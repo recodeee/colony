@@ -28,11 +28,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The same four gates we enforce locally — block the release if any fail.
+      # Build first — every package's exports point to ./dist/, and the unit
+      # tests that import workspace packages (mcp-server, worker, hooks, cli)
+      # need those dists to exist.
+      - run: pnpm build
+
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
-      - run: pnpm build
 
       # End-to-end check of the actual published artifact: pack, install -g
       # into an isolated prefix, drive every hook event, verify MCP launches,
