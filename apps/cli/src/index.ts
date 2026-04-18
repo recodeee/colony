@@ -42,6 +42,13 @@ export function createProgram(): Command {
 }
 
 if (isMainEntry()) {
+  // When stdout is piped to a consumer that exits early (e.g. `| head`, `| grep -q`),
+  // further writes raise EPIPE. Node turns that into an uncaught exception by default,
+  // which is noisy and misleading for what is really a successful upstream-terminated pipe.
+  process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EPIPE') process.exit(0);
+    throw err;
+  });
   createProgram()
     .parseAsync(process.argv)
     .catch((err) => {
