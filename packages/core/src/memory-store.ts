@@ -120,9 +120,13 @@ export class MemoryStore {
     if (!embedder || this.settings.embedding.provider === 'none') {
       return keyword.slice(0, cap);
     }
-    const vectors = this.storage.allEmbeddings();
+    const vectors = this.storage.allEmbeddings({ model: embedder.model, dim: embedder.dim });
     if (vectors.length === 0) return keyword.slice(0, cap);
     const qvec = await embedder.embed(query);
+    if (qvec.length !== embedder.dim) {
+      // Provider lied about dim — skip vector ranking rather than mix dims.
+      return keyword.slice(0, cap);
+    }
     const scored = vectors.map((v) => ({
       id: v.observation_id,
       cosine: cosine(qvec, v.vec),
@@ -167,6 +171,8 @@ export class MemoryStore {
 }
 
 export interface Embedder {
+  readonly model: string;
+  readonly dim: number;
   embed(text: string): Promise<Float32Array>;
 }
 

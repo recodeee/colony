@@ -18,6 +18,7 @@
     "@cavemem/compress": "workspace:*",
     "@cavemem/config": "workspace:*",
     "@cavemem/core": "workspace:*",
+    "@cavemem/embedding": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.8"
   },

@@ -1,6 +1,14 @@
 # MCP tools
 
-cavemem exposes three tools over an MCP stdio server. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
+cavemem exposes four tools over an MCP stdio server. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
+
+The recommended workflow is a three-layer pattern:
+
+1. `search` (or `list_sessions` → `timeline`) to get a compact index.
+2. Review IDs.
+3. `get_observations` with the filtered set.
+
+Following this pattern saves ~10× tokens versus fetching full bodies upfront.
 
 ## `search`
 
@@ -44,6 +52,19 @@ Fetch full observation bodies by ID.
 Returns: `[ { id, session_id, kind, ts, content, metadata } ]`.
 
 Content is expanded to human-readable form by default. Pass `expand: false` to request the compressed form (useful for audit or for agents that understand the caveman dialect directly).
+
+## `list_sessions`
+
+List recent sessions in reverse chronological order.
+
+```json
+{
+  "name": "list_sessions",
+  "input": { "limit": 20 }
+}
+```
+
+Returns: `[ { id, ide, cwd, started_at, ended_at } ]`. Use `id` with `timeline` to navigate within a session.
 
 ## Contract stability
 

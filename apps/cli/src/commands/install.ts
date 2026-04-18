@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import {
   defaultSettings,
   loadSettings,
@@ -28,7 +27,7 @@ export function registerInstallCommand(program: Command): void {
       const path = settingsPath();
       if (!existsSync(path)) {
         saveSettings(defaultSettings);
-        process.stdout.write(`wrote ${path}\n`);
+        process.stdout.write(`${kleur.dim('wrote')} ${path}\n`);
       }
       const settings = loadSettings();
       const ctx = {
@@ -41,6 +40,38 @@ export function registerInstallCommand(program: Command): void {
       for (const m of msgs) process.stdout.write(`${kleur.green('✓')} ${m}\n`);
       settings.ides[name] = true;
       saveSettings(settings);
-      process.stdout.write(`\n${kleur.bold('next:')} run ${kleur.cyan('cavemem doctor')}\n`);
+
+      const model = settings.embedding.model;
+      const provider = settings.embedding.provider;
+
+      process.stdout.write(`\n${kleur.bold('cavemem is wired into')} ${kleur.cyan(name)}\n`);
+      process.stdout.write(
+        `${kleur.dim('memory writes happen in hooks — no daemon required on the hot path.')}\n\n`,
+      );
+      process.stdout.write(`${kleur.bold('what to try next:')}\n`);
+      process.stdout.write(
+        `  ${kleur.cyan('cavemem status')}        show wiring + embedding backfill\n`,
+      );
+      process.stdout.write(`  ${kleur.cyan('cavemem viewer')}        open the memory viewer\n`);
+      process.stdout.write(
+        `  ${kleur.cyan('cavemem search "…"')}    query your memory from the terminal\n`,
+      );
+      process.stdout.write(`  ${kleur.cyan('cavemem config show')}   see settings + docs\n\n`);
+
+      if (provider === 'local') {
+        process.stdout.write(
+          `${kleur.dim(
+            `embeddings: local ${model} — weights (~25 MB) download to ${ctx.dataDir}/models on first use.`,
+          )}\n`,
+        );
+      } else if (provider === 'none') {
+        process.stdout.write(
+          `${kleur.yellow('embeddings: disabled')} (provider=none). enable with \`cavemem config set embedding.provider local\`.\n`,
+        );
+      } else {
+        process.stdout.write(
+          `${kleur.dim(`embeddings: ${provider} / ${model} — configure endpoint/apiKey via \`cavemem config\`.`)}\n`,
+        );
+      }
     });
 }

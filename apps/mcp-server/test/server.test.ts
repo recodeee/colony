@@ -30,7 +30,7 @@ async function seed(): Promise<{ a: number; b: number }> {
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'cavemem-mcp-'));
   store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
-  const server = buildServer(store);
+  const server = buildServer(store, defaultSettings);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'test', version: '0.0.0' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -43,9 +43,14 @@ afterEach(async () => {
 });
 
 describe('MCP server', () => {
-  it('lists the three cavemem tools', async () => {
+  it('lists the cavemem tools', async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['get_observations', 'search', 'timeline']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'get_observations',
+      'list_sessions',
+      'search',
+      'timeline',
+    ]);
   });
 
   it('search returns compact hits (id, snippet, score, ts)', async () => {

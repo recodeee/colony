@@ -3,13 +3,16 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { registerCompressCommands } from './commands/compress.js';
+import { registerConfigCommand } from './commands/config.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerExportCommand } from './commands/export.js';
 import { registerHookCommand } from './commands/hook.js';
 import { registerInstallCommand } from './commands/install.js';
+import { registerLifecycleCommands } from './commands/lifecycle.js';
 import { registerMcpCommand } from './commands/mcp.js';
 import { registerReindexCommand } from './commands/reindex.js';
 import { registerSearchCommand } from './commands/search.js';
+import { registerStatusCommand } from './commands/status.js';
 import { registerUninstallCommand } from './commands/uninstall.js';
 import { registerWorkerCommand } from './commands/worker.js';
 
@@ -23,7 +26,10 @@ export function createProgram(): Command {
 
   registerInstallCommand(program);
   registerUninstallCommand(program);
+  registerStatusCommand(program);
+  registerConfigCommand(program);
   registerDoctorCommand(program);
+  registerLifecycleCommands(program);
   registerWorkerCommand(program);
   registerMcpCommand(program);
   registerSearchCommand(program);

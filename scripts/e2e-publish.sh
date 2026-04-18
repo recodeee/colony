@@ -32,6 +32,11 @@ mkdir -p "$PACK" "$PREFIX" "$HOME_DIR"
 
 cd "$REPO"
 
+# Embedding backfill needs the worker daemon to run. We disable autoSpawn
+# during hook runs so the e2e stays deterministic — the test drives the
+# worker explicitly in the checks below.
+export CAVEMEM_NO_AUTOSTART=1
+
 echo "==> 1. build everything"
 pnpm build >/dev/null
 
@@ -91,6 +96,13 @@ echo "==> 12. search via FTS (better-sqlite3 native)"
 
 echo "==> 13. doctor reports healthy"
 "$BIN" doctor
+
+echo "==> 13b. status command runs and reports observation count"
+"$BIN" status
+
+echo "==> 13c. config show works and includes descriptions"
+"$BIN" config show | grep -q "embedding.provider" || { echo "config show missing embedding.provider"; exit 1; }
+"$BIN" config path | grep -q "settings.json" || { echo "config path broken"; exit 1; }
 
 echo "==> 14. MCP server launches without crashing on init"
 HOME="$HOME_DIR" "$BIN" mcp </dev/null >/dev/null 2>&1 &

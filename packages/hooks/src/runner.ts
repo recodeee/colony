@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@cavemem/config';
 import { MemoryStore } from '@cavemem/core';
+import { ensureWorkerRunning } from './auto-spawn.js';
 import { postToolUse } from './handlers/post-tool-use.js';
 import { sessionEnd } from './handlers/session-end.js';
 import { sessionStart } from './handlers/session-start.js';
@@ -24,10 +25,12 @@ export async function runHook(
   const start = performance.now();
   const injected = opts.store !== undefined;
   let store: MemoryStore;
+  let settingsForSpawn: ReturnType<typeof loadSettings> | undefined;
   if (opts.store) {
     store = opts.store;
   } else {
     const settings = loadSettings();
+    settingsForSpawn = settings;
     const dbPath = join(resolveDataDir(settings.dataDir), 'data.db');
     store = new MemoryStore({ dbPath, settings });
   }
@@ -49,6 +52,12 @@ export async function runHook(
       case 'session-end':
         await sessionEnd(store, input);
         break;
+    }
+    // Fire-and-forget: ensure the worker is running so embeddings happen
+    // in the background. <2 ms when already running (stat + kill probe).
+    // Skipped entirely when a caller injects their own store (tests).
+    if (settingsForSpawn && name !== 'session-end') {
+      ensureWorkerRunning(settingsForSpawn);
     }
     const result: HookResult = { ok: true, ms: Math.round(performance.now() - start) };
     if (context !== undefined) result.context = context;

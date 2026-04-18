@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
   dim INTEGER NOT NULL,
   vec BLOB NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model, dim);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (1);
+INSERT OR IGNORE INTO schema_version(version) VALUES (2);
 `;

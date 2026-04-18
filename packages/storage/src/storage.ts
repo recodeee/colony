@@ -182,19 +182,46 @@ export class Storage {
     return { model: row.model, dim: row.dim, vec };
   }
 
-  allEmbeddings(): Array<{ observation_id: number; vec: Float32Array }> {
-    const rows = this.db.prepare('SELECT observation_id, dim, vec FROM embeddings').all() as Array<{
-      observation_id: number;
-      dim: number;
-      vec: Buffer;
-    }>;
+  allEmbeddings(filter?: { model: string; dim: number }): Array<{
+    observation_id: number;
+    vec: Float32Array;
+  }> {
+    const rows = filter
+      ? (this.db
+          .prepare('SELECT observation_id, dim, vec FROM embeddings WHERE model = ? AND dim = ?')
+          .all(filter.model, filter.dim) as Array<{
+          observation_id: number;
+          dim: number;
+          vec: Buffer;
+        }>)
+      : (this.db.prepare('SELECT observation_id, dim, vec FROM embeddings').all() as Array<{
+          observation_id: number;
+          dim: number;
+          vec: Buffer;
+        }>);
     return rows.map((r) => ({
       observation_id: r.observation_id,
-      vec: new Float32Array(r.vec.buffer, r.vec.byteOffset, r.dim),
+      // Copy into a fresh buffer — the underlying Buffer from better-sqlite3
+      // is freed after the statement is iterated, so aliasing it into a
+      // Float32Array is not safe once the row goes out of scope.
+      vec: new Float32Array(
+        new Uint8Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength).slice().buffer,
+      ),
     }));
   }
 
-  observationsMissingEmbeddings(limit = 100): ObservationRow[] {
+  observationsMissingEmbeddings(limit = 100, model?: string): ObservationRow[] {
+    if (model) {
+      return this.db
+        .prepare(
+          `SELECT o.* FROM observations o
+           LEFT JOIN embeddings e ON e.observation_id = o.id AND e.model = ?
+           WHERE e.observation_id IS NULL
+           ORDER BY o.id DESC
+           LIMIT ?`,
+        )
+        .all(model, limit) as ObservationRow[];
+    }
     return this.db
       .prepare(
         `SELECT o.* FROM observations o
@@ -204,6 +231,39 @@ export class Storage {
          LIMIT ?`,
       )
       .all(limit) as ObservationRow[];
+  }
+
+  /**
+   * Remove embeddings whose model does not match the currently configured one.
+   * Returns the number of rows deleted. Used on worker startup when the user
+   * has switched embedding models — mixed-model cosine returns garbage.
+   */
+  dropEmbeddingsWhereModelNot(model: string): number {
+    const info = this.db.prepare('DELETE FROM embeddings WHERE model != ?').run(model);
+    return Number(info.changes);
+  }
+
+  countObservations(): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM observations').get() as { n: number };
+    return row.n;
+  }
+
+  countEmbeddings(filter?: { model: string; dim: number }): number {
+    if (filter) {
+      const row = this.db
+        .prepare('SELECT COUNT(*) AS n FROM embeddings WHERE model = ? AND dim = ?')
+        .get(filter.model, filter.dim) as { n: number };
+      return row.n;
+    }
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM embeddings').get() as { n: number };
+    return row.n;
+  }
+
+  lastObservationAt(): number | null {
+    const row = this.db.prepare('SELECT MAX(ts) AS t FROM observations').get() as {
+      t: number | null;
+    };
+    return row.t ?? null;
   }
 }
 

@@ -43,8 +43,11 @@ Cross-agent persistent memory for coding assistants. Hooks fire at session bound
 npm install -g cavemem
 cavemem install                    # Claude Code
 cavemem install --ide cursor       # cursor | gemini-cli | opencode | codex
-cavemem doctor                     # verify
+cavemem status                     # see wiring + embedding backfill
+cavemem viewer                     # open http://127.0.0.1:37777
 ```
+
+No daemon to start. Hooks write synchronously. A local worker auto-spawns in the background on the first hook to build embeddings; it self-exits when idle. Disable with `cavemem config set embedding.autoStart false`.
 
 ---
 
@@ -74,12 +77,15 @@ Code blocks, URLs, paths, identifiers, and version numbers are never touched. Ho
 |---------|--|
 | `cavemem install [--ide <name>]` | Register hooks + MCP for an IDE |
 | `cavemem uninstall [--ide <name>]` | Remove hooks + MCP |
+| `cavemem status` | Single dashboard: wiring, DB counts, embedding backfill, worker pid |
+| `cavemem config show\|get\|set\|open` | View/edit settings — schema is self-documenting |
+| `cavemem start\|stop\|restart` | Control the worker daemon (usually unnecessary — auto-starts) |
+| `cavemem viewer` | Open the memory viewer in your browser |
 | `cavemem doctor` | Verify installation |
-| `cavemem search <query> [--limit N]` | Search memory from terminal |
+| `cavemem search <query> [--limit N] [--no-semantic]` | Search memory (BM25 + cosine re-rank) |
 | `cavemem compress <file>` | Compress a file with caveman grammar |
 | `cavemem reindex` | Rebuild FTS5 + vector index |
 | `cavemem export <out.jsonl>` | Dump observations to JSONL |
-| `cavemem worker` | Start local viewer (http://127.0.0.1:37777) |
 | `cavemem mcp` | Start MCP server (stdio) |
 
 ---
@@ -90,9 +96,10 @@ Progressive disclosure: `search` and `timeline` return compact results; `get_obs
 
 | Tool | Returns |
 |------|---------|
-| `search(query, limit?)` | `[{id, score, snippet, session_id, ts}]` |
+| `search(query, limit?)` | `[{id, score, snippet, session_id, ts}]` — BM25 + optional cosine re-rank |
 | `timeline(session_id, around_id?, limit?)` | `[{id, kind, ts}]` |
 | `get_observations(ids[], expand?)` | Full bodies, expanded by default |
+| `list_sessions(limit?)` | `[{id, ide, cwd, started_at, ended_at}]` |
 
 ---
 

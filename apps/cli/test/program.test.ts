@@ -7,6 +7,7 @@ describe('cavemem CLI program', () => {
     const names = program.commands.map((c) => c.name()).sort();
     const expected = [
       'compress',
+      'config',
       'doctor',
       'expand',
       'export',
@@ -15,8 +16,13 @@ describe('cavemem CLI program', () => {
       'install',
       'mcp',
       'reindex',
+      'restart',
       'search',
+      'start',
+      'status',
+      'stop',
       'uninstall',
+      'viewer',
       'worker',
     ].sort();
     for (const name of expected) {

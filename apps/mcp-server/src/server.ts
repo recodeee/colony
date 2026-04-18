@@ -2,30 +2,50 @@
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
+import { type Settings, loadSettings, resolveDataDir } from '@cavemem/config';
+import { type Embedder, MemoryStore } from '@cavemem/core';
+import { createEmbedder } from '@cavemem/embedding';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
 /**
- * MCP stdio server exposing three tools with progressive disclosure.
- * - search: compact hits (id, score, snippet)
- * - timeline: chronological ids around a point
- * - get_observations: full bodies (expanded by default for the model)
+ * MCP stdio server exposing progressive-disclosure tools:
+ * - search: compact hits with BM25 + optional semantic re-rank
+ * - timeline: chronological IDs around a point
+ * - get_observations: full bodies by ID
+ * - list_sessions: recent sessions for navigation
+ *
+ * Embedder is loaded lazily on first search — keeps MCP handshake fast.
  */
-export function buildServer(store: MemoryStore): McpServer {
+export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   const server = new McpServer({
     name: 'cavemem',
     version: '0.1.0',
   });
+
+  // tri-state: undefined = not yet attempted; null = unavailable (provider=none or load failed)
+  let embedder: Embedder | null | undefined = undefined;
+  const resolveEmbedder = async (): Promise<Embedder | null> => {
+    if (embedder !== undefined) return embedder;
+    try {
+      embedder = await createEmbedder(settings, { log: () => {} });
+    } catch (err) {
+      process.stderr.write(
+        `[cavemem mcp] embedder unavailable: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      embedder = null;
+    }
+    return embedder;
+  };
 
   server.tool(
     'search',
     'Search memory. Returns compact hits — fetch full bodies via get_observations.',
     { query: z.string().min(1), limit: z.number().int().positive().max(50).optional() },
     async ({ query, limit }) => {
-      const hits = await store.search(query, limit);
+      const e = (await resolveEmbedder()) ?? undefined;
+      const hits = await store.search(query, limit, e);
       return {
         content: [{ type: 'text', text: JSON.stringify(hits) }],
       };
@@ -55,9 +75,6 @@ export function buildServer(store: MemoryStore): McpServer {
       expand: z.boolean().optional(),
     },
     async ({ ids, expand: expandOpt }) => {
-      // Expansion happens exactly once, inside MemoryStore.getObservations,
-      // based on the flag we pass. Expanding again here would be wasteful and
-      // would drift the text for any non-idempotent lexicon entry.
       const rows = store.getObservations(ids, { expand: expandOpt ?? true });
       const payload = rows.map((r) => ({
         id: r.id,
@@ -71,6 +88,31 @@ export function buildServer(store: MemoryStore): McpServer {
     },
   );
 
+  server.tool(
+    'list_sessions',
+    'List recent sessions in reverse chronological order. Use to navigate before calling timeline.',
+    { limit: z.number().int().positive().max(200).optional() },
+    async ({ limit }) => {
+      const sessions = store.storage.listSessions(limit ?? 20);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              sessions.map((s) => ({
+                id: s.id,
+                ide: s.ide,
+                cwd: s.cwd,
+                started_at: s.started_at,
+                ended_at: s.ended_at,
+              })),
+            ),
+          },
+        ],
+      };
+    },
+  );
+
   return server;
 }
 
@@ -79,14 +121,13 @@ async function main(): Promise<void> {
   const dbPath = join(resolveDataDir(settings.dataDir), 'data.db');
   const store = new MemoryStore({ dbPath, settings });
 
-  const server = buildServer(store);
+  const server = buildServer(store, settings);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
 if (isMainEntry()) {
   main().catch((err) => {
-    // stderr only — stdout is reserved for the MCP protocol.
     process.stderr.write(`[cavemem mcp] fatal: ${String(err)}\n`);
     process.exit(1);
   });

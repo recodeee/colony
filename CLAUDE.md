@@ -18,10 +18,11 @@ The signature property of the project is that **memory is stored compressed**. E
 6. **Privacy is enforced at the write boundary.** Content inside `<private>…</private>` tags is stripped. Paths matching `settings.excludePatterns` are never read. Neither appears in logs.
 7. **Local by default.** Default embedding provider is local (Transformers.js). Remote providers are opt-in via settings. Do not add default network calls.
 8. **No silent failures.** Hook and worker errors are logged as structured JSON; user-visible commands surface failures with a non-zero exit code and a short message.
+9. **No daemon on the write path.** Hooks write observations synchronously through `MemoryStore.addObservation` — never across a network or HTTP boundary. Hooks may *detach-spawn* the worker to kick off background embedding, but they must never wait on it. If the worker is down, writes still succeed; only the semantic-search side is degraded (BM25 keeps working).
 
 ## Architectural rules
 
-- Monorepo with pnpm workspaces. Dependency direction is strictly downward: `apps/*` may depend on `packages/*`; `packages/*` may depend on each other only in the order `config → compress → storage → core → hooks → installers`. No upward or sideways imports that break this order.
+- Monorepo with pnpm workspaces. Dependency direction is strictly downward: `apps/*` may depend on `packages/*`; `packages/*` may depend on each other only in the order `config → compress → storage → { core, embedding } → hooks → installers`. (`core` and `embedding` are siblings — both consume `config` and `storage`, neither depends on the other.) No upward or sideways imports that break this order.
 - All database I/O goes through `@cavemem/storage`. No other package opens the DB directly.
 - Settings access goes through `@cavemem/config`. No direct reads from `~/.cavemem/settings.json` elsewhere.
 - All user-visible strings default to the caveman intensity from settings (default `full`).
@@ -31,13 +32,14 @@ The signature property of the project is that **memory is stored compressed**. E
 
 ```
 apps/cli          user-facing binary
-apps/worker       local HTTP daemon + read-only viewer
+apps/worker       local HTTP daemon: read-only viewer + embedding backfill loop
 apps/mcp-server   stdio MCP server
-packages/config   settings schema, loader, defaults
+packages/config   settings schema, loader, defaults, settingsDocs()
 packages/compress compression engine + lexicon
 packages/storage  SQLite + FTS5 + vector adapter
-packages/core     domain models, MemoryStore facade
-packages/hooks    lifecycle hook handlers
+packages/core     domain models, MemoryStore facade, Embedder interface
+packages/embedding provider factory (local / ollama / openai / none)
+packages/hooks    lifecycle hook handlers + worker auto-spawn
 packages/installers per-IDE integration modules
 viewer            Vite + React read-only UI
 hooks-scripts     portable shell stubs that invoke node handlers
@@ -71,7 +73,9 @@ Unit tests cover handlers, storage, and protocol contracts in isolation. They ca
 - **New IDE integration**: add a module in `packages/installers/src/` that implements the `Installer` interface (`detect`, `install`, `uninstall`, `status`) and register it in the installer index. Update the CLI `install` command choices.
 - **New MCP tool**: register in `apps/mcp-server/src/server.ts`, document contract in `docs/mcp.md`, add an inspector test fixture.
 - **New compression rule**: update `packages/compress/src/lexicon.json`, add at least one round-trip fixture under `packages/compress/test/fixtures/`, and re-run the benchmark in `evals/`.
+- **New embedding provider**: add a module in `packages/embedding/src/providers/`, wire it into the `createEmbedder` switch in `packages/embedding/src/index.ts`, and extend the `EmbeddingProvider` enum in `packages/config/src/schema.ts`. Each provider must expose `{ model, dim, embed(text) }` — `dim` must be correct before the first `embed()` call completes (warm-up probe).
 - **New storage migration**: add a numbered SQL file in `packages/storage/src/migrations/`. Migrations are forward-only.
+- **New CLI setting**: add the field to `SettingsSchema` with a `.describe(…)` string. `cavemem config show` and `settingsDocs()` pick it up automatically — no parallel docs to maintain.
 
 ## Performance budgets
 
