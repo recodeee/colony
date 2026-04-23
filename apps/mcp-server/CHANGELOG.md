@@ -1,5 +1,11 @@
 # @cavemem/mcp-server
 
+## 0.3.0
+
+### Minor Changes
+
+- f853481: Add a compact `hivemind` MCP tool that maps active proxy-runtime agent sessions to their current tasks.
+
 ## 0.2.0
 
 ### Minor Changes
