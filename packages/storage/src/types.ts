@@ -91,6 +91,50 @@ export interface NewPheromone {
   deposited_at: number;
 }
 
+export type ProposalStatus = 'pending' | 'active' | 'evaporated';
+export type ReinforcementKind = 'explicit' | 'rediscovered' | 'adjacent';
+
+export interface ProposalRow {
+  id: number;
+  repo_root: string;
+  branch: string;
+  summary: string;
+  rationale: string;
+  touches_files: string;
+  status: ProposalStatus;
+  proposed_by: string;
+  proposed_at: number;
+  promoted_at: number | null;
+  task_id: number | null;
+}
+
+export interface NewProposal {
+  repo_root: string;
+  branch: string;
+  summary: string;
+  rationale: string;
+  touches_files: string;
+  proposed_by: string;
+  status?: ProposalStatus;
+  proposed_at?: number;
+}
+
+export interface ReinforcementRow {
+  proposal_id: number;
+  session_id: string;
+  kind: ReinforcementKind;
+  weight: number;
+  reinforced_at: number;
+}
+
+export interface NewReinforcement {
+  proposal_id: number;
+  session_id: string;
+  kind: ReinforcementKind;
+  weight: number;
+  reinforced_at: number;
+}
+
 export interface NewSummary {
   session_id: string;
   scope: 'turn' | 'session';

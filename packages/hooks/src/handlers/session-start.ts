@@ -1,4 +1,4 @@
-import { type MemoryStore, TaskThread, detectRepoBranch } from '@cavemem/core';
+import { type MemoryStore, ProposalSystem, TaskThread, detectRepoBranch } from '@cavemem/core';
 import type { HookInput } from '../types.js';
 
 export async function sessionStart(store: MemoryStore, input: HookInput): Promise<string> {
@@ -12,8 +12,9 @@ export async function sessionStart(store: MemoryStore, input: HookInput): Promis
 
   const priorPreface = buildPriorPreface(store, input);
   const taskPreface = buildTaskPreface(store, input);
+  const proposalPreface = buildProposalPreface(store, input);
 
-  return [priorPreface, taskPreface].filter(Boolean).join('\n\n');
+  return [priorPreface, taskPreface, proposalPreface].filter(Boolean).join('\n\n');
 }
 
 function buildPriorPreface(store: MemoryStore, input: HookInput): string {
@@ -96,6 +97,48 @@ export function buildTaskPreface(
     lines.push(
       `  decline with: task_decline_handoff(handoff_observation_id=${h.id}, session_id="${input.session_id}", reason="...")`,
     );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Surface pending proposals and recently promoted ones for this branch.
+ * Agents see this at SessionStart so they know what ideas the colony
+ * is considering, which lets them explicitly support (via MCP
+ * task_reinforce) or silently ignore. A quiet queue with zero pending
+ * is the right UX — the preface stays empty and doesn't waste context.
+ */
+export function buildProposalPreface(
+  store: MemoryStore,
+  input: Pick<HookInput, 'cwd'>,
+): string {
+  const cwd = input.cwd;
+  if (!cwd) return '';
+  const detected = detectRepoBranch(cwd);
+  if (!detected) return '';
+
+  const proposals = new ProposalSystem(store);
+  const report = proposals.foragingReport(detected.repo_root, detected.branch);
+
+  if (report.pending.length === 0 && report.promoted.length === 0) return '';
+
+  const lines: string[] = [`## Proposals on ${detected.branch}`];
+  if (report.pending.length > 0) {
+    lines.push('Pending (support via task_reinforce if you agree):');
+    for (const p of report.pending.slice(0, 5)) {
+      lines.push(
+        `  #${p.id} [${p.strength.toFixed(1)} / ${ProposalSystem.PROMOTION_THRESHOLD}] ${p.summary}`,
+      );
+    }
+    if (report.pending.length > 5) {
+      lines.push(`  (${report.pending.length - 5} more — call task_foraging_report to see all)`);
+    }
+  }
+  if (report.promoted.length > 0) {
+    lines.push('Recently promoted to tasks:');
+    for (const p of report.promoted.slice(0, 3)) {
+      lines.push(`  task #${p.task_id}: ${p.summary}`);
+    }
   }
   return lines.join('\n');
 }

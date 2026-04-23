@@ -12,4 +12,10 @@ export type {
   TaskClaimRow,
   PheromoneRow,
   NewPheromone,
+  ProposalRow,
+  NewProposal,
+  ProposalStatus,
+  ReinforcementRow,
+  NewReinforcement,
+  ReinforcementKind,
 } from './types.js';

@@ -9,6 +9,7 @@ import {
   type HivemindSession,
   type HivemindSnapshot,
   MemoryStore,
+  ProposalSystem,
   type SearchResult,
   TaskThread,
   readHivemind,
@@ -390,6 +391,89 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
           isError: true,
         };
       }
+    },
+  );
+
+  server.tool(
+    'task_propose',
+    'Propose a potential improvement scoped to (repo_root, branch). Becomes a real task only after collective reinforcement crosses the promotion threshold.',
+    {
+      repo_root: z.string().min(1),
+      branch: z.string().min(1),
+      summary: z.string().min(1),
+      rationale: z.string().min(1),
+      touches_files: z.array(z.string()).default([]),
+      session_id: z.string().min(1),
+    },
+    async ({ repo_root, branch, summary, rationale, touches_files, session_id }) => {
+      const proposals = new ProposalSystem(store);
+      const id = proposals.propose({
+        repo_root,
+        branch,
+        summary,
+        rationale,
+        touches_files,
+        session_id,
+      });
+      const strength = proposals.currentStrength(id);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              proposal_id: id,
+              strength,
+              promotion_threshold: ProposalSystem.PROMOTION_THRESHOLD,
+            }),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    'task_reinforce',
+    "Reinforce a pending proposal. kind='explicit' for direct support; 'rediscovered' when you arrived at the same idea independently.",
+    {
+      proposal_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      kind: z.enum(['explicit', 'rediscovered']).default('explicit'),
+    },
+    async ({ proposal_id, session_id, kind }) => {
+      const proposals = new ProposalSystem(store);
+      const { strength, promoted } = proposals.reinforce({
+        proposal_id,
+        session_id,
+        kind,
+      });
+      const proposal = store.storage.getProposal(proposal_id);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              proposal_id,
+              strength,
+              promoted,
+              task_id: proposal?.task_id ?? null,
+            }),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    'task_foraging_report',
+    'List pending and recently promoted proposals on a (repo_root, branch). Pending proposals whose strength has evaporated below the noise floor are omitted.',
+    {
+      repo_root: z.string().min(1),
+      branch: z.string().min(1),
+    },
+    async ({ repo_root, branch }) => {
+      const proposals = new ProposalSystem(store);
+      const report = proposals.foragingReport(repo_root, branch);
+      return { content: [{ type: 'text', text: JSON.stringify(report) }] };
     },
   );
 

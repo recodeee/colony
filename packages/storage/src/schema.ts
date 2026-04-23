@@ -116,7 +116,43 @@ CREATE TABLE IF NOT EXISTS pheromones (
 );
 CREATE INDEX IF NOT EXISTS idx_pheromones_task ON pheromones(task_id, deposited_at DESC);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (4);
+-- Proposals: pre-tasks that become real tasks only when collective
+-- reinforcement crosses a threshold. A proposal is a candidate improvement
+-- that an agent surfaced but hasn't been adopted yet; it decays with
+-- neglect and saturates with support. The distinction from tasks is
+-- deliberate — the tasks table is for agreed work, the proposals table
+-- is for the foraging queue, and mixing them would turn the task list
+-- into a noisy suggestion box.
+CREATE TABLE IF NOT EXISTS proposals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_root TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  touches_files TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  proposed_by TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  proposed_at INTEGER NOT NULL,
+  promoted_at INTEGER,
+  task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_branch ON proposals(repo_root, branch, status);
+
+-- Reinforcements: one row per support event. Kept as discrete rows (not
+-- a counter) because each event has its own timestamp and decay needs
+-- per-event age. An old reinforcement should count less than a new one,
+-- same semantics as pheromone.
+CREATE TABLE IF NOT EXISTS proposal_reinforcements (
+  proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  weight REAL NOT NULL,
+  reinforced_at INTEGER NOT NULL,
+  PRIMARY KEY (proposal_id, session_id, reinforced_at)
+);
+CREATE INDEX IF NOT EXISTS idx_reinforcements_proposal ON proposal_reinforcements(proposal_id);
+
+INSERT OR IGNORE INTO schema_version(version) VALUES (5);
 `;
 
 /**
