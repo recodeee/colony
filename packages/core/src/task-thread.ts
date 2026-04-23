@@ -6,6 +6,7 @@ export type CoordinationKind =
   | 'question'
   | 'answer'
   | 'handoff'
+  | 'decline'
   | 'decision'
   | 'blocker'
   | 'note';
@@ -254,7 +255,8 @@ export class TaskThread {
     });
   }
 
-  /** Explicitly decline a pending handoff. Records a `note` and flips status. */
+  /** Explicitly decline a pending handoff. Records a `decline` observation
+   *  and flips the handoff status to `cancelled`. No claims are touched. */
   declineHandoff(handoff_observation_id: number, session_id: string, reason?: string): void {
     const obs = this.store.storage.getObservation(handoff_observation_id);
     if (!obs || obs.kind !== 'handoff') throw new Error('not a handoff');
@@ -267,13 +269,13 @@ export class TaskThread {
       this.store.storage.updateObservationMetadata(handoff_observation_id, JSON.stringify(meta));
       this.store.addObservation({
         session_id,
-        kind: 'note',
+        kind: 'decline',
         content: reason
           ? `declined handoff #${handoff_observation_id}: ${reason}`
           : `declined handoff #${handoff_observation_id}`,
         task_id: this.task_id,
         reply_to: handoff_observation_id,
-        metadata: { kind: 'note', declined_handoff: handoff_observation_id },
+        metadata: { kind: 'decline', declined_handoff: handoff_observation_id },
       });
       this.store.storage.touchTask(this.task_id);
     });

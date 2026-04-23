@@ -38,8 +38,14 @@ function buildPriorPreface(store: MemoryStore, input: HookInput): string {
  * handoffs or co-participants. This is the moment the hivemind flips from
  * passive synchronised memory into active collaboration: the new agent
  * starts the turn already knowing who else is on this branch.
+ *
+ * Exported so integration tests can drive the preface builder directly
+ * without spinning up the full runner / transport stack.
  */
-function buildTaskPreface(store: MemoryStore, input: HookInput): string {
+export function buildTaskPreface(
+  store: MemoryStore,
+  input: Pick<HookInput, 'session_id' | 'cwd' | 'ide'>,
+): string {
   const cwd = input.cwd;
   if (!cwd) return '';
   const detected = detectRepoBranch(cwd);
@@ -82,7 +88,14 @@ function buildTaskPreface(store: MemoryStore, input: HookInput): string {
     if (h.meta.transferred_files.length) {
       lines.push(`  transferred_files: ${h.meta.transferred_files.join(', ')}`);
     }
-    lines.push(`  accept with: task_accept_handoff(handoff_observation_id=${h.id})`);
+    // Include session_id in the suggested tool calls — agents drop it
+    // otherwise and the accept fails with a generic validation error.
+    lines.push(
+      `  accept with: task_accept_handoff(handoff_observation_id=${h.id}, session_id="${input.session_id}")`,
+    );
+    lines.push(
+      `  decline with: task_decline_handoff(handoff_observation_id=${h.id}, session_id="${input.session_id}", reason="...")`,
+    );
   }
   return lines.join('\n');
 }
