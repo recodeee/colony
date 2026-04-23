@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@cavemem/config';
@@ -26,6 +26,36 @@ function seed(): { sessionId: string; a: number; b: number } {
   return { sessionId: 's1', a, b };
 }
 
+function seedRuntime(repoRoot: string): void {
+  const worktreePath = join(repoRoot, '.omx', 'agent-worktrees', 'agent__codex__viewer-task');
+  const activeSessionDir = join(repoRoot, '.omx', 'state', 'active-sessions');
+  const now = new Date().toISOString();
+  mkdirSync(activeSessionDir, { recursive: true });
+  mkdirSync(worktreePath, { recursive: true });
+  writeFileSync(
+    join(activeSessionDir, 'agent__codex__viewer-task.json'),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        repoRoot,
+        branch: 'agent/codex/viewer-task',
+        taskName: 'Show Hivemind dashboard',
+        latestTaskPreview: 'Render active lanes in worker viewer',
+        agentName: 'codex',
+        worktreePath,
+        pid: process.pid,
+        cliName: 'codex',
+        startedAt: now,
+        lastHeartbeatAt: now,
+        state: 'working',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+}
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'cavemem-worker-'));
   store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
@@ -50,6 +80,24 @@ describe('worker HTTP', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Array<{ id: string }>;
     expect(body.map((s) => s.id)).toContain('s1');
+  });
+
+  it('GET /api/hivemind returns active runtime lanes', async () => {
+    const repoRoot = join(dir, 'repo-runtime');
+    seedRuntime(repoRoot);
+    const appWithRuntime = buildApp(store, undefined, { hivemindRepoRoots: [repoRoot] });
+
+    const res = await appWithRuntime.request('/api/hivemind');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      session_count: number;
+      sessions: Array<{ branch: string; task: string }>;
+    };
+    expect(body.session_count).toBe(1);
+    expect(body.sessions[0]).toMatchObject({
+      branch: 'agent/codex/viewer-task',
+      task: 'Render active lanes in worker viewer',
+    });
   });
 
   it('GET /api/sessions/:id/observations returns expanded text', async () => {
@@ -79,6 +127,19 @@ describe('worker HTTP', () => {
     expect(res.headers.get('content-type') ?? '').toMatch(/text\/html/);
     const body = await res.text();
     expect(body).toContain('s1');
+  });
+
+  it('GET / renders the Hivemind runtime dashboard', async () => {
+    const repoRoot = join(dir, 'repo-dashboard');
+    seedRuntime(repoRoot);
+    const appWithRuntime = buildApp(store, undefined, { hivemindRepoRoots: [repoRoot] });
+
+    const res = await appWithRuntime.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('Hivemind runtime');
+    expect(body).toContain('Render active lanes in worker viewer');
+    expect(body).toContain('runtime clean');
   });
 
   it('GET /sessions/:id renders observation HTML', async () => {

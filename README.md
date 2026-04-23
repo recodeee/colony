@@ -19,8 +19,8 @@ Important current-state note: the published CLI and package names are still `cav
 - Prose is compressed before storage while code, paths, URLs, and technical tokens stay intact.
 - Observations are written to local SQLite with FTS-backed search.
 - MCP tools expose progressive retrieval: compact hits first, full bodies only when needed.
-- The `hivemind` MCP tool reads `.omx` runtime state so agents can see who owns which branch, worktree, and task.
-- A local worker serves a read-only browser viewer and optional embedding backfill.
+- The `hivemind` and `hivemind_context` MCP tools read `.omx` runtime state so agents can see who owns which branch, worktree, and task before pulling memory.
+- A local worker serves a read-only browser viewer, Hivemind runtime dashboard, and optional embedding backfill.
 
 ## Current Surface
 
@@ -47,6 +47,7 @@ The current CLI entrypoint is `cavemem` and registers these command groups:
 The MCP server currently exposes:
 
 - `hivemind`
+- `hivemind_context`
 - `search`
 - `timeline`
 - `get_observations`
@@ -54,9 +55,10 @@ The MCP server currently exposes:
 
 Recommended usage pattern:
 
-1. Call `hivemind` when you need live ownership and task state from `.omx`.
-2. Call `search` or `list_sessions` plus `timeline` to narrow the memory slice.
-3. Call `get_observations` only for the specific IDs you actually need.
+1. Call `hivemind_context` when you need live ownership plus compact relevant memory hits in one request.
+2. Call `hivemind` when you only need active branch/worktree/task state from `.omx`.
+3. Call `search` or `list_sessions` plus `timeline` to narrow memory manually.
+4. Call `get_observations` only for the specific IDs you actually need.
 
 ## Repo Layout
 
@@ -90,7 +92,7 @@ IDE hooks -> CLI hook runner -> MemoryStore
                                |- SQLite / FTS / embeddings
 
 MCP client -> apps/mcp-server -> MemoryStore
-Browser    -> apps/worker     -> MemoryStore
+Browser    -> apps/worker     -> MemoryStore + Hivemind dashboard
 ```
 
 Write path:
@@ -105,7 +107,7 @@ Write path:
 Read path:
 
 - Agents use MCP for compact-first retrieval.
-- Humans use the local viewer on `127.0.0.1`.
+- Humans use the local viewer and runtime dashboard on `127.0.0.1`.
 - Multi-agent runtime state comes from `.omx/state/active-sessions/*.json` and worktree `AGENT.lock` telemetry when available.
 
 ## Quick Start
@@ -168,6 +170,10 @@ It reads runtime state from:
 - `.omc/agent-worktrees/*/AGENT.lock`
 
 This is meant to answer "who is doing what right now?" before a model starts pulling historical memory.
+
+`hivemind_context` adds the next step: it returns the same lane map plus a compact memory hit list derived from either an explicit `query` or the current active task text. It is the preferred first call for takeover, review, or resume flows because it preserves progressive retrieval while reducing MCP round trips.
+
+The worker viewer also renders a Hivemind runtime dashboard on `/` and exposes the same runtime snapshot at `/api/hivemind`.
 
 ## Development
 

@@ -1,6 +1,6 @@
 # MCP tools
 
-cavemem exposes five tools over an MCP stdio server. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
+cavemem exposes six tools over an MCP stdio server. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
 
 The recommended workflow is a three-layer pattern:
 
@@ -8,7 +8,7 @@ The recommended workflow is a three-layer pattern:
 2. Review IDs.
 3. `get_observations` with the filtered set.
 
-For multi-agent runtime awareness, call `hivemind` first. It returns a compact map of active worktrees, branches, agents, and task previews from `.omx` proxy-runtime state without fetching observation bodies.
+For multi-agent runtime awareness, call `hivemind_context` first when you need ownership plus likely memory hits, or `hivemind` when you only need the runtime map. Both return compact active worktrees, branches, agents, and task previews from `.omx` proxy-runtime state without fetching observation bodies.
 
 Following this pattern saves ~10× tokens versus fetching full bodies upfront.
 
@@ -117,6 +117,56 @@ Sources:
 - `.omx/agent-worktrees/*/AGENT.lock` and `.omc/agent-worktrees/*/AGENT.lock` as a telemetry fallback for task previews.
 
 Use this from a Codex skill as the first context step when the skill needs to know which session owns which task before reading memory timelines.
+
+## `hivemind_context`
+
+Return live lane ownership plus compact relevant memory hits in one request.
+
+```json
+{
+  "name": "hivemind_context",
+  "input": {
+    "repo_root": "/home/deadpool/Documents/recodee",
+    "query": "session takeover stale source",
+    "memory_limit": 3,
+    "limit": 20
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "generated_at": "2026-04-23T08:01:00.000Z",
+  "summary": {
+    "lane_count": 1,
+    "memory_hit_count": 3,
+    "needs_attention_count": 0,
+    "next_action": "Use lane ownership first, then fetch only the specific memory IDs needed."
+  },
+  "lanes": [
+    {
+      "branch": "agent/codex/live-task",
+      "task": "Expose runtime tasks to Codex",
+      "owner": "codex/codex",
+      "activity": "working",
+      "needs_attention": false
+    }
+  ],
+  "memory_hits": [
+    { "id": 42, "session_id": "sess_abc", "snippet": "compact hit", "score": 1.2, "ts": 1710000000000 }
+  ]
+}
+```
+
+Inputs:
+
+- `repo_root`, `repo_roots`, `include_stale`, and `limit`: same as `hivemind`.
+- `query`: optional memory query. If omitted, the server derives one from active task text.
+- `memory_limit`: compact memory hits to return, capped at 10 and defaulting to 3.
+
+Use this for takeover, review, or resume flows where the agent needs current ownership and a small memory index before deciding which full observations to fetch.
 
 ## Contract stability
 

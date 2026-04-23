@@ -4,14 +4,22 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expand } from '@cavemem/compress';
 import { type Settings, loadSettings, resolveDataDir } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
+import { type HivemindOptions, MemoryStore, readHivemind } from '@cavemem/core';
 import { createEmbedder } from '@cavemem/embedding';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
 import { renderIndex, renderSession } from './viewer.js';
 
-export function buildApp(store: MemoryStore, loop?: EmbedLoopHandle): Hono {
+export interface WorkerAppOptions {
+  hivemindRepoRoots?: string[];
+}
+
+export function buildApp(
+  store: MemoryStore,
+  loop?: EmbedLoopHandle,
+  options: WorkerAppOptions = {},
+): Hono {
   const app = new Hono();
 
   app.use('*', async (_c, next) => {
@@ -31,6 +39,8 @@ export function buildApp(store: MemoryStore, loop?: EmbedLoopHandle): Hono {
     return c.json(store.storage.listSessions(limit));
   });
 
+  app.get('/api/hivemind', (c) => c.json(readWorkerHivemind(options)));
+
   app.get('/api/sessions/:id/observations', (c) => {
     const id = c.req.param('id');
     const limit = Number(c.req.query('limit') ?? 200);
@@ -44,7 +54,9 @@ export function buildApp(store: MemoryStore, loop?: EmbedLoopHandle): Hono {
     return c.json(await store.search(q, limit));
   });
 
-  app.get('/', (c) => c.html(renderIndex(store.storage.listSessions(50))));
+  app.get('/', (c) =>
+    c.html(renderIndex(store.storage.listSessions(50), readWorkerHivemind(options))),
+  );
   app.get('/sessions/:id', (c) => {
     const id = c.req.param('id');
     const session = store.storage.getSession(id);
@@ -59,6 +71,14 @@ export function buildApp(store: MemoryStore, loop?: EmbedLoopHandle): Hono {
   });
 
   return app;
+}
+
+function readWorkerHivemind(options: WorkerAppOptions): ReturnType<typeof readHivemind> {
+  const input: HivemindOptions = { limit: 20 };
+  if (options.hivemindRepoRoots?.length) {
+    input.repoRoots = options.hivemindRepoRoots;
+  }
+  return readHivemind(input);
 }
 
 function pidFilePath(settings: Settings): string {

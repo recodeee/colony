@@ -48,6 +48,7 @@ describe('MCP server', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'get_observations',
       'hivemind',
+      'hivemind_context',
       'list_sessions',
       'search',
       'timeline',
@@ -110,6 +111,67 @@ describe('MCP server', () => {
       pid_alive: true,
     });
     expect(payload.sessions[0]).not.toHaveProperty('content');
+  });
+
+  it('hivemind_context returns lanes plus compact memory hits', async () => {
+    const repoRoot = join(dir, 'repo-context');
+    const worktreePath = join(repoRoot, '.omx', 'agent-worktrees', 'agent__codex__context-task');
+    const activeSessionDir = join(repoRoot, '.omx', 'state', 'active-sessions');
+    const now = new Date().toISOString();
+    mkdirSync(activeSessionDir, { recursive: true });
+    mkdirSync(worktreePath, { recursive: true });
+    writeFileSync(
+      join(activeSessionDir, 'agent__codex__context-task.json'),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          repoRoot,
+          branch: 'agent/codex/context-task',
+          taskName: 'Ship hivemind context',
+          latestTaskPreview: 'Expose compact context for active lanes',
+          agentName: 'codex',
+          worktreePath,
+          pid: process.pid,
+          cliName: 'codex',
+          startedAt: now,
+          lastHeartbeatAt: now,
+          state: 'working',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+    store.startSession({ id: 'ctx', ide: 'test', cwd: repoRoot });
+    store.addObservation({
+      session_id: 'ctx',
+      kind: 'note',
+      content: 'Hivemind context should fetch compact memory hits before full observations.',
+    });
+
+    const res = await client.callTool({
+      name: 'hivemind_context',
+      arguments: { repo_root: repoRoot, query: 'hivemind context', memory_limit: 2 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      summary: { lane_count: number; memory_hit_count: number; next_action: string };
+      lanes: Array<Record<string, unknown>>;
+      memory_hits: Array<Record<string, unknown>>;
+    };
+
+    expect(payload.summary.lane_count).toBe(1);
+    expect(payload.summary.memory_hit_count).toBeGreaterThan(0);
+    expect(payload.summary.next_action).toMatch(/fetch only/);
+    expect(payload.lanes[0]).toMatchObject({
+      branch: 'agent/codex/context-task',
+      owner: 'codex/codex',
+      activity: 'working',
+      needs_attention: false,
+    });
+    expect(payload.memory_hits[0]).toHaveProperty('id');
+    expect(payload.memory_hits[0]).toHaveProperty('snippet');
+    expect(payload.memory_hits[0]).not.toHaveProperty('content');
   });
 
   it('hivemind falls back to worktree AGENT.lock task previews', async () => {

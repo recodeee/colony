@@ -3,12 +3,19 @@ import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { type Settings, loadSettings, resolveDataDir } from '@cavemem/config';
-import { type Embedder, MemoryStore } from '@cavemem/core';
+import {
+  type Embedder,
+  type HivemindOptions,
+  type HivemindSession,
+  type HivemindSnapshot,
+  MemoryStore,
+  type SearchResult,
+  readHivemind,
+} from '@cavemem/core';
 import { createEmbedder } from '@cavemem/embedding';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readHivemind } from './hivemind.js';
 
 /**
  * MCP stdio server exposing progressive-disclosure tools:
@@ -17,6 +24,7 @@ import { readHivemind } from './hivemind.js';
  * - get_observations: full bodies by ID
  * - list_sessions: recent sessions for navigation
  * - hivemind: compact proxy-runtime active task map
+ * - hivemind_context: active task map plus compact relevant memory hits
  *
  * Embedder is loaded lazily on first search — keeps MCP handshake fast.
  */
@@ -135,7 +143,162 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
     },
   );
 
+  server.tool(
+    'hivemind_context',
+    'Return active task ownership plus compact relevant memory hits. Use before fetching full observations.',
+    {
+      repo_root: z.string().min(1).optional(),
+      repo_roots: z.array(z.string().min(1)).max(20).optional(),
+      include_stale: z.boolean().optional(),
+      limit: z.number().int().positive().max(100).optional(),
+      query: z.string().min(1).optional(),
+      memory_limit: z.number().int().positive().max(10).optional(),
+    },
+    async ({ repo_root, repo_roots, include_stale, limit, query, memory_limit }) => {
+      const snapshot = readHivemind(
+        toHivemindOptions({ repo_root, repo_roots, include_stale, limit }),
+      );
+      const memoryLimit = memory_limit ?? 3;
+      const contextQuery = buildContextQuery(query, snapshot.sessions);
+      let memoryHits: SearchResult[] = [];
+
+      if (contextQuery) {
+        const e = (await resolveEmbedder()) ?? undefined;
+        memoryHits = await store.search(contextQuery, memoryLimit, e);
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(buildHivemindContext(snapshot, memoryHits, contextQuery)),
+          },
+        ],
+      };
+    },
+  );
+
   return server;
+}
+
+interface HivemindToolOptions {
+  repo_root: string | undefined;
+  repo_roots: string[] | undefined;
+  include_stale: boolean | undefined;
+  limit: number | undefined;
+}
+
+interface HivemindContextLane {
+  repo_root: string;
+  branch: string;
+  task: string;
+  owner: string;
+  activity: HivemindSession['activity'];
+  activity_summary: string;
+  needs_attention: boolean;
+  risk: string;
+  source: HivemindSession['source'];
+  worktree_path: string;
+  updated_at: string;
+  elapsed_seconds: number;
+}
+
+interface HivemindContext {
+  generated_at: string;
+  repo_roots: string[];
+  summary: {
+    lane_count: number;
+    memory_hit_count: number;
+    needs_attention_count: number;
+    next_action: string;
+  };
+  counts: HivemindSnapshot['counts'];
+  query: string;
+  lanes: HivemindContextLane[];
+  memory_hits: SearchResult[];
+}
+
+function toHivemindOptions(input: HivemindToolOptions): HivemindOptions {
+  const options: HivemindOptions = {};
+  if (input.repo_root !== undefined) options.repoRoot = input.repo_root;
+  if (input.repo_roots !== undefined) options.repoRoots = input.repo_roots;
+  if (input.include_stale !== undefined) options.includeStale = input.include_stale;
+  if (input.limit !== undefined) options.limit = input.limit;
+  return options;
+}
+
+function buildContextQuery(query: string | undefined, sessions: HivemindSession[]): string {
+  if (query?.trim()) return query.trim();
+  const taskText = sessions
+    .flatMap((session) => [session.task, session.task_name, session.routing_reason])
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return [...new Set(taskText)].join(' ').slice(0, 800);
+}
+
+function buildHivemindContext(
+  snapshot: HivemindSnapshot,
+  memoryHits: SearchResult[],
+  query: string,
+): HivemindContext {
+  const lanes = snapshot.sessions.map(toContextLane);
+  const needsAttentionCount = lanes.filter((lane) => lane.needs_attention).length;
+
+  return {
+    generated_at: snapshot.generated_at,
+    repo_roots: snapshot.repo_roots,
+    summary: {
+      lane_count: lanes.length,
+      memory_hit_count: memoryHits.length,
+      needs_attention_count: needsAttentionCount,
+      next_action: nextAction(lanes, memoryHits),
+    },
+    counts: snapshot.counts,
+    query,
+    lanes,
+    memory_hits: memoryHits,
+  };
+}
+
+function toContextLane(session: HivemindSession): HivemindContextLane {
+  const risk = laneRisk(session);
+  return {
+    repo_root: session.repo_root,
+    branch: session.branch,
+    task: session.task,
+    owner: `${session.agent}/${session.cli}`,
+    activity: session.activity,
+    activity_summary: session.activity_summary,
+    needs_attention: risk !== 'none',
+    risk,
+    source: session.source,
+    worktree_path: session.worktree_path,
+    updated_at: session.updated_at,
+    elapsed_seconds: session.elapsed_seconds,
+  };
+}
+
+function laneRisk(session: HivemindSession): string {
+  if (session.activity === 'dead') return 'dead session';
+  if (session.activity === 'stalled') return 'stale telemetry';
+  if (session.activity === 'unknown') return 'unknown runtime state';
+  return 'none';
+}
+
+function nextAction(lanes: HivemindContextLane[], memoryHits: SearchResult[]): string {
+  if (lanes.some((lane) => lane.needs_attention)) {
+    return 'Inspect lanes with needs_attention before taking over or editing nearby files.';
+  }
+  if (lanes.length > 0 && memoryHits.length > 0) {
+    return 'Use lane ownership first, then fetch only the specific memory IDs needed.';
+  }
+  if (lanes.length > 0) {
+    return 'Use lane ownership before editing; no matching memory hit was needed.';
+  }
+  if (memoryHits.length > 0) {
+    return 'No live lanes found; fetch only the memory IDs needed.';
+  }
+  return 'No live lanes or matching memory found.';
 }
 
 async function main(): Promise<void> {
