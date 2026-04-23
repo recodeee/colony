@@ -9,3 +9,13 @@ export {
 export { hybridRank } from './ranker.js';
 export type { SearchResult, GetObservationsOptions, Observation, Session } from './types.js';
 export { createSessionId } from './ids.js';
+export {
+  TaskThread,
+  type CoordinationKind,
+  type HandoffMetadata,
+  type HandoffObservation,
+  type HandoffStatus,
+  type HandoffTarget,
+  type HandOffArgs,
+} from './task-thread.js';
+export { detectRepoBranch } from './git-detect.js';

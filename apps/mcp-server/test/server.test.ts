@@ -51,6 +51,14 @@ describe('MCP server', () => {
       'hivemind_context',
       'list_sessions',
       'search',
+      'task_accept_handoff',
+      'task_claim_file',
+      'task_decline_handoff',
+      'task_hand_off',
+      'task_list',
+      'task_post',
+      'task_timeline',
+      'task_updates_since',
       'timeline',
     ]);
   });

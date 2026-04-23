@@ -16,6 +16,8 @@ export interface ObservationRow {
   intensity: string | null;
   ts: number;
   metadata: string | null;
+  task_id: number | null;
+  reply_to: number | null;
 }
 
 export interface SummaryRow {
@@ -36,6 +38,41 @@ export interface NewObservation {
   intensity: string | null;
   metadata?: Record<string, unknown>;
   ts?: number;
+  task_id?: number | null;
+  reply_to?: number | null;
+}
+
+export interface TaskRow {
+  id: number;
+  title: string;
+  repo_root: string;
+  branch: string;
+  status: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface NewTask {
+  title: string;
+  repo_root: string;
+  branch: string;
+  created_by: string;
+}
+
+export interface TaskParticipantRow {
+  task_id: number;
+  session_id: string;
+  agent: string;
+  joined_at: number;
+  left_at: number | null;
+}
+
+export interface TaskClaimRow {
+  task_id: number;
+  file_path: string;
+  session_id: string;
+  claimed_at: number;
 }
 
 export interface NewSummary {

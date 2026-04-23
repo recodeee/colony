@@ -6,4 +6,8 @@ export type {
   NewObservation,
   NewSummary,
   SearchHit,
+  TaskRow,
+  NewTask,
+  TaskParticipantRow,
+  TaskClaimRow,
 } from './types.js';

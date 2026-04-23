@@ -7,6 +7,8 @@ export interface Observation {
   intensity: string | null;
   ts: number;
   metadata: Record<string, unknown> | null;
+  task_id: number | null;
+  reply_to: number | null;
 }
 
 export interface Session {

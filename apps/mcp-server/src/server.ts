@@ -10,6 +10,7 @@ import {
   type HivemindSnapshot,
   MemoryStore,
   type SearchResult,
+  TaskThread,
   readHivemind,
 } from '@cavemem/core';
 import { createEmbedder } from '@cavemem/embedding';
@@ -175,6 +176,220 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
           },
         ],
       };
+    },
+  );
+
+  // --- task thread tools ---
+  //
+  // Agents already know their session_id from SessionStart; it's passed
+  // explicitly on every call so this server can stay session-agnostic and
+  // serve multiple agents (e.g. a shared viewer) without ambient state.
+
+  server.tool(
+    'task_list',
+    'List recent task threads. Each task groups sessions collaborating on the same (repo_root, branch).',
+    { limit: z.number().int().positive().max(200).optional() },
+    async ({ limit }) => {
+      const tasks = store.storage.listTasks(limit ?? 50);
+      return { content: [{ type: 'text', text: JSON.stringify(tasks) }] };
+    },
+  );
+
+  server.tool(
+    'task_timeline',
+    'Recent observations on a task thread (compact: id, kind, session_id, ts, reply_to).',
+    {
+      task_id: z.number().int().positive(),
+      limit: z.number().int().positive().max(200).optional(),
+    },
+    async ({ task_id, limit }) => {
+      const rows = store.storage.taskTimeline(task_id, limit ?? 50);
+      const compact = rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        session_id: r.session_id,
+        ts: r.ts,
+        reply_to: r.reply_to,
+      }));
+      return { content: [{ type: 'text', text: JSON.stringify(compact) }] };
+    },
+  );
+
+  server.tool(
+    'task_updates_since',
+    "Task-thread observations after a cursor ts, excluding this session's own posts.",
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      since_ts: z.number().int().nonnegative(),
+      limit: z.number().int().positive().max(200).optional(),
+    },
+    async ({ task_id, session_id, since_ts, limit }) => {
+      const rows = store.storage
+        .taskObservationsSince(task_id, since_ts, limit ?? 50)
+        .filter((o) => o.session_id !== session_id);
+      const compact = rows.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        session_id: r.session_id,
+        ts: r.ts,
+      }));
+      return { content: [{ type: 'text', text: JSON.stringify(compact) }] };
+    },
+  );
+
+  server.tool(
+    'task_post',
+    'Post a coordination message on a task thread. Use specific tools for claim / hand_off / accept.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      kind: z.enum(['question', 'answer', 'decision', 'blocker', 'note']),
+      content: z.string().min(1),
+      reply_to: z.number().int().positive().optional(),
+    },
+    async ({ task_id, session_id, kind, content, reply_to }) => {
+      const thread = new TaskThread(store, task_id);
+      const id = thread.post({
+        session_id,
+        kind,
+        content,
+        ...(reply_to !== undefined ? { reply_to } : {}),
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+    },
+  );
+
+  server.tool(
+    'task_claim_file',
+    'Claim a file on a task thread so overlapping edits from other sessions surface a warning next turn.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      file_path: z.string().min(1),
+      note: z.string().optional(),
+    },
+    async ({ task_id, session_id, file_path, note }) => {
+      const thread = new TaskThread(store, task_id);
+      const id = thread.claimFile({
+        session_id,
+        file_path,
+        ...(note !== undefined ? { note } : {}),
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ observation_id: id }) }] };
+    },
+  );
+
+  server.tool(
+    'task_hand_off',
+    'Hand off work to another agent on this task. Atomically releases/transfers file claims.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1).describe('your session_id (the sender)'),
+      agent: z.string().min(1).describe('your agent name, e.g. claude or codex'),
+      to_agent: z.enum(['claude', 'codex', 'any']),
+      to_session_id: z.string().optional(),
+      summary: z.string().min(1),
+      next_steps: z.array(z.string()).optional(),
+      blockers: z.array(z.string()).optional(),
+      released_files: z.array(z.string()).optional(),
+      transferred_files: z.array(z.string()).optional(),
+      expires_in_minutes: z.number().int().positive().max(480).optional(),
+    },
+    async (args) => {
+      const thread = new TaskThread(store, args.task_id);
+      const id = thread.handOff({
+        from_session_id: args.session_id,
+        from_agent: args.agent,
+        to_agent: args.to_agent,
+        ...(args.to_session_id !== undefined ? { to_session_id: args.to_session_id } : {}),
+        summary: args.summary,
+        ...(args.next_steps !== undefined ? { next_steps: args.next_steps } : {}),
+        ...(args.blockers !== undefined ? { blockers: args.blockers } : {}),
+        ...(args.released_files !== undefined ? { released_files: args.released_files } : {}),
+        ...(args.transferred_files !== undefined
+          ? { transferred_files: args.transferred_files }
+          : {}),
+        ...(args.expires_in_minutes !== undefined
+          ? { expires_in_ms: args.expires_in_minutes * 60_000 }
+          : {}),
+      });
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify({ handoff_observation_id: id, status: 'pending' }) },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    'task_accept_handoff',
+    'Accept a pending handoff addressed to you. Installs transferred file claims under your session.',
+    {
+      handoff_observation_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+    },
+    async ({ handoff_observation_id, session_id }) => {
+      const obs = store.storage.getObservation(handoff_observation_id);
+      if (!obs?.task_id) {
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ error: 'observation is not on a task' }) },
+          ],
+          isError: true,
+        };
+      }
+      const thread = new TaskThread(store, obs.task_id);
+      try {
+        thread.acceptHandoff(handoff_observation_id, session_id);
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'accepted' }) }] };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.tool(
+    'task_decline_handoff',
+    'Decline a pending handoff. Records a reason and cancels the handoff so the sender can reissue.',
+    {
+      handoff_observation_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      reason: z.string().optional(),
+    },
+    async ({ handoff_observation_id, session_id, reason }) => {
+      const obs = store.storage.getObservation(handoff_observation_id);
+      if (!obs?.task_id) {
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ error: 'observation is not on a task' }) },
+          ],
+          isError: true,
+        };
+      }
+      const thread = new TaskThread(store, obs.task_id);
+      try {
+        thread.declineHandoff(handoff_observation_id, session_id, reason);
+        return { content: [{ type: 'text', text: JSON.stringify({ status: 'cancelled' }) }] };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+            },
+          ],
+          isError: true,
+        };
+      }
     },
   );
 

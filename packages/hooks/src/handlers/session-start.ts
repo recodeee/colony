@@ -1,4 +1,4 @@
-import type { MemoryStore } from '@cavemem/core';
+import { type MemoryStore, TaskThread, detectRepoBranch } from '@cavemem/core';
 import type { HookInput } from '../types.js';
 
 export async function sessionStart(store: MemoryStore, input: HookInput): Promise<string> {
@@ -9,6 +9,14 @@ export async function sessionStart(store: MemoryStore, input: HookInput): Promis
     ide: input.ide ?? 'unknown',
     cwd: input.cwd ?? null,
   });
+
+  const priorPreface = buildPriorPreface(store, input);
+  const taskPreface = buildTaskPreface(store, input);
+
+  return [priorPreface, taskPreface].filter(Boolean).join('\n\n');
+}
+
+function buildPriorPreface(store: MemoryStore, input: HookInput): string {
   // For resume/clear/compact the agent already has its own context; injecting
   // a "Prior-session context" preface would be noisy and possibly stale.
   if (input.source && input.source !== 'startup') return '';
@@ -23,4 +31,68 @@ export async function sessionStart(store: MemoryStore, input: HookInput): Promis
     .filter(Boolean);
   if (hints.length === 0) return '';
   return `## Prior-session context\n${hints.join('\n---\n')}`;
+}
+
+/**
+ * Auto-join the task for this (repo_root, branch) and inject any pending
+ * handoffs or co-participants. This is the moment the hivemind flips from
+ * passive synchronised memory into active collaboration: the new agent
+ * starts the turn already knowing who else is on this branch.
+ */
+function buildTaskPreface(store: MemoryStore, input: HookInput): string {
+  const cwd = input.cwd;
+  if (!cwd) return '';
+  const detected = detectRepoBranch(cwd);
+  if (!detected) return '';
+  const agent = deriveAgent(input.ide, detected.branch);
+  const thread = TaskThread.open(store, {
+    repo_root: detected.repo_root,
+    branch: detected.branch,
+    session_id: input.session_id,
+  });
+  thread.join(input.session_id, agent);
+
+  const pending = thread.pendingHandoffsFor(input.session_id, agent);
+  const others = thread.participants().filter((p) => p.session_id !== input.session_id);
+
+  const lines: string[] = [];
+  if (others.length > 0 || pending.length > 0) {
+    const who =
+      others.length > 0
+        ? others.map((p) => `${p.agent}@${p.session_id.slice(0, 8)}`).join(', ')
+        : 'you only';
+    lines.push(
+      `## Task thread #${thread.task_id} (${detected.branch})`,
+      `Joined with: ${who}. Post coordination via MCP tools task_post / task_claim_file / task_hand_off.`,
+    );
+  }
+  for (const h of pending) {
+    const minsLeft = Math.max(0, Math.round((h.meta.expires_at - Date.now()) / 60_000));
+    lines.push('');
+    lines.push(
+      `PENDING HANDOFF #${h.id} from ${h.meta.from_agent} (expires in ${minsLeft}m):`,
+      `  summary: ${h.meta.summary}`,
+    );
+    if (h.meta.next_steps.length) {
+      lines.push(`  next: ${h.meta.next_steps.join(' | ')}`);
+    }
+    if (h.meta.blockers.length) {
+      lines.push(`  blockers: ${h.meta.blockers.join(' | ')}`);
+    }
+    if (h.meta.transferred_files.length) {
+      lines.push(`  transferred_files: ${h.meta.transferred_files.join(', ')}`);
+    }
+    lines.push(`  accept with: task_accept_handoff(handoff_observation_id=${h.id})`);
+  }
+  return lines.join('\n');
+}
+
+function deriveAgent(ide: string | undefined, branch: string): string {
+  if (ide === 'claude-code') return 'claude';
+  if (ide === 'codex') return 'codex';
+  // Branches under `agent/<name>/...` carry their agent in the path itself,
+  // which is more reliable than the IDE hint when one agent drives another.
+  const parts = branch.split('/').filter(Boolean);
+  if (parts[0] === 'agent' && parts[1]) return parts[1];
+  return ide ?? 'agent';
 }

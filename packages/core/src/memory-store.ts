@@ -49,6 +49,8 @@ export class MemoryStore {
     kind: string;
     content: string;
     metadata?: Record<string, unknown>;
+    task_id?: number | null;
+    reply_to?: number | null;
   }): number {
     const redacted = redactPrivate(p.content);
     if (!redacted.trim()) return -1;
@@ -62,6 +64,8 @@ export class MemoryStore {
       compressed: true,
       intensity,
       ...(p.metadata !== undefined ? { metadata: p.metadata } : {}),
+      ...(p.task_id !== undefined ? { task_id: p.task_id } : {}),
+      ...(p.reply_to !== undefined ? { reply_to: p.reply_to } : {}),
     };
     return this.storage.insertObservation(obs);
   }
@@ -187,6 +191,8 @@ function toObservation(r: ObservationRow, expandText: boolean): Observation {
     intensity: r.intensity,
     ts: r.ts,
     metadata: r.metadata ? safeParse(r.metadata) : null,
+    task_id: r.task_id,
+    reply_to: r.reply_to,
   };
 }
 
