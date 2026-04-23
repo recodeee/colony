@@ -56,6 +56,29 @@ function seedRuntime(repoRoot: string): void {
   );
 }
 
+function seedFileLocks(repoRoot: string): void {
+  const lockStateDir = join(repoRoot, '.omx', 'state');
+  const now = new Date().toISOString();
+  mkdirSync(lockStateDir, { recursive: true });
+  writeFileSync(
+    join(lockStateDir, 'agent-file-locks.json'),
+    `${JSON.stringify(
+      {
+        locks: {
+          'apps/worker/src/server.ts': {
+            branch: 'agent/codex/viewer-locks',
+            claimed_at: now,
+            allow_delete: false,
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+}
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'cavemem-worker-'));
   store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
@@ -97,6 +120,25 @@ describe('worker HTTP', () => {
     expect(body.sessions[0]).toMatchObject({
       branch: 'agent/codex/viewer-task',
       task: 'Render active lanes in worker viewer',
+    });
+  });
+
+  it('GET /api/hivemind returns GX file-lock fallback lanes', async () => {
+    const repoRoot = join(dir, 'repo-file-locks');
+    seedFileLocks(repoRoot);
+    const appWithRuntime = buildApp(store, undefined, { hivemindRepoRoots: [repoRoot] });
+
+    const res = await appWithRuntime.request('/api/hivemind');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      session_count: number;
+      sessions: Array<{ branch: string; source: string; locked_file_count: number }>;
+    };
+    expect(body.session_count).toBe(1);
+    expect(body.sessions[0]).toMatchObject({
+      branch: 'agent/codex/viewer-locks',
+      source: 'file-lock',
+      locked_file_count: 1,
     });
   });
 

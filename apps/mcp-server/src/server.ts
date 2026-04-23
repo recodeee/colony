@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { type Settings, loadSettings, resolveDataDir } from '@cavemem/config';
 import {
+  type AgentCapabilities,
   DEFAULT_CAPABILITIES,
   type Embedder,
   type HivemindOptions,
@@ -482,7 +483,10 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
         .default({}),
     },
     async ({ agent, capabilities }) => {
-      const profile = saveProfile(store.storage, agent, capabilities);
+      const definedCapabilities = Object.fromEntries(
+        Object.entries(capabilities).filter(([, value]) => value !== undefined),
+      ) as Partial<AgentCapabilities>;
+      const profile = saveProfile(store.storage, agent, definedCapabilities);
       return { content: [{ type: 'text', text: JSON.stringify(profile) }] };
     },
   );
@@ -541,6 +545,8 @@ interface HivemindContextLane {
   worktree_path: string;
   updated_at: string;
   elapsed_seconds: number;
+  locked_file_count: number;
+  locked_file_preview: string[];
 }
 
 interface HivemindContext {
@@ -570,7 +576,12 @@ function toHivemindOptions(input: HivemindToolOptions): HivemindOptions {
 function buildContextQuery(query: string | undefined, sessions: HivemindSession[]): string {
   if (query?.trim()) return query.trim();
   const taskText = sessions
-    .flatMap((session) => [session.task, session.task_name, session.routing_reason])
+    .flatMap((session) => [
+      session.task,
+      session.task_name,
+      session.routing_reason,
+      ...session.locked_file_preview,
+    ])
     .map((entry) => entry.trim())
     .filter(Boolean);
   return [...new Set(taskText)].join(' ').slice(0, 800);
@@ -615,6 +626,8 @@ function toContextLane(session: HivemindSession): HivemindContextLane {
     worktree_path: session.worktree_path,
     updated_at: session.updated_at,
     elapsed_seconds: session.elapsed_seconds,
+    locked_file_count: session.locked_file_count,
+    locked_file_preview: session.locked_file_preview,
   };
 }
 

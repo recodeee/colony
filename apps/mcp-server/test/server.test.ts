@@ -250,6 +250,58 @@ describe('MCP server', () => {
     expect(payload.sessions[0]).not.toHaveProperty('email');
   });
 
+  it('hivemind falls back to GX file locks when no live session exists', async () => {
+    const repoRoot = join(dir, 'repo-file-locks');
+    const lockStateDir = join(repoRoot, '.omx', 'state');
+    const now = new Date().toISOString();
+    mkdirSync(lockStateDir, { recursive: true });
+    writeFileSync(
+      join(lockStateDir, 'agent-file-locks.json'),
+      `${JSON.stringify(
+        {
+          locks: {
+            'apps/mcp-server/src/server.ts': {
+              branch: 'agent/codex/gx-locks',
+              claimed_at: now,
+              allow_delete: false,
+            },
+            'packages/core/src/hivemind.ts': {
+              branch: 'agent/codex/gx-locks',
+              claimed_at: now,
+              allow_delete: false,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    const res = await client.callTool({
+      name: 'hivemind_context',
+      arguments: { repo_root: repoRoot, limit: 5 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      summary: { lane_count: number };
+      counts: Record<string, number>;
+      lanes: Array<Record<string, unknown>>;
+    };
+
+    expect(payload.summary.lane_count).toBe(1);
+    expect(payload.counts.working).toBe(1);
+    expect(payload.lanes[0]).toMatchObject({
+      branch: 'agent/codex/gx-locks',
+      task: 'GX locks: apps/mcp-server/src/server.ts, packages/core/src/hivemind.ts',
+      owner: 'codex/gx',
+      source: 'file-lock',
+      activity: 'working',
+      locked_file_count: 2,
+      locked_file_preview: ['apps/mcp-server/src/server.ts', 'packages/core/src/hivemind.ts'],
+    });
+  });
+
   it('search returns compact hits (id, snippet, score, ts)', async () => {
     await seed();
     const res = await client.callTool({ name: 'search', arguments: { query: 'cargo' } });

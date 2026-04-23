@@ -26,5 +26,5 @@ What it does:
 - Shows repo-root git changes in a sibling `CHANGES` section when the guarded repo itself is dirty.
 - Derives session state from dirty worktree status, git conflict markers, heartbeat freshness, PID liveness, and recent file mtimes, surfaces working/dead/conflict counts in the repo/header summary, and shows changed-file counts for active edits.
 - Uses distinct VS Code codicons for each session state, including animated `loading~spin` for `WORKING NOW`.
-- Reads repo-local presence files from `.omx/state/active-sessions/`, expects `lastHeartbeatAt` freshness, and falls back to managed worktree-root `AGENT.lock` telemetry when the launcher session file is absent.
+- Reads repo-local presence files from `.omx/state/active-sessions/`, expects `lastHeartbeatAt` freshness, and falls back to managed worktree-root `AGENT.lock` telemetry plus `.omx/state/agent-file-locks.json` ownership when launcher session files are absent.
 - Publishes `guardex.hasAgents` and `guardex.hasConflicts` context keys for other VS Code contributions.

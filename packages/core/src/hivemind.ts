@@ -2,9 +2,12 @@ import { type Dirent, existsSync, readFileSync, readdirSync, statSync } from 'no
 import { basename, delimiter, join, resolve } from 'node:path';
 
 const ACTIVE_SESSIONS_RELATIVE_DIR = join('.omx', 'state', 'active-sessions');
+const FILE_LOCKS_RELATIVE_PATH = join('.omx', 'state', 'agent-file-locks.json');
 const MANAGED_WORKTREE_ROOTS = [join('.omx', 'agent-worktrees'), join('.omc', 'agent-worktrees')];
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const WORKTREE_LOCK_STALE_MS = 15 * 60 * 1000;
+const FILE_LOCK_STALE_MS = 60 * 60 * 1000;
+const FILE_LOCK_PREVIEW_LIMIT = 5;
 const DEFAULT_LIMIT = 50;
 
 export type HivemindActivity = 'working' | 'thinking' | 'idle' | 'stalled' | 'dead' | 'unknown';
@@ -19,7 +22,7 @@ export interface HivemindOptions {
 
 export interface HivemindSession {
   repo_root: string;
-  source: 'active-session' | 'worktree-lock';
+  source: 'active-session' | 'worktree-lock' | 'file-lock';
   branch: string;
   task: string;
   task_name: string;
@@ -42,6 +45,8 @@ export interface HivemindSession {
   snapshot_name: string;
   project_name: string;
   session_key: string;
+  locked_file_count: number;
+  locked_file_preview: string[];
   file_path: string;
 }
 
@@ -54,6 +59,22 @@ export interface HivemindSnapshot {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+interface FileLockClaim {
+  filePath: string;
+  branch: string;
+  claimedAt: string;
+}
+
+interface FileLockGroup {
+  branch: string;
+  claims: FileLockClaim[];
+  latestClaimedAt: string;
+  earliestClaimedAt: string;
+  preview: string[];
+  worktreePath: string;
+  filePath: string;
+}
 
 export function readHivemind(options: HivemindOptions = {}): HivemindSnapshot {
   const now = options.now ?? Date.now();
@@ -109,7 +130,7 @@ function readRepoSessions(repoRoot: string, now: number): HivemindSession[] {
     (session) => !activeWorktrees.has(resolve(session.worktree_path)),
   );
 
-  return [...activeSessions, ...lockSessions];
+  return mergeFileLockSessions(repoRoot, [...activeSessions, ...lockSessions], now);
 }
 
 function readActiveSessionFiles(repoRoot: string, now: number): HivemindSession[] {
@@ -179,6 +200,8 @@ function normalizeActiveSession(
     snapshot_name: '',
     project_name: '',
     session_key: readString(input.sessionKey) || readString(input.session_key),
+    locked_file_count: 0,
+    locked_file_preview: [],
     file_path: filePath,
   };
 }
@@ -260,9 +283,192 @@ function normalizeWorktreeLock(
         snapshot_name: entry.snapshotName,
         project_name: entry.projectName,
         session_key: entry.sessionKey,
+        locked_file_count: 0,
+        locked_file_preview: [],
         file_path: filePath,
       };
     });
+}
+
+function mergeFileLockSessions(
+  repoRoot: string,
+  sessions: HivemindSession[],
+  now: number,
+): HivemindSession[] {
+  const lockGroups = readFileLockGroups(repoRoot);
+  if (lockGroups.length === 0) return sessions;
+
+  const groupsByBranch = new Map(lockGroups.map((group) => [group.branch, group]));
+  const coveredBranches = new Set<string>();
+  const mergedSessions = sessions.map((session) => {
+    coveredBranches.add(session.branch);
+    const lockGroup = groupsByBranch.get(session.branch);
+    return lockGroup ? annotateSessionWithFileLocks(session, lockGroup, now) : session;
+  });
+
+  for (const lockGroup of lockGroups) {
+    if (!coveredBranches.has(lockGroup.branch)) {
+      mergedSessions.push(buildFileLockSession(repoRoot, lockGroup, now));
+    }
+  }
+
+  return mergedSessions;
+}
+
+function readFileLockGroups(repoRoot: string): FileLockGroup[] {
+  const filePath = join(repoRoot, FILE_LOCKS_RELATIVE_PATH);
+  const payload = readJsonFile(filePath);
+  if (!payload || !isRecord(payload.locks)) return [];
+
+  const claimsByBranch = new Map<string, FileLockClaim[]>();
+  for (const [lockPath, value] of Object.entries(payload.locks)) {
+    if (!isRecord(value)) continue;
+    const branch = readString(value.branch);
+    if (!branch) continue;
+    const claim: FileLockClaim = {
+      filePath: normalizeLockFilePath(lockPath),
+      branch,
+      claimedAt: normalizeIso(readString(value.claimed_at) || readString(value.claimedAt)),
+    };
+    const claims = claimsByBranch.get(branch) ?? [];
+    claims.push(claim);
+    claimsByBranch.set(branch, claims);
+  }
+
+  return [...claimsByBranch.entries()]
+    .map(([branch, claims]) => buildFileLockGroup(repoRoot, filePath, branch, claims))
+    .sort((left, right) => compareIsoDesc(left.latestClaimedAt, right.latestClaimedAt));
+}
+
+function buildFileLockGroup(
+  repoRoot: string,
+  filePath: string,
+  branch: string,
+  claims: FileLockClaim[],
+): FileLockGroup {
+  const sortedClaims = [...claims].sort((left, right) => {
+    const timeDelta = compareIsoDesc(left.claimedAt, right.claimedAt);
+    return timeDelta !== 0 ? timeDelta : left.filePath.localeCompare(right.filePath);
+  });
+  const validTimes = sortedClaims.map((claim) => claim.claimedAt).filter(Boolean);
+  return {
+    branch,
+    claims: sortedClaims,
+    latestClaimedAt: validTimes[0] ?? '',
+    earliestClaimedAt: validTimes.at(-1) ?? '',
+    preview: sortedClaims.slice(0, FILE_LOCK_PREVIEW_LIMIT).map((claim) => claim.filePath),
+    worktreePath: resolveFileLockWorktreePath(repoRoot, branch, sortedClaims),
+    filePath,
+  };
+}
+
+function annotateSessionWithFileLocks(
+  session: HivemindSession,
+  group: FileLockGroup,
+  now: number,
+): HivemindSession {
+  return {
+    ...session,
+    activity_summary: `${session.activity_summary} ${fileLockSummary(group, now)}`,
+    updated_at: latestIso(session.updated_at, group.latestClaimedAt),
+    locked_file_count: group.claims.length,
+    locked_file_preview: group.preview,
+  };
+}
+
+function buildFileLockSession(
+  repoRoot: string,
+  group: FileLockGroup,
+  now: number,
+): HivemindSession {
+  const updatedAt = group.latestClaimedAt;
+  const startedAt = group.earliestClaimedAt || updatedAt || new Date(now).toISOString();
+  const taskPreview = group.preview.join(', ');
+  const activity = classifyFileLockGroup(updatedAt, now);
+
+  return {
+    repo_root: resolve(repoRoot),
+    source: 'file-lock',
+    branch: group.branch,
+    task: taskPreview ? `GX locks: ${taskPreview}` : `GX locks on ${group.branch}`,
+    task_name: `GX file locks (${group.claims.length})`,
+    latest_task_preview: taskPreview,
+    agent: deriveAgentName(group.branch),
+    cli: 'gx',
+    state: '',
+    activity,
+    activity_summary: fileLockSummary(group, now),
+    worktree_path: group.worktreePath,
+    pid: null,
+    pid_alive: null,
+    started_at: startedAt,
+    last_heartbeat_at: '',
+    updated_at: updatedAt,
+    elapsed_seconds: elapsedSeconds(startedAt, now),
+    task_mode: '',
+    openspec_tier: '',
+    routing_reason: 'gx file locks',
+    snapshot_name: '',
+    project_name: '',
+    session_key: '',
+    locked_file_count: group.claims.length,
+    locked_file_preview: group.preview,
+    file_path: group.filePath,
+  };
+}
+
+function resolveFileLockWorktreePath(
+  repoRoot: string,
+  branch: string,
+  claims: FileLockClaim[],
+): string {
+  for (const claim of claims) {
+    const inferred = inferManagedWorktreeFromLockedPath(repoRoot, claim.filePath);
+    if (inferred) return inferred;
+  }
+  return findManagedWorktreeForBranch(repoRoot, branch) || resolve(repoRoot);
+}
+
+function inferManagedWorktreeFromLockedPath(repoRoot: string, filePath: string): string {
+  const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length < 3) return '';
+  if (parts[0] !== '.omx' && parts[0] !== '.omc') return '';
+  if (parts[1] !== 'agent-worktrees' || !parts[2]) return '';
+
+  const candidate = join(repoRoot, parts[0], parts[1], parts[2]);
+  return existsSync(candidate) ? resolve(candidate) : '';
+}
+
+function findManagedWorktreeForBranch(repoRoot: string, branch: string): string {
+  for (const relativeRoot of MANAGED_WORKTREE_ROOTS) {
+    const managedRoot = join(repoRoot, relativeRoot);
+    for (const entry of safeReadDir(managedRoot)) {
+      if (!entry.isDirectory()) continue;
+      const worktreePath = join(managedRoot, entry.name);
+      if (readWorktreeBranch(worktreePath) === branch) {
+        return resolve(worktreePath);
+      }
+    }
+  }
+  return '';
+}
+
+function normalizeLockFilePath(value: string): string {
+  return value.trim().replace(/\\/g, '/');
+}
+
+function classifyFileLockGroup(updatedAt: string, now: number): HivemindActivity {
+  const updatedAtMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedAtMs)) return 'unknown';
+  return now - updatedAtMs > FILE_LOCK_STALE_MS ? 'stalled' : 'working';
+}
+
+function fileLockSummary(group: FileLockGroup, now: number): string {
+  const count = group.claims.length;
+  if (!group.latestClaimedAt) {
+    return `GX locks ${count} file(s); latest claim timestamp unavailable.`;
+  }
+  return `GX locks ${count} file(s); latest claim ${formatElapsed(group.latestClaimedAt, now)} ago.`;
 }
 
 function flattenLockSessions(payload: JsonRecord): Array<{
@@ -355,6 +561,21 @@ function compareSessions(left: HivemindSession, right: HivemindSession): number 
   return `${left.repo_root}:${left.branch}:${left.task}`.localeCompare(
     `${right.repo_root}:${right.branch}:${right.task}`,
   );
+}
+
+function compareIsoDesc(left: string, right: string): number {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  const leftFinite = Number.isFinite(leftMs);
+  const rightFinite = Number.isFinite(rightMs);
+  if (leftFinite && rightFinite) return rightMs - leftMs;
+  if (leftFinite) return -1;
+  if (rightFinite) return 1;
+  return 0;
+}
+
+function latestIso(left: string, right: string): string {
+  return compareIsoDesc(left, right) <= 0 ? left : right;
 }
 
 function countActivities(sessions: HivemindSession[]): Record<HivemindActivity, number> {

@@ -98,12 +98,17 @@ function renderHivemindDashboard(snapshot: HivemindSnapshot): string {
 
 function renderLane(session: HivemindSession): string {
   const attention = laneNeedsAttention(session);
+  const lockSummary =
+    session.locked_file_count > 0
+      ? `<div class="meta">GX locks ${session.locked_file_count}: ${esc(session.locked_file_preview.join(', '))}</div>`
+      : '';
   return `
     <div class="card lane" data-attention="${String(attention)}">
       <strong>${esc(session.task || session.task_name || session.branch)}</strong>
       <span class="badge" data-attention="${String(attention)}">${esc(session.activity)}</span>
       <div class="meta">${esc(session.agent)}/${esc(session.cli)} · ${esc(session.branch)} · ${esc(session.source)}</div>
       <div class="meta">${esc(session.activity_summary)} Updated ${esc(session.updated_at || 'unknown')}.</div>
+      ${lockSummary}
       <div class="meta">${esc(session.worktree_path)}</div>
     </div>`;
 }
