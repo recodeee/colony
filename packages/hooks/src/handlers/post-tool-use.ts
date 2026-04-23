@@ -1,4 +1,4 @@
-import { PheromoneSystem, type MemoryStore } from '@cavemem/core';
+import { PheromoneSystem, ProposalSystem, type MemoryStore } from '@cavemem/core';
 import type { HookInput } from '../types.js';
 
 /**
@@ -55,6 +55,14 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
   // ("how much activity has happened here recently"). Both are cheap to
   // write; the preface code decides which one to surface at read time.
   depositPheromoneFromToolUse(store, input);
+
+  // Third side effect: passive proposal reinforcement. Editing a file
+  // listed in a pending proposal's touches_files is weak evidence that
+  // the proposal matters, so we count it as an 'adjacent' reinforcement.
+  // This is what lets proposals accumulate strength without agents
+  // thinking about them explicitly — the ordinary work of editing code
+  // feeds the foraging algorithm for free.
+  reinforceAdjacentProposals(store, input);
 }
 
 /**
@@ -143,6 +151,44 @@ export function depositPheromoneFromToolUse(
     pheromones.deposit({ task_id, file_path, session_id: input.session_id });
   }
   return { deposited: files };
+}
+
+/**
+ * Add a weak 'adjacent' reinforcement to every pending proposal on the
+ * current branch whose touches_files includes this edit's file_path.
+ * No-op when the session isn't on a task, when no write happened, or
+ * when the task row is somehow missing.
+ *
+ * Exported for tests.
+ */
+export function reinforceAdjacentProposals(
+  store: MemoryStore,
+  input: Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input'>,
+): { reinforced: number[] } {
+  const toolName = input.tool_name ?? input.tool ?? '';
+  const files = extractTouchedFiles(toolName, input.tool_input);
+  if (files.length === 0) return { reinforced: [] };
+
+  const task_id = store.storage.findActiveTaskForSession(input.session_id);
+  if (task_id === undefined) return { reinforced: [] };
+
+  const task = store.storage.getTask(task_id);
+  if (!task) return { reinforced: [] };
+
+  const proposals = new ProposalSystem(store);
+  const reinforced: number[] = [];
+  for (const file_path of files) {
+    const matches = proposals.pendingProposalsTouching({
+      repo_root: task.repo_root,
+      branch: task.branch,
+      file_path,
+    });
+    for (const proposal_id of matches) {
+      proposals.reinforce({ proposal_id, session_id: input.session_id, kind: 'adjacent' });
+      reinforced.push(proposal_id);
+    }
+  }
+  return { reinforced };
 }
 
 function stringifyShort(v: unknown): string {

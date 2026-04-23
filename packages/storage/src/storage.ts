@@ -5,10 +5,15 @@ import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import type {
   NewObservation,
   NewPheromone,
+  NewProposal,
+  NewReinforcement,
   NewSummary,
   NewTask,
   ObservationRow,
   PheromoneRow,
+  ProposalRow,
+  ProposalStatus,
+  ReinforcementRow,
   SearchHit,
   SessionRow,
   SummaryRow,
@@ -478,6 +483,90 @@ export class Storage {
     return this.db
       .prepare('SELECT * FROM pheromones WHERE task_id = ? ORDER BY deposited_at DESC')
       .all(task_id) as PheromoneRow[];
+  }
+
+  // --- proposals (pre-tasks that promote on collective reinforcement) ---
+
+  /**
+   * Insert a new pending proposal. `touches_files` is stored as JSON text —
+   * the caller stringifies; we keep the blob opaque because SQLite has no
+   * array type and JSON functions don't buy us enough to be worth the
+   * indexing complexity at this scale.
+   */
+  insertProposal(p: NewProposal): number {
+    const now = p.proposed_at ?? Date.now();
+    const info = this.db
+      .prepare(
+        `INSERT INTO proposals(repo_root, branch, summary, rationale, touches_files,
+                                status, proposed_by, proposed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        p.repo_root,
+        p.branch,
+        p.summary,
+        p.rationale,
+        p.touches_files,
+        p.status ?? 'pending',
+        p.proposed_by,
+        now,
+      );
+    return Number(info.lastInsertRowid);
+  }
+
+  getProposal(id: number): ProposalRow | undefined {
+    return this.db.prepare('SELECT * FROM proposals WHERE id = ?').get(id) as
+      | ProposalRow
+      | undefined;
+  }
+
+  /**
+   * Update a proposal's status and optional promotion fields. Designed for
+   * the promotion path: (status='active', promoted_at=..., task_id=...).
+   */
+  updateProposal(
+    id: number,
+    patch: { status?: ProposalStatus; promoted_at?: number | null; task_id?: number | null },
+  ): void {
+    const current = this.getProposal(id);
+    if (!current) return;
+    const next = {
+      status: patch.status ?? current.status,
+      promoted_at: patch.promoted_at === undefined ? current.promoted_at : patch.promoted_at,
+      task_id: patch.task_id === undefined ? current.task_id : patch.task_id,
+    };
+    this.db
+      .prepare(
+        'UPDATE proposals SET status = ?, promoted_at = ?, task_id = ? WHERE id = ?',
+      )
+      .run(next.status, next.promoted_at, next.task_id, id);
+  }
+
+  /** Every proposal on a (repo_root, branch). Ordered newest-first. */
+  listProposalsForBranch(repo_root: string, branch: string): ProposalRow[] {
+    return this.db
+      .prepare(
+        'SELECT * FROM proposals WHERE repo_root = ? AND branch = ? ORDER BY proposed_at DESC',
+      )
+      .all(repo_root, branch) as ProposalRow[];
+  }
+
+  // --- proposal reinforcements ---
+
+  insertReinforcement(r: NewReinforcement): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO proposal_reinforcements
+           (proposal_id, session_id, kind, weight, reinforced_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(r.proposal_id, r.session_id, r.kind, r.weight, r.reinforced_at);
+  }
+
+  listReinforcements(proposal_id: number): ReinforcementRow[] {
+    return this.db
+      .prepare('SELECT * FROM proposal_reinforcements WHERE proposal_id = ?')
+      .all(proposal_id) as ReinforcementRow[];
   }
 
   taskObservationsSince(task_id: number, since_ts: number, limit = 50): ObservationRow[] {

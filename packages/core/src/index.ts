@@ -24,3 +24,9 @@ export {
   type PheromoneStrengthBySession,
   type PheromoneTrail,
 } from './pheromone.js';
+export {
+  ProposalSystem,
+  type ForagingReport,
+  type PendingProposal,
+  type PromotedProposal,
+} from './proposal-system.js';
