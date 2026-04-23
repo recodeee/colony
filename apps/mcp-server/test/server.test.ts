@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@cavemem/config';
@@ -47,10 +47,132 @@ describe('MCP server', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'get_observations',
+      'hivemind',
       'list_sessions',
       'search',
       'timeline',
     ]);
+  });
+
+  it('hivemind returns compact active-session task state', async () => {
+    const repoRoot = join(dir, 'repo');
+    const worktreePath = join(repoRoot, '.omx', 'agent-worktrees', 'agent__codex__live-task');
+    const activeSessionDir = join(repoRoot, '.omx', 'state', 'active-sessions');
+    const now = new Date().toISOString();
+    mkdirSync(activeSessionDir, { recursive: true });
+    mkdirSync(worktreePath, { recursive: true });
+    writeFileSync(
+      join(activeSessionDir, 'agent__codex__live-task.json'),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          repoRoot,
+          branch: 'agent/codex/live-task',
+          taskName: 'Ship hivemind MCP tool',
+          latestTaskPreview: 'Expose runtime tasks to Codex',
+          agentName: 'codex',
+          worktreePath,
+          pid: process.pid,
+          cliName: 'codex',
+          taskMode: 'caveman',
+          openspecTier: 'T1',
+          taskRoutingReason: 'runtime lookup',
+          startedAt: now,
+          lastHeartbeatAt: now,
+          state: 'working',
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    const res = await client.callTool({
+      name: 'hivemind',
+      arguments: { repo_root: repoRoot, limit: 5 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      session_count: number;
+      counts: Record<string, number>;
+      sessions: Array<Record<string, unknown>>;
+    };
+
+    expect(payload.session_count).toBe(1);
+    expect(payload.counts.working).toBe(1);
+    expect(payload.sessions[0]).toMatchObject({
+      branch: 'agent/codex/live-task',
+      task: 'Expose runtime tasks to Codex',
+      task_name: 'Ship hivemind MCP tool',
+      agent: 'codex',
+      activity: 'working',
+      source: 'active-session',
+      pid_alive: true,
+    });
+    expect(payload.sessions[0]).not.toHaveProperty('content');
+  });
+
+  it('hivemind falls back to worktree AGENT.lock task previews', async () => {
+    const repoRoot = join(dir, 'repo-lock');
+    const worktreePath = join(repoRoot, '.omx', 'agent-worktrees', 'agent__codex__proxy-task');
+    mkdirSync(join(worktreePath, '.git'), { recursive: true });
+    writeFileSync(
+      join(worktreePath, '.git', 'HEAD'),
+      'ref: refs/heads/agent/codex/proxy-task\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(worktreePath, 'AGENT.lock'),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          source: 'recodee-live-telemetry',
+          updatedAt: '2026-04-23T08:01:00.000Z',
+          worktreePath,
+          worktreeName: 'agent__codex__proxy-task',
+          snapshotCount: 1,
+          sessionCount: 1,
+          snapshots: [
+            {
+              snapshotName: 'default',
+              email: 'agent@example.com',
+              sessions: [
+                {
+                  sessionKey: 'pid:123',
+                  taskPreview: 'Map proxy runtime sessions to current tasks',
+                  taskUpdatedAt: '2026-04-23T08:01:00.000Z',
+                  projectName: 'recodee',
+                  projectPath: worktreePath,
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    const res = await client.callTool({
+      name: 'hivemind',
+      arguments: { repo_root: repoRoot, limit: 5 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      session_count: number;
+      sessions: Array<Record<string, unknown>>;
+    };
+
+    expect(payload.session_count).toBe(1);
+    expect(payload.sessions[0]).toMatchObject({
+      branch: 'agent/codex/proxy-task',
+      task: 'Map proxy runtime sessions to current tasks',
+      source: 'worktree-lock',
+      project_name: 'recodee',
+      snapshot_name: 'default',
+    });
+    expect(payload.sessions[0]).not.toHaveProperty('email');
   });
 
   it('search returns compact hits (id, snippet, score, ts)', async () => {

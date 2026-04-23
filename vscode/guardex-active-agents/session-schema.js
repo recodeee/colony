@@ -14,8 +14,9 @@ const MANAGED_WORKTREE_ROOTS = [
 const MAX_CHANGED_PATH_PREVIEW = 3;
 const ACTIVE_SESSIONS_FILTER_PREFIX = ACTIVE_SESSIONS_RELATIVE_DIR.split(path.sep).join('/');
 const LOCK_FILE_FILTER_PATH = LOCK_FILE_RELATIVE.split(path.sep).join('/');
-const MANAGED_WORKTREE_FILTER_PREFIXES = MANAGED_WORKTREE_ROOTS
-  .map((relativeRoot) => relativeRoot.split(path.sep).join('/').replace(/\/+$/, ''));
+const MANAGED_WORKTREE_FILTER_PREFIXES = MANAGED_WORKTREE_ROOTS.map((relativeRoot) =>
+  relativeRoot.split(path.sep).join('/').replace(/\/+$/, ''),
+);
 const IDLE_ACTIVITY_WINDOW_MS = 2 * 60 * 1000;
 const STALLED_ACTIVITY_WINDOW_MS = 15 * 60 * 1000;
 const HEARTBEAT_STALE_MS = 5 * 60 * 1000;
@@ -109,7 +110,9 @@ function sessionFilePathForBranch(repoRoot, branch) {
 }
 
 function resolveManagedWorktreeRoots(repoRoot) {
-  return MANAGED_WORKTREE_ROOTS.map((relativeRoot) => path.join(path.resolve(repoRoot), relativeRoot));
+  return MANAGED_WORKTREE_ROOTS.map((relativeRoot) =>
+    path.join(path.resolve(repoRoot), relativeRoot),
+  );
 }
 
 function splitOutputLines(output) {
@@ -117,9 +120,7 @@ function splitOutputLines(output) {
     return null;
   }
 
-  return output
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0);
+  return output.split(/\r?\n/).filter((line) => line.trim().length > 0);
 }
 
 function normalizeRelativePath(value) {
@@ -162,9 +163,10 @@ function readAheadBehindCounts(worktreePath, branch, baseBranch) {
     '--count',
     `${normalizedBranch}...${compareRef}`,
   ]);
-  const match = Array.isArray(lines) && typeof lines[0] === 'string'
-    ? lines[0].trim().match(/^(\d+)\s+(\d+)$/)
-    : null;
+  const match =
+    Array.isArray(lines) && typeof lines[0] === 'string'
+      ? lines[0].trim().match(/^(\d+)\s+(\d+)$/)
+      : null;
   if (!match) {
     return {
       compareRef,
@@ -381,13 +383,14 @@ function parseRepoChangeLine(repoRoot, line) {
 
   const normalizedRelativePath = relativePath.split(path.sep).join('/');
   if (
-    normalizedRelativePath === LOCK_FILE_FILTER_PATH
-    || normalizedRelativePath.startsWith(`${LOCK_FILE_FILTER_PATH}/`)
-    || normalizedRelativePath === ACTIVE_SESSIONS_FILTER_PREFIX
-    || normalizedRelativePath.startsWith(`${ACTIVE_SESSIONS_FILTER_PREFIX}/`)
-    || MANAGED_WORKTREE_FILTER_PREFIXES.some((prefix) => (
-      normalizedRelativePath === prefix || normalizedRelativePath.startsWith(`${prefix}/`)
-    ))
+    normalizedRelativePath === LOCK_FILE_FILTER_PATH ||
+    normalizedRelativePath.startsWith(`${LOCK_FILE_FILTER_PATH}/`) ||
+    normalizedRelativePath === ACTIVE_SESSIONS_FILTER_PREFIX ||
+    normalizedRelativePath.startsWith(`${ACTIVE_SESSIONS_FILTER_PREFIX}/`) ||
+    MANAGED_WORKTREE_FILTER_PREFIXES.some(
+      (prefix) =>
+        normalizedRelativePath === prefix || normalizedRelativePath.startsWith(`${prefix}/`),
+    )
   ) {
     return null;
   }
@@ -403,8 +406,23 @@ function parseRepoChangeLine(repoRoot, line) {
 
 function collectWorktreeChangedPaths(worktreePath) {
   const changedGroups = [
-    runGitLines(worktreePath, ['diff', '--name-only', '--', '.', `:(exclude)${LOCK_FILE_RELATIVE}`, `:(exclude)${AGENT_WORKTREE_LOCK_FILE}`]),
-    runGitLines(worktreePath, ['diff', '--cached', '--name-only', '--', '.', `:(exclude)${LOCK_FILE_RELATIVE}`, `:(exclude)${AGENT_WORKTREE_LOCK_FILE}`]),
+    runGitLines(worktreePath, [
+      'diff',
+      '--name-only',
+      '--',
+      '.',
+      `:(exclude)${LOCK_FILE_RELATIVE}`,
+      `:(exclude)${AGENT_WORKTREE_LOCK_FILE}`,
+    ]),
+    runGitLines(worktreePath, [
+      'diff',
+      '--cached',
+      '--name-only',
+      '--',
+      '.',
+      `:(exclude)${LOCK_FILE_RELATIVE}`,
+      `:(exclude)${AGENT_WORKTREE_LOCK_FILE}`,
+    ]),
     runGitLines(worktreePath, ['ls-files', '--others', '--exclude-standard']),
   ];
 
@@ -413,11 +431,12 @@ function collectWorktreeChangedPaths(worktreePath) {
   }
 
   return [...new Set(changedGroups.flat())]
-    .filter((relativePath) => (
-      relativePath
-      && relativePath !== LOCK_FILE_RELATIVE
-      && relativePath !== AGENT_WORKTREE_LOCK_FILE
-    ))
+    .filter(
+      (relativePath) =>
+        relativePath &&
+        relativePath !== LOCK_FILE_RELATIVE &&
+        relativePath !== AGENT_WORKTREE_LOCK_FILE,
+    )
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -460,7 +479,12 @@ function deriveBlockingGitLabel(worktreePath) {
 }
 
 function collectWorktreeTrackedPaths(worktreePath) {
-  const trackedPaths = runGitLines(worktreePath, ['ls-files', '--cached', '--others', '--exclude-standard']);
+  const trackedPaths = runGitLines(worktreePath, [
+    'ls-files',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+  ]);
   if (!trackedPaths) {
     return null;
   }
@@ -476,9 +500,9 @@ function shouldSkipWorktreeActivityPath(relativePath) {
     return true;
   }
 
-  return WORKTREE_ACTIVITY_SKIP_PREFIXES.some((prefix) => (
-    normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
-  ));
+  return WORKTREE_ACTIVITY_SKIP_PREFIXES.some(
+    (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix),
+  );
 }
 
 function worktreeActivityPathPriority(relativePath, recentPathsSet) {
@@ -495,25 +519,30 @@ function worktreeActivityPathPriority(relativePath, recentPathsSet) {
 }
 
 function collectWorktreeActivityCandidatePaths(worktreePath, trackedPaths) {
-  const recentPaths = runGitLines(worktreePath, ['log', '-1', '--name-only', '--pretty=format:', '--', '.']) || [];
-  const filteredRecentPaths = [...new Set(recentPaths.map(normalizeRelativePath).filter(Boolean))]
-    .filter((relativePath) => !shouldSkipWorktreeActivityPath(relativePath));
+  const recentPaths =
+    runGitLines(worktreePath, ['log', '-1', '--name-only', '--pretty=format:', '--', '.']) || [];
+  const filteredRecentPaths = [
+    ...new Set(recentPaths.map(normalizeRelativePath).filter(Boolean)),
+  ].filter((relativePath) => !shouldSkipWorktreeActivityPath(relativePath));
   const recentPathSet = new Set(filteredRecentPaths);
   const prioritizedTrackedPaths = trackedPaths
     .map(normalizeRelativePath)
     .filter(Boolean)
     .filter((relativePath) => !shouldSkipWorktreeActivityPath(relativePath))
     .sort((left, right) => {
-      const priorityDelta = worktreeActivityPathPriority(left, recentPathSet)
-        - worktreeActivityPathPriority(right, recentPathSet);
+      const priorityDelta =
+        worktreeActivityPathPriority(left, recentPathSet) -
+        worktreeActivityPathPriority(right, recentPathSet);
       if (priorityDelta !== 0) {
         return priorityDelta;
       }
       return left.localeCompare(right);
     });
 
-  return [...new Set([...filteredRecentPaths, ...prioritizedTrackedPaths])]
-    .slice(0, MAX_WORKTREE_ACTIVITY_STAT_PATHS);
+  return [...new Set([...filteredRecentPaths, ...prioritizedTrackedPaths])].slice(
+    0,
+    MAX_WORKTREE_ACTIVITY_STAT_PATHS,
+  );
 }
 
 function clearWorktreeActivityCache(worktreePath = '') {
@@ -531,7 +560,7 @@ function deriveLatestWorktreeFileActivity(worktreePath, options = {}) {
   const cacheKey = path.resolve(worktreePath);
   if (useCache) {
     const cached = worktreeActivityCache.get(cacheKey);
-    if (cached && (now - cached.checkedAtMs) < WORKTREE_ACTIVITY_CACHE_TTL_MS) {
+    if (cached && now - cached.checkedAtMs < WORKTREE_ACTIVITY_CACHE_TTL_MS) {
       return cached.latestMtimeMs;
     }
   }
@@ -550,12 +579,9 @@ function deriveLatestWorktreeFileActivity(worktreePath, options = {}) {
       if (!stats.isFile() || !Number.isFinite(stats.mtimeMs)) {
         continue;
       }
-      latestMtimeMs = latestMtimeMs === null
-        ? stats.mtimeMs
-        : Math.max(latestMtimeMs, stats.mtimeMs);
-    } catch (_error) {
-      continue;
-    }
+      latestMtimeMs =
+        latestMtimeMs === null ? stats.mtimeMs : Math.max(latestMtimeMs, stats.mtimeMs);
+    } catch (_error) {}
   }
 
   if (useCache) {
@@ -637,17 +663,25 @@ function deriveSessionActivity(session, options = {}) {
   }
 
   if (worktreeChangedPaths.length > 0) {
-    const worktreeRelativePaths = [...new Set(worktreeChangedPaths
-      .map((relativePath) => normalizeRelativePath(relativePath))
-      .filter(Boolean))]
-      .sort((left, right) => left.localeCompare(right));
+    const worktreeRelativePaths = [
+      ...new Set(
+        worktreeChangedPaths
+          .map((relativePath) => normalizeRelativePath(relativePath))
+          .filter(Boolean),
+      ),
+    ].sort((left, right) => left.localeCompare(right));
     clearWorktreeActivityCache(session.worktreePath);
-    const changedPaths = [...new Set(worktreeChangedPaths
-      .map((relativePath) => normalizeRelativePath(
-        path.relative(session.repoRoot, path.resolve(session.worktreePath, relativePath)),
-      ))
-      .filter(Boolean))]
-      .sort((left, right) => left.localeCompare(right));
+    const changedPaths = [
+      ...new Set(
+        worktreeChangedPaths
+          .map((relativePath) =>
+            normalizeRelativePath(
+              path.relative(session.repoRoot, path.resolve(session.worktreePath, relativePath)),
+            ),
+          )
+          .filter(Boolean),
+      ),
+    ].sort((left, right) => left.localeCompare(right));
 
     return {
       activityKind: 'working',
@@ -696,11 +730,12 @@ function deriveSessionActivity(session, options = {}) {
     activityKind: 'idle',
     activityLabel: 'idle',
     activityCountLabel: '',
-    activitySummary: lastFileActivityAgeMs !== null && lastFileActivityAgeMs <= IDLE_ACTIVITY_WINDOW_MS
-      ? `Worktree clean. Recent file activity ${lastFileActivityLabel} ago.`
-      : lastFileActivityLabel
-        ? `Worktree clean. Last file activity ${lastFileActivityLabel} ago.`
-        : 'Worktree clean.',
+    activitySummary:
+      lastFileActivityAgeMs !== null && lastFileActivityAgeMs <= IDLE_ACTIVITY_WINDOW_MS
+        ? `Worktree clean. Recent file activity ${lastFileActivityLabel} ago.`
+        : lastFileActivityLabel
+          ? `Worktree clean. Last file activity ${lastFileActivityLabel} ago.`
+          : 'Worktree clean.',
     changeCount: 0,
     changedPaths: [],
     worktreeChangedPaths: [],
@@ -777,12 +812,12 @@ function normalizeSessionRecord(input, options = {}) {
   const pid = toPositiveInteger(input.pid);
 
   if (
-    !repoRoot
-    || !branch
-    || !worktreePath
-    || !pid
-    || Number.isNaN(startedAt.getTime())
-    || Number.isNaN(lastHeartbeatAt.getTime())
+    !repoRoot ||
+    !branch ||
+    !worktreePath ||
+    !pid ||
+    Number.isNaN(startedAt.getTime()) ||
+    Number.isNaN(lastHeartbeatAt.getTime())
   ) {
     return null;
   }
@@ -922,9 +957,8 @@ function buildWorktreeLockSession(repoRoot, worktreePath, lockPayload, options =
   const telemetryEntries = flattenTelemetrySnapshotSessions(lockPayload);
   const telemetryUpdatedAt = normalizeIsoString(lockPayload?.updatedAt);
   const branch = readWorktreeBranch(worktreePath);
-  const effectiveBranch = branch && branch !== 'HEAD'
-    ? branch
-    : `agent/telemetry/${path.basename(worktreePath)}`;
+  const effectiveBranch =
+    branch && branch !== 'HEAD' ? branch : `agent/telemetry/${path.basename(worktreePath)}`;
   const label = deriveSessionLabel(effectiveBranch, worktreePath);
   const taskAnchor = deriveLockTaskAnchor(telemetryEntries, label, telemetryUpdatedAt);
   const startedAt = taskAnchor.timestamp || telemetryUpdatedAt || new Date(now).toISOString();

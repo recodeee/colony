@@ -8,6 +8,7 @@ import { createEmbedder } from '@cavemem/embedding';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { readHivemind } from './hivemind.js';
 
 /**
  * MCP stdio server exposing progressive-disclosure tools:
@@ -15,6 +16,7 @@ import { z } from 'zod';
  * - timeline: chronological IDs around a point
  * - get_observations: full bodies by ID
  * - list_sessions: recent sessions for navigation
+ * - hivemind: compact proxy-runtime active task map
  *
  * Embedder is loaded lazily on first search — keeps MCP handshake fast.
  */
@@ -110,6 +112,26 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
           },
         ],
       };
+    },
+  );
+
+  server.tool(
+    'hivemind',
+    'Summarize active agent sessions and task ownership from proxy-runtime state files.',
+    {
+      repo_root: z.string().min(1).optional(),
+      repo_roots: z.array(z.string().min(1)).max(20).optional(),
+      include_stale: z.boolean().optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    },
+    async ({ repo_root, repo_roots, include_stale, limit }) => {
+      const options: Parameters<typeof readHivemind>[0] = {};
+      if (repo_root !== undefined) options.repoRoot = repo_root;
+      if (repo_roots !== undefined) options.repoRoots = repo_roots;
+      if (include_stale !== undefined) options.includeStale = include_stale;
+      if (limit !== undefined) options.limit = limit;
+      const snapshot = readHivemind(options);
+      return { content: [{ type: 'text', text: JSON.stringify(snapshot) }] };
     },
   );
 

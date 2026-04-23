@@ -9,10 +9,7 @@
   "engines": {
     "vscode": "^1.88.0"
   },
-  "categories": [
-    "Source Control",
-    "Other"
-  ],
+  "categories": ["Source Control", "Other"],
   "activationEvents": [
     "onStartupFinished",
     "workspaceContains:.omx/state/active-sessions",

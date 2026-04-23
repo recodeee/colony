@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cavemem Reviewer"
+  short_description: "Review active lanes with hivemind-first context"
+  default_prompt: "Review this active repo or PR by using Cavemem hivemind first, then fetch only the minimum memory and code context needed for findings."
