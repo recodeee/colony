@@ -30,3 +30,5 @@ scripts/install-vscode-active-agents-extension.js
 oh-my-codex/
 .omx/state/agent-file-locks.json
 # multiagent-safety:END
+apps/hivemind-demo/data/runs/*
+!apps/hivemind-demo/data/runs/.gitkeep

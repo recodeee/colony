@@ -1,0 +1,22 @@
+{
+  "name": "@cavemem/hivemind-demo",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "cavemem-hivemind-demo": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts src/cli/index.ts --format esm --dts --clean",
+    "demo": "pnpm build && node dist/cli/index.js --demo",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}
