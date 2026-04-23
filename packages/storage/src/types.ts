@@ -135,6 +135,18 @@ export interface NewReinforcement {
   reinforced_at: number;
 }
 
+export interface AgentProfileRow {
+  agent: string;
+  capabilities: string;
+  updated_at: number;
+}
+
+export interface NewAgentProfile {
+  agent: string;
+  capabilities: string;
+  updated_at?: number;
+}
+
 export interface NewSummary {
   session_id: string;
   scope: 'turn' | 'session';

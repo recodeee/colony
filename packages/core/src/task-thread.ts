@@ -1,5 +1,11 @@
 import type { ObservationRow, TaskClaimRow, TaskParticipantRow, TaskRow } from '@cavemem/storage';
 import type { MemoryStore } from './memory-store.js';
+import {
+  type AgentProfile,
+  type CandidateScore,
+  loadProfile,
+  rankCandidates,
+} from './response-thresholds.js';
 
 export type CoordinationKind =
   | 'claim'
@@ -35,6 +41,14 @@ export interface HandoffMetadata {
   accepted_by_session_id: string | null;
   accepted_at: number | null;
   expires_at: number;
+  /**
+   * Ranking of candidate agents by capability fit against this handoff,
+   * snapshotted at send time. Only populated when `to_agent === 'any'`;
+   * for directed handoffs the target is already known. Agents viewing
+   * the pending handoff in a preface can use this to decide whether
+   * they are the best fit even though anyone could accept.
+   */
+  suggested_candidates?: CandidateScore[];
 }
 
 export interface HandoffObservation {
@@ -182,6 +196,30 @@ export class TaskThread {
       accepted_at: null,
       expires_at: now + (args.expires_in_ms ?? DEFAULT_HANDOFF_TTL_MS),
     };
+    // For broadcast handoffs, rank candidate agents by capability fit so
+    // the preface can surface "best match" hints without each receiver
+    // recomputing the score. We snapshot at send time because profiles
+    // are mutable and we want the routing reasoning to be reproducible
+    // from the observation alone.
+    if (meta.to_agent === 'any') {
+      const distinctAgents = Array.from(
+        new Set(
+          this.store.storage
+            .listParticipants(this.task_id)
+            .filter((p) => p.session_id !== args.from_session_id)
+            .map((p) => p.agent),
+        ),
+      );
+      if (distinctAgents.length > 0) {
+        const profiles: AgentProfile[] = distinctAgents.map((a) =>
+          loadProfile(this.store.storage, a),
+        );
+        meta.suggested_candidates = rankCandidates(
+          { summary: meta.summary, next_steps: meta.next_steps, blockers: meta.blockers },
+          profiles,
+        );
+      }
+    }
     return this.store.storage.transaction(() => {
       for (const path of meta.released_files) {
         this.store.storage.releaseClaim({

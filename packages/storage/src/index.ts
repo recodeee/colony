@@ -18,4 +18,6 @@ export type {
   ReinforcementRow,
   NewReinforcement,
   ReinforcementKind,
+  AgentProfileRow,
+  NewAgentProfile,
 } from './types.js';

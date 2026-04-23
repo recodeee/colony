@@ -46,6 +46,8 @@ describe('MCP server', () => {
   it('lists the cavemem tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      'agent_get_profile',
+      'agent_upsert_profile',
       'get_observations',
       'hivemind',
       'hivemind_context',

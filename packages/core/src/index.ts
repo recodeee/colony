@@ -30,3 +30,13 @@ export {
   type PendingProposal,
   type PromotedProposal,
 } from './proposal-system.js';
+export {
+  DEFAULT_CAPABILITIES,
+  loadProfile,
+  rankCandidates,
+  saveProfile,
+  scoreHandoff,
+  type AgentCapabilities,
+  type AgentProfile,
+  type CandidateScore,
+} from './response-thresholds.js';

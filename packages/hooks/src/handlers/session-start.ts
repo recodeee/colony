@@ -89,6 +89,19 @@ export function buildTaskPreface(
     if (h.meta.transferred_files.length) {
       lines.push(`  transferred_files: ${h.meta.transferred_files.join(', ')}`);
     }
+    // Response-threshold hint: if this handoff broadcast to 'any' with a
+    // candidate ranking, surface the top match and the current agent's
+    // own rank so the reader can decide if they're the best fit before
+    // accepting. Purely advisory — anyone eligible can still accept.
+    if (h.meta.to_agent === 'any' && h.meta.suggested_candidates?.length) {
+      const top = h.meta.suggested_candidates[0];
+      const mine = h.meta.suggested_candidates.find((c) => c.agent === agent);
+      const hints = [`top match: ${top.agent} (${top.score.toFixed(2)})`];
+      if (mine && mine.agent !== top.agent) {
+        hints.push(`you (${agent}): ${mine.score.toFixed(2)}`);
+      }
+      lines.push(`  routing: ${hints.join(' | ')}`);
+    }
     // Include session_id in the suggested tool calls — agents drop it
     // otherwise and the accept fails with a generic validation error.
     lines.push(

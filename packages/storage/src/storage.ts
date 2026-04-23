@@ -3,6 +3,8 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import type {
+  AgentProfileRow,
+  NewAgentProfile,
   NewObservation,
   NewPheromone,
   NewProposal,
@@ -567,6 +569,35 @@ export class Storage {
     return this.db
       .prepare('SELECT * FROM proposal_reinforcements WHERE proposal_id = ?')
       .all(proposal_id) as ReinforcementRow[];
+  }
+
+  // --- agent profiles (response-threshold routing) ---
+
+  /**
+   * Upsert an agent's capability profile. Last-writer-wins — agents
+   * adjust their own profile as they settle on what they do well, and
+   * there's no meaningful "merge" semantics between two different views
+   * of the same agent's own capabilities.
+   */
+  upsertAgentProfile(p: NewAgentProfile): void {
+    const now = p.updated_at ?? Date.now();
+    this.db
+      .prepare(
+        'INSERT OR REPLACE INTO agent_profiles(agent, capabilities, updated_at) VALUES (?, ?, ?)',
+      )
+      .run(p.agent, p.capabilities, now);
+  }
+
+  getAgentProfile(agent: string): AgentProfileRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM agent_profiles WHERE agent = ?')
+      .get(agent) as AgentProfileRow | undefined;
+  }
+
+  listAgentProfiles(): AgentProfileRow[] {
+    return this.db
+      .prepare('SELECT * FROM agent_profiles ORDER BY agent ASC')
+      .all() as AgentProfileRow[];
   }
 
   taskObservationsSince(task_id: number, since_ts: number, limit = 50): ObservationRow[] {

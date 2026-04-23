@@ -152,7 +152,19 @@ CREATE TABLE IF NOT EXISTS proposal_reinforcements (
 );
 CREATE INDEX IF NOT EXISTS idx_reinforcements_proposal ON proposal_reinforcements(proposal_id);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (5);
+-- Per-agent capability profile. One row per distinct agent identity
+-- (not per session — Claude today and Claude tomorrow share the same
+-- profile). capabilities is a JSON blob of named dimension -> weight
+-- (0..1 typically). JSON rather than normalized columns because the
+-- right dimensions won't be obvious until the system runs under load
+-- and we want to add new dimensions without migrations.
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  agent TEXT PRIMARY KEY,
+  capabilities TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO schema_version(version) VALUES (6);
 `;
 
 /**
