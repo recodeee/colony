@@ -9,6 +9,7 @@ coverage
 .env
 .env.*
 !.env.example
+.claude/scheduled_tasks.lock
 ~/.cavemem
 .cavemem-dev
 .e2e/
