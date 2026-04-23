@@ -100,7 +100,23 @@ CREATE TABLE IF NOT EXISTS task_claims (
 );
 CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (3);
+-- Pheromone trails: ambient, decaying "activity intensity" left on files by
+-- tool use. One row per (task_id, file_path, session_id) — different agents
+-- leave distinguishable trails so "Claude has been here" is separable from
+-- "Codex has been here". Current strength is computed on read via
+-- exponential decay from (strength, deposited_at); we never run a cleanup
+-- pass, time does the work in the formula.
+CREATE TABLE IF NOT EXISTS pheromones (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  strength REAL NOT NULL,
+  deposited_at INTEGER NOT NULL,
+  PRIMARY KEY (task_id, file_path, session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pheromones_task ON pheromones(task_id, deposited_at DESC);
+
+INSERT OR IGNORE INTO schema_version(version) VALUES (4);
 `;
 
 /**

@@ -10,4 +10,6 @@ export type {
   NewTask,
   TaskParticipantRow,
   TaskClaimRow,
+  PheromoneRow,
+  NewPheromone,
 } from './types.js';

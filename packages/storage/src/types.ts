@@ -75,6 +75,22 @@ export interface TaskClaimRow {
   claimed_at: number;
 }
 
+export interface PheromoneRow {
+  task_id: number;
+  file_path: string;
+  session_id: string;
+  strength: number;
+  deposited_at: number;
+}
+
+export interface NewPheromone {
+  task_id: number;
+  file_path: string;
+  session_id: string;
+  strength: number;
+  deposited_at: number;
+}
+
 export interface NewSummary {
   session_id: string;
   scope: 'turn' | 'session';

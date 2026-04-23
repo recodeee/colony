@@ -19,3 +19,8 @@ export {
   type HandOffArgs,
 } from './task-thread.js';
 export { detectRepoBranch } from './git-detect.js';
+export {
+  PheromoneSystem,
+  type PheromoneStrengthBySession,
+  type PheromoneTrail,
+} from './pheromone.js';

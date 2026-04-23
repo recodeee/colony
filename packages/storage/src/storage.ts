@@ -4,9 +4,11 @@ import Database from 'better-sqlite3';
 import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import type {
   NewObservation,
+  NewPheromone,
   NewSummary,
   NewTask,
   ObservationRow,
+  PheromoneRow,
   SearchHit,
   SessionRow,
   SummaryRow,
@@ -432,6 +434,50 @@ export class Storage {
         'SELECT * FROM task_claims WHERE task_id = ? AND claimed_at > ? ORDER BY claimed_at DESC LIMIT ?',
       )
       .all(task_id, since_ts, limit) as TaskClaimRow[];
+  }
+
+  // --- pheromones (ambient decaying activity trails) ---
+
+  /**
+   * Write-or-overwrite a pheromone row. The caller computes the new strength
+   * (decay + reinforcement) and passes both `strength` and `deposited_at`.
+   * We don't merge on the SQL side because the decay constant lives in the
+   * caller and we want a single source of truth for it.
+   */
+  upsertPheromone(p: NewPheromone): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO pheromones(task_id, file_path, session_id, strength, deposited_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(p.task_id, p.file_path, p.session_id, p.strength, p.deposited_at);
+  }
+
+  /** One pheromone row for (task, file, session) or undefined. */
+  getPheromone(
+    task_id: number,
+    file_path: string,
+    session_id: string,
+  ): PheromoneRow | undefined {
+    return this.db
+      .prepare(
+        'SELECT * FROM pheromones WHERE task_id = ? AND file_path = ? AND session_id = ?',
+      )
+      .get(task_id, file_path, session_id) as PheromoneRow | undefined;
+  }
+
+  /** Every pheromone row on a (task, file) across all sessions. */
+  listPheromonesForFile(task_id: number, file_path: string): PheromoneRow[] {
+    return this.db
+      .prepare('SELECT * FROM pheromones WHERE task_id = ? AND file_path = ?')
+      .all(task_id, file_path) as PheromoneRow[];
+  }
+
+  /** Every pheromone row on a task. Caller is expected to apply decay. */
+  listPheromonesForTask(task_id: number): PheromoneRow[] {
+    return this.db
+      .prepare('SELECT * FROM pheromones WHERE task_id = ? ORDER BY deposited_at DESC')
+      .all(task_id) as PheromoneRow[];
   }
 
   taskObservationsSince(task_id: number, since_ts: number, limit = 50): ObservationRow[] {

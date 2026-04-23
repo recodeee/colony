@@ -1,4 +1,4 @@
-import type { MemoryStore } from '@cavemem/core';
+import { PheromoneSystem, type MemoryStore } from '@cavemem/core';
 import type { HookInput } from '../types.js';
 
 /**
@@ -49,6 +49,12 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
   // exists for the claim system to protect its work. The next session that
   // touches the same file gets a warning in its UserPromptSubmit preface.
   autoClaimFromToolUse(store, input);
+
+  // Second, finer-grained side effect: leave an ambient pheromone trail.
+  // Claims are binary ("who owns this now"); pheromones are graded
+  // ("how much activity has happened here recently"). Both are cheap to
+  // write; the preface code decides which one to surface at read time.
+  depositPheromoneFromToolUse(store, input);
 }
 
 /**
@@ -109,6 +115,34 @@ export function autoClaimFromToolUse(
   }
 
   return { claimed, conflicts };
+}
+
+/**
+ * Leave pheromone on every file this tool touched. No-op when the session
+ * isn't on a task (solo work needs no coordination) or when the tool wasn't
+ * a write tool. Unlike auto-claim, this never conflicts, never reports
+ * back — deposits are fire-and-forget. The decay math means "did the
+ * deposit matter" is a question for the next turn's conflict surface, not
+ * this turn's hook.
+ *
+ * Exposed for tests; the main handler ignores the return value.
+ */
+export function depositPheromoneFromToolUse(
+  store: MemoryStore,
+  input: Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input'>,
+): { deposited: string[] } {
+  const toolName = input.tool_name ?? input.tool ?? '';
+  const files = extractTouchedFiles(toolName, input.tool_input);
+  if (files.length === 0) return { deposited: [] };
+
+  const task_id = store.storage.findActiveTaskForSession(input.session_id);
+  if (task_id === undefined) return { deposited: [] };
+
+  const pheromones = new PheromoneSystem(store.storage);
+  for (const file_path of files) {
+    pheromones.deposit({ task_id, file_path, session_id: input.session_id });
+  }
+  return { deposited: files };
 }
 
 function stringifyShort(v: unknown): string {

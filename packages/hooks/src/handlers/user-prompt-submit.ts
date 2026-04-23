@@ -1,4 +1,4 @@
-import type { MemoryStore } from '@cavemem/core';
+import { PheromoneSystem, type MemoryStore } from '@cavemem/core';
 import type { HookInput } from '../types.js';
 
 /**
@@ -23,7 +23,8 @@ export async function userPromptSubmit(store: MemoryStore, input: HookInput): Pr
 
   const activity = buildTaskUpdatesPreface(store, input.session_id, sinceTs);
   const conflicts = buildConflictPreface(store, input.session_id);
-  return [activity, conflicts].filter(Boolean).join('\n\n');
+  const pheromones = buildPheromoneConflictPreface(store, input.session_id);
+  return [activity, conflicts, pheromones].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -64,6 +65,53 @@ export function buildConflictPreface(store: MemoryStore, session_id: string): st
     lines.push(`  ${sess}: ${paths.join(', ')}`);
   }
   lines.push('Coordinate via task_post or task_hand_off before editing these files.');
+  return lines.join('\n');
+}
+
+/**
+ * Pheromone-based territory warning. Complements buildConflictPreface: the
+ * claim preface fires on "someone else just edited this", this one fires on
+ * "I have history here AND another session has strong recent activity".
+ *
+ * The decay-graded threshold filters out files whose other-session trail
+ * has evaporated below the noise floor — a once-touched file from an hour
+ * ago is not a collision risk even if a claim row technically still exists.
+ *
+ * Exported so hook-integration tests can drive the preface builder without
+ * the full runner/transport stack.
+ */
+export function buildPheromoneConflictPreface(store: MemoryStore, session_id: string): string {
+  const task_id = store.storage.findActiveTaskForSession(session_id);
+  if (task_id === undefined) return '';
+
+  // Threshold 1.0 = "one fresh deposit worth, undecayed". A single recent
+  // touch from another session is enough to raise a territory warning.
+  // Tune after real usage: raise to 2.0 if the warning fires too often.
+  const COLLISION_THRESHOLD = 1.0;
+
+  const pheromones = new PheromoneSystem(store.storage);
+  const trails = pheromones.strongestTrails(task_id, 0.1);
+
+  const conflicts = trails.filter((trail) => {
+    const mine = trail.bySession.find((s) => s.session_id === session_id);
+    if (!mine) return false;
+    const others = trail.bySession.filter((s) => s.session_id !== session_id);
+    return others.some((s) => s.strength >= COLLISION_THRESHOLD);
+  });
+  if (conflicts.length === 0) return '';
+
+  const lines = ['## Active pheromone trails overlapping with yours'];
+  for (const trail of conflicts) {
+    const mine = trail.bySession.find((s) => s.session_id === session_id);
+    const dominant = trail.bySession
+      .filter((s) => s.session_id !== session_id)
+      .sort((a, b) => b.strength - a.strength)[0];
+    if (!mine || !dominant) continue;
+    lines.push(
+      `  ${trail.file_path}  ${dominant.session_id} strong (${dominant.strength.toFixed(1)}), you weaker (${mine.strength.toFixed(1)})`,
+    );
+  }
+  lines.push('High cross-agent activity — coordinate before editing these files.');
   return lines.join('\n');
 }
 
