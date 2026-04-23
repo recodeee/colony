@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { deepMerge, readJson, shellQuote, writeJson } from './fs-utils.js';
+import { readJson, shellQuote, writeJson } from './fs-utils.js';
 import type { InstallContext, Installer } from './types.js';
 
 interface ClaudeSettings {
@@ -51,16 +51,15 @@ export const claudeCode: Installer = {
         },
       ];
     }
-    const mcpServers = {
-      ...(current.mcpServers ?? {}),
-      cavemem: {
-        // Spawn node explicitly — if command is the .js file, Claude Code's
-        // MCP launcher can't exec it on Windows (EFTYPE).
-        command: ctx.nodeBin,
-        args: [ctx.cliPath, 'mcp'],
-      },
+    const mcpServers: NonNullable<ClaudeSettings['mcpServers']> = { ...(current.mcpServers ?? {}) };
+    delete mcpServers.cavemem;
+    mcpServers.colony = {
+      // Spawn node explicitly — if command is the .js file, Claude Code's
+      // MCP launcher can't exec it on Windows (EFTYPE).
+      command: ctx.nodeBin,
+      args: [ctx.cliPath, 'mcp'],
     };
-    const next = deepMerge<ClaudeSettings>(current, { hooks, mcpServers });
+    const next: ClaudeSettings = { ...current, hooks, mcpServers };
     writeJson(path, next);
     return [`wrote ${path}`];
   },
@@ -70,7 +69,10 @@ export const claudeCode: Installer = {
     if (current.hooks) {
       for (const [claudeName] of HOOK_NAMES) delete current.hooks[claudeName];
     }
-    if (current.mcpServers) delete current.mcpServers.cavemem;
+    if (current.mcpServers) {
+      delete current.mcpServers.colony;
+      delete current.mcpServers.cavemem;
+    }
     writeJson(path, current);
     return [`updated ${path}`];
   },

@@ -6,6 +6,8 @@ cavemem is a local-first memory and coordination system that lets multiple AI co
 
 The design choice worth pausing on, because it's the thing that makes cavemem different from conventional coordination tools, is the decision to borrow from biology rather than from distributed systems textbooks. Ant colonies have been stress-testing their coordination protocols for about 150 million years, which means any pattern we take from them has already been debugged against failure modes we haven't even imagined yet. What ants use is not messaging and not shared state in the usual programmer's sense — it's *stigmergy*, coordination through traces left in a shared environment. cavemem applies exactly that pattern to AI agents.
 
+Important current-state note: the published CLI and package names are still `cavemem`, so the commands below use `cavemem` even though this repository is branded as `agents-hivemind`. IDE MCP installs register the server as `colony`, so agent tool calls use the `colony` namespace.
+
 ## The core idea: stigmergy
 
 The fundamental pattern underneath everything cavemem does is that agents never talk to each other directly. Instead, each agent leaves traces in a shared environment, and those traces influence what the other agents choose to do next. It's the same mechanism an ant colony uses to solve surprisingly sophisticated coordination problems — finding the shortest path to food, building a ventilated nest, allocating workers to tasks — without any individual ant knowing the colony's plan, because there *is* no colony plan. There's just the environment, the trail-laying behavior, and the rules each ant follows.

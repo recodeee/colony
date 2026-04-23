@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeCode } from '../src/claude-code.js';
 import { cursor } from '../src/cursor.js';
@@ -73,7 +73,7 @@ describe('claude-code installer', () => {
     expect(first.hooks.SessionStart?.[0]?.hooks?.[0]?.command).toBe(
       `${ctx.nodeBin} ${ctx.cliPath} hook run session-start --ide claude-code`,
     );
-    expect(first.mcpServers.cavemem).toEqual({
+    expect(first.mcpServers.colony).toEqual({
       command: ctx.nodeBin,
       args: [ctx.cliPath, 'mcp'],
     });
@@ -81,8 +81,8 @@ describe('claude-code installer', () => {
     await claudeCode.install(ctx); // run twice
     const second = JSON.parse(readFileSync(settingsPath, 'utf8')) as typeof first;
     expect(Object.keys(second.hooks).sort()).toEqual(Object.keys(first.hooks).sort());
-    // No duplicate cavemem entries.
-    expect(Object.keys(second.mcpServers)).toEqual(['cavemem']);
+    // No duplicate or stale MCP namespace entries.
+    expect(Object.keys(second.mcpServers)).toEqual(['colony']);
   });
 
   it('preserves unrelated user settings on install + uninstall', async () => {
@@ -92,7 +92,10 @@ describe('claude-code installer', () => {
       settingsPath,
       JSON.stringify({
         theme: 'dark',
-        mcpServers: { other: { command: '/other/bin' } },
+        mcpServers: {
+          other: { command: '/other/bin' },
+          cavemem: { command: '/old/bin', args: ['old-mcp'] },
+        },
         hooks: { CustomEvent: [{ hooks: [{ type: 'command', command: 'noop' }] }] },
       }),
     );
@@ -105,12 +108,18 @@ describe('claude-code installer', () => {
     };
     expect(installed.theme).toBe('dark');
     expect(installed.mcpServers.other).toEqual({ command: '/other/bin' });
+    expect(installed.mcpServers.colony).toEqual({
+      command: ctx.nodeBin,
+      args: [ctx.cliPath, 'mcp'],
+    });
+    expect(installed.mcpServers.cavemem).toBeUndefined();
     expect(installed.hooks.CustomEvent).toBeDefined();
 
     await claudeCode.uninstall(ctx);
     const after = JSON.parse(readFileSync(settingsPath, 'utf8')) as typeof installed;
     expect(after.theme).toBe('dark');
     expect(after.mcpServers.other).toEqual({ command: '/other/bin' });
+    expect(after.mcpServers.colony).toBeUndefined();
     expect(after.mcpServers.cavemem).toBeUndefined();
     expect(after.hooks.SessionStart).toBeUndefined();
     expect(after.hooks.CustomEvent).toBeDefined();
@@ -135,7 +144,7 @@ describe('claude-code installer', () => {
     );
     // MCP entry is a structured shape, so no quoting needed there — Claude
     // spawns command + args directly.
-    expect(parsed.mcpServers.cavemem).toEqual({
+    expect(parsed.mcpServers.colony).toEqual({
       command: winCtx.nodeBin,
       args: [winCtx.cliPath, 'mcp'],
     });
@@ -156,13 +165,56 @@ describe('cursor installer', () => {
     const cfg = JSON.parse(readFileSync(p, 'utf8')) as {
       mcpServers: Record<string, { command: string; args?: string[] }>;
     };
-    expect(cfg.mcpServers.cavemem).toEqual({
+    expect(cfg.mcpServers.colony).toEqual({
       command: ctx.nodeBin,
       args: [ctx.cliPath, 'mcp'],
     });
 
     await cursor.uninstall(ctx);
     const after = JSON.parse(readFileSync(p, 'utf8')) as typeof cfg;
+    expect(after.mcpServers.colony).toBeUndefined();
     expect(after.mcpServers.cavemem).toBeUndefined();
   });
+});
+
+describe('MCP namespace installers', () => {
+  const cases = [
+    ['codex', ['.codex', 'config.json']],
+    ['gemini-cli', ['.gemini', 'settings.json']],
+    ['opencode', ['.opencode', 'config.json']],
+  ] as const;
+
+  for (const [installerId, pathParts] of cases) {
+    it(`${installerId} writes colony and removes stale cavemem`, async () => {
+      const p = join(home, ...pathParts);
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(
+        p,
+        JSON.stringify({
+          mcpServers: {
+            other: { command: '/other/bin' },
+            cavemem: { command: '/old/bin', args: ['old-mcp'] },
+          },
+        }),
+      );
+
+      const installer = getInstaller(installerId);
+      await installer.install(ctx);
+      const installed = JSON.parse(readFileSync(p, 'utf8')) as {
+        mcpServers: Record<string, { command: string; args?: string[] }>;
+      };
+      expect(installed.mcpServers.other).toEqual({ command: '/other/bin' });
+      expect(installed.mcpServers.colony).toEqual({
+        command: ctx.nodeBin,
+        args: [ctx.cliPath, 'mcp'],
+      });
+      expect(installed.mcpServers.cavemem).toBeUndefined();
+
+      await installer.uninstall(ctx);
+      const after = JSON.parse(readFileSync(p, 'utf8')) as typeof installed;
+      expect(after.mcpServers.other).toEqual({ command: '/other/bin' });
+      expect(after.mcpServers.colony).toBeUndefined();
+      expect(after.mcpServers.cavemem).toBeUndefined();
+    });
+  }
 });

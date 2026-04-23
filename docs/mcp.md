@@ -1,6 +1,6 @@
 # MCP tools
 
-cavemem exposes six tools over an MCP stdio server. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
+cavemem exposes MCP tools over a stdio server. IDE installers register that server as `colony`, so agent tool calls appear under the `colony` namespace. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
 
 The recommended workflow is a three-layer pattern:
 
