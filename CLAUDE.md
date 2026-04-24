@@ -19,6 +19,19 @@ The signature property of the project is that **memory is stored compressed**. E
 7. **Local by default.** Default embedding provider is local (Transformers.js). Remote providers are opt-in via settings. Do not add default network calls.
 8. **No silent failures.** Hook and worker errors are logged as structured JSON; user-visible commands surface failures with a non-zero exit code and a short message.
 9. **No daemon on the write path.** Hooks write observations synchronously through `MemoryStore.addObservation` — never across a network or HTTP boundary. Hooks may *detach-spawn* the worker to kick off background embedding, but they must never wait on it. If the worker is down, writes still succeed; only the semantic-search side is degraded (BM25 keeps working).
+10. **Never edit on the local base branch.** Treat the local `main` checkout as read-only. Every task — even a typo or one-line fix — runs on a dedicated `agent/*` branch inside a worktree. Do not run `git checkout main` / `git switch main` to start work, do not `git commit` on the primary working tree, and do not push to `main` directly. This matches what codex does via Guardex and keeps parallel lanes safe.
+
+## Worktree discipline
+
+Claude Code works the same way Codex does in this repo: isolated `agent/*` branches in worktrees, never on the primary checkout.
+
+- **Start a lane before editing.** `gx branch start "<task>" "claude-code"` (alias: `guardex branch start ...`). Optionally pass `--tier T0|T1|T2|T3`. Work only inside the resulting `.omc/agent-worktrees/...` directory.
+- **Tier routing.** `T0` = typo / format / comment-only. `T1` = ≤5 files, one capability, no API or schema change. `T2` = behavior / API / schema / multi-module. `T3` = cross-cutting or plan-driven. Default small-fix posture is `T0` / `T1`.
+- **Claim files before touching them.** `gx locks claim --branch "<agent-branch>" <file...>`. Release on completion.
+- **Never switch the primary checkout.** If currently on `main`, create the lane first; the worktree must not flip the primary tree's branch. A `post-checkout` hook reverts accidental primary-branch switches — do not bypass it except via an explicit approved override.
+- **Finish via PR, not a direct push.** `gx branch finish --branch "<agent-branch>" --base main --via-pr --wait-for-merge --cleanup`. A lane is only complete when: commit pushed → PR opened → `MERGED` → worktree pruned.
+- **Resume the existing lane.** If an `agent/claude/...` branch or worktree is already open for this task/chat, continue in it instead of opening a new lane. Only start a fresh lane when no matching one exists or the user explicitly splits scope.
+- **Coordinate via colony MCP.** Post `task_post` notes, use `task_claim_file` for shared files, and `task_hand_off` for ownership transfers so codex/claude sessions stay aligned.
 
 ## Architectural rules
 
