@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
 import {
   type AgentCapabilities,
@@ -22,6 +20,7 @@ import {
 } from '@colony/core';
 import { createEmbedder } from '@colony/embedding';
 import { type HookInput, type HookName, upsertActiveSession } from '@colony/hooks';
+import { isMainEntry } from '@colony/process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -867,19 +866,9 @@ export async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-if (isMainEntry()) {
+if (isMainEntry(import.meta.url)) {
   main().catch((err) => {
     process.stderr.write(`[colony mcp] fatal: ${String(err)}\n`);
     process.exit(1);
   });
-}
-
-function isMainEntry(): boolean {
-  const argv = process.argv[1];
-  if (!argv) return false;
-  try {
-    return import.meta.url === pathToFileURL(realpathSync(argv)).href;
-  } catch {
-    return import.meta.url === pathToFileURL(argv).href;
-  }
 }

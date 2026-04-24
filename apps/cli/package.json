@@ -67,6 +67,7 @@
     "@colony/hooks": "workspace:*",
     "@colony/installers": "workspace:*",
     "@colony/mcp-server": "workspace:*",
+    "@colony/process": "workspace:*",
     "@colony/storage": "workspace:*",
     "@colony/worker": "workspace:*",
     "tsup": "^8.3.5",

@@ -1,7 +1,6 @@
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Settings, resolveDataDir } from '@colony/config';
+import { isAlive, readPidFile, spawnNodeScript } from '@colony/process';
 
 /**
  * Ensure the worker daemon is running. Called from the hook runner after
@@ -24,39 +23,16 @@ export function ensureWorkerRunning(settings: Settings): void {
   if (settings.embedding.provider === 'none') return;
 
   const pidFile = join(resolveDataDir(settings.dataDir), 'worker.pid');
-  if (existsSync(pidFile)) {
-    try {
-      const pid = Number(readFileSync(pidFile, 'utf8'));
-      if (pid > 0 && isAlive(pid)) return;
-    } catch {
-      // fall through — stale or unreadable pidfile
-    }
-  }
+  const pid = readPidFile(pidFile);
+  if (pid !== null && isAlive(pid)) return;
 
   const cli = resolveCli();
   if (!cli) return;
 
   try {
-    // Spawn `node <cli> worker start` — Windows can't exec a raw .js path
-    // (EFTYPE), and `cli` is the .js entry when the hook runs through the
-    // colony CLI.
-    const child = spawn(process.execPath, [cli, 'worker', 'start'], {
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env },
-    });
-    child.unref();
+    spawnNodeScript(cli, ['worker', 'start']);
   } catch {
     // Best-effort — if spawn fails, the hook still succeeds. Next hook will retry.
-  }
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 }
 

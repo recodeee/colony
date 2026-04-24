@@ -73,6 +73,9 @@ importers:
       '@colony/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+      '@colony/process':
+        specifier: workspace:*
+        version: link:../../packages/process
       '@colony/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -118,6 +121,9 @@ importers:
       '@colony/hooks':
         specifier: workspace:*
         version: link:../../packages/hooks
+      '@colony/process':
+        specifier: workspace:*
+        version: link:../../packages/process
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
@@ -149,6 +155,9 @@ importers:
       '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
+      '@colony/process':
+        specifier: workspace:*
+        version: link:../../packages/process
       '@colony/storage':
         specifier: workspace:*
         version: link:../../packages/storage
@@ -263,6 +272,9 @@ importers:
       '@colony/core':
         specifier: workspace:*
         version: link:../core
+      '@colony/process':
+        specifier: workspace:*
+        version: link:../process
     devDependencies:
       tsup:
         specifier: ^8.3.5
@@ -279,6 +291,18 @@ importers:
       '@colony/config':
         specifier: workspace:*
         version: link:../config
+    devDependencies:
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.5
+        version: 2.1.9(@types/node@22.19.17)
+
+  packages/process:
     devDependencies:
       tsup:
         specifier: ^8.3.5

@@ -1,5 +1,5 @@
 {
-  "name": "@colony/hooks",
+  "name": "@colony/process",
   "version": "0.5.0",
   "license": "MIT",
   "type": "module",
@@ -19,11 +19,6 @@
     "dev": "tsup src/index.ts --format esm --dts --watch",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@colony/config": "workspace:*",
-    "@colony/core": "workspace:*",
-    "@colony/process": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

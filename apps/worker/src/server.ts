@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { expand } from '@colony/compress';
 import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
 import { type HivemindOptions, MemoryStore, readHivemind } from '@colony/core';
 import { createEmbedder } from '@colony/embedding';
+import { isMainEntry, removePidFile, writePidFile } from '@colony/process';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
@@ -85,30 +85,18 @@ function pidFilePath(settings: Settings): string {
   return join(resolveDataDir(settings.dataDir), 'worker.pid');
 }
 
-function writePidFile(settings: Settings): void {
-  writeFileSync(pidFilePath(settings), String(process.pid));
-}
-
-function removePidFile(settings: Settings): void {
-  try {
-    unlinkSync(pidFilePath(settings));
-  } catch {
-    // already gone
-  }
-}
-
 export async function start(): Promise<void> {
   const settings = loadSettings();
   const dbPath = join(resolveDataDir(settings.dataDir), 'data.db');
   const store = new MemoryStore({ dbPath, settings });
 
-  writePidFile(settings);
+  writePidFile(pidFilePath(settings));
 
   let loop: EmbedLoopHandle | undefined;
   const servers: Array<ReturnType<typeof serve>> = [];
 
   const shutdown = async () => {
-    removePidFile(settings);
+    removePidFile(pidFilePath(settings));
     if (loop) await loop.stop();
     for (const s of servers) s.close();
     store.close();
@@ -174,19 +162,9 @@ export async function start(): Promise<void> {
   );
 }
 
-if (isMainEntry()) {
+if (isMainEntry(import.meta.url)) {
   start().catch((err) => {
     process.stderr.write(`[colony worker] fatal: ${String(err)}\n`);
     process.exit(1);
   });
-}
-
-function isMainEntry(): boolean {
-  const argv = process.argv[1];
-  if (!argv) return false;
-  try {
-    return import.meta.url === pathToFileURL(realpathSync(argv)).href;
-  } catch {
-    return import.meta.url === pathToFileURL(argv).href;
-  }
 }

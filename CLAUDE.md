@@ -36,7 +36,7 @@ Claude Code works the same way Codex does in this repo: isolated `agent/*` branc
 
 ## Architectural rules
 
-- Monorepo with pnpm workspaces. Dependency direction is strictly downward: `apps/*` may depend on `packages/*`; `packages/*` may depend on each other only in the order `config → compress → storage → { core, embedding } → hooks → installers`. (`core` and `embedding` are siblings — both consume `config` and `storage`, neither depends on the other.) No upward or sideways imports that break this order.
+- Monorepo with pnpm workspaces. Dependency direction is strictly downward: `apps/*` may depend on `packages/*`; `packages/*` may depend on each other only in the order `process → config → compress → storage → { core, embedding } → hooks → installers`. (`core` and `embedding` are siblings — both consume `config` and `storage`, neither depends on the other. `process` has no upstream deps — only `node:` builtins.) No upward or sideways imports that break this order.
 - All database I/O goes through `@colony/storage`. No other package opens the DB directly.
 - Settings access goes through `@colony/config`. No direct reads from `~/.colony/settings.json` elsewhere.
 - All user-visible strings default to the caveman intensity from settings (default `full`).
@@ -48,6 +48,7 @@ Claude Code works the same way Codex does in this repo: isolated `agent/*` branc
 apps/cli          user-facing binary
 apps/worker       local HTTP daemon: read-only viewer + embedding backfill loop
 apps/mcp-server   stdio MCP server
+packages/process  shared pidfile / spawn / isMainEntry helpers (no deps)
 packages/config   settings schema, loader, defaults, settingsDocs()
 packages/compress compression engine + lexicon
 packages/storage  SQLite + FTS5 + vector adapter

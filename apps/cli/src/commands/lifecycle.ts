@@ -1,7 +1,13 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
+import {
+  isAlive,
+  readPidFile,
+  removePidFile,
+  spawnNodeScript,
+  writePidFile,
+} from '@colony/process';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';
@@ -17,23 +23,12 @@ function pidFile(): string {
   return join(resolveDataDir(loadSettings().dataDir), 'worker.pid');
 }
 
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function waitForPidOrPort(timeoutMs = 5000): Promise<boolean> {
   const pf = pidFile();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(pf)) {
-      const pid = Number(readFileSync(pf, 'utf8'));
-      if (pid > 0 && isAlive(pid)) return true;
-    }
+    const pid = readPidFile(pf);
+    if (pid !== null && isAlive(pid)) return true;
     await new Promise((r) => setTimeout(r, 100));
   }
   return false;
@@ -41,43 +36,29 @@ async function waitForPidOrPort(timeoutMs = 5000): Promise<boolean> {
 
 function startWorker(silent = false): number | null {
   const pf = pidFile();
-  if (existsSync(pf)) {
-    const pid = Number(readFileSync(pf, 'utf8'));
-    if (pid > 0 && isAlive(pid)) {
-      if (!silent) process.stdout.write(`${kleur.yellow('already running')} (pid ${pid})\n`);
-      return pid;
+  const existing = readPidFile(pf);
+  if (existing !== null) {
+    if (isAlive(existing)) {
+      if (!silent) process.stdout.write(`${kleur.yellow('already running')} (pid ${existing})\n`);
+      return existing;
     }
-    try {
-      unlinkSync(pf);
-    } catch {
-      // ignore
-    }
+    removePidFile(pf);
   }
-  // Spawn `node <cli> worker run` so Windows doesn't try to exec a .js directly.
-  const child = spawn(process.execPath, [resolveCliPath(), 'worker', 'run'], {
-    detached: true,
-    stdio: 'ignore',
-    env: process.env,
-  });
-  child.unref();
-  if (child.pid) writeFileSync(pf, String(child.pid));
+  const child = spawnNodeScript(resolveCliPath(), ['worker', 'run']);
+  if (child.pid) writePidFile(pf, child.pid);
   return child.pid ?? null;
 }
 
 function stopWorker(): boolean {
   const pf = pidFile();
-  if (!existsSync(pf)) return false;
-  const pid = Number(readFileSync(pf, 'utf8'));
+  const pid = readPidFile(pf);
+  if (pid === null) return false;
   try {
     process.kill(pid);
   } catch {
     // already dead
   }
-  try {
-    unlinkSync(pf);
-  } catch {
-    // ignore
-  }
+  removePidFile(pf);
   return true;
 }
 
