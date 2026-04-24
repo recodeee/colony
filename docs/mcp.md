@@ -168,6 +168,65 @@ Inputs:
 
 Use this for takeover, review, or resume flows where the agent needs current ownership and a small memory index before deciding which full observations to fetch.
 
+## `examples_list`
+
+List indexed example projects (food sources) discovered under `<repo_root>/examples/<name>/`. Populated by the `colony foraging scan` command and by the SessionStart hook when `settings.foraging.scanOnSessionStart` is true.
+
+```json
+{
+  "name": "examples_list",
+  "input": { "repo_root": "/abs/path/to/repo" }
+}
+```
+
+Returns: `[ { example_name, manifest_kind, observation_count, last_scanned_at } ]`.
+
+`manifest_kind` is one of `npm`, `pypi`, `cargo`, `go`, `unknown`, or `null`. `observation_count` is the cached number of `foraged-pattern` observations the indexer wrote for that example. Use this to choose a target for `examples_query` or `examples_integrate_plan`.
+
+## `examples_query`
+
+BM25-ranked search scoped to `kind = 'foraged-pattern'` observations, optionally narrowed to a single example.
+
+```json
+{
+  "name": "examples_query",
+  "input": { "query": "webhook signature", "example_name": "stripe-webhook", "limit": 10 }
+}
+```
+
+Returns compact hits: `[ { id, session_id, snippet, score, ts } ]`. Follow with `get_observations(ids[])` for full bodies. Vector re-rank is intentionally skipped when a filter is present — the embedding index has no kind column.
+
+## `examples_integrate_plan`
+
+Build a deterministic plan for integrating a food source into the target repo. No LLM in the loop — the plan is derived from the indexed manifest and entrypoints plus a fresh read of the target `package.json`.
+
+```json
+{
+  "name": "examples_integrate_plan",
+  "input": {
+    "repo_root": "/abs/path/to/repo",
+    "example_name": "stripe-webhook",
+    "target_hint": "apps/api/package.json"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "example_name": "stripe-webhook",
+  "dependency_delta": { "add": { "stripe": "^14.0.0" }, "remove": ["lodash"] },
+  "files_to_copy": [
+    { "from": "examples/stripe-webhook/src/index.ts", "to_suggestion": "src/index.ts", "rationale": "…" }
+  ],
+  "config_steps": ["npm run build", "npm run test"],
+  "uncertainty_notes": ["…"]
+}
+```
+
+`dependency_delta.add` lists example deps missing from the target. `dependency_delta.remove` is informational — it is never a recommendation to delete. Only `npm` examples produce a real diff today; other `manifest_kind`s emit an uncertainty note and leave `add` empty. `target_hint` is optional: absolute paths are used as-is, relative paths are joined onto `repo_root`, and the default is `<repo_root>/package.json`.
+
 ## Contract stability
 
 Fields may be added. Existing fields will not be removed or renamed within a minor version.
