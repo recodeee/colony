@@ -44,6 +44,7 @@ export {
   type AttentionInboxOptions,
   type InboxHandoff,
   type InboxLane,
+  type InboxMessage,
   type InboxRecentClaim,
   type InboxWake,
 } from './attention-inbox.js';

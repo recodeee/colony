@@ -71,8 +71,30 @@ export function registerInboxCommand(program: Command): void {
             kleur.bold(`Inbox for ${agent}@${session.slice(0, 8)} — ${inbox.summary.next_action}`),
           );
           lines.push(
-            `  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  recent other claims: ${inbox.summary.recent_other_claim_count}`,
+            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  recent other claims: ${inbox.summary.recent_other_claim_count}`,
           );
+
+          const blockingMessages = inbox.unread_messages.filter((m) => m.urgency === 'blocking');
+          const needsReplyMessages = inbox.unread_messages.filter(
+            (m) => m.urgency === 'needs_reply',
+          );
+          const fyiMessages = inbox.unread_messages.filter((m) => m.urgency === 'fyi');
+          if (blockingMessages.length > 0 || needsReplyMessages.length > 0) {
+            lines.push('');
+            lines.push(kleur.red('Unread messages:'));
+            for (const m of [...blockingMessages, ...needsReplyMessages]) {
+              lines.push(`  #${m.id} task ${m.task_id} from ${m.from_agent} [${m.urgency}]`);
+              lines.push(`    ${m.preview.replace(/\s+/g, ' ').trim()}`);
+              lines.push(
+                `    reply: task_message(task_id=${m.task_id}, session_id="${session}", agent="${agent}", to_agent="any", to_session_id="${m.from_session_id}", reply_to=${m.id}, urgency="fyi", content="...")`,
+              );
+            }
+          }
+          if (fyiMessages.length > 0) {
+            lines.push(
+              `  FYI messages: ${fyiMessages.length} unread collapsed; use --json to expand`,
+            );
+          }
 
           if (inbox.pending_handoffs.length > 0) {
             lines.push('');

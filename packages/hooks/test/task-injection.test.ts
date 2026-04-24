@@ -116,4 +116,57 @@ describe('SessionStart task preface injection', () => {
     expect(preface).toContain('task_ack_wake');
     expect(preface).toContain('session_id="B"');
   });
+
+  it('surfaces unread messages by urgency and keeps FYI collapsed', () => {
+    store.startSession({ id: 'A', ide: 'claude-code', cwd: repo });
+    const thread = TaskThread.open(store, {
+      repo_root: repo,
+      branch: 'feat/handoff',
+      session_id: 'A',
+    });
+    thread.join('A', 'claude');
+    thread.postMessage({
+      from_session_id: 'A',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'blocked until you choose the schema direction',
+      urgency: 'blocking',
+    });
+    thread.postMessage({
+      from_session_id: 'A',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'please confirm the generated-column tradeoff',
+      urgency: 'needs_reply',
+    });
+    thread.postMessage({
+      from_session_id: 'A',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'FYI: local docs mention the migration path',
+      urgency: 'fyi',
+    });
+
+    store.startSession({ id: 'B', ide: 'codex', cwd: repo });
+    const preface = buildTaskPreface(store, {
+      session_id: 'B',
+      cwd: repo,
+      ide: 'codex',
+    });
+
+    const blocking = preface.indexOf('BLOCKING MESSAGE');
+    const needsReply = preface.indexOf('MESSAGE NEEDS REPLY');
+    const fyi = preface.indexOf('FYI MESSAGES: 1 unread collapsed');
+
+    expect(blocking).toBeGreaterThanOrEqual(0);
+    expect(needsReply).toBeGreaterThan(blocking);
+    expect(fyi).toBeGreaterThan(needsReply);
+    expect(preface).toContain('blocked until you choose schema direction');
+    expect(preface).toContain('confirm generated-column tradeoff');
+    expect(preface).not.toContain('FYI: local docs mention the migration path');
+    expect(preface).toContain('task_message(');
+    expect(preface).toContain('to_session_id="A"');
+    expect(preface).toContain('task_message_mark_read');
+    expect(preface).toContain('task_messages(session_id="B", agent="codex"');
+  });
 });

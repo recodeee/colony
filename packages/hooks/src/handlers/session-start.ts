@@ -1,4 +1,11 @@
-import { type MemoryStore, ProposalSystem, TaskThread, detectRepoBranch } from '@colony/core';
+import {
+  type InboxMessage,
+  type MemoryStore,
+  ProposalSystem,
+  TaskThread,
+  buildAttentionInbox,
+  detectRepoBranch,
+} from '@colony/core';
 import { spawnNodeScript } from '@colony/process';
 import type { HookInput } from '../types.js';
 
@@ -103,10 +110,22 @@ export function buildTaskPreface(
 
   const pending = thread.pendingHandoffsFor(input.session_id, agent);
   const pendingWakes = thread.pendingWakesFor(input.session_id, agent);
+  const unreadMessages = buildAttentionInbox(store, {
+    session_id: input.session_id,
+    agent,
+    task_ids: [thread.task_id],
+    repo_root: detected.repo_root,
+    include_stalled_lanes: false,
+  }).unread_messages;
   const others = thread.participants().filter((p) => p.session_id !== input.session_id);
 
   const lines: string[] = [];
-  if (others.length > 0 || pending.length > 0 || pendingWakes.length > 0) {
+  if (
+    others.length > 0 ||
+    pending.length > 0 ||
+    pendingWakes.length > 0 ||
+    unreadMessages.length > 0
+  ) {
     const who =
       others.length > 0
         ? others.map((p) => `${p.agent}@${p.session_id.slice(0, 8)}`).join(', ')
@@ -116,6 +135,7 @@ export function buildTaskPreface(
       `Joined with: ${who}. Post coordination via MCP tools task_post / task_claim_file / task_hand_off.`,
     );
   }
+  appendMessagePreface(lines, unreadMessages, input.session_id, agent);
   for (const h of pending) {
     const minsLeft = Math.max(0, Math.round((h.meta.expires_at - Date.now()) / 60_000));
     lines.push('');
@@ -173,6 +193,52 @@ export function buildTaskPreface(
     );
   }
   return lines.join('\n');
+}
+
+function appendMessagePreface(
+  lines: string[],
+  messages: InboxMessage[],
+  session_id: string,
+  agent: string,
+): void {
+  const blocking = messages.filter((m) => m.urgency === 'blocking');
+  const needsReply = messages.filter((m) => m.urgency === 'needs_reply');
+  const fyi = messages.filter((m) => m.urgency === 'fyi');
+
+  for (const m of blocking) {
+    appendMessage(lines, m, 'BLOCKING MESSAGE', session_id, agent);
+  }
+  for (const m of needsReply) {
+    appendMessage(lines, m, 'MESSAGE NEEDS REPLY', session_id, agent);
+  }
+  if (fyi.length > 0) {
+    lines.push('');
+    lines.push(
+      `FYI MESSAGES: ${fyi.length} unread collapsed; expand with: task_messages(session_id="${session_id}", agent="${agent}", task_ids=[${[...new Set(fyi.map((m) => m.task_id))].join(', ')}], unread_only=true)`,
+    );
+  }
+}
+
+function appendMessage(
+  lines: string[],
+  message: InboxMessage,
+  label: string,
+  session_id: string,
+  agent: string,
+): void {
+  lines.push('');
+  lines.push(`${label} #${message.id} from ${message.from_agent}:`);
+  lines.push(`  preview: ${compactPreview(message.preview)}`);
+  lines.push(
+    `  reply with: task_message(task_id=${message.task_id}, session_id="${session_id}", agent="${agent}", to_agent="any", to_session_id="${message.from_session_id}", reply_to=${message.id}, urgency="fyi", content="...")`,
+  );
+  lines.push(
+    `  mark read: task_message_mark_read(message_observation_id=${message.id}, session_id="${session_id}")`,
+  );
+}
+
+function compactPreview(preview: string): string {
+  return preview.replace(/\s+/g, ' ').trim();
 }
 
 /**

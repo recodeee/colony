@@ -30,6 +30,7 @@
       "@colony/hooks": ["./packages/hooks/src/index.ts"],
       "@colony/installers": ["./packages/installers/src/index.ts"],
       "@colony/mcp-server": ["./apps/mcp-server/src/server.ts"],
+      "@colony/process": ["./packages/process/src/index.ts"],
       "@colony/worker": ["./apps/worker/src/server.ts"]
     }
   },

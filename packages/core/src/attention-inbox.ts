@@ -6,6 +6,7 @@ import {
   readHivemind,
 } from './hivemind.js';
 import type { MemoryStore } from './memory-store.js';
+import { type MessageSummary, listMessagesForAgent } from './messages.js';
 import {
   type HandoffMetadata,
   type HandoffTarget,
@@ -41,6 +42,8 @@ export interface InboxWake {
   ts: number;
 }
 
+export type InboxMessage = MessageSummary;
+
 export interface InboxLane {
   repo_root: string;
   branch: string;
@@ -66,12 +69,14 @@ export interface AttentionInbox {
   summary: {
     pending_handoff_count: number;
     pending_wake_count: number;
+    unread_message_count: number;
     stalled_lane_count: number;
     recent_other_claim_count: number;
     next_action: string;
   };
   pending_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
+  unread_messages: InboxMessage[];
   stalled_lanes: InboxLane[];
   recent_other_claims: InboxRecentClaim[];
 }
@@ -92,6 +97,9 @@ export interface AttentionInboxOptions {
   /** Tasks to scan for pending handoffs/wakes. Defaults to all tasks the
    *  session participates in. */
   task_ids?: number[];
+  unread_message_limit?: number;
+  /** Defaults true; hooks can disable filesystem hivemind reads for hot paths. */
+  include_stalled_lanes?: boolean;
 }
 
 const DEFAULT_RECENT_CLAIM_WINDOW_MS = 15 * 60_000;
@@ -117,6 +125,13 @@ export function buildAttentionInbox(
   const pending_handoffs: InboxHandoff[] = [];
   const pending_wakes: InboxWake[] = [];
   const recent_other_claims: InboxRecentClaim[] = [];
+  const unread_messages = listMessagesForAgent(store, {
+    session_id: opts.session_id,
+    agent: opts.agent,
+    task_ids: taskIds,
+    unread_only: true,
+    ...(opts.unread_message_limit !== undefined ? { limit: opts.unread_message_limit } : {}),
+  });
 
   const recentWindow = opts.recent_claim_window_ms ?? DEFAULT_RECENT_CLAIM_WINDOW_MS;
   const recentLimit = opts.recent_claim_limit ?? DEFAULT_RECENT_CLAIM_LIMIT;
@@ -136,16 +151,18 @@ export function buildAttentionInbox(
     }
   }
 
-  const stalled_lanes = collectStalledLanes(opts);
+  const stalled_lanes = opts.include_stalled_lanes === false ? [] : collectStalledLanes(opts);
 
   const summary = {
     pending_handoff_count: pending_handoffs.length,
     pending_wake_count: pending_wakes.length,
+    unread_message_count: unread_messages.length,
     stalled_lane_count: stalled_lanes.length,
     recent_other_claim_count: recent_other_claims.length,
     next_action: deriveNextAction({
       pending_handoffs,
       pending_wakes,
+      unread_messages,
       stalled_lanes,
       recent_other_claims,
     }),
@@ -158,6 +175,7 @@ export function buildAttentionInbox(
     summary,
     pending_handoffs,
     pending_wakes,
+    unread_messages,
     stalled_lanes,
     recent_other_claims,
   };
@@ -261,14 +279,24 @@ function toInboxLane(session: HivemindSession): InboxLane {
 function deriveNextAction(parts: {
   pending_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
+  unread_messages: InboxMessage[];
   stalled_lanes: InboxLane[];
   recent_other_claims: InboxRecentClaim[];
 }): string {
+  if (parts.unread_messages.some((m) => m.urgency === 'blocking')) {
+    return 'Answer blocking task messages first; another agent is explicitly blocked on you.';
+  }
   if (parts.pending_handoffs.length > 0) {
     return 'Respond to pending handoffs first; each baton pass is blocking until accept or decline.';
   }
+  if (parts.unread_messages.some((m) => m.urgency === 'needs_reply')) {
+    return 'Reply to task messages that need a response before starting unrelated work.';
+  }
   if (parts.pending_wakes.length > 0) {
     return 'Acknowledge pending wake requests; another session is waiting on you.';
+  }
+  if (parts.unread_messages.length > 0) {
+    return 'Review unread FYI task messages when context allows.';
   }
   if (parts.stalled_lanes.length > 0) {
     return 'Review stalled lanes — takeover may be safer than waiting for the owner to return.';
