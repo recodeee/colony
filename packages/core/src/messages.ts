@@ -5,6 +5,7 @@ import type {
   MessageTarget,
   MessageUrgency,
 } from './task-thread.js';
+import { isMessageAddressedTo } from './task-thread.js';
 
 /**
  * Compact view of a directed message, safe to return from MCP list-shape
@@ -51,8 +52,8 @@ const DEFAULT_PREVIEW_LENGTH = 120;
  * Return messages addressed to this (session, agent), newest-first. A
  * message is addressed to the caller when:
  *   - metadata.to_session_id === session_id, OR
- *   - metadata.to_agent === agent, OR
- *   - metadata.to_agent === 'any' (broadcast)
+ *   - metadata.to_session_id is absent and metadata.to_agent === agent, OR
+ *   - metadata.to_session_id is absent and metadata.to_agent === 'any'
  *
  * The caller's own sends are filtered out — your outbox is not your inbox.
  * This function does *not* mark messages as read; `markMessageRead` is a
@@ -68,7 +69,9 @@ export function listMessagesForAgent(
   const previewLen = opts.previewLength ?? DEFAULT_PREVIEW_LENGTH;
 
   const taskIds = opts.task_ids?.length
-    ? [...new Set(opts.task_ids)]
+    ? [...new Set(opts.task_ids)].filter(
+        (task_id) => store.storage.getParticipantAgent(task_id, opts.session_id) !== undefined,
+      )
     : participatingTaskIds(store, opts.session_id);
 
   const out: MessageSummary[] = [];
@@ -86,10 +89,7 @@ export function listMessagesForAgent(
       }
       if (meta.kind !== 'message') continue;
 
-      const addressedToMe =
-        meta.to_session_id === opts.session_id ||
-        meta.to_agent === opts.agent ||
-        meta.to_agent === 'any';
+      const addressedToMe = isMessageAddressedTo(meta, opts.session_id, opts.agent);
       if (!addressedToMe) continue;
       if (opts.unread_only && meta.status !== 'unread') continue;
 

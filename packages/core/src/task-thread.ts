@@ -214,6 +214,16 @@ export interface PostMessageArgs {
   urgency?: MessageUrgency;
 }
 
+export function isMessageAddressedTo(
+  meta: MessageMetadata,
+  session_id: string,
+  agent: string,
+): boolean {
+  if (meta.to_session_id !== null) return meta.to_session_id === session_id;
+  if (meta.to_agent === 'any') return true;
+  return meta.to_agent === agent;
+}
+
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_WAKE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -753,6 +763,31 @@ export class TaskThread {
     if (!meta) {
       throw taskError(TASK_THREAD_ERROR_CODES.METADATA_MISSING, 'message metadata missing');
     }
+    const myAgent = this.store.storage.getParticipantAgent(this.task_id, session_id);
+    if (!myAgent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_PARTICIPANT,
+        'session is not a participant on this task',
+      );
+    }
+    if (meta.from_session_id === session_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_SESSION,
+        'message was sent by this session',
+      );
+    }
+    if (meta.to_session_id !== null && meta.to_session_id !== session_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_SESSION,
+        'message is addressed to a different session',
+      );
+    }
+    if (meta.to_session_id === null && meta.to_agent !== 'any' && meta.to_agent !== myAgent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_AGENT,
+        `message is for ${meta.to_agent}, not ${myAgent}`,
+      );
+    }
     if (meta.status === 'unread') {
       meta.status = 'read';
       meta.read_by_session_id = session_id;
@@ -777,7 +812,7 @@ export class TaskThread {
         ({ meta }) =>
           meta.status === 'unread' &&
           meta.from_session_id !== session_id &&
-          (meta.to_session_id === session_id || meta.to_agent === 'any' || meta.to_agent === agent),
+          isMessageAddressedTo(meta, session_id, agent),
       );
   }
 }

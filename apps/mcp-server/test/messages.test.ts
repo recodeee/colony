@@ -191,8 +191,10 @@ describe('task threads — direct messages', () => {
     expect(senderInbox.find((m) => m.id === message_observation_id)).toBeUndefined();
   });
 
-  it('to_session_id routes to the target session and stays invisible to mismatched-agent participants', async () => {
+  it('to_session_id routes only to the target session, not every matching-agent participant', async () => {
     const { task_id, sessionA, sessionB, sessionC } = seedThreeSessionTask();
+    store.startSession({ id: 'D', ide: 'claude-code', cwd: '/repo' });
+    new TaskThread(store, task_id).join('D', 'claude');
 
     const { message_observation_id } = await call<{ message_observation_id: number }>(
       'task_message',
@@ -214,15 +216,55 @@ describe('task threads — direct messages', () => {
     });
     expect(cInbox.find((m) => m.id === message_observation_id)).toBeDefined();
 
-    // B is a codex session; filter by to_agent='claude' should exclude B
-    // *and* a second claude session would also be excluded if to_session_id
-    // were honoured strictly. Here we only seed one extra claude session (C),
-    // so we assert the negative case via B.
     const bInbox = await call<Array<{ id: number }>>('task_messages', {
       session_id: sessionB,
       agent: 'codex',
     });
     expect(bInbox.find((m) => m.id === message_observation_id)).toBeUndefined();
+
+    const dInbox = await call<Array<{ id: number }>>('task_messages', {
+      session_id: 'D',
+      agent: 'claude',
+    });
+    expect(dInbox.find((m) => m.id === message_observation_id)).toBeUndefined();
+    expect(new TaskThread(store, task_id).pendingMessagesFor('D', 'claude')).toHaveLength(0);
+  });
+
+  it('task_ids cannot expose messages from tasks the caller has not joined', async () => {
+    const { sessionA, sessionB } = seedTwoSessionTask();
+    store.startSession({ id: 'C', ide: 'codex', cwd: '/repo' });
+    const privateThread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'feat/private',
+      session_id: sessionA,
+    });
+    privateThread.join(sessionA, 'claude');
+    privateThread.join('C', 'codex');
+
+    const { message_observation_id } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id: privateThread.task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'codex',
+        content: 'private codex-only task details',
+      },
+    );
+
+    const outsiderInbox = await call<Array<{ id: number }>>('task_messages', {
+      session_id: sessionB,
+      agent: 'codex',
+      task_ids: [privateThread.task_id],
+    });
+    expect(outsiderInbox.find((m) => m.id === message_observation_id)).toBeUndefined();
+
+    const participantInbox = await call<Array<{ id: number }>>('task_messages', {
+      session_id: 'C',
+      agent: 'codex',
+      task_ids: [privateThread.task_id],
+    });
+    expect(participantInbox.find((m) => m.id === message_observation_id)).toBeDefined();
   });
 
   it('since_ts cursor filters out older messages', async () => {
@@ -320,5 +362,44 @@ describe('task threads — direct messages', () => {
       session_id: sessionB,
     });
     expect(err.code).toBe(TASK_THREAD_ERROR_CODES.NOT_MESSAGE);
+  });
+
+  it('mark_read rejects non-participants and non-recipients without clearing unread status', async () => {
+    const { task_id, sessionA, sessionB, sessionC } = seedThreeSessionTask();
+
+    const { message_observation_id } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'claude',
+        to_session_id: sessionC,
+        content: 'targeted to session C only',
+      },
+    );
+
+    const wrongParticipant = await callError('task_message_mark_read', {
+      message_observation_id,
+      session_id: sessionB,
+    });
+    expect(wrongParticipant.code).toBe(TASK_THREAD_ERROR_CODES.NOT_TARGET_SESSION);
+
+    store.startSession({ id: 'outsider', ide: 'codex', cwd: '/repo' });
+    const outsider = await callError('task_message_mark_read', {
+      message_observation_id,
+      session_id: 'outsider',
+    });
+    expect(outsider.code).toBe(TASK_THREAD_ERROR_CODES.NOT_PARTICIPANT);
+
+    const meta = JSON.parse(store.storage.getObservation(message_observation_id)?.metadata ?? '{}');
+    expect(meta.status).toBe('unread');
+    expect(meta.read_by_session_id).toBeNull();
+
+    const target = await call<{ status: string }>('task_message_mark_read', {
+      message_observation_id,
+      session_id: sessionC,
+    });
+    expect(target.status).toBe('read');
   });
 });

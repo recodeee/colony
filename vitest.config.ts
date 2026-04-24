@@ -9,10 +9,12 @@ export const workspaceAliases = {
   '@colony/config': resolve(rootDir, 'packages/config/src/index.ts'),
   '@colony/core': resolve(rootDir, 'packages/core/src/index.ts'),
   '@colony/embedding': resolve(rootDir, 'packages/embedding/src/index.ts'),
+  '@colony/foraging': resolve(rootDir, 'packages/foraging/src/index.ts'),
   '@colony/hooks': resolve(rootDir, 'packages/hooks/src/index.ts'),
   '@colony/installers': resolve(rootDir, 'packages/installers/src/index.ts'),
   '@colony/mcp-server': resolve(rootDir, 'apps/mcp-server/src/server.ts'),
   '@colony/process': resolve(rootDir, 'packages/process/src/index.ts'),
+  '@colony/spec': resolve(rootDir, 'packages/spec/src/index.ts'),
   '@colony/storage': resolve(rootDir, 'packages/storage/src/index.ts'),
   '@colony/worker': resolve(rootDir, 'apps/worker/src/server.ts'),
 };
