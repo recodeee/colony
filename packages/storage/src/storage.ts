@@ -218,6 +218,10 @@ export class Storage {
     }));
   }
 
+  rebuildFts(): void {
+    this.db.exec("INSERT INTO observations_fts(observations_fts) VALUES('rebuild');");
+  }
+
   // --- embeddings ---
 
   putEmbedding(observationId: number, model: string, vec: Float32Array): void {
