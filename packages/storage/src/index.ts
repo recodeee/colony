@@ -20,4 +20,7 @@ export type {
   ReinforcementKind,
   AgentProfileRow,
   NewAgentProfile,
+  ExampleRow,
+  NewExample,
+  ExampleManifestKind,
 } from './types.js';

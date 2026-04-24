@@ -4,7 +4,9 @@ import Database from 'better-sqlite3';
 import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import type {
   AgentProfileRow,
+  ExampleRow,
   NewAgentProfile,
+  NewExample,
   NewObservation,
   NewPheromone,
   NewProposal,
@@ -649,6 +651,62 @@ export class Storage {
   /** Run a function inside a SQLite transaction. All-or-nothing. */
   transaction<T>(fn: () => T): T {
     return this.db.transaction(fn)();
+  }
+
+  // --- foraging food sources (indexed <repo_root>/examples/<name>) ---
+
+  /**
+   * Insert-or-replace an `examples` row for a (repo_root, example_name).
+   * The scanner owns `content_hash` semantics — we accept whatever it
+   * computes and last-writer-wins. Replacing the row (rather than merging)
+   * matches the data's identity: a food source is defined by its current
+   * content, so stale metadata must not survive a rescan.
+   */
+  upsertExample(e: NewExample): number {
+    const now = e.last_scanned_at ?? Date.now();
+    const info = this.db
+      .prepare(
+        `INSERT INTO examples(repo_root, example_name, content_hash, manifest_kind,
+                              last_scanned_at, observation_count)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(repo_root, example_name) DO UPDATE SET
+           content_hash      = excluded.content_hash,
+           manifest_kind     = excluded.manifest_kind,
+           last_scanned_at   = excluded.last_scanned_at,
+           observation_count = excluded.observation_count
+         RETURNING id`,
+      )
+      .get(
+        e.repo_root,
+        e.example_name,
+        e.content_hash,
+        e.manifest_kind,
+        now,
+        e.observation_count ?? 0,
+      ) as { id: number };
+    return info.id;
+  }
+
+  /** One example row for (repo_root, example_name) or undefined. */
+  getExample(repo_root: string, example_name: string): ExampleRow | undefined {
+    return this.db
+      .prepare('SELECT * FROM examples WHERE repo_root = ? AND example_name = ?')
+      .get(repo_root, example_name) as ExampleRow | undefined;
+  }
+
+  /** Every example for a repo, newest-scan-first. */
+  listExamples(repo_root: string): ExampleRow[] {
+    return this.db
+      .prepare('SELECT * FROM examples WHERE repo_root = ? ORDER BY last_scanned_at DESC')
+      .all(repo_root) as ExampleRow[];
+  }
+
+  /** Delete a single food source's row. Observations are kept — the caller
+   *  (CLI `foraging clear`) decides whether to purge those separately. */
+  deleteExample(repo_root: string, example_name: string): void {
+    this.db
+      .prepare('DELETE FROM examples WHERE repo_root = ? AND example_name = ?')
+      .run(repo_root, example_name);
   }
 
   // --- observe / debrief analytics ---

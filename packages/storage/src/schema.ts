@@ -164,7 +164,24 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
   updated_at INTEGER NOT NULL
 );
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (6);
+-- Foraging food sources: one row per indexed <repo_root>/examples/<name>.
+-- content_hash is sha256 over (manifest + filetree + key file sizes); the
+-- scanner uses it to skip work on repeat SessionStarts. observation_count
+-- is cached here so listExamples doesn't need to fan out into observations
+-- just to render the session-start preface.
+CREATE TABLE IF NOT EXISTS examples (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo_root         TEXT NOT NULL,
+  example_name      TEXT NOT NULL,
+  content_hash      TEXT NOT NULL,
+  manifest_kind     TEXT,
+  last_scanned_at   INTEGER NOT NULL,
+  observation_count INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(repo_root, example_name)
+);
+CREATE INDEX IF NOT EXISTS idx_examples_repo ON examples(repo_root);
+
+INSERT OR IGNORE INTO schema_version(version) VALUES (7);
 `;
 
 /**

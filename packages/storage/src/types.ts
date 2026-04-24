@@ -163,3 +163,24 @@ export interface SearchHit {
   score: number;
   ts: number;
 }
+
+export type ExampleManifestKind = 'npm' | 'pypi' | 'cargo' | 'go' | 'unknown';
+
+export interface ExampleRow {
+  id: number;
+  repo_root: string;
+  example_name: string;
+  content_hash: string;
+  manifest_kind: ExampleManifestKind | null;
+  last_scanned_at: number;
+  observation_count: number;
+}
+
+export interface NewExample {
+  repo_root: string;
+  example_name: string;
+  content_hash: string;
+  manifest_kind: ExampleManifestKind | null;
+  observation_count?: number;
+  last_scanned_at?: number;
+}
