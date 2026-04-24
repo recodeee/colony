@@ -52,6 +52,33 @@ describe('runHook', () => {
     expect(tl[0]?.content).not.toMatch(/basically/i);
   });
 
+  it('user-prompt-submit reminds Claude Code to read files before edit tools', async () => {
+    const claude = await runHook(
+      'user-prompt-submit',
+      {
+        session_id: 'sess-claude-edit',
+        ide: 'claude-code',
+        prompt: 'Update packages/hooks/src/handlers/user-prompt-submit.ts',
+      },
+      { store },
+    );
+    expect(claude.ok).toBe(true);
+    expect(claude.context).toContain('Read each existing target file before Edit/Update/MultiEdit');
+    expect(claude.context).toContain('File must be read first');
+
+    const codex = await runHook(
+      'user-prompt-submit',
+      {
+        session_id: 'sess-codex-edit',
+        ide: 'codex',
+        prompt: 'Update packages/hooks/src/handlers/user-prompt-submit.ts',
+      },
+      { store },
+    );
+    expect(codex.ok).toBe(true);
+    expect(codex.context ?? '').not.toContain('Edit/Update/MultiEdit');
+  });
+
   it('post-tool-use records a tool_use observation with metadata', async () => {
     await runHook('session-start', { session_id: 'sess-c', ide: 'claude-code' }, { store });
     const r = await runHook(

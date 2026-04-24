@@ -7,6 +7,8 @@ import type { HookInput } from '../types.js';
  * so one chatty agent can't drown out the signal in another agent's context.
  */
 const MAX_INJECTED_MESSAGES = 6;
+const CLAUDE_EDIT_READ_GUARD =
+  'Claude Code edit safety: Read each existing target file before Edit/Update/MultiEdit, or Claude Code rejects with "File must be read first".';
 
 export async function userPromptSubmit(store: MemoryStore, input: HookInput): Promise<string> {
   // Compute the "since" cursor *before* recording this turn's prompt so the
@@ -24,7 +26,8 @@ export async function userPromptSubmit(store: MemoryStore, input: HookInput): Pr
   const activity = buildTaskUpdatesPreface(store, input.session_id, sinceTs);
   const conflicts = buildConflictPreface(store, input.session_id);
   const pheromones = buildPheromoneConflictPreface(store, input.session_id);
-  return [activity, conflicts, pheromones].filter(Boolean).join('\n\n');
+  const editGuard = input.ide === 'claude-code' ? CLAUDE_EDIT_READ_GUARD : '';
+  return [editGuard, activity, conflicts, pheromones].filter(Boolean).join('\n\n');
 }
 
 /**

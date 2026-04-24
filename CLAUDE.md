@@ -20,7 +20,8 @@ The signature property of the project is that **memory is stored compressed**. E
 8. **Local by default.** Default embedding provider is local (Transformers.js). Remote providers are opt-in via settings. Do not add default network calls.
 9. **No silent failures.** Hook and worker errors are logged as structured JSON; user-visible commands surface failures with a non-zero exit code and a short message.
 10. **No daemon on the write path.** Hooks write observations synchronously through `MemoryStore.addObservation` — never across a network or HTTP boundary. Hooks may *detach-spawn* the worker to kick off background embedding, but they must never wait on it. If the worker is down, writes still succeed; only the semantic-search side is degraded (BM25 keeps working).
-11. **Never edit on the local base branch.** Treat the local `main` checkout as read-only. Every task — even a typo or one-line fix — runs on a dedicated `agent/*` branch inside a worktree. Do not run `git checkout main` / `git switch main` to start work, do not `git commit` on the primary working tree, and do not push to `main` directly. This matches what codex does via Guardex and keeps parallel lanes safe.
+11. **Read before edit tools.** Claude Code rejects `Edit` / `Update` / `MultiEdit` on an existing file unless that exact file path was read first in the current session. Before any edit tool call, run `Read` on the target file with the same relative path you will edit.
+12. **Never edit on the local base branch.** Treat the local `main` checkout as read-only. Every task — even a typo or one-line fix — runs on a dedicated `agent/*` branch inside a worktree. Do not run `git checkout main` / `git switch main` to start work, do not `git commit` on the primary working tree, and do not push to `main` directly. This matches what codex does via Guardex and keeps parallel lanes safe.
 
 ## Worktree discipline
 
