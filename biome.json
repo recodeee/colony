@@ -3,7 +3,7 @@
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "ignoreUnknown": true,
-    "ignore": ["**/dist", "**/node_modules", "**/*.d.ts", "pnpm-lock.yaml"]
+    "ignore": ["**/dist", "**/node_modules", "**/*.d.ts", "pnpm-lock.yaml", "apps/cli/release"]
   },
   "formatter": {
     "enabled": true,
