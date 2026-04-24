@@ -150,6 +150,11 @@ function buildTaskUpdatesPreface(store: MemoryStore, session_id: string, sinceTs
         `    -> accept with: task_accept_handoff(handoff_observation_id=${o.id}, session_id="${session_id}")`,
       );
     }
+    if (o.kind === 'wake_request') {
+      lines.push(
+        `    -> ack with: task_ack_wake(wake_observation_id=${o.id}, session_id="${session_id}")`,
+      );
+    }
   }
   if (skipped > 0) {
     lines.push(`  (${skipped} older message(s) omitted — call task_timeline to see them)`);

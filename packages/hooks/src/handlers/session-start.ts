@@ -60,10 +60,11 @@ export function buildTaskPreface(
   thread.join(input.session_id, agent);
 
   const pending = thread.pendingHandoffsFor(input.session_id, agent);
+  const pendingWakes = thread.pendingWakesFor(input.session_id, agent);
   const others = thread.participants().filter((p) => p.session_id !== input.session_id);
 
   const lines: string[] = [];
-  if (others.length > 0 || pending.length > 0) {
+  if (others.length > 0 || pending.length > 0 || pendingWakes.length > 0) {
     const who =
       others.length > 0
         ? others.map((p) => `${p.agent}@${p.session_id.slice(0, 8)}`).join(', ')
@@ -110,6 +111,23 @@ export function buildTaskPreface(
     );
     lines.push(
       `  decline with: task_decline_handoff(handoff_observation_id=${h.id}, session_id="${input.session_id}", reason="...")`,
+    );
+  }
+  for (const w of pendingWakes) {
+    const minsLeft = Math.max(0, Math.round((w.meta.expires_at - Date.now()) / 60_000));
+    lines.push('');
+    lines.push(
+      `PENDING WAKE #${w.id} from ${w.meta.from_agent} (expires in ${minsLeft}m):`,
+      `  reason: ${w.meta.reason}`,
+    );
+    if (w.meta.next_step) {
+      lines.push(`  next: ${w.meta.next_step}`);
+    }
+    // Mirror the handoff ergonomics — inline the session_id so the ack
+    // call validates on first try instead of round-tripping through an
+    // "invalid arguments" error.
+    lines.push(
+      `  ack with: task_ack_wake(wake_observation_id=${w.id}, session_id="${input.session_id}")`,
     );
   }
   return lines.join('\n');

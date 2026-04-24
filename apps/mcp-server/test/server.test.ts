@@ -48,12 +48,15 @@ describe('MCP server', () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       'agent_get_profile',
       'agent_upsert_profile',
+      'attention_inbox',
       'get_observations',
       'hivemind',
       'hivemind_context',
       'list_sessions',
       'search',
       'task_accept_handoff',
+      'task_ack_wake',
+      'task_cancel_wake',
       'task_claim_file',
       'task_decline_handoff',
       'task_foraging_report',
@@ -64,6 +67,7 @@ describe('MCP server', () => {
       'task_reinforce',
       'task_timeline',
       'task_updates_since',
+      'task_wake',
       'timeline',
     ]);
   });

@@ -86,4 +86,34 @@ describe('SessionStart task preface injection', () => {
     // ramp rather than silently letting the handoff expire.
     expect(preface).toContain('task_decline_handoff');
   });
+
+  it('surfaces a pending wake request with a ready-to-copy ack call', () => {
+    store.startSession({ id: 'A', ide: 'claude-code', cwd: repo });
+    const thread = TaskThread.open(store, {
+      repo_root: repo,
+      branch: 'feat/handoff',
+      session_id: 'A',
+    });
+    thread.join('A', 'claude');
+    thread.requestWake({
+      from_session_id: 'A',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      reason: 'stuck on migration shape, need a second pair of eyes',
+      next_step: 'look at packages/storage/src/schema.ts',
+    });
+
+    store.startSession({ id: 'B', ide: 'codex', cwd: repo });
+    const preface = buildTaskPreface(store, {
+      session_id: 'B',
+      cwd: repo,
+      ide: 'codex',
+    });
+
+    expect(preface).toContain('PENDING WAKE');
+    expect(preface).toContain('stuck on migration shape');
+    expect(preface).toContain('packages/storage/src/schema.ts');
+    expect(preface).toContain('task_ack_wake');
+    expect(preface).toContain('session_id="B"');
+  });
 });

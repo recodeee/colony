@@ -17,7 +17,21 @@ export {
   type HandoffStatus,
   type HandoffTarget,
   type HandOffArgs,
+  type RequestWakeArgs,
+  type WakeRequestMetadata,
+  type WakeRequestObservation,
+  type WakeStatus,
+  type WakeTarget,
 } from './task-thread.js';
+export {
+  buildAttentionInbox,
+  type AttentionInbox,
+  type AttentionInboxOptions,
+  type InboxHandoff,
+  type InboxLane,
+  type InboxRecentClaim,
+  type InboxWake,
+} from './attention-inbox.js';
 export { detectRepoBranch } from './git-detect.js';
 export {
   PheromoneSystem,
