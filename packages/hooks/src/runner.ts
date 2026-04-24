@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
-import { MemoryStore } from '@colony/core';
+import { MemoryStore, inferIdeFromSessionId } from '@colony/core';
 import { removeActiveSession, upsertActiveSession } from './active-session.js';
 import { ensureWorkerRunning } from './auto-spawn.js';
 import { postToolUse } from './handlers/post-tool-use.js';
@@ -99,13 +99,6 @@ function ensureTaskBinding(store: MemoryStore, input: HookInput): string {
   if (!input.cwd) return '';
   if (store.storage.findActiveTaskForSession(input.session_id) !== undefined) return '';
   return joinContext(buildTaskPreface(store, input), buildProposalPreface(store, input));
-}
-
-function inferIdeFromSessionId(sessionId: string): string | undefined {
-  const prefix = sessionId.split('@')[0]?.toLowerCase();
-  if (prefix === 'codex') return 'codex';
-  if (prefix === 'claude' || prefix === 'claude-code') return 'claude-code';
-  return undefined;
 }
 
 function joinContext(...parts: Array<string | undefined>): string {

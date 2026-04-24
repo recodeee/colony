@@ -9,6 +9,7 @@ export {
 export { hybridRank } from './ranker.js';
 export type { SearchResult, GetObservationsOptions, Observation, Session } from './types.js';
 export { createSessionId } from './ids.js';
+export { inferIdeFromSessionId } from './infer-ide.js';
 export {
   TaskThread,
   type CoordinationKind,

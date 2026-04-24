@@ -1,6 +1,7 @@
 import { compress, expand, redactPrivate } from '@colony/compress';
 import type { Settings } from '@colony/config';
 import { type NewObservation, type ObservationRow, Storage } from '@colony/storage';
+import { inferIdeFromSessionId } from './infer-ide.js';
 import { cosine, hybridRank } from './ranker.js';
 import type { GetObservationsOptions, Observation, SearchResult } from './types.js';
 
@@ -95,7 +96,7 @@ export class MemoryStore {
   private ensureSession(id: string): void {
     this.storage.createSession({
       id,
-      ide: 'unknown',
+      ide: inferIdeFromSessionId(id) ?? 'unknown',
       cwd: null,
       started_at: Date.now(),
       metadata: null,

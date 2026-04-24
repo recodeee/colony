@@ -1,4 +1,4 @@
-import type { HivemindSession, HivemindSnapshot } from '@colony/core';
+import { inferIdeFromSessionId, type HivemindSession, type HivemindSnapshot } from '@colony/core';
 import type { SessionRow } from '@colony/storage';
 
 const style = `
@@ -20,6 +20,11 @@ const style = `
   h1 { margin: 0 0 4px; font-size: 20px; }
   h2 { margin: 0 0 12px; font-size: 16px; color: #cfd5de; }
   code { background: #1d2129; padding: 1px 4px; border-radius: 3px; }
+  .owner { display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: 999px; background: #1c2433; color: #cdd6e4; font-size: 11px; font-weight: 500; }
+  .owner[data-owner="codex"] { background: #1a2a1f; color: #8bd5a6; }
+  .owner[data-owner="claude-code"] { background: #2a2238; color: #c8b1ff; }
+  .owner[data-owner="unknown"] { background: #2a1f1f; color: #e48a8a; }
+  .owner[data-derived="true"] { font-style: italic; opacity: 0.85; }
 `;
 
 function layout(title: string, body: string): string {
@@ -33,23 +38,49 @@ function esc(s: string): string {
   );
 }
 
+/**
+ * Backfill display-only owner when the stored ide is 'unknown' — legacy rows
+ * from before MemoryStore.ensureSession learned to infer. Mark the result
+ * `derived` so the viewer renders it italic + with a `?` suffix instead of
+ * claiming the store actually knows the owner.
+ */
+function resolveOwner(storedIde: string, sessionId: string): { ide: string; derived: boolean } {
+  if (storedIde && storedIde !== 'unknown') return { ide: storedIde, derived: false };
+  const inferred = inferIdeFromSessionId(sessionId);
+  if (inferred) return { ide: inferred, derived: true };
+  return { ide: 'unknown', derived: false };
+}
+
+function ownerChip(ide: string, derived: boolean): string {
+  const label = derived ? `${ide}?` : ide;
+  return `<span class="owner" data-owner="${esc(ide)}" data-derived="${String(derived)}">${esc(label)}</span>`;
+}
+
 export function renderIndex(sessions: SessionRow[], snapshot?: HivemindSnapshot): string {
   const dashboard = snapshot ? renderHivemindDashboard(snapshot) : '';
   if (sessions.length === 0) {
     return layout('agents-hivemind', `${dashboard}<p>No memory sessions yet.</p>`);
   }
+  const ownerCounts = new Map<string, number>();
   const items = sessions
-    .map(
-      (s) => `
+    .map((s) => {
+      const owner = resolveOwner(s.ide, s.id);
+      ownerCounts.set(owner.ide, (ownerCounts.get(owner.ide) ?? 0) + 1);
+      const cwdHtml = s.cwd ? ` · ${esc(s.cwd)}` : '';
+      return `
       <div class="card">
-        <a href="/sessions/${esc(s.id)}"><strong>${esc(s.id)}</strong></a>
-        <div class="meta">${esc(s.ide)} · ${esc(s.cwd ?? '')} · ${new Date(s.started_at).toISOString()}</div>
-      </div>`,
-    )
+        <div>${ownerChip(owner.ide, owner.derived)}<a href="/sessions/${esc(s.id)}"><strong>${esc(s.id)}</strong></a></div>
+        <div class="meta">${new Date(s.started_at).toISOString()}${cwdHtml}</div>
+      </div>`;
+    })
     .join('');
+  const summary = [...ownerCounts.entries()]
+    .sort(([, a], [, b]) => b - a)
+    .map(([ide, n]) => `<span class="owner" data-owner="${esc(ide)}">${esc(ide)} · ${n}</span>`)
+    .join(' ');
   return layout(
     'agents-hivemind · sessions',
-    `${dashboard}<h2>Recent memory sessions</h2>${items}`,
+    `${dashboard}<h2>Recent memory sessions</h2><p class="meta">${summary}</p>${items}`,
   );
 }
 
@@ -66,9 +97,10 @@ export function renderSession(
       </div>`,
     )
     .join('');
+  const owner = resolveOwner(session.ide, session.id);
   return layout(
     `agents-hivemind · ${session.id}`,
-    `<h2>${esc(session.id)} <span class="meta">(${esc(session.ide)})</span></h2><p><a href="/">&larr; all sessions</a></p>${rows}`,
+    `<h2>${ownerChip(owner.ide, owner.derived)}${esc(session.id)}</h2><p><a href="/">&larr; all sessions</a></p>${rows}`,
   );
 }
 
@@ -102,15 +134,31 @@ function renderLane(session: HivemindSession): string {
     session.locked_file_count > 0
       ? `<div class="meta">GX locks ${session.locked_file_count}: ${esc(session.locked_file_preview.join(', '))}</div>`
       : '';
+  const ownerIde = laneOwnerIde(session);
+  const ownerDerived = ownerIde !== session.agent && ownerIde !== session.cli;
   return `
     <div class="card lane" data-attention="${String(attention)}">
-      <strong>${esc(session.task || session.task_name || session.branch)}</strong>
-      <span class="badge" data-attention="${String(attention)}">${esc(session.activity)}</span>
+      <div>${ownerChip(ownerIde, ownerDerived)}<strong>${esc(session.task || session.task_name || session.branch)}</strong>
+        <span class="badge" data-attention="${String(attention)}">${esc(session.activity)}</span></div>
       <div class="meta">${esc(session.agent)}/${esc(session.cli)} · ${esc(session.branch)} · ${esc(session.source)}</div>
       <div class="meta">${esc(session.activity_summary)} Updated ${esc(session.updated_at || 'unknown')}.</div>
       ${lockSummary}
       <div class="meta">${esc(session.worktree_path)}</div>
     </div>`;
+}
+
+/**
+ * Pick the owner label for a lane card. Prefers concrete signals (agent
+ * name parsed from the `agent/<name>/...` branch, cli identifier) before
+ * falling back to a prefix inference on the session id. Keeps codex- vs
+ * claude-driven lanes visually distinguishable even when the hivemind
+ * telemetry only knew the generic `'agent'` fallback.
+ */
+function laneOwnerIde(session: HivemindSession): string {
+  if (session.agent && session.agent !== 'agent') return session.agent;
+  if (session.cli && session.cli !== 'unknown') return session.cli;
+  const inferred = inferIdeFromSessionId(session.session_key);
+  return inferred ?? session.agent ?? 'unknown';
 }
 
 function laneNeedsAttention(session: HivemindSession): boolean {
