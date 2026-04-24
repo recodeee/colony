@@ -63,7 +63,8 @@ export async function stop(store: MemoryStore, input: HookInput): Promise<void> 
 
 function detectUsageLimitReason(input: HookInput): string | null {
   for (const signal of collectReasonSignals(input)) {
-    if (USAGE_LIMIT_PATTERNS.some((pattern) => pattern.test(signal))) {
+    const normalized = normalizeSignalForMatch(signal);
+    if (USAGE_LIMIT_PATTERNS.some((pattern) => pattern.test(signal) || pattern.test(normalized))) {
       return compactOneLine(signal, 220) ?? 'usage limit reached';
     }
   }
@@ -87,6 +88,10 @@ function collectNarrativeSignals(input: HookInput): string[] {
   return values.filter(
     (value): value is string => typeof value === 'string' && value.trim().length > 0,
   );
+}
+
+function normalizeSignalForMatch(value: string): string {
+  return value.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function extractStringValues(value: unknown, depth = 0): string[] {
