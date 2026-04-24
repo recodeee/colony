@@ -1,4 +1,4 @@
-import type { ReinforcementKind } from '@cavemem/storage';
+import type { ReinforcementKind } from '@colony/storage';
 import type { MemoryStore } from './memory-store.js';
 import { TaskThread } from './task-thread.js';
 

@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
+import { loadSettings, resolveDataDir } from '@colony/config';
+import { MemoryStore } from '@colony/core';
 import { removeActiveSession, upsertActiveSession } from './active-session.js';
 import { ensureWorkerRunning } from './auto-spawn.js';
 import { postToolUse } from './handlers/post-tool-use.js';

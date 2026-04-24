@@ -1,5 +1,5 @@
 {
-  "name": "@cavemem/hooks",
+  "name": "@colony/hooks",
   "version": "0.2.0",
   "license": "MIT",
   "type": "module",
@@ -19,8 +19,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cavemem/config": "workspace:*",
-    "@cavemem/core": "workspace:*"
+    "@colony/config": "workspace:*",
+    "@colony/core": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

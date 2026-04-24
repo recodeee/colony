@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir, settingsPath } from '@cavemem/config';
-import { Storage } from '@cavemem/storage';
+import { loadSettings, resolveDataDir, settingsPath } from '@colony/config';
+import { Storage } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 

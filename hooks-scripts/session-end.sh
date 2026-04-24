@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec cavemem hook run session-end
+exec colony hook run session-end

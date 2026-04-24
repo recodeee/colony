@@ -50,7 +50,9 @@ export function applyAgentResult(
           ? 'in_progress'
           : state.status),
     currentPlan: result.plan ? [...result.plan.steps] : [...state.currentPlan],
-    subtasks: result.plan ? result.plan.subtasks.map(cloneSubtask) : state.subtasks.map(cloneSubtask),
+    subtasks: result.plan
+      ? result.plan.subtasks.map(cloneSubtask)
+      : state.subtasks.map(cloneSubtask),
     completedSteps: [...state.completedSteps],
     messages: [...state.messages],
     artifacts: [...state.artifacts],
@@ -75,7 +77,14 @@ export function applyAgentResult(
   }
 
   if (result.artifact) {
-    nextState.artifacts.push(createArtifact(result.artifact.type, result.artifact.label, result.artifact.content, nextState.artifacts.length + 1));
+    nextState.artifacts.push(
+      createArtifact(
+        result.artifact.type,
+        result.artifact.label,
+        result.artifact.content,
+        nextState.artifacts.length + 1,
+      ),
+    );
   }
 
   for (const update of result.markSubtasks ?? []) {

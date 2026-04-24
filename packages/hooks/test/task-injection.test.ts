@@ -1,13 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@cavemem/config';
-import { MemoryStore, TaskThread } from '@cavemem/core';
+import { defaultSettings } from '@colony/config';
+import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildTaskPreface } from '../src/handlers/session-start.js';
 
 /**
- * End-to-end proof that the task-thread primitive (@cavemem/core), the
+ * End-to-end proof that the task-thread primitive (@colony/core), the
  * storage layer, and the SessionStart hook injection are wired together
  * correctly. If these are green, a fresh codex session landing on a branch
  * where claude just left a handoff *will* see the handoff in its

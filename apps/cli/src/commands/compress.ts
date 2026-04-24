@@ -1,6 +1,6 @@
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { compress, countTokens, expand } from '@cavemem/compress';
-import { loadSettings } from '@cavemem/config';
+import { compress, countTokens, expand } from '@colony/compress';
+import { loadSettings } from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 

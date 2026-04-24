@@ -1,4 +1,4 @@
-import { SettingsSchema } from '@cavemem/config';
+import { SettingsSchema } from '@colony/config';
 import { describe, expect, it } from 'vitest';
 import { createEmbedder } from '../src/index.js';
 

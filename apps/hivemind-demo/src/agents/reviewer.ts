@@ -71,7 +71,9 @@ export class ReviewerAgent implements Agent {
 
     return {
       status: approved ? 'completed' : 'blocked',
-      summary: approved ? 'Reviewer approved builder output.' : `Reviewer found ${issues.length} gap(s).`,
+      summary: approved
+        ? 'Reviewer approved builder output.'
+        : `Reviewer found ${issues.length} gap(s).`,
       details: approved ? strengths.slice(0, 3) : issues,
       artifact: {
         type: 'review',

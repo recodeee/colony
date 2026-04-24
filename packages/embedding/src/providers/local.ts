@@ -23,7 +23,7 @@ export async function createLocalEmbedder(
   opts: EmbeddingFactoryOptions = {},
 ): Promise<Embedder> {
   const log = opts.log ?? (() => {});
-  log(`[cavemem:embed] loading local model ${model}`);
+  log(`[colony:embed] loading local model ${model}`);
   const transformers = (await import('@xenova/transformers').catch((err) => {
     throw new Error(
       `Local embedding provider requires @xenova/transformers. Install it or set embedding.provider to 'none'. (${String(

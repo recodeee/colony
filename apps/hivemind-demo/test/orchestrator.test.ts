@@ -5,8 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ReviewerAgent } from '../src/agents/reviewer.js';
 import { createCheckpoint } from '../src/core/checkpoint.js';
 import { createInitialState } from '../src/core/state.js';
-import { HivemindOrchestrator } from '../src/index.js';
 import type { BuildArtifactContent, OrchestratorOptions } from '../src/core/types.js';
+import { HivemindOrchestrator } from '../src/index.js';
 
 const tempDirs: string[] = [];
 const silentLogger = { info: () => {} };
@@ -69,10 +69,7 @@ describe('HivemindOrchestrator', () => {
     });
 
     const reviewer = new ReviewerAgent();
-    const result = reviewer.run(
-      { task: 'Ship a bounded MVP', phase: 'review', attempt: 1 },
-      state,
-    );
+    const result = reviewer.run({ task: 'Ship a bounded MVP', phase: 'review', attempt: 1 }, state);
 
     expect(result.status).toBe('blocked');
     expect(result.replaceBlockers).toContain('Test plan missing.');
@@ -109,7 +106,9 @@ describe('HivemindOrchestrator', () => {
     expect(checkpoint.compactSummary).toContain('Goal: Tighten context handoffs');
     expect(checkpoint.compactSummary).toContain('Done: Researcher captured constraints.');
     expect(checkpoint.compactSummary).toContain('Current blocker: Awaiting verifier approval.');
-    expect(checkpoint.compactSummary).toContain('Next batch: Review output for risks and missing edges');
+    expect(checkpoint.compactSummary).toContain(
+      'Next batch: Review output for risks and missing edges',
+    );
   });
 });
 

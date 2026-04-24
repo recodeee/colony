@@ -1,4 +1,4 @@
-import { type HookName, type HookResult, runHook } from '@cavemem/hooks';
+import { type HookName, type HookResult, runHook } from '@colony/hooks';
 import type { Command } from 'commander';
 
 const VALID: HookName[] = [

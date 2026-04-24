@@ -1,4 +1,4 @@
-import type { Storage } from '@cavemem/storage';
+import type { Storage } from '@colony/storage';
 
 /**
  * Named capability dimensions. Intentionally small — five is the upper

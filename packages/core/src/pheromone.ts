@@ -1,4 +1,4 @@
-import type { Storage } from '@cavemem/storage';
+import type { Storage } from '@colony/storage';
 
 export interface PheromoneStrengthBySession {
   session_id: string;
@@ -47,19 +47,12 @@ export class PheromoneSystem {
   /** Leave pheromone on a file. Called per write-tool invocation. */
   deposit(args: { task_id: number; file_path: string; session_id: string }): void {
     const now = Date.now();
-    const existing = this.storage.getPheromone(
-      args.task_id,
-      args.file_path,
-      args.session_id,
-    );
+    const existing = this.storage.getPheromone(args.task_id, args.file_path, args.session_id);
 
     let newStrength: number;
     if (existing) {
       const decayed = PheromoneSystem.decay(existing.strength, existing.deposited_at, now);
-      newStrength = Math.min(
-        decayed + PheromoneSystem.DEPOSIT,
-        PheromoneSystem.MAX_STRENGTH,
-      );
+      newStrength = Math.min(decayed + PheromoneSystem.DEPOSIT, PheromoneSystem.MAX_STRENGTH);
     } else {
       newStrength = PheromoneSystem.DEPOSIT;
     }

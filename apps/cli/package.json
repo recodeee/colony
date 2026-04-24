@@ -1,8 +1,8 @@
 {
-  "name": "cavemem",
+  "name": "colony",
   "version": "0.2.0",
   "license": "MIT",
-  "description": "Cross-agent persistent memory with compressed storage. Plug-and-play memory for Claude Code, Gemini CLI, OpenCode, Codex, and Cursor.",
+  "description": "Local-first memory and coordination for Claude Code, Gemini CLI, OpenCode, Codex, and Cursor.",
   "keywords": [
     "memory",
     "mcp",
@@ -15,21 +15,21 @@
     "compression",
     "llm"
   ],
-  "author": "Julius Brussee",
-  "homepage": "https://github.com/JuliusBrussee/cavemem",
+  "author": "Imdeadpool",
+  "homepage": "https://github.com/recodeee/colony",
   "repository": {
     "type": "git",
-    "url": "https://github.com/JuliusBrussee/cavemem.git"
+    "url": "https://github.com/recodeee/colony.git"
   },
   "bugs": {
-    "url": "https://github.com/JuliusBrussee/cavemem/issues"
+    "url": "https://github.com/recodeee/colony/issues"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "type": "module",
   "bin": {
-    "cavemem": "./dist/index.js"
+    "colony": "./dist/index.js"
   },
   "main": "./dist/index.js",
   "files": ["dist", "hooks-scripts", "README.md", "LICENSE"],
@@ -55,15 +55,15 @@
     "@xenova/transformers": "^2.17.2"
   },
   "devDependencies": {
-    "@cavemem/compress": "workspace:*",
-    "@cavemem/config": "workspace:*",
-    "@cavemem/core": "workspace:*",
-    "@cavemem/embedding": "workspace:*",
-    "@cavemem/hooks": "workspace:*",
-    "@cavemem/installers": "workspace:*",
-    "@cavemem/mcp-server": "workspace:*",
-    "@cavemem/storage": "workspace:*",
-    "@cavemem/worker": "workspace:*",
+    "@colony/compress": "workspace:*",
+    "@colony/config": "workspace:*",
+    "@colony/core": "workspace:*",
+    "@colony/embedding": "workspace:*",
+    "@colony/hooks": "workspace:*",
+    "@colony/installers": "workspace:*",
+    "@colony/mcp-server": "workspace:*",
+    "@colony/storage": "workspace:*",
+    "@colony/worker": "workspace:*",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"

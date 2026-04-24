@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
+import { defaultSettings } from '@colony/config';
+import { MemoryStore } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runHook } from '../src/index.js';
 

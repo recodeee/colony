@@ -1,7 +1,7 @@
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
-import { createEmbedder } from '@cavemem/embedding';
+import { loadSettings, resolveDataDir } from '@colony/config';
+import { MemoryStore } from '@colony/core';
+import { createEmbedder } from '@colony/embedding';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 

@@ -23,9 +23,9 @@ export function createProgram(): Command {
   const program = new Command();
 
   program
-    .name('cavemem')
+    .name('colony')
     .description('Cross-agent persistent memory with compressed storage.')
-    .version(__CAVEMEM_VERSION__);
+    .version(__COLONY_VERSION__);
 
   registerInstallCommand(program);
   registerUninstallCommand(program);
@@ -58,7 +58,7 @@ if (isMainEntry()) {
   createProgram()
     .parseAsync(process.argv)
     .catch((err) => {
-      process.stderr.write(`cavemem error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.stderr.write(`colony error: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     });
 }

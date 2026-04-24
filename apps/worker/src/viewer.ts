@@ -1,5 +1,5 @@
-import type { HivemindSession, HivemindSnapshot } from '@cavemem/core';
-import type { SessionRow } from '@cavemem/storage';
+import type { HivemindSession, HivemindSnapshot } from '@colony/core';
+import type { SessionRow } from '@colony/storage';
 
 const style = `
   body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; background: #0b0d10; color: #e6e6e6; }

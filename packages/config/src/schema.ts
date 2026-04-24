@@ -10,8 +10,8 @@ export const SettingsSchema = z
   .object({
     dataDir: z
       .string()
-      .default('~/.cavemem')
-      .describe('Where cavemem stores its SQLite database, models, pidfile, and logs.'),
+      .default('~/.colony')
+      .describe('Where colony stores its SQLite database, models, pidfile, and logs.'),
     workerPort: z
       .number()
       .int()
@@ -109,7 +109,7 @@ export const SettingsSchema = z
     ides: z
       .record(z.string(), z.boolean())
       .default({})
-      .describe('Installed IDE integrations (set by `cavemem install`).'),
+      .describe('Installed IDE integrations (set by `colony install`).'),
   })
   .strict();
 

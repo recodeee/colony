@@ -5,7 +5,13 @@ import { ReviewerAgent } from '../agents/reviewer.js';
 import { VerifierAgent } from '../agents/verifier.js';
 import { createLogger } from '../utils/logger.js';
 import { createCheckpoint, shouldCreateCheckpoint } from './checkpoint.js';
-import { appendCheckpoint, applyAgentResult, createInitialState, incrementRetryCount, RunStore } from './state.js';
+import {
+  RunStore,
+  appendCheckpoint,
+  applyAgentResult,
+  createInitialState,
+  incrementRetryCount,
+} from './state.js';
 import type { Agent, AgentInput, AgentResult, OrchestratorOptions, RunState } from './types.js';
 
 const DEFAULT_MAX_TURNS = 10;
@@ -43,8 +49,18 @@ export class HivemindOrchestrator {
         return this.failForTurnBudget(state, store);
       }
 
-      state = this.runAgent(this.builder, { task, phase: 'build', attempt: state.retryCount + 1 }, state, store);
-      state = this.runAgent(this.reviewer, { task, phase: 'review', attempt: state.retryCount + 1 }, state, store);
+      state = this.runAgent(
+        this.builder,
+        { task, phase: 'build', attempt: state.retryCount + 1 },
+        state,
+        store,
+      );
+      state = this.runAgent(
+        this.reviewer,
+        { task, phase: 'review', attempt: state.retryCount + 1 },
+        state,
+        store,
+      );
 
       const decisionInput: AgentInput = {
         task,
@@ -74,7 +90,12 @@ export class HivemindOrchestrator {
       return this.failForTurnBudget(state, store);
     }
 
-    return this.runAgent(this.verifier, { task, phase: 'verify', attempt: state.retryCount + 1 }, state, store);
+    return this.runAgent(
+      this.verifier,
+      { task, phase: 'verify', attempt: state.retryCount + 1 },
+      state,
+      store,
+    );
   }
 
   private runAgent(agent: Agent, input: AgentInput, state: RunState, store: RunStore): RunState {

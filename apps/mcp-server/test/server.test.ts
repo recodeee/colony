@@ -1,8 +1,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
+import { defaultSettings } from '@colony/config';
+import { MemoryStore } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,7 +43,7 @@ afterEach(async () => {
 });
 
 describe('MCP server', () => {
-  it('lists the cavemem tools', async () => {
+  it('lists the colony tools', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'agent_get_profile',

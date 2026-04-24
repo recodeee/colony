@@ -1,9 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expand } from '@cavemem/compress';
-import type { Settings } from '@cavemem/config';
-import { resolveDataDir } from '@cavemem/config';
-import type { Embedder, MemoryStore } from '@cavemem/core';
+import { expand } from '@colony/compress';
+import type { Settings } from '@colony/config';
+import { resolveDataDir } from '@colony/config';
+import type { Embedder, MemoryStore } from '@colony/core';
 
 export interface EmbedLoopState {
   provider: string;
@@ -35,7 +35,7 @@ export function stateFilePath(settings: Settings): string {
 
 /**
  * Run the embedding backfill loop in-process. Writes a snapshot JSON after
- * every batch so `cavemem status` can read it without HTTP.
+ * every batch so `colony status` can read it without HTTP.
  *
  * Lifecycle:
  *   1. Drop embeddings rows that don't match the current model/dim.
@@ -62,7 +62,7 @@ export function startEmbedLoop(opts: {
   const dropped = store.storage.dropEmbeddingsWhereModelNot(embedder.model);
   if (dropped > 0) {
     process.stderr.write(
-      `[cavemem worker] dropped ${dropped} stale embeddings (model switched to ${embedder.model})\n`,
+      `[colony worker] dropped ${dropped} stale embeddings (model switched to ${embedder.model})\n`,
     );
   }
 
@@ -106,7 +106,7 @@ export function startEmbedLoop(opts: {
         store.storage.putEmbedding(row.id, embedder.model, vec);
       } catch (err) {
         state.lastError = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[cavemem worker] embed error row=${row.id}: ${state.lastError}\n`);
+        process.stderr.write(`[colony worker] embed error row=${row.id}: ${state.lastError}\n`);
         // Don't re-attempt forever — insert a zero vector marker? No, skip this batch
         // and retry on next iteration. If the error is persistent, user will see it in status.
         break;
@@ -136,7 +136,7 @@ export function startEmbedLoop(opts: {
       const noTraffic = now - state.lastHttpAt;
       if (noWork > idleShutdownMs && noTraffic > idleShutdownMs) {
         process.stderr.write(
-          `[cavemem worker] idle ${Math.round(noWork / 1000)}s + no traffic ${Math.round(
+          `[colony worker] idle ${Math.round(noWork / 1000)}s + no traffic ${Math.round(
             noTraffic / 1000,
           )}s — exiting\n`,
         );

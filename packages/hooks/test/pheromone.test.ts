@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@cavemem/config';
-import { MemoryStore, PheromoneSystem, TaskThread } from '@cavemem/core';
+import { defaultSettings } from '@colony/config';
+import { MemoryStore, PheromoneSystem, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { depositPheromoneFromToolUse } from '../src/handlers/post-tool-use.js';
 import { buildPheromoneConflictPreface } from '../src/handlers/user-prompt-submit.js';

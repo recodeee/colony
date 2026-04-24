@@ -14,7 +14,7 @@ export interface SettingDoc {
 
 /**
  * Walk the settings zod schema and produce a flat list of documented fields.
- * Powers `cavemem config show` and in-terminal help so settings are
+ * Powers `colony config show` and in-terminal help so settings are
  * self-documenting — one source of truth, no parallel docs to drift.
  */
 export function settingsDocs(): SettingDoc[] {

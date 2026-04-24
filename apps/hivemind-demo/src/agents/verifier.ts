@@ -105,7 +105,13 @@ export class VerifierAgent implements Agent {
       finalResult,
       runStatus: 'completed',
       replaceBlockers: [],
-      markSubtasks: [{ id: 'verify', status: 'completed', note: `Verified with ${state.checkpoints.length} checkpoint(s).` }],
+      markSubtasks: [
+        {
+          id: 'verify',
+          status: 'completed',
+          note: `Verified with ${state.checkpoints.length} checkpoint(s).`,
+        },
+      ],
     };
   }
 }

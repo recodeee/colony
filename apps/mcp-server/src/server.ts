@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { type Settings, loadSettings, resolveDataDir } from '@cavemem/config';
+import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
 import {
   type AgentCapabilities,
   DEFAULT_CAPABILITIES,
@@ -17,8 +17,8 @@ import {
   loadProfile,
   readHivemind,
   saveProfile,
-} from '@cavemem/core';
-import { createEmbedder } from '@cavemem/embedding';
+} from '@colony/core';
+import { createEmbedder } from '@colony/embedding';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -36,7 +36,7 @@ import { z } from 'zod';
  */
 export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   const server = new McpServer({
-    name: 'cavemem',
+    name: 'colony',
     version: '0.1.0',
   });
 
@@ -48,7 +48,7 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
       embedder = await createEmbedder(settings, { log: () => {} });
     } catch (err) {
       process.stderr.write(
-        `[cavemem mcp] embedder unavailable: ${err instanceof Error ? err.message : String(err)}\n`,
+        `[colony mcp] embedder unavailable: ${err instanceof Error ? err.message : String(err)}\n`,
       );
       embedder = null;
     }
@@ -666,7 +666,7 @@ async function main(): Promise<void> {
 
 if (isMainEntry()) {
   main().catch((err) => {
-    process.stderr.write(`[cavemem mcp] fatal: ${String(err)}\n`);
+    process.stderr.write(`[colony mcp] fatal: ${String(err)}\n`);
     process.exit(1);
   });
 }

@@ -33,6 +33,6 @@ Browser ── HTTP ──▶ worker (Hono) ─┘
 ## Invariants
 
 - Only `MemoryStore` may write observations.
-- Only `@cavemem/storage` may open the database.
+- Only `@colony/storage` may open the database.
 - Hooks do no I/O beyond the `MemoryStore` call.
 - Worker binds to loopback only.

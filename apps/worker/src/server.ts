@@ -2,10 +2,10 @@
 import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { expand } from '@cavemem/compress';
-import { type Settings, loadSettings, resolveDataDir } from '@cavemem/config';
-import { type HivemindOptions, MemoryStore, readHivemind } from '@cavemem/core';
-import { createEmbedder } from '@cavemem/embedding';
+import { expand } from '@colony/compress';
+import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
+import { type HivemindOptions, MemoryStore, readHivemind } from '@colony/core';
+import { createEmbedder } from '@colony/embedding';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
@@ -130,7 +130,7 @@ export async function start(): Promise<void> {
     });
   } catch (err) {
     process.stderr.write(
-      `[cavemem worker] embedder unavailable: ${err instanceof Error ? err.message : String(err)}\n`,
+      `[colony worker] embedder unavailable: ${err instanceof Error ? err.message : String(err)}\n`,
     );
   }
 
@@ -144,7 +144,7 @@ export async function start(): Promise<void> {
       },
     });
   } else {
-    // Still write a minimal state file so `cavemem status` has something to show.
+    // Still write a minimal state file so `colony status` has something to show.
     writeFileSync(
       stateFilePath(settings),
       `${JSON.stringify(
@@ -170,13 +170,13 @@ export async function start(): Promise<void> {
   const app = buildApp(store, loop);
   servers.push(serve({ fetch: app.fetch, port: settings.workerPort, hostname: '127.0.0.1' }));
   process.stderr.write(
-    `[cavemem worker] listening on http://127.0.0.1:${settings.workerPort} (pid ${process.pid})\n`,
+    `[colony worker] listening on http://127.0.0.1:${settings.workerPort} (pid ${process.pid})\n`,
   );
 }
 
 if (isMainEntry()) {
   start().catch((err) => {
-    process.stderr.write(`[cavemem worker] fatal: ${String(err)}\n`);
+    process.stderr.write(`[colony worker] fatal: ${String(err)}\n`);
     process.exit(1);
   });
 }

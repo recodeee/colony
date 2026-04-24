@@ -1,7 +1,7 @@
 export interface InstallContext {
   /** Directory where the IDE keeps its config. */
   ideConfigDir: string;
-  /** Absolute path to the cavemem CLI entrypoint (the .js file). */
+  /** Absolute path to the colony CLI entrypoint (the .js file). */
   cliPath: string;
   /**
    * Absolute path to the Node binary used to launch the CLI. IDE configs
@@ -9,7 +9,7 @@ export interface InstallContext {
    * a raw .js fails with EFTYPE (no associated exec handler).
    */
   nodeBin: string;
-  /** Absolute path to the local data dir (e.g., ~/.cavemem). */
+  /** Absolute path to the local data dir (e.g., ~/.colony). */
   dataDir: string;
 }
 

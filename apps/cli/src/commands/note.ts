@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
-import { MemoryStore } from '@cavemem/core';
+import { loadSettings, resolveDataDir } from '@colony/config';
+import { MemoryStore } from '@colony/core';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 
@@ -27,7 +27,7 @@ function ensureObserverSession(store: MemoryStore): void {
 
 export function registerNoteCommand(program: Command): void {
   program
-    // Variadic so `cavemem note codex stepped on claude` works without
+    // Variadic so `colony note codex stepped on claude` works without
     // quoting. The quoting-every-note friction kills adoption otherwise.
     .command('note <text...>')
     .description('Record a timestamped scratch note into the memory timeline')

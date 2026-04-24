@@ -1,6 +1,6 @@
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
-import { Storage } from '@cavemem/storage';
+import { loadSettings, resolveDataDir } from '@colony/config';
+import { Storage } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 
@@ -32,7 +32,7 @@ function fmtAgo(ts: number): string {
 function renderFrame(storage: Storage): string {
   const lines: string[] = [];
   const now = new Date().toISOString().slice(11, 19);
-  lines.push(`${kleur.bold('cavemem observe')}  ${kleur.dim(now)}`);
+  lines.push(`${kleur.bold('colony observe')}  ${kleur.dim(now)}`);
   lines.push(kleur.dim('─'.repeat(60)));
 
   const tasks = storage.listTasks(5);

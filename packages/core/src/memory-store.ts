@@ -1,6 +1,6 @@
-import { compress, expand, redactPrivate } from '@cavemem/compress';
-import type { Settings } from '@cavemem/config';
-import { type NewObservation, type ObservationRow, Storage } from '@cavemem/storage';
+import { compress, expand, redactPrivate } from '@colony/compress';
+import type { Settings } from '@colony/config';
+import { type NewObservation, type ObservationRow, Storage } from '@colony/storage';
 import { cosine, hybridRank } from './ranker.js';
 import type { GetObservationsOptions, Observation, SearchResult } from './types.js';
 
@@ -87,7 +87,7 @@ export class MemoryStore {
   /**
    * Idempotently materialise a sessions row before inserting child rows.
    * Claude Code does not guarantee that SessionStart fires before the first
-   * UserPromptSubmit / PostToolUse — for example when cavemem is installed
+   * UserPromptSubmit / PostToolUse — for example when colony is installed
    * mid-session, when a hook earlier in the chain fails, or when a user
    * resumes a session whose SessionStart was lost. Without this guard,
    * observations and summaries hit `FOREIGN KEY constraint failed`.

@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { type Settings, resolveDataDir } from '@cavemem/config';
+import { type Settings, resolveDataDir } from '@colony/config';
 import { createLocalEmbedder } from './providers/local.js';
 import { createOllamaEmbedder } from './providers/ollama.js';
 import { createOpenAIEmbedder } from './providers/openai.js';

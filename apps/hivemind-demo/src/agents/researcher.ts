@@ -1,4 +1,10 @@
-import type { Agent, AgentInput, AgentResult, ResearchArtifactContent, RunState } from '../core/types.js';
+import type {
+  Agent,
+  AgentInput,
+  AgentResult,
+  ResearchArtifactContent,
+  RunState,
+} from '../core/types.js';
 
 export class ResearcherAgent implements Agent {
   readonly name = 'Researcher';
@@ -59,7 +65,11 @@ export class ResearcherAgent implements Agent {
         content,
       },
       markSubtasks: [
-        { id: 'research', status: 'completed', note: `Captured ${constraints.length} constraints.` },
+        {
+          id: 'research',
+          status: 'completed',
+          note: `Captured ${constraints.length} constraints.`,
+        },
         { id: 'build', status: 'in_progress', note: 'Research ready for builder.' },
       ],
       replaceBlockers: [],

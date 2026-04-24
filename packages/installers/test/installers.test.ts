@@ -18,9 +18,9 @@ beforeEach(() => {
   process.env.HOME = home;
   ctx = {
     ideConfigDir: home,
-    cliPath: '/fake/bin/cavemem.js',
+    cliPath: '/fake/bin/colony.js',
     nodeBin: '/fake/bin/node',
-    dataDir: join(home, '.cavemem'),
+    dataDir: join(home, '.colony'),
   };
 });
 
@@ -128,9 +128,9 @@ describe('claude-code installer', () => {
   it('quotes paths with spaces in hook command strings (Windows)', async () => {
     const winCtx: InstallContext = {
       ideConfigDir: home,
-      cliPath: 'C:\\Users\\Some User\\AppData\\Roaming\\npm\\node_modules\\cavemem\\dist\\index.js',
+      cliPath: 'C:\\Users\\Some User\\AppData\\Roaming\\npm\\node_modules\\colony\\dist\\index.js',
       nodeBin: 'C:\\Program Files\\nodejs\\node.exe',
-      dataDir: join(home, '.cavemem'),
+      dataDir: join(home, '.colony'),
     };
     await claudeCode.install(winCtx);
     const settingsPath = join(home, '.claude', 'settings.json');
@@ -173,7 +173,7 @@ describe('cursor installer', () => {
     await cursor.uninstall(ctx);
     const after = JSON.parse(readFileSync(p, 'utf8')) as typeof cfg;
     expect(after.mcpServers.colony).toBeUndefined();
-    expect(after.mcpServers.cavemem).toBeUndefined();
+    expect(after.mcpServers.colony).toBeUndefined();
   });
 });
 

@@ -52,31 +52,31 @@ importers:
         specifier: ^2.17.2
         version: 2.17.2
     devDependencies:
-      '@cavemem/compress':
+      '@colony/compress':
         specifier: workspace:*
         version: link:../../packages/compress
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@cavemem/core':
+      '@colony/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@cavemem/embedding':
+      '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
-      '@cavemem/hooks':
+      '@colony/hooks':
         specifier: workspace:*
         version: link:../../packages/hooks
-      '@cavemem/installers':
+      '@colony/installers':
         specifier: workspace:*
         version: link:../../packages/installers
-      '@cavemem/mcp-server':
+      '@colony/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
-      '@cavemem/storage':
+      '@colony/storage':
         specifier: workspace:*
         version: link:../../packages/storage
-      '@cavemem/worker':
+      '@colony/worker':
         specifier: workspace:*
         version: link:../worker
       tsup:
@@ -103,16 +103,16 @@ importers:
 
   apps/mcp-server:
     dependencies:
-      '@cavemem/compress':
+      '@colony/compress':
         specifier: workspace:*
         version: link:../../packages/compress
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@cavemem/core':
+      '@colony/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@cavemem/embedding':
+      '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
       '@modelcontextprotocol/sdk':
@@ -134,19 +134,19 @@ importers:
 
   apps/worker:
     dependencies:
-      '@cavemem/compress':
+      '@colony/compress':
         specifier: workspace:*
         version: link:../../packages/compress
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@cavemem/core':
+      '@colony/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@cavemem/embedding':
+      '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
-      '@cavemem/storage':
+      '@colony/storage':
         specifier: workspace:*
         version: link:../../packages/storage
       '@hono/node-server':
@@ -168,7 +168,7 @@ importers:
 
   evals:
     dependencies:
-      '@cavemem/compress':
+      '@colony/compress':
         specifier: workspace:*
         version: link:../packages/compress
     devDependencies:
@@ -212,13 +212,13 @@ importers:
 
   packages/core:
     dependencies:
-      '@cavemem/compress':
+      '@colony/compress':
         specifier: workspace:*
         version: link:../compress
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../config
-      '@cavemem/storage':
+      '@colony/storage':
         specifier: workspace:*
         version: link:../storage
     devDependencies:
@@ -234,7 +234,7 @@ importers:
 
   packages/embedding:
     dependencies:
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../config
     optionalDependencies:
@@ -254,10 +254,10 @@ importers:
 
   packages/hooks:
     dependencies:
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../config
-      '@cavemem/core':
+      '@colony/core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -273,7 +273,7 @@ importers:
 
   packages/installers:
     dependencies:
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../config
     devDependencies:
@@ -289,7 +289,7 @@ importers:
 
   packages/storage:
     dependencies:
-      '@cavemem/config':
+      '@colony/config':
         specifier: workspace:*
         version: link:../config
       better-sqlite3:

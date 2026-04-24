@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
-import { loadSettings, resolveDataDir, saveSettings } from '@cavemem/config';
-import { type IdeName, getInstaller, installers } from '@cavemem/installers';
+import { loadSettings, resolveDataDir, saveSettings } from '@colony/config';
+import { type IdeName, getInstaller, installers } from '@colony/installers';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';

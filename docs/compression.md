@@ -1,6 +1,6 @@
 # Compression spec
 
-cavemem compresses prose deterministically and offline. The engine never invokes a model. Its contract is:
+colony compresses prose deterministically and offline. The engine never invokes a model. Its contract is:
 
 1. **Deterministic.** `compress(x)` always returns the same output for the same input and intensity.
 2. **Technical tokens are preserved byte-for-byte.** The tokenizer identifies code, URLs, paths, commands, version numbers, dates, numeric literals, and identifier-like tokens. These segments are held out of every transformation.
@@ -55,5 +55,5 @@ input → tokenize → [preserved | prose] → transform prose → join → outp
 
 1. Edit `packages/compress/src/lexicon.json`.
 2. Add a fixture under `packages/compress/test/fixtures/` demonstrating the new rule and its round-trip.
-3. Run `pnpm --filter @cavemem/compress test`.
+3. Run `pnpm --filter @colony/compress test`.
 4. Update benchmark numbers in `evals/` if the aggregate savings shifted.

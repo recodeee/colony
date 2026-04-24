@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Prepares a self-contained publish directory for the `cavemem` npm package.
-// tsup already bundles all @cavemem/* workspace code into dist/index.js, so
+// Prepares a self-contained publish directory for the `colony` npm package.
+// tsup already bundles all @colony/* workspace code into dist/index.js, so
 // the shipped package only needs the real third-party runtime deps.
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

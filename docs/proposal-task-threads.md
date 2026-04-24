@@ -129,7 +129,7 @@ Over time, this produces the habit: agents start calling `claim_file` before edi
 - Auto-join on `SessionStart`
 - Turn-boundary new-message injection in `UserPromptSubmit`
 
-Impact: converts the hivemind from a passive shared notebook into an active collaboration substrate. Roughly 500 lines of code spread across `@cavemem/core`, `@cavemem/storage`, `@cavemem/hooks`, and `@cavemem/mcp-server`.
+Impact: converts the hivemind from a passive shared notebook into an active collaboration substrate. Roughly 500 lines of code spread across `@colony/core`, `@colony/storage`, `@colony/hooks`, and `@colony/mcp-server`.
 
 ### v0.4
 

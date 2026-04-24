@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-exec cavemem hook run post-tool-use
+exec colony hook run post-tool-use

@@ -1,4 +1,4 @@
-import { PheromoneSystem, ProposalSystem, type MemoryStore } from '@cavemem/core';
+import { type MemoryStore, PheromoneSystem, ProposalSystem } from '@colony/core';
 import type { HookInput } from '../types.js';
 
 /**

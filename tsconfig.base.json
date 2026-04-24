@@ -21,15 +21,15 @@
     "composite": false,
     "baseUrl": ".",
     "paths": {
-      "@cavemem/compress": ["./packages/compress/src/index.ts"],
-      "@cavemem/config": ["./packages/config/src/index.ts"],
-      "@cavemem/core": ["./packages/core/src/index.ts"],
-      "@cavemem/embedding": ["./packages/embedding/src/index.ts"],
-      "@cavemem/storage": ["./packages/storage/src/index.ts"],
-      "@cavemem/hooks": ["./packages/hooks/src/index.ts"],
-      "@cavemem/installers": ["./packages/installers/src/index.ts"],
-      "@cavemem/mcp-server": ["./apps/mcp-server/src/server.ts"],
-      "@cavemem/worker": ["./apps/worker/src/server.ts"]
+      "@colony/compress": ["./packages/compress/src/index.ts"],
+      "@colony/config": ["./packages/config/src/index.ts"],
+      "@colony/core": ["./packages/core/src/index.ts"],
+      "@colony/embedding": ["./packages/embedding/src/index.ts"],
+      "@colony/storage": ["./packages/storage/src/index.ts"],
+      "@colony/hooks": ["./packages/hooks/src/index.ts"],
+      "@colony/installers": ["./packages/installers/src/index.ts"],
+      "@colony/mcp-server": ["./apps/mcp-server/src/server.ts"],
+      "@colony/worker": ["./apps/worker/src/server.ts"]
     }
   },
   "exclude": ["node_modules", "dist"]

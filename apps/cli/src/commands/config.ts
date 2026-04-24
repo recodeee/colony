@@ -8,7 +8,7 @@ import {
   saveSettings,
   settingsDocs,
   settingsPath,
-} from '@cavemem/config';
+} from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 
@@ -78,7 +78,7 @@ function printDocs(docs: SettingDoc[]): void {
 }
 
 export function registerConfigCommand(program: Command): void {
-  const cfg = program.command('config').description('View or edit cavemem settings');
+  const cfg = program.command('config').description('View or edit colony settings');
 
   cfg
     .command('show')

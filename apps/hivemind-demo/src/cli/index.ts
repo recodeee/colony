@@ -151,13 +151,15 @@ function readInteger(argv: string[], index: number, flag: string): number {
 }
 
 function printUsage(): void {
-  console.log(`Usage: cavemem-hivemind-demo [options] "<task>"`);
+  console.log(`Usage: colony-hivemind-demo [options] "<task>"`);
   console.log('');
   console.log('Options:');
   console.log('  --demo                    Run the built-in demo task');
   console.log('  --data-dir <path>         Directory for persisted run state');
   console.log('  --max-turns <n>           Maximum total agent turns (default: 10)');
-  console.log('  --max-retries <n>         Builder retry budget after review failures (default: 1)');
+  console.log(
+    '  --max-retries <n>         Builder retry budget after review failures (default: 1)',
+  );
   console.log('  --checkpoint-interval <n> Create a checkpoint every N steps (default: 2)');
   console.log('  --quiet                   Suppress per-step logs');
   console.log('  --help, -h                Show this usage text');

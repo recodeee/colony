@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
+import { loadSettings, resolveDataDir } from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';
@@ -50,7 +50,7 @@ export function registerWorkerCommand(program: Command): void {
   w.command('run')
     .description('Run the worker in the foreground (internal)')
     .action(async () => {
-      const mod = await import('@cavemem/worker');
+      const mod = await import('@colony/worker');
       await mod.start();
     });
 

@@ -12,7 +12,7 @@
 # - chunk shebangs (one shebang per ESM file, never two)
 # - prepublishOnly staging (README, LICENSE, hooks-scripts in the tarball)
 # - better-sqlite3 native module resolution from a global install
-# - dynamic import of bundled @cavemem/* sub-modules
+# - dynamic import of bundled @colony/* sub-modules
 #
 # Run from repo root:  bash scripts/e2e-publish.sh
 # Requires: node >= 20, npm, pnpm
@@ -35,18 +35,18 @@ cd "$REPO"
 # Embedding backfill needs the worker daemon to run. We disable autoSpawn
 # during hook runs so the e2e stays deterministic — the test drives the
 # worker explicitly in the checks below.
-export CAVEMEM_NO_AUTOSTART=1
+export COLONY_NO_AUTOSTART=1
 
 echo "==> 1. build everything"
 pnpm build >/dev/null
 
 echo "==> 2. stage publish files (README, LICENSE, hooks-scripts)"
-pnpm --filter cavemem stage-publish
+pnpm --filter colony stage-publish
 
 echo "==> 3. npm pack from apps/cli"
 VERSION=$(node -e "console.log(require('$REPO/apps/cli/package.json').version)")
 ( cd "$REPO/apps/cli" && npm pack --pack-destination "$PACK" >/dev/null )
-TGZ="$PACK/cavemem-$VERSION.tgz"
+TGZ="$PACK/colony-$VERSION.tgz"
 test -f "$TGZ" || { echo "tarball missing at $TGZ"; ls "$PACK"; exit 1; }
 
 echo "==> 4. inspect tarball contents"
@@ -54,10 +54,10 @@ tar -tzf "$TGZ" | sort
 
 echo "==> 5. install -g into isolated prefix"
 npm install --prefix "$PREFIX" --global "$TGZ" >/dev/null
-BIN="$PREFIX/bin/cavemem"
+BIN="$PREFIX/bin/colony"
 test -x "$BIN" || { echo "bin shim missing"; exit 1; }
 
-# All subsequent commands run in an isolated $HOME so we never touch the real ~/.cavemem
+# All subsequent commands run in an isolated $HOME so we never touch the real ~/.colony
 export HOME="$HOME_DIR"
 
 echo "==> 6. version (must match apps/cli/package.json#version)"
@@ -123,7 +123,7 @@ wait $mcp_pid 2>/dev/null || true
 
 echo "==> 15. uninstall cleans up settings"
 "$BIN" uninstall --ide claude-code
-grep -q "cavemem" "$HOME/.claude/settings.json" && { echo "uninstall left cavemem entry"; exit 1; }
+grep -q "colony" "$HOME/.claude/settings.json" && { echo "uninstall left colony entry"; exit 1; }
 
 echo
 echo "ALL CHECKS PASSED"

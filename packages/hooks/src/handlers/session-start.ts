@@ -1,4 +1,4 @@
-import { type MemoryStore, ProposalSystem, TaskThread, detectRepoBranch } from '@cavemem/core';
+import { type MemoryStore, ProposalSystem, TaskThread, detectRepoBranch } from '@colony/core';
 import type { HookInput } from '../types.js';
 
 export async function sessionStart(store: MemoryStore, input: HookInput): Promise<string> {

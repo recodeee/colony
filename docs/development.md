@@ -16,13 +16,13 @@ Link the CLI for local use:
 
 ```bash
 cd apps/cli && pnpm link --global
-cavemem --help
+colony --help
 ```
 
 ## Run against a scratch data dir
 
 ```bash
-export CAVEMEM_HOME=$PWD/.cavemem-dev
+export COLONY_HOME=$PWD/.colony-dev
 pnpm dev
 ```
 

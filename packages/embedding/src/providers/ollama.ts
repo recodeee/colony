@@ -42,7 +42,7 @@ export async function createOllamaEmbedder(
   };
 
   // Warm-up probe — checks the endpoint is reachable and captures dim.
-  log(`[cavemem:embed] probing ollama at ${base} with model ${model}`);
+  log(`[colony:embed] probing ollama at ${base} with model ${model}`);
   const probe = await embed(' ');
   dim = probe.length;
 

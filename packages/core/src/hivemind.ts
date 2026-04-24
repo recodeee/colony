@@ -106,7 +106,7 @@ function resolveRepoRoots(options: HivemindOptions): string[] {
 }
 
 function envRepoRoots(): string[] {
-  const raw = process.env.CAVEMEM_HIVEMIND_REPO_ROOTS;
+  const raw = process.env.COLONY_HIVEMIND_REPO_ROOTS ?? process.env.CAVEMEM_HIVEMIND_REPO_ROOTS;
   if (!raw) return [];
   return raw.split(delimiter);
 }

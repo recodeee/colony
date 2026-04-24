@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@cavemem/config';
-import { MemoryStore, TaskThread } from '@cavemem/core';
+import { defaultSettings } from '@colony/config';
+import { MemoryStore, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,7 +13,7 @@ let store: MemoryStore;
 let client: Client;
 
 /**
- * Every cavemem tool returns `{ content: [{ type: 'text', text: JSON }] }`.
+ * Every colony tool returns `{ content: [{ type: 'text', text: JSON }] }`.
  * Centralising the unwrap keeps the individual tests readable.
  */
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {

@@ -1,4 +1,4 @@
-import type { MemoryStore } from '@cavemem/core';
+import type { MemoryStore } from '@colony/core';
 import type { HookInput } from '../types.js';
 
 export async function stop(store: MemoryStore, input: HookInput): Promise<void> {

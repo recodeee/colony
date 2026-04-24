@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SettingsSchema } from '@cavemem/config';
-import { type Embedder, MemoryStore } from '@cavemem/core';
+import { SettingsSchema } from '@colony/config';
+import { type Embedder, MemoryStore } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startEmbedLoop, stateFilePath } from '../src/embed-loop.js';
 

@@ -1,6 +1,6 @@
 # MCP tools
 
-cavemem exposes MCP tools over a stdio server. IDE installers register that server as `colony`, so agent tool calls appear under the `colony` namespace. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
+colony exposes MCP tools over a stdio server. IDE installers register that server as `colony`, so agent tool calls appear under the `colony` namespace. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
 
 The recommended workflow is a three-layer pattern:
 
@@ -107,7 +107,7 @@ Returns:
 Inputs:
 
 - `repo_root`: one workspace root to inspect. Defaults to the MCP server process cwd.
-- `repo_roots`: multiple workspace roots to inspect. Also configurable with `CAVEMEM_HIVEMIND_REPO_ROOTS` separated by the platform path delimiter.
+- `repo_roots`: multiple workspace roots to inspect. Also configurable with `COLONY_HIVEMIND_REPO_ROOTS` separated by the platform path delimiter.
 - `include_stale`: include dead active-session records. Defaults to `false`.
 - `limit`: maximum sessions returned, capped at 100.
 

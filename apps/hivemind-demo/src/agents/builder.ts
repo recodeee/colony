@@ -36,7 +36,9 @@ export class BuilderAgent implements Agent {
     const research = findLatestArtifact<ResearchArtifactContent>(state, 'research')?.content;
     const priorReview = findLatestArtifact<ReviewArtifactContent>(state, 'review')?.content;
     const revisionNotes =
-      input.attempt > 1 && priorReview ? priorReview.requiredFixes.map((issue) => `Address review feedback: ${issue}`) : [];
+      input.attempt > 1 && priorReview
+        ? priorReview.requiredFixes.map((issue) => `Address review feedback: ${issue}`)
+        : [];
 
     const content: BuildArtifactContent = {
       fileTree: [...BASE_FILE_TREE],
@@ -78,7 +80,11 @@ export class BuilderAgent implements Agent {
         content,
       },
       markSubtasks: [
-        { id: 'build', status: 'completed', note: `Builder attempt ${input.attempt} ready for review.` },
+        {
+          id: 'build',
+          status: 'completed',
+          note: `Builder attempt ${input.attempt} ready for review.`,
+        },
         { id: 'review', status: 'in_progress', note: 'Reviewing current build.' },
       ],
       replaceBlockers: [],

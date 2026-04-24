@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { detectRepoBranch } from '@cavemem/core';
+import { detectRepoBranch } from '@colony/core';
 import type { HookInput, HookName } from './types.js';
 
 type ActiveSessionState = 'working' | 'thinking' | 'idle';
@@ -27,7 +27,7 @@ export function upsertActiveSession(input: HookInput, hook: HookName): void {
     worktreePath: detected.repo_root,
     taskMode: existing?.taskMode ?? '',
     openspecTier: existing?.openspecTier ?? '',
-    taskRoutingReason: 'cavemem hook cwd binding',
+    taskRoutingReason: 'colony hook cwd binding',
     startedAt: existing?.startedAt ?? now,
     lastHeartbeatAt: now,
     state: stateForHook(hook),

@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
+import { loadSettings, resolveDataDir } from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';
 
 /**
- * Top-level `cavemem start|stop|restart|viewer` commands — matches the
+ * Top-level `colony start|stop|restart|viewer` commands — matches the
  * ergonomic surface users expect from tools like ollama and tailscale.
  * Thin wrappers around the existing `worker start/stop` subcommands so
  * there's still a single pid-managing implementation.
@@ -94,7 +94,7 @@ export function registerLifecycleCommands(program: Command): void {
           process.stdout.write(`${kleur.green('started')} (pid ${pid}) http://127.0.0.1:${port}\n`);
         } else {
           process.stdout.write(
-            `${kleur.yellow('spawned')} (pid ${pid}) — check \`cavemem status\`\n`,
+            `${kleur.yellow('spawned')} (pid ${pid}) — check \`colony status\`\n`,
           );
         }
       }
@@ -125,7 +125,7 @@ export function registerLifecycleCommands(program: Command): void {
         process.stdout.write(`${kleur.green('restarted')} (pid ${pid}) http://127.0.0.1:${port}\n`);
       } else {
         process.stdout.write(
-          `${kleur.yellow('restart: unclear state')} — check \`cavemem status\`\n`,
+          `${kleur.yellow('restart: unclear state')} — check \`colony status\`\n`,
         );
       }
     });

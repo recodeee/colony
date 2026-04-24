@@ -1,12 +1,12 @@
 {
-  "name": "@cavemem/worker",
+  "name": "@colony/worker",
   "version": "0.2.0",
   "license": "MIT",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",
   "bin": {
-    "cavemem-worker": "./dist/server.js"
+    "colony-worker": "./dist/server.js"
   },
   "scripts": {
     "build": "tsup src/server.ts --format esm --dts --clean",
@@ -15,11 +15,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cavemem/compress": "workspace:*",
-    "@cavemem/config": "workspace:*",
-    "@cavemem/core": "workspace:*",
-    "@cavemem/embedding": "workspace:*",
-    "@cavemem/storage": "workspace:*",
+    "@colony/compress": "workspace:*",
+    "@colony/config": "workspace:*",
+    "@colony/core": "workspace:*",
+    "@colony/embedding": "workspace:*",
+    "@colony/storage": "workspace:*",
     "hono": "^4.6.10",
     "@hono/node-server": "^1.13.7"
   },

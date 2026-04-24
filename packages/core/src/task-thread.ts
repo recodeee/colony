@@ -1,4 +1,4 @@
-import type { ObservationRow, TaskClaimRow, TaskParticipantRow, TaskRow } from '@cavemem/storage';
+import type { ObservationRow, TaskClaimRow, TaskParticipantRow, TaskRow } from '@colony/storage';
 import type { MemoryStore } from './memory-store.js';
 import {
   type AgentProfile,

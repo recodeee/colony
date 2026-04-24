@@ -7,6 +7,6 @@ const { version } = JSON.parse(readFileSync('./package.json', 'utf8')) as { vers
 export default mergeConfig(
   rootConfig,
   defineConfig({
-    define: { __CAVEMEM_VERSION__: JSON.stringify(version) },
+    define: { __COLONY_VERSION__: JSON.stringify(version) },
   }),
 );

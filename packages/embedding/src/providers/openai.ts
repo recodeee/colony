@@ -24,7 +24,7 @@ export async function createOpenAIEmbedder(
 ): Promise<Embedder> {
   if (!apiKey) {
     throw new Error(
-      'OpenAI embedding provider requires an API key. Set via `cavemem config set embedding.apiKey <KEY>`.',
+      'OpenAI embedding provider requires an API key. Set via `colony config set embedding.apiKey <KEY>`.',
     );
   }
   const base = (endpoint ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
@@ -55,7 +55,7 @@ export async function createOpenAIEmbedder(
   };
 
   if (dim === 0) {
-    log(`[cavemem:embed] probing openai model ${model} for dim`);
+    log(`[colony:embed] probing openai model ${model} for dim`);
     const probe = await embed(' ');
     dim = probe.length;
   }

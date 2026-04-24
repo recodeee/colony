@@ -1,5 +1,5 @@
 {
-  "dataDir": "~/.cavemem",
+  "dataDir": "~/.colony",
   "workerPort": 37777,
   "logLevel": "info",
   "compression": {

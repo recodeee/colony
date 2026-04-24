@@ -6,8 +6,8 @@ import {
   resolveDataDir,
   saveSettings,
   settingsPath,
-} from '@cavemem/config';
-import { type IdeName, getInstaller, installers } from '@cavemem/installers';
+} from '@colony/config';
+import { type IdeName, getInstaller, installers } from '@colony/installers';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';
@@ -45,19 +45,19 @@ export function registerInstallCommand(program: Command): void {
       const model = settings.embedding.model;
       const provider = settings.embedding.provider;
 
-      process.stdout.write(`\n${kleur.bold('cavemem is wired into')} ${kleur.cyan(name)}\n`);
+      process.stdout.write(`\n${kleur.bold('colony is wired into')} ${kleur.cyan(name)}\n`);
       process.stdout.write(
         `${kleur.dim('memory writes happen in hooks — no daemon required on the hot path.')}\n\n`,
       );
       process.stdout.write(`${kleur.bold('what to try next:')}\n`);
       process.stdout.write(
-        `  ${kleur.cyan('cavemem status')}        show wiring + embedding backfill\n`,
+        `  ${kleur.cyan('colony status')}        show wiring + embedding backfill\n`,
       );
-      process.stdout.write(`  ${kleur.cyan('cavemem viewer')}        open the memory viewer\n`);
+      process.stdout.write(`  ${kleur.cyan('colony viewer')}        open the memory viewer\n`);
       process.stdout.write(
-        `  ${kleur.cyan('cavemem search "…"')}    query your memory from the terminal\n`,
+        `  ${kleur.cyan('colony search "…"')}    query your memory from the terminal\n`,
       );
-      process.stdout.write(`  ${kleur.cyan('cavemem config show')}   see settings + docs\n\n`);
+      process.stdout.write(`  ${kleur.cyan('colony config show')}   see settings + docs\n\n`);
 
       if (provider === 'local') {
         process.stdout.write(
@@ -67,11 +67,11 @@ export function registerInstallCommand(program: Command): void {
         );
       } else if (provider === 'none') {
         process.stdout.write(
-          `${kleur.yellow('embeddings: disabled')} (provider=none). enable with \`cavemem config set embedding.provider local\`.\n`,
+          `${kleur.yellow('embeddings: disabled')} (provider=none). enable with \`colony config set embedding.provider local\`.\n`,
         );
       } else {
         process.stdout.write(
-          `${kleur.dim(`embeddings: ${provider} / ${model} — configure endpoint/apiKey via \`cavemem config\`.`)}\n`,
+          `${kleur.dim(`embeddings: ${provider} / ${model} — configure endpoint/apiKey via \`colony config\`.`)}\n`,
         );
       }
     });

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@cavemem/config';
-import { Storage } from '@cavemem/storage';
+import { loadSettings, resolveDataDir } from '@colony/config';
+import { Storage } from '@colony/storage';
 import type { Command } from 'commander';
 
 export function registerExportCommand(program: Command): void {

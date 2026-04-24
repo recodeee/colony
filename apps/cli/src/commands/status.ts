@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir, settingsPath } from '@cavemem/config';
-import { Storage } from '@cavemem/storage';
+import { loadSettings, resolveDataDir, settingsPath } from '@colony/config';
+import { Storage } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 
@@ -55,14 +55,14 @@ function fmtAgo(ts: number | null | undefined): string {
 export function registerStatusCommand(program: Command): void {
   program
     .command('status')
-    .description('Show cavemem wiring, data, and worker state')
+    .description('Show colony wiring, data, and worker state')
     .action(() => {
       const sp = settingsPath();
       const settings = loadSettings();
       const dir = resolveDataDir(settings.dataDir);
       const dbPath = join(dir, 'data.db');
 
-      process.stdout.write(`${kleur.bold('cavemem status')}\n\n`);
+      process.stdout.write(`${kleur.bold('colony status')}\n\n`);
       process.stdout.write(
         `settings:   ${sp} ${existsSync(sp) ? kleur.green('✓') : kleur.yellow('default')}\n`,
       );
@@ -89,7 +89,7 @@ export function registerStatusCommand(program: Command): void {
         .filter(([, v]) => v)
         .map(([k]) => k);
       process.stdout.write(
-        `ides:       ${enabled.length ? enabled.join(', ') : kleur.dim('none installed — try `cavemem install`')}\n`,
+        `ides:       ${enabled.length ? enabled.join(', ') : kleur.dim('none installed — try `colony install`')}\n`,
       );
 
       // Embedding
@@ -112,7 +112,7 @@ export function registerStatusCommand(program: Command): void {
         }
       } else {
         process.stdout.write(
-          `backfill:   ${kleur.dim('no worker state yet — run `cavemem start`')}\n`,
+          `backfill:   ${kleur.dim('no worker state yet — run `colony start`')}\n`,
         );
       }
 

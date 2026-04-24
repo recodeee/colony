@@ -4,4 +4,4 @@ export {
   type HivemindOptions,
   type HivemindSession,
   type HivemindSnapshot,
-} from '@cavemem/core';
+} from '@colony/core';

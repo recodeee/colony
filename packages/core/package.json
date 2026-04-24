@@ -1,5 +1,5 @@
 {
-  "name": "@cavemem/core",
+  "name": "@colony/core",
   "version": "0.2.0",
   "license": "MIT",
   "type": "module",
@@ -19,9 +19,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cavemem/compress": "workspace:*",
-    "@cavemem/config": "workspace:*",
-    "@cavemem/storage": "workspace:*"
+    "@colony/compress": "workspace:*",
+    "@colony/config": "workspace:*",
+    "@colony/storage": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.3.5",

@@ -1,7 +1,7 @@
 /**
- * Embedder — matches the structural interface in @cavemem/core.
+ * Embedder — matches the structural interface in @colony/core.
  *
- * Declared here too so consumers of @cavemem/embedding don't need to depend
+ * Declared here too so consumers of @colony/embedding don't need to depend
  * on core for the type. The two definitions are kept in sync manually; if
  * they drift, MemoryStore.search will fail to compile against this package.
  */

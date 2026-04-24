@@ -1,5 +1,5 @@
 {
-  "name": "@cavemem/storage",
+  "name": "@colony/storage",
   "version": "0.2.0",
   "license": "MIT",
   "type": "module",
@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cavemem/config": "workspace:*",
+    "@colony/config": "workspace:*",
     "better-sqlite3": "^11.5.0"
   },
   "devDependencies": {
