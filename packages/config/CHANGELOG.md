@@ -1,5 +1,18 @@
 # @colony/config
 
+## 0.5.0
+
+### Minor Changes
+
+- Sync linked release with the 0.4.0 MCP heartbeat bump so `@imdeadpool/colony`
+  and the supporting `@colony/*` workspace packages publish together.
+
+## 0.3.0
+
+### Patch Changes
+
+- eb4dad9: Rename the public CLI package and workspace package/import namespace from cavemem to Colony. The CLI binary is now `colony`, workspace imports use `@colony/*`, release scripts pack `colony`, and installed hook scripts call `colony`.
+
 ## 0.2.0
 
 ### Minor Changes

@@ -1,5 +1,69 @@
 # @colony/mcp-server
 
+## 0.5.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @colony/compress@0.5.0
+  - @colony/config@0.5.0
+  - @colony/core@0.5.0
+  - @colony/embedding@0.5.0
+  - @colony/hooks@0.5.0
+
+## 0.4.0
+
+### Minor Changes
+
+- Register the MCP caller in hivemind on startup and on every tool call. When a
+  client (e.g. codex) attaches to the colony stdio server without ever running
+  colony's lifecycle hooks, the server now writes / refreshes
+  `.omx/state/active-sessions/<session_id>.json` using the caller's cwd plus a
+  session id derived from `CODEX_SESSION_ID`, `CLAUDECODE_SESSION_ID`,
+  `CLAUDE_SESSION_ID`, `COLONY_CLIENT_SESSION_ID`, or a per-parent-process
+  fallback. Existing hook-written heartbeats are preserved — the writer never
+  overwrites a richer task preview with a blank one.
+
+  Exposes `upsertActiveSession` / `removeActiveSession` from `@colony/hooks` so
+  other non-hook runtimes can reuse the same writer.
+
+### Patch Changes
+
+- Updated dependencies
+  - @colony/hooks@0.4.0
+
+## 0.3.0
+
+### Minor Changes
+
+- f853481: Add a compact `hivemind` MCP tool that maps active proxy-runtime agent sessions to their current tasks.
+- 4076133: Add proposal system: pre-tasks that auto-promote via collective reinforcement. Agents call `task_propose` to surface a candidate improvement; other agents call `task_reinforce` (kind `explicit` or `rediscovered`), and PostToolUse adds weak `adjacent` reinforcement whenever an edit touches a file listed in a pending proposal's `touches_files`. Total decayed strength (1-hour half-life, weights 1.0 / 0.7 / 0.3 by kind) is recomputed on every read; when it crosses `PROMOTION_THRESHOLD` (2.5), the proposal is auto-promoted to a real `TaskThread` on a synthetic branch `{branch}/proposal-{id}`. The new `task_foraging_report` MCP tool lists pending (above the 0.3 noise floor) and promoted proposals; `SessionStart` surfaces the same report in-preface. Schema bumped 4 → 5: adds `proposals` and `proposal_reinforcements`.
+- 42dd222: Add response-threshold routing for broadcast (`to_agent: 'any'`) handoffs. Each agent identity (Claude, Codex, …) can register a capability profile (`ui_work`, `api_work`, `test_work`, `infra_work`, `doc_work`, each `0..1`) via the new `agent_upsert_profile` MCP tool; unknown agents default to `0.5` across all dimensions. When `TaskThread.handOff` runs with `to_agent: 'any'`, it snapshots a keyword-weighted ranking of every non-sender participant into `HandoffMetadata.suggested_candidates`. `SessionStart` preface surfaces the top match and the viewing agent's own score inline with each pending broadcast handoff, so receivers can see at a glance whether they are the best fit. New `agent_get_profile` MCP tool exposes read-only inspection. Schema bumped 5 → 6: adds `agent_profiles` table.
+
+### Patch Changes
+
+- Fix `colony mcp` never starting the stdio server.
+
+  `apps/mcp-server/src/server.ts` gated `main()` behind an `isMainEntry()` check
+  so it only ran when executed directly. The CLI `mcp` command invoked it via
+  `await import('@colony/mcp-server')`, which triggered the guard (entry was
+  the CLI binary, not `server.js`) and skipped `main()` — the process exited
+  immediately after the dynamic import, causing IDE clients (Codex, Claude
+  Code) to fail the MCP handshake with "connection closed: initialize
+  response".
+
+  `main` is now exported from the server module and invoked explicitly by the
+  CLI command.
+
+- Updated dependencies [eb4dad9]
+- Updated dependencies [5f37e75]
+- Updated dependencies [4076133]
+- Updated dependencies [42dd222]
+  - @colony/compress@0.3.0
+  - @colony/config@0.3.0
+  - @colony/core@0.3.0
+  - @colony/embedding@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

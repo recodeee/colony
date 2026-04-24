@@ -1,6 +1,6 @@
 {
   "name": "@colony/mcp-server",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -19,6 +19,7 @@
     "@colony/config": "workspace:*",
     "@colony/core": "workspace:*",
     "@colony/embedding": "workspace:*",
+    "@colony/hooks": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.8"
   },

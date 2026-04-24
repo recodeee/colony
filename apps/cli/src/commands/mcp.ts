@@ -5,7 +5,7 @@ export function registerMcpCommand(program: Command): void {
     .command('mcp')
     .description('Run the MCP stdio server (typically invoked by the IDE)')
     .action(async () => {
-      // Delegate: importing runs main() via the server module.
-      await import('@colony/mcp-server');
+      const { main } = await import('@colony/mcp-server');
+      await main();
     });
 }

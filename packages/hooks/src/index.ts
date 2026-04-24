@@ -6,3 +6,4 @@ export { userPromptSubmit } from './handlers/user-prompt-submit.js';
 export { postToolUse } from './handlers/post-tool-use.js';
 export { stop } from './handlers/stop.js';
 export { sessionEnd } from './handlers/session-end.js';
+export { upsertActiveSession, removeActiveSession } from './active-session.js';

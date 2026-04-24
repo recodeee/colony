@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -357,5 +357,62 @@ describe('MCP server', () => {
       arguments: { ids: [] },
     });
     expect(res.isError).toBe(true);
+  });
+
+  it('registers the MCP caller as an active session on connect and tool use', async () => {
+    // The fixture's pre-wired server was built before we set env + cwd, so
+    // build an isolated one here to drive the heartbeat path end-to-end.
+    const repoRoot = mkdtempSync(join(tmpdir(), 'colony-mcp-hb-'));
+    mkdirSync(join(repoRoot, '.git'), { recursive: true });
+    writeFileSync(join(repoRoot, '.git', 'HEAD'), 'ref: refs/heads/hb-branch\n', 'utf8');
+
+    const prevCwd = process.cwd();
+    const prevCodexId = process.env.CODEX_SESSION_ID;
+    process.chdir(repoRoot);
+    process.env.CODEX_SESSION_ID = 'hb-session-1';
+
+    const isolatedStore = new MemoryStore({
+      dbPath: join(repoRoot, 'data.db'),
+      settings: defaultSettings,
+    });
+    const isolatedServer = buildServer(isolatedStore, defaultSettings);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const isolatedClient = new Client({ name: 'hb-test', version: '0.0.0' });
+
+    try {
+      await Promise.all([
+        isolatedServer.connect(serverTransport),
+        isolatedClient.connect(clientTransport),
+      ]);
+
+      const sessionFile = join(
+        repoRoot,
+        '.omx',
+        'state',
+        'active-sessions',
+        'hb-session-1.json',
+      );
+      const afterConnect = JSON.parse(readFileSync(sessionFile, 'utf8'));
+      expect(afterConnect.sessionKey).toBe('hb-session-1');
+      expect(afterConnect.branch).toBe('hb-branch');
+      expect(afterConnect.cliName).toBe('codex');
+      expect(afterConnect.state).toBe('working');
+      const connectHeartbeat = afterConnect.lastHeartbeatAt;
+
+      await new Promise((r) => setTimeout(r, 5));
+
+      await isolatedClient.callTool({ name: 'list_sessions', arguments: { limit: 1 } });
+
+      const afterTool = JSON.parse(readFileSync(sessionFile, 'utf8'));
+      expect(afterTool.lastHeartbeatAt >= connectHeartbeat).toBe(true);
+      expect(afterTool.latestTaskPreview).toContain('colony.list_sessions');
+    } finally {
+      await isolatedClient.close();
+      isolatedStore.close();
+      process.chdir(prevCwd);
+      if (prevCodexId === undefined) delete process.env.CODEX_SESSION_ID;
+      else process.env.CODEX_SESSION_ID = prevCodexId;
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });

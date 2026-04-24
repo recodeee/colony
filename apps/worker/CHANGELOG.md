@@ -1,5 +1,31 @@
 # @colony/worker
 
+## 0.5.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @colony/compress@0.5.0
+  - @colony/config@0.5.0
+  - @colony/core@0.5.0
+  - @colony/embedding@0.5.0
+  - @colony/storage@0.5.0
+
+## 0.3.0
+
+### Patch Changes
+
+- Updated dependencies [eb4dad9]
+- Updated dependencies [f1d036a]
+- Updated dependencies [5f37e75]
+- Updated dependencies [4076133]
+- Updated dependencies [42dd222]
+  - @colony/compress@0.3.0
+  - @colony/config@0.3.0
+  - @colony/core@0.3.0
+  - @colony/embedding@0.3.0
+  - @colony/storage@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes

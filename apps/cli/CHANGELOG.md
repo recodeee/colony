@@ -1,5 +1,31 @@
 # cavemem
 
+## 0.5.0
+
+### Minor Changes
+
+- Sync linked release with the 0.4.0 MCP heartbeat bump so `@imdeadpool/colony`
+  and the supporting `@colony/*` workspace packages publish together.
+
+## 0.3.0
+
+### Patch Changes
+
+- eb4dad9: Rename the public CLI package and workspace package/import namespace from cavemem to Colony. The CLI binary is now `colony`, workspace imports use `@colony/*`, release scripts pack `colony`, and installed hook scripts call `colony`.
+- f1d036a: Bind hook-created sessions back to their repository cwd so colony views can see live Codex/Claude work instead of orphan `cwd: null` sessions.
+- Fix `colony mcp` never starting the stdio server.
+
+  `apps/mcp-server/src/server.ts` gated `main()` behind an `isMainEntry()` check
+  so it only ran when executed directly. The CLI `mcp` command invoked it via
+  `await import('@colony/mcp-server')`, which triggered the guard (entry was
+  the CLI binary, not `server.js`) and skipped `main()` — the process exited
+  immediately after the dynamic import, causing IDE clients (Codex, Claude
+  Code) to fail the MCP handshake with "connection closed: initialize
+  response".
+
+  `main` is now exported from the server module and invoked explicitly by the
+  CLI command.
+
 ## 0.2.0
 
 ### Minor Changes

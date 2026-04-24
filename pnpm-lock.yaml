@@ -115,6 +115,9 @@ importers:
       '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
+      '@colony/hooks':
+        specifier: workspace:*
+        version: link:../../packages/hooks
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
