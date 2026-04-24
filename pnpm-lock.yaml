@@ -118,6 +118,9 @@ importers:
       '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
+      '@colony/foraging':
+        specifier: workspace:*
+        version: link:../../packages/foraging
       '@colony/hooks':
         specifier: workspace:*
         version: link:../../packages/hooks

@@ -190,8 +190,39 @@ export class Storage {
 
   // --- search (BM25 via FTS5) ---
 
-  searchFts(query: string, limit = 10): SearchHit[] {
+  /**
+   * BM25-ranked search. An optional `filter` scopes the hits to a specific
+   * observation kind and/or to rows whose `metadata` JSON contains literal
+   * string matches for the given keys. The filter runs in SQL via
+   * `json_extract` so the LIMIT still bounds the scan.
+   *
+   * Design choice: we keep one method with an optional filter rather than
+   * a separate `searchForagedFts`. Callers such as MCP `examples_query`
+   * need filter support today, and every future kind-scoped search will
+   * want the same wiring — branching here is cheaper than a new method
+   * per caller.
+   */
+  searchFts(
+    query: string,
+    limit = 10,
+    filter?: { kind?: string; metadata?: Record<string, string> },
+  ): SearchHit[] {
     if (!query.trim()) return [];
+    const conditions: string[] = ['observations_fts MATCH ?'];
+    const params: Array<string | number> = [sanitizeMatch(query)];
+    if (filter?.kind) {
+      conditions.push('o.kind = ?');
+      params.push(filter.kind);
+    }
+    if (filter?.metadata) {
+      for (const [key, value] of Object.entries(filter.metadata)) {
+        // Allow only simple identifier-shaped keys to keep JSON path safe.
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) continue;
+        conditions.push(`json_extract(o.metadata, '$.${key}') = ?`);
+        params.push(value);
+      }
+    }
+    const where = conditions.join(' AND ');
     const rows = this.db
       .prepare(
         `SELECT o.id, o.session_id, o.ts,
@@ -199,11 +230,11 @@ export class Storage {
                 bm25(observations_fts) AS score
          FROM observations_fts
          JOIN observations o ON o.id = observations_fts.rowid
-         WHERE observations_fts MATCH ?
+         WHERE ${where}
          ORDER BY score ASC
          LIMIT ?`,
       )
-      .all(sanitizeMatch(query), limit) as Array<{
+      .all(...params, limit) as Array<{
       id: number;
       session_id: string;
       ts: number;

@@ -19,6 +19,7 @@
     "@colony/config": "workspace:*",
     "@colony/core": "workspace:*",
     "@colony/embedding": "workspace:*",
+    "@colony/foraging": "workspace:*",
     "@colony/hooks": "workspace:*",
     "@colony/process": "workspace:*",
     "@colony/spec": "workspace:*",

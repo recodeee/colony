@@ -7,6 +7,7 @@ import { isMainEntry } from '@colony/process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { ToolContext } from './tools/context.js';
+import * as foraging from './tools/foraging.js';
 import * as handoff from './tools/handoff.js';
 import { installActiveSessionHeartbeat } from './tools/heartbeat.js';
 import * as hivemind from './tools/hivemind.js';
@@ -76,6 +77,11 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   // spec_archive. Registered last so the heartbeat wrapper has seen every
   // core tool first.
   spec.register(server, ctx);
+
+  // Foraging lane (@colony/foraging). Adds examples_list, examples_query,
+  // examples_integrate_plan. Registered after spec so the heartbeat has
+  // wrapped the earlier tools before we bind these three.
+  foraging.register(server, ctx);
 
   return server;
 }

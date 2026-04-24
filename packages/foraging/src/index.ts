@@ -4,6 +4,8 @@ export { extract, readCapped } from './extractor.js';
 export type { ExtractedShape } from './extractor.js';
 export { indexFoodSource } from './indexer.js';
 export type { IndexFoodSourceOptions } from './indexer.js';
+export { buildIntegrationPlan } from './integration-plan.js';
+export type { BuildIntegrationPlanOptions } from './integration-plan.js';
 export { redact } from './redact.js';
 export type {
   ExampleManifestKind,

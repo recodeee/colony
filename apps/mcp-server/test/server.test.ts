@@ -49,6 +49,9 @@ describe('MCP server', () => {
       'agent_get_profile',
       'agent_upsert_profile',
       'attention_inbox',
+      'examples_integrate_plan',
+      'examples_list',
+      'examples_query',
       'get_observations',
       'hivemind',
       'hivemind_context',
@@ -395,13 +398,7 @@ describe('MCP server', () => {
         isolatedClient.connect(clientTransport),
       ]);
 
-      const sessionFile = join(
-        repoRoot,
-        '.omx',
-        'state',
-        'active-sessions',
-        'hb-session-1.json',
-      );
+      const sessionFile = join(repoRoot, '.omx', 'state', 'active-sessions', 'hb-session-1.json');
       const afterConnect = JSON.parse(readFileSync(sessionFile, 'utf8'));
       expect(afterConnect.sessionKey).toBe('hb-session-1');
       expect(afterConnect.branch).toBe('hb-branch');

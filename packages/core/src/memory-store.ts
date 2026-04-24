@@ -117,10 +117,23 @@ export class MemoryStore {
 
   // --- search ---
 
-  async search(query: string, limit?: number, embedder?: Embedder): Promise<SearchResult[]> {
+  async search(
+    query: string,
+    limit?: number,
+    embedder?: Embedder,
+    filter?: { kind?: string; metadata?: Record<string, string> },
+  ): Promise<SearchResult[]> {
     const cap = limit ?? this.settings.search.defaultLimit;
     const alpha = this.settings.search.alpha;
-    const keyword = this.storage.searchFts(query, cap * 2);
+    const keyword = this.storage.searchFts(query, cap * 2, filter);
+    // When the caller scopes the result to a `kind` / `metadata` pair,
+    // skip vector ranking: the embedding index has no kind filter, so
+    // mixing vector hits would bring back observations from other kinds
+    // and force a second pass to drop them. The filtered FTS output is
+    // already scoped correctly — keyword-only is faster and cleaner.
+    if (filter && (filter.kind || (filter.metadata && Object.keys(filter.metadata).length > 0))) {
+      return keyword.slice(0, cap);
+    }
     if (!embedder || this.settings.embedding.provider === 'none') {
       return keyword.slice(0, cap);
     }
