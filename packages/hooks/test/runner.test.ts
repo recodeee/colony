@@ -315,6 +315,72 @@ describe('runHook', () => {
     expect(turns).toHaveLength(1);
   });
 
+  it('stop auto-posts blocker + broadcast handoff when usage limit is hit (deduped)', async () => {
+    const repo = join(dir, 'repo-limit');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/agent/codex/limit\n', 'utf8');
+
+    await runHook(
+      'user-prompt-submit',
+      {
+        session_id: 'codex@limit-hit',
+        ide: 'codex',
+        cwd: repo,
+        prompt: 'continue migration lane',
+      },
+      { store },
+    );
+
+    await runHook(
+      'stop',
+      {
+        session_id: 'codex@limit-hit',
+        ide: 'codex',
+        cwd: repo,
+        stop_reason: 'usage limit reached',
+        last_assistant_message: 'completed parser refactor; tests still pending',
+      },
+      { store },
+    );
+
+    const taskId = store.storage.findActiveTaskForSession('codex@limit-hit');
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task should exist for usage-limit takeover');
+    const handoffs = store.storage.taskObservationsByKind(taskId, 'handoff', 10);
+    const blockers = store.storage.taskObservationsByKind(taskId, 'blocker', 10);
+    expect(handoffs).toHaveLength(1);
+    expect(blockers).toHaveLength(1);
+
+    const handoffMeta = JSON.parse(handoffs[0]?.metadata ?? '{}') as Record<string, unknown>;
+    expect(handoffMeta).toMatchObject({
+      kind: 'handoff',
+      from_session_id: 'codex@limit-hit',
+      from_agent: 'codex',
+      to_agent: 'any',
+      status: 'pending',
+      summary: 'Session hit usage limit; takeover requested.',
+    });
+    expect((handoffMeta.next_steps as string[])[1]).toContain(
+      'Last assistant update: completed parser refactor; tests still pending',
+    );
+    expect((handoffMeta.blockers as string[])[0]).toContain('usage limit reached');
+    expect(blockers[0]?.content).toContain('USAGE LIMIT: usage limit reached');
+
+    // Stop can fire more than once around session shutdown; ensure we don't
+    // spam duplicate auto-handoffs for the same pending baton.
+    await runHook(
+      'stop',
+      {
+        session_id: 'codex@limit-hit',
+        ide: 'codex',
+        cwd: repo,
+        stop_reason: 'usage limit reached',
+      },
+      { store },
+    );
+    expect(store.storage.taskObservationsByKind(taskId, 'handoff', 10)).toHaveLength(1);
+  });
+
   it('hot-path hooks stay under a generous 150ms budget on a warm runtime', async () => {
     await runHook('session-start', { session_id: 'sess-perf', ide: 'claude-code' }, { store });
     // Warm up JIT / prepared-statement cache.
