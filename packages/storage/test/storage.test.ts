@@ -108,6 +108,26 @@ describe('Storage', () => {
     expect(hits[0]?.snippet).toContain('[auth]');
   });
 
+  it('rebuildFts leaves FTS queryable', () => {
+    storage.createSession({
+      id: 'sfts',
+      ide: 'claude-code',
+      cwd: null,
+      started_at: Date.now(),
+      metadata: null,
+    });
+    storage.insertObservation({
+      session_id: 'sfts',
+      kind: 'note',
+      content: 'token bucket rate limiter',
+      compressed: true,
+      intensity: 'full',
+    });
+    expect(() => storage.rebuildFts()).not.toThrow();
+    const hits = storage.searchFts('bucket');
+    expect(hits.length).toBeGreaterThan(0);
+  });
+
   it('stores and retrieves embeddings', () => {
     storage.createSession({
       id: 's2',
