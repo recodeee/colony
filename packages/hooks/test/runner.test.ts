@@ -381,6 +381,56 @@ describe('runHook', () => {
     expect(store.storage.taskObservationsByKind(taskId, 'handoff', 10)).toHaveLength(1);
   });
 
+  it('stop treats RATE_LIMIT_EXCEEDED code as usage-limit trigger', async () => {
+    const repo = join(dir, 'repo-limit-code');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/agent/codex/limit-code\n', 'utf8');
+
+    await runHook(
+      'user-prompt-submit',
+      {
+        session_id: 'codex@limit-code',
+        ide: 'codex',
+        cwd: repo,
+        prompt: 'continue migration lane',
+      },
+      { store },
+    );
+
+    await runHook(
+      'stop',
+      {
+        session_id: 'codex@limit-code',
+        ide: 'codex',
+        cwd: repo,
+        stop_reason: 'RATE_LIMIT_EXCEEDED',
+      },
+      { store },
+    );
+
+    const taskId = store.storage.findActiveTaskForSession('codex@limit-code');
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task should exist for rate-limit code takeover');
+
+    const handoffs = store.storage.taskObservationsByKind(taskId, 'handoff', 10);
+    const blockers = store.storage.taskObservationsByKind(taskId, 'blocker', 10);
+    const turns = store.storage.listSummaries('codex@limit-code').filter((s) => s.scope === 'turn');
+
+    expect(handoffs).toHaveLength(1);
+    expect(blockers).toHaveLength(1);
+    expect(turns).toHaveLength(0);
+
+    const handoffMeta = JSON.parse(handoffs[0]?.metadata ?? '{}') as Record<string, unknown>;
+    expect(handoffMeta).toMatchObject({
+      kind: 'handoff',
+      to_agent: 'any',
+      status: 'pending',
+      summary: 'Session hit usage limit; takeover requested.',
+    });
+    expect((handoffMeta.blockers as string[])[0]).toContain('RATE_LIMIT_EXCEEDED');
+    expect(blockers[0]?.content).toContain('USAGE LIMIT: RATE_LIMIT_EXCEEDED');
+  });
+
   it('hot-path hooks stay under a generous 150ms budget on a warm runtime', async () => {
     await runHook('session-start', { session_id: 'sess-perf', ide: 'claude-code' }, { store });
     // Warm up JIT / prepared-statement cache.
