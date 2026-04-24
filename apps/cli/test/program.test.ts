@@ -6,6 +6,7 @@ describe('Colony CLI program', () => {
     const program = createProgram();
     const names = program.commands.map((c) => c.name()).sort();
     const expected = [
+      'backfill',
       'compress',
       'config',
       'debrief',
@@ -29,9 +30,7 @@ describe('Colony CLI program', () => {
       'viewer',
       'worker',
     ].sort();
-    for (const name of expected) {
-      expect(names).toContain(name);
-    }
+    expect(names).toEqual(expected);
   });
 
   it('the install command accepts --ide', () => {

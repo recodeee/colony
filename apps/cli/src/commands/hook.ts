@@ -1,3 +1,4 @@
+import { inferIdeFromSessionId } from '@colony/core';
 import { type HookName, type HookResult, runHook } from '@colony/hooks';
 import type { Command } from 'commander';
 
@@ -88,13 +89,6 @@ function safeJson(s: string): Record<string, unknown> {
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function inferIdeFromSessionId(sessionId: string): string | undefined {
-  const prefix = sessionId.split('@')[0]?.toLowerCase();
-  if (prefix === 'codex') return 'codex';
-  if (prefix === 'claude' || prefix === 'claude-code') return 'claude-code';
-  return undefined;
 }
 
 function readStdin(): Promise<string> {
