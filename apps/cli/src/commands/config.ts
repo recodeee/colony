@@ -37,20 +37,95 @@ function setDotted(obj: Record<string, unknown>, path: string, value: unknown): 
   if (last) cur[last] = value;
 }
 
-function coerce(raw: string): unknown {
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  if (raw === 'null') return null;
-  if (/^-?\d+$/.test(raw)) return Number(raw);
-  if (/^-?\d*\.\d+$/.test(raw)) return Number(raw);
-  // Try JSON for arrays/objects; fall back to raw string.
-  if (raw.startsWith('[') || raw.startsWith('{')) {
+// Walk the zod schema so `colony config set` coerces values with the shape of
+// the target field instead of a regex heuristic. Compare against `_def.typeName`
+// strings instead of `instanceof z.ZodFoo`: the CLI bundles its own zod copy
+// via tsup, so schemas returned from `@colony/config` can originate in a
+// different realpath and fail nominal `instanceof` checks even though the
+// runtime shape is identical.
+type ZodTypeName =
+  | 'ZodDefault'
+  | 'ZodOptional'
+  | 'ZodNullable'
+  | 'ZodObject'
+  | 'ZodRecord'
+  | 'ZodBoolean'
+  | 'ZodNumber'
+  | 'ZodString'
+  | 'ZodArray'
+  | 'ZodEnum';
+
+type ZodNode = {
+  _def: { typeName: ZodTypeName } & Record<string, unknown>;
+  shape?: Record<string, ZodNode>;
+};
+
+function typeName(schema: unknown): ZodTypeName | undefined {
+  const def = (schema as ZodNode | undefined)?._def;
+  const n = def?.typeName;
+  return typeof n === 'string' ? (n as ZodTypeName) : undefined;
+}
+
+function unwrap(schema: ZodNode): ZodNode {
+  let cur = schema;
+  let n = typeName(cur);
+  while (n === 'ZodDefault' || n === 'ZodOptional' || n === 'ZodNullable') {
+    cur = cur._def.innerType as ZodNode;
+    n = typeName(cur);
+  }
+  return cur;
+}
+
+export function leafSchema(root: unknown, path: string): unknown {
+  let cur = unwrap(root as ZodNode);
+  for (const part of path.split('.')) {
+    const t = typeName(cur);
+    if (t === 'ZodObject') {
+      const shape = (cur as { shape: Record<string, ZodNode> }).shape;
+      const child = shape[part];
+      if (!child) return undefined;
+      cur = unwrap(child);
+      continue;
+    }
+    if (t === 'ZodRecord') {
+      cur = unwrap(cur._def.valueType as ZodNode);
+      continue;
+    }
+    return undefined;
+  }
+  return cur;
+}
+
+export function coerceForPath(raw: string, path: string): unknown {
+  const leaf = leafSchema(SettingsSchema, path);
+  if (!leaf) {
+    // Unknown path — hand the raw string to validation so the zod error is the
+    // source of truth instead of a separate "unknown key" message that would hide
+    // the schema shape from the user.
+    return raw;
+  }
+  const t = typeName(leaf);
+  if (t === 'ZodBoolean') {
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return raw;
+  }
+  if (t === 'ZodNumber') {
+    if (raw.trim() === '') return raw;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : raw;
+  }
+  if (t === 'ZodArray' || t === 'ZodObject' || t === 'ZodRecord') {
     try {
       return JSON.parse(raw);
     } catch {
-      // fall through
+      return raw;
     }
   }
+  if (t === 'ZodEnum' || t === 'ZodString') {
+    return raw;
+  }
+  if (raw === 'null') return null;
   return raw;
 }
 
@@ -114,7 +189,8 @@ export function registerConfigCommand(program: Command): void {
     .action((key: string, value: string) => {
       const settings = loadSettings();
       const next = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>;
-      setDotted(next, key, coerce(value));
+      const coerced = coerceForPath(value, key);
+      setDotted(next, key, coerced);
       const parsed = SettingsSchema.safeParse(next);
       if (!parsed.success) {
         process.stderr.write(`${kleur.red('invalid:')} ${parsed.error.message}\n`);
@@ -122,7 +198,7 @@ export function registerConfigCommand(program: Command): void {
         return;
       }
       saveSettings(parsed.data);
-      process.stdout.write(`${kleur.green('✓')} ${key} = ${JSON.stringify(coerce(value))}\n`);
+      process.stdout.write(`${kleur.green('✓')} ${key} = ${JSON.stringify(coerced)}\n`);
     });
 
   cfg
