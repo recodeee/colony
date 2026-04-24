@@ -124,6 +124,9 @@ importers:
       '@colony/process':
         specifier: workspace:*
         version: link:../../packages/process
+      '@colony/spec':
+        specifier: workspace:*
+        version: link:../../packages/spec
       '@modelcontextprotocol/sdk':
         specifier: ^1.0.0
         version: 1.29.0(zod@3.25.76)
@@ -303,6 +306,28 @@ importers:
         version: 2.1.9(@types/node@22.19.17)
 
   packages/process:
+    devDependencies:
+      tsup:
+        specifier: ^8.3.5
+        version: 8.5.1(postcss@8.5.10)(tsx@4.21.0)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.5
+        version: 2.1.9(@types/node@22.19.17)
+
+  packages/spec:
+    dependencies:
+      '@colony/compress':
+        specifier: workspace:*
+        version: link:../compress
+      '@colony/core':
+        specifier: workspace:*
+        version: link:../core
+      '@colony/storage':
+        specifier: workspace:*
+        version: link:../storage
     devDependencies:
       tsup:
         specifier: ^8.3.5

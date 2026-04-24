@@ -37,7 +37,7 @@ Claude Code works the same way Codex does in this repo: isolated `agent/*` branc
 
 ## Architectural rules
 
-- Monorepo with pnpm workspaces. Dependency direction is strictly downward: `apps/*` may depend on `packages/*`; `packages/*` may depend on each other only in the order `process → config → compress → storage → { core, embedding } → hooks → installers`. (`core` and `embedding` are siblings — both consume `config` and `storage`, neither depends on the other. `process` has no upstream deps — only `node:` builtins.) No upward or sideways imports that break this order.
+- Monorepo with pnpm workspaces. Dependency direction is strictly downward: `apps/*` may depend on `packages/*`; `packages/*` may depend on each other only in the order `process → config → compress → storage → { core, embedding } → hooks → installers → spec`. (`core` and `embedding` are siblings — both consume `config` and `storage`, neither depends on the other. `process` has no upstream deps — only `node:` builtins. `spec` sits at the end of the chain because it consumes core + storage + compress.) No upward or sideways imports that break this order.
 - All database I/O goes through `@colony/storage`. No other package opens the DB directly.
 - Settings access goes through `@colony/config`. No direct reads from `~/.colony/settings.json` elsewhere.
 - All user-visible strings default to the caveman intensity from settings (default `full`).
@@ -57,6 +57,8 @@ packages/core     domain models, MemoryStore facade, Embedder interface
 packages/embedding provider factory (local / ollama / openai / none)
 packages/hooks    lifecycle hook handlers + worker auto-spawn
 packages/installers per-IDE integration modules
+packages/spec     spec-driven dev lane (grammar, sync, backprop, context)
+skills            Claude Code skill definitions (/co:change, /co:build, /co:check, /co:archive)
 viewer            Vite + React read-only UI
 hooks-scripts     portable shell stubs that invoke node handlers
 docs              architecture + user docs

@@ -13,6 +13,7 @@ import * as hivemind from './tools/hivemind.js';
 import * as profile from './tools/profile.js';
 import * as proposal from './tools/proposal.js';
 import * as search from './tools/search.js';
+import * as spec from './tools/spec.js';
 import * as task from './tools/task.js';
 import * as wake from './tools/wake.js';
 
@@ -69,6 +70,12 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   proposal.register(server, ctx);
   profile.register(server, ctx);
   wake.register(server, ctx);
+
+  // Spec-driven dev lane (@colony/spec). Adds spec_read, spec_change_open,
+  // spec_change_add_delta, spec_build_context, spec_build_record_failure,
+  // spec_archive. Registered last so the heartbeat wrapper has seen every
+  // core tool first.
+  spec.register(server, ctx);
 
   return server;
 }
