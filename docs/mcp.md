@@ -751,7 +751,8 @@ Publish a multi-task plan as a spec change with one task thread per sub-task. Su
         "depends_on": [0],
         "capability_hint": "ui_work"
       }
-    ]
+    ],
+    "auto_archive": false
   }
 }
 ```
@@ -761,6 +762,10 @@ Validation:
 - `subtasks` must contain at least 2 entries; for a single task use `task_thread` directly.
 - `depends_on` indices are zero-based and must point to **earlier** indices (cycle prevention).
 - Independent sub-tasks (no `depends_on` chain between them) cannot share `file_scope` entries. To overlap files, sequence the work via `depends_on`.
+
+Optional inputs:
+
+- `auto_archive` (default `false`): when `true`, the parent spec change three-way-merges and archives automatically after the last sub-task completes. Conflicts block the auto-archive (recorded as a `plan-archive-blocked` observation on the parent spec task) instead of forcing — the change stays open so the merge can be resolved by hand. Leave `auto_archive` off until you trust the lane to land cleanly; opt in per plan.
 
 Returns `{ plan_slug, spec_task_id, spec_change_path, subtasks: [{ subtask_index, branch, task_id, title }] }`. Errors: `PLAN_INVALID_DEPENDENCY`, `PLAN_SCOPE_OVERLAP`.
 
@@ -816,14 +821,25 @@ Mark your claimed sub-task complete. Releases the sub-task file claims and stamp
 }
 ```
 
-Returns `{ status: 'completed' }`. Errors: `PLAN_SUBTASK_NOT_FOUND`, `PLAN_SUBTASK_NOT_CLAIMED`, `PLAN_SUBTASK_NOT_YOURS`.
+Returns `{ status: 'completed', auto_archive: { status, reason?, archived_path?, merged_root_hash?, applied?, conflicts? } }`. The `auto_archive` field is always present and reports what happened on this completion:
+
+- `status: 'skipped'` — auto-archive disabled, sub-tasks still outstanding, or no parent linkage. `reason` carries the specific cause.
+- `status: 'archived'` — the merge was clean and the change is now under `openspec/archive/<date>-<slug>/`. `archived_path` and `merged_root_hash` describe the result.
+- `status: 'blocked'` — auto-archive opted in and the plan is fully completed, but the three-way merge has conflicts. The change stays open; resolve by hand and call `spec_archive` directly.
+- `status: 'error'` — auto-archive opted in but the archive flow threw (for example a missing `CHANGE.md`). The completion still succeeded; the failure is recorded as a `plan-archive-error` observation on the parent spec task.
+
+Errors on `task_plan_complete_subtask` itself: `PLAN_SUBTASK_NOT_FOUND`, `PLAN_SUBTASK_NOT_CLAIMED`, `PLAN_SUBTASK_NOT_YOURS`.
 
 ## Plan observation kinds
 
-The lane introduces two observation kinds on the sub-task threads. They are written through `MemoryStore.addObservation`, so content is compressed and `metadata` carries the structured payload.
+The lane introduces several observation kinds on the parent spec task and on the sub-task threads. They are written through `MemoryStore.addObservation`, so content is compressed and `metadata` carries the structured payload.
 
 - `plan-subtask` — the initial advertisement, one per sub-task at publish time. `metadata` carries `parent_plan_slug`, `parent_plan_title`, `parent_spec_task_id`, `subtask_index`, `file_scope`, `depends_on`, `capability_hint`, and an initial `status: 'available'`.
 - `plan-subtask-claim` — every lifecycle transition (claim, complete). `metadata.status` is the new state; `metadata.session_id` and `metadata.agent` identify the actor. The latest `plan-subtask-claim` observation by timestamp is authoritative.
+- `plan-config` — written on the parent spec task at publish time. Carries plan-level lifecycle policy. Today: `metadata.auto_archive`.
+- `plan-archived` — written on the parent spec task when auto-archive succeeds. Carries `archived_path`, `merged_root_hash`, `applied`.
+- `plan-archive-blocked` — written when auto-archive is ready but the three-way merge has conflicts. Carries `conflicts` (the conflict set) and `applied` (the deltas that did merge cleanly).
+- `plan-archive-error` — written when auto-archive throws. Carries the error message in `metadata.error`. The sub-task completion still succeeded; auto-archive errors never tear down completion.
 
 ## Contract stability
 

@@ -54,14 +54,28 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
   const initial = rows.find((r) => r.kind === 'plan-subtask');
   if (!initial) return null;
   const meta = parseMeta(initial.metadata);
-  // taskTimeline returns DESC by ts, so the first claim row is the latest.
-  const latestClaim = rows.find((r) => r.kind === 'plan-subtask-claim');
-  const claimMeta = latestClaim ? parseMeta(latestClaim.metadata) : {};
 
-  const status =
-    (claimMeta.status as SubtaskStatus | undefined) ??
-    (meta.status as SubtaskStatus | undefined) ??
-    'available';
+  // Lifecycle resolution. taskTimeline orders by `ts DESC`, but two
+  // observations stamped within the same millisecond have undefined
+  // tie-breaker order in SQLite, so the latest-by-ts row can flicker
+  // between `claimed` and `completed` for a sub-task that was just
+  // finished. Resolve with terminal-state-wins precedence so a
+  // `completed` row is authoritative once it exists; the attribution
+  // metadata (session_id, agent) is read from the same row that
+  // decided the status.
+  const claimRows = rows.filter((r) => r.kind === 'plan-subtask-claim');
+  let claimMeta: Record<string, unknown> = {};
+  let resolvedStatus: SubtaskStatus | undefined;
+  for (const precedence of ['completed', 'blocked', 'claimed'] as const) {
+    const match = claimRows.find((r) => parseMeta(r.metadata).status === precedence);
+    if (match) {
+      claimMeta = parseMeta(match.metadata);
+      resolvedStatus = precedence;
+      break;
+    }
+  }
+
+  const status = resolvedStatus ?? (meta.status as SubtaskStatus | undefined) ?? 'available';
 
   const [titleLine, ...rest] = initial.content.split('\n\n');
   return {
