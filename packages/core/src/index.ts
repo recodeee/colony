@@ -14,6 +14,9 @@ export {
   TaskThread,
   TaskThreadError,
   TASK_THREAD_ERROR_CODES,
+  isBroadcastMessage,
+  isMessageAddressedTo,
+  isVisibleToBroadcastClaimant,
   type CoordinationKind,
   type HandoffMetadata,
   type HandoffObservation,
@@ -42,11 +45,13 @@ export {
   buildAttentionInbox,
   type AttentionInbox,
   type AttentionInboxOptions,
+  type CoalescedMessageGroup,
   type InboxHandoff,
   type InboxLane,
   type InboxMessage,
   type InboxRecentClaim,
   type InboxWake,
+  type ReadReceipt,
 } from './attention-inbox.js';
 export { detectRepoBranch } from './git-detect.js';
 export {

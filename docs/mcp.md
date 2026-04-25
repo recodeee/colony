@@ -399,7 +399,7 @@ Returns `{ status: 'cancelled' }`. Errors include `{ code, error }`.
 
 ## `task_message`
 
-Send a direct message to another agent on a task thread. Use for coordination chat that **doesn't** transfer file claims — for "hand off the work + files", use `task_hand_off`. A message is a `task_post` with kind `message`, explicit addressing, and a read/reply lifecycle.
+Send a direct message to another agent on a task thread. Use for coordination chat that **doesn't** transfer file claims — for "hand off the work + files", use `task_hand_off`. A message is a `task_post` with kind `message`, explicit addressing, and a read/reply/expire/retract/claim lifecycle.
 
 ```json
 {
@@ -412,16 +412,17 @@ Send a direct message to another agent on a task thread. Use for coordination ch
     "to_session_id": "sess_xyz",
     "content": "can you re-run the typecheck on your branch?",
     "urgency": "needs_reply",
-    "reply_to": 401
+    "reply_to": 401,
+    "expires_in_minutes": 60
   }
 }
 ```
 
-`to_agent` ∈ `claude | codex | any` — `any` broadcasts to every participant but the sender. `to_session_id` narrows delivery to a specific live session. `urgency` ∈ `fyi | needs_reply | blocking` and controls preface prominence. `reply_to` chains a reply; the parent message's status flips to `replied` atomically on the send. Returns `{ message_observation_id, status: 'unread' }`.
+`to_agent` ∈ `claude | codex | any` — `any` broadcasts to every participant but the sender. `to_session_id` narrows delivery to a specific live session. `urgency` ∈ `fyi | needs_reply | blocking` and controls preface prominence: `fyi` coalesces into a counter, `needs_reply` renders as a summary, `blocking` lands at the top of the preface and never coalesces. `reply_to` chains a reply; the parent message's status flips to `replied` atomically on the send. **Reply chains are 1-deep authoritative**: replies-to-replies are allowed, but only the immediate parent's status flips, never a transitively-referenced ancestor. `expires_in_minutes` (max 7 days) gives the message a TTL — past-TTL unread messages drop out of inbox queries and any later `task_message_mark_read` returns `MESSAGE_EXPIRED`; bodies remain in storage for audit and stay searchable via FTS. Replying to a still-unclaimed broadcast auto-claims it for the replier (see `task_message_claim`). Returns `{ message_observation_id, status: 'unread' }`.
 
 ## `task_messages`
 
-List messages addressed to you across tasks you participate in (or scoped with `task_ids`). Compact shape — fetch full bodies via `get_observations`. Does **not** mark as read; call `task_message_mark_read` explicitly so an agent can peek at its inbox during planning without burning the "you have new mail" signal.
+List messages addressed to you across tasks you participate in (or scoped with `task_ids`). Compact shape — fetch full bodies via `get_observations`. Does **not** mark as read; call `task_message_mark_read` explicitly so an agent can peek at its inbox during planning without burning the "you have new mail" signal. Retracted messages and broadcasts already claimed by other agents are filtered out of every recipient's view.
 
 ```json
 {
@@ -436,11 +437,11 @@ List messages addressed to you across tasks you participate in (or scoped with `
 }
 ```
 
-Returns `[ { id, task_id, ts, from_session_id, from_agent, to_agent, to_session_id, urgency, status, reply_to, preview } ]`, newest-first.
+Returns `[ { id, task_id, ts, from_session_id, from_agent, to_agent, to_session_id, urgency, status, reply_to, preview, expires_at, is_claimable_broadcast, claimed_by_session_id, claimed_by_agent } ]`, newest-first. `status` reflects the effective state: an `unread` row past its TTL surfaces as `expired` even if the on-disk status hasn't been rewritten yet.
 
 ## `task_message_mark_read`
 
-Mark a message as read. Idempotent — re-marking a read or replied message is a no-op. Returns the resulting `status`.
+Mark a message as read. Idempotent — re-marking a read or replied message is a no-op. Writes a sibling `message_read` observation so the original sender sees a read receipt in their `attention_inbox`. Returns the resulting `status`.
 
 ```json
 {
@@ -449,7 +450,41 @@ Mark a message as read. Idempotent — re-marking a read or replied message is a
 }
 ```
 
-Errors include `{ code, error }` with stable codes like `NOT_MESSAGE`, `TASK_MISMATCH`, or `OBSERVATION_NOT_ON_TASK`.
+Errors include `{ code, error }` with stable codes: `NOT_MESSAGE`, `TASK_MISMATCH`, `OBSERVATION_NOT_ON_TASK`, `NOT_PARTICIPANT`, `NOT_TARGET_SESSION`, `NOT_TARGET_AGENT`, `MESSAGE_EXPIRED` (TTL elapsed before read; status flips to `expired` on the same call), or `ALREADY_RETRACTED` (sender retracted the message).
+
+## `task_message_retract`
+
+Retract a message you sent. Sets the status to `retracted` and the body stops surfacing in any recipient's inbox; the body stays in storage (still searchable via FTS, still in the timeline) for audit. Cannot retract a message that has already been replied to — at that point the recipient has invested response work and silently rewriting the sender's intent would be deceptive.
+
+```json
+{
+  "name": "task_message_retract",
+  "input": {
+    "message_observation_id": 512,
+    "session_id": "sess_abc",
+    "reason": "duplicate of #498"
+  }
+}
+```
+
+Errors: `NOT_MESSAGE`, `TASK_MISMATCH`, `NOT_SENDER` (only the original sender may retract), `ALREADY_REPLIED`, `ALREADY_RETRACTED`.
+
+## `task_message_claim`
+
+Claim a `to_agent='any'` broadcast message. Once claimed, the broadcast drops out of every other recipient's inbox; only the claimer keeps seeing it. Use when you want to silently take ownership of a broadcast before responding — replying via `task_message` already auto-claims, so this tool is for the "I'll handle it but not yet ready to reply" case.
+
+```json
+{
+  "name": "task_message_claim",
+  "input": {
+    "message_observation_id": 730,
+    "session_id": "sess_xyz",
+    "agent": "codex"
+  }
+}
+```
+
+Returns `{ status: 'claimed', claimed_by_session_id, claimed_by_agent, claimed_at }`. Errors: `NOT_MESSAGE`, `NOT_BROADCAST` (directed messages can't be claimed), `NOT_PARTICIPANT`, `ALREADY_CLAIMED` (someone else got there first — idempotent for the existing claimer), `MESSAGE_EXPIRED`, `ALREADY_RETRACTED`.
 
 ## `recall_session`
 

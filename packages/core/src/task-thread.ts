@@ -19,7 +19,9 @@ export type CoordinationKind =
   | 'wake_request'
   | 'wake_ack'
   | 'wake_cancel'
-  | 'message';
+  | 'message'
+  | 'message_read'
+  | 'message_retract';
 
 export type HandoffStatus = 'pending' | 'accepted' | 'expired' | 'cancelled';
 export type HandoffTarget = 'claude' | 'codex' | 'any';
@@ -27,7 +29,7 @@ export type HandoffTarget = 'claude' | 'codex' | 'any';
 export type WakeStatus = 'pending' | 'acknowledged' | 'expired' | 'cancelled';
 export type WakeTarget = 'claude' | 'codex' | 'any';
 
-export type MessageStatus = 'unread' | 'read' | 'replied';
+export type MessageStatus = 'unread' | 'read' | 'replied' | 'expired' | 'retracted';
 export type MessageTarget = 'claude' | 'codex' | 'any';
 export type MessageUrgency = 'fyi' | 'needs_reply' | 'blocking';
 
@@ -41,8 +43,14 @@ export const TASK_THREAD_ERROR_CODES = {
   ALREADY_ACCEPTED: 'ALREADY_ACCEPTED',
   ALREADY_ACKNOWLEDGED: 'ALREADY_ACKNOWLEDGED',
   ALREADY_CANCELLED: 'ALREADY_CANCELLED',
+  ALREADY_REPLIED: 'ALREADY_REPLIED',
+  ALREADY_RETRACTED: 'ALREADY_RETRACTED',
+  ALREADY_CLAIMED: 'ALREADY_CLAIMED',
   HANDOFF_EXPIRED: 'HANDOFF_EXPIRED',
   WAKE_EXPIRED: 'WAKE_EXPIRED',
+  MESSAGE_EXPIRED: 'MESSAGE_EXPIRED',
+  NOT_BROADCAST: 'NOT_BROADCAST',
+  NOT_SENDER: 'NOT_SENDER',
   NOT_TARGET_SESSION: 'NOT_TARGET_SESSION',
   NOT_PARTICIPANT: 'NOT_PARTICIPANT',
   NOT_TARGET_AGENT: 'NOT_TARGET_AGENT',
@@ -177,12 +185,33 @@ export interface HandOffArgs {
  * the structured fields below live in `observations.metadata` as JSON.
  *
  * `status` transitions:
- *   - `unread`  → set at send time
- *   - `read`    → set by `markMessageRead` on the recipient's fetch (advisory)
- *   - `replied` → set on *write* when someone posts with `reply_to=<this id>`;
- *                 authoritative — overrides `read`. Flipping on write (not
- *                 read) avoids a race where the sender could see their own
- *                 reply round-tripped as still-unread.
+ *   - `unread`    → set at send time
+ *   - `read`      → set by `markMessageRead` on the recipient's fetch (advisory)
+ *   - `replied`   → set on *write* when someone posts with `reply_to=<this id>`;
+ *                   authoritative — overrides `read`. Flipping on write (not
+ *                   read) avoids a race where the sender could see their own
+ *                   reply round-tripped as still-unread.
+ *   - `expired`   → set by `markMessageRead`/`retractMessage`/`postMessage(reply_to=…)`
+ *                   when the message's `expires_at` is in the past. Lazy: list
+ *                   queries simply hide expired rows by computing the predicate
+ *                   client-side, mirroring the `pendingHandoffsFor` pattern.
+ *   - `retracted` → set by `retractMessage` when the original sender retracts.
+ *                   The body stays in storage (still searchable, still in
+ *                   timeline) but the inbox view shows a terse retraction
+ *                   stub instead of the original preview.
+ *
+ * Reply-chain depth: `reply_to` is **1-deep authoritative**. We flip *only*
+ * the immediate parent's status, never a transitively-referenced ancestor.
+ * Replies-to-replies are allowed but only the immediate parent's status
+ * changes, and there is no thread-root tracking. If you want a long thread,
+ * model it as `task_post` notes; messages are for short directed exchanges.
+ *
+ * Broadcast claim: `to_agent='any' && to_session_id===null` messages are
+ * visible to every non-sender participant by default. Once any agent calls
+ * `claimBroadcastMessage` (or replies to it), `claimed_by_session_id` /
+ * `claimed_by_agent` / `claimed_at` are set and the message drops out of
+ * other agents' inboxes — only the claimer keeps seeing it. Replying to a
+ * still-unclaimed broadcast auto-claims for the replier.
  */
 export interface MessageMetadata {
   kind: 'message';
@@ -196,6 +225,17 @@ export interface MessageMetadata {
   read_at: number | null;
   replied_by_observation_id: number | null;
   replied_at: number | null;
+  /** Absolute ms-epoch when this message stops surfacing in inbox queries.
+   *  null = no TTL; the message is visible until explicitly read/replied/retracted. */
+  expires_at: number | null;
+  retracted_at: number | null;
+  retract_reason: string | null;
+  /** Set when an agent claims (or auto-claims via reply) a `to_agent=any`
+   *  broadcast. Hides the message from other agents' inboxes; the claimer
+   *  keeps seeing it. Always null on directed messages. */
+  claimed_by_session_id: string | null;
+  claimed_by_agent: string | null;
+  claimed_at: number | null;
 }
 
 export interface MessageObservation {
@@ -212,6 +252,10 @@ export interface PostMessageArgs {
   content: string;
   reply_to?: number;
   urgency?: MessageUrgency;
+  /** Optional TTL in ms. If omitted, the message has no expiry. Mirrors the
+   *  handoff/wake `expires_in_ms` shape so MCP tool layers can present a
+   *  uniform "expires_in_minutes" affordance. */
+  expires_in_ms?: number;
 }
 
 export function isMessageAddressedTo(
@@ -222,6 +266,13 @@ export function isMessageAddressedTo(
   if (meta.to_session_id !== null) return meta.to_session_id === session_id;
   if (meta.to_agent === 'any') return true;
   return meta.to_agent === agent;
+}
+
+/** True when this message was sent as a broadcast (`to_agent='any'`,
+ *  no specific `to_session_id`). Broadcasts can be claimed; directed
+ *  messages cannot. */
+export function isBroadcastMessage(meta: MessageMetadata): boolean {
+  return meta.to_agent === 'any' && meta.to_session_id === null;
 }
 
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
@@ -692,8 +743,13 @@ export class TaskThread {
    * lifecycle. If `reply_to` points at another message, we flip the parent's
    * status to `replied` in the same transaction — authoritative on the
    * sender side so the sender sees resolution on their next read.
+   *
+   * If the parent is a still-unclaimed broadcast (`to_agent='any'`), the
+   * reply also auto-claims it for this session — silent ownership take so
+   * other participants stop seeing the broadcast in their inboxes.
    */
   postMessage(args: PostMessageArgs): number {
+    const now = Date.now();
     const meta: MessageMetadata = {
       kind: 'message',
       from_session_id: args.from_session_id,
@@ -706,6 +762,12 @@ export class TaskThread {
       read_at: null,
       replied_by_observation_id: null,
       replied_at: null,
+      expires_at: args.expires_in_ms !== undefined ? now + args.expires_in_ms : null,
+      retracted_at: null,
+      retract_reason: null,
+      claimed_by_session_id: null,
+      claimed_by_agent: null,
+      claimed_at: null,
     };
     return this.store.storage.transaction(() => {
       const id = this.store.addObservation({
@@ -727,10 +789,24 @@ export class TaskThread {
         // authoritative over their own lifecycle.
         const parentMeta =
           parent && parent.task_id === this.task_id ? parseMessage(parent.metadata) : null;
-        if (parentMeta && parentMeta.status !== 'replied') {
+        // Reply-chain depth is 1-deep: only the immediate parent flips. If
+        // the parent is itself a reply, we do NOT walk up to flip the root.
+        if (parentMeta && isReplyableStatus(parentMeta.status)) {
           parentMeta.status = 'replied';
           parentMeta.replied_by_observation_id = id;
-          parentMeta.replied_at = Date.now();
+          parentMeta.replied_at = now;
+          // Auto-claim a still-unclaimed broadcast on reply. Replying *is*
+          // engagement, so we don't make agents call task_message_claim
+          // separately; explicit claim is for the silent-ownership case.
+          if (
+            isBroadcastMessage(parentMeta) &&
+            parentMeta.claimed_by_session_id === null &&
+            parentMeta.from_session_id !== args.from_session_id
+          ) {
+            parentMeta.claimed_by_session_id = args.from_session_id;
+            parentMeta.claimed_by_agent = args.from_agent;
+            parentMeta.claimed_at = now;
+          }
           this.store.storage.updateObservationMetadata(args.reply_to, JSON.stringify(parentMeta));
         }
       }
@@ -744,6 +820,14 @@ export class TaskThread {
    * already-read (or replied) message is a no-op so concurrent fetches from
    * the same recipient don't clobber the first reader's `read_at`. Returns
    * the resulting status for callers that want to short-circuit.
+   *
+   * Side effect: when this transitions `unread → read`, we also write a
+   * sibling `message_read` observation. The original sender's preface
+   * scans those siblings (filtering `original_sender_session_id === me`)
+   * to surface read receipts without polling.
+   *
+   * Past-TTL messages flip to `expired` here and throw `MESSAGE_EXPIRED`.
+   * Retracted messages throw `ALREADY_RETRACTED`. Both stay terminal.
    */
   markMessageRead(message_observation_id: number, session_id: string): MessageStatus {
     const obs = this.store.storage.getObservation(message_observation_id);
@@ -788,19 +872,193 @@ export class TaskThread {
         `message is for ${meta.to_agent}, not ${myAgent}`,
       );
     }
+    if (meta.status === 'retracted') {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.ALREADY_RETRACTED,
+        'message has been retracted by the sender',
+      );
+    }
+    if (meta.expires_at !== null && Date.now() > meta.expires_at && meta.status === 'unread') {
+      meta.status = 'expired';
+      this.store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));
+      throw taskError(TASK_THREAD_ERROR_CODES.MESSAGE_EXPIRED, 'message expired before read');
+    }
     if (meta.status === 'unread') {
+      const now = Date.now();
       meta.status = 'read';
       meta.read_by_session_id = session_id;
-      meta.read_at = Date.now();
-      this.store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));
+      meta.read_at = now;
+      this.store.storage.transaction(() => {
+        this.store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));
+        // Sibling read-receipt observation: lets the original sender's
+        // preface render "B read your message at T (no reply yet)" without
+        // a polling channel. Compressed like every other observation; the
+        // structured fields live in metadata so the renderer can scan
+        // without decompressing content.
+        this.store.addObservation({
+          session_id,
+          kind: 'message_read',
+          content: `read message #${message_observation_id} from ${meta.from_agent}`,
+          task_id: this.task_id,
+          reply_to: message_observation_id,
+          metadata: {
+            kind: 'message_read',
+            read_message_id: message_observation_id,
+            read_by_session_id: session_id,
+            read_by_agent: myAgent,
+            original_sender_session_id: meta.from_session_id,
+            urgency: meta.urgency,
+            ts: now,
+          },
+        });
+        this.store.storage.touchTask(this.task_id, now);
+      });
     }
     return meta.status;
   }
 
+  /**
+   * Sender-side retraction. Flips status to `retracted` and stamps a
+   * reason; the body stays in storage (still searchable) but inbox views
+   * render a stub instead of the original preview. Cannot retract a
+   * message that has already been replied to — at that point the
+   * recipient has invested response work and silently rewriting the
+   * sender's intent would be deceptive.
+   */
+  retractMessage(message_observation_id: number, session_id: string, reason?: string): void {
+    const obs = this.store.storage.getObservation(message_observation_id);
+    if (!obs || obs.kind !== 'message') {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_MESSAGE,
+        `observation ${message_observation_id} is not a message`,
+      );
+    }
+    if (obs.task_id !== this.task_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.TASK_MISMATCH,
+        `message belongs to task ${obs.task_id}, not ${this.task_id}`,
+      );
+    }
+    const meta = parseMessage(obs.metadata);
+    if (!meta) {
+      throw taskError(TASK_THREAD_ERROR_CODES.METADATA_MISSING, 'message metadata missing');
+    }
+    if (meta.from_session_id !== session_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_SENDER,
+        'only the original sender can retract this message',
+      );
+    }
+    if (meta.status === 'retracted') {
+      throw taskError(TASK_THREAD_ERROR_CODES.ALREADY_RETRACTED, 'message already retracted');
+    }
+    if (meta.status === 'replied') {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.ALREADY_REPLIED,
+        'message has been replied to and cannot be retracted',
+      );
+    }
+    const now = Date.now();
+    meta.status = 'retracted';
+    meta.retracted_at = now;
+    meta.retract_reason = reason ?? null;
+    this.store.storage.transaction(() => {
+      this.store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));
+      this.store.addObservation({
+        session_id,
+        kind: 'message_retract',
+        content: reason
+          ? `retracted message #${message_observation_id}: ${reason}`
+          : `retracted message #${message_observation_id}`,
+        task_id: this.task_id,
+        reply_to: message_observation_id,
+        metadata: {
+          kind: 'message_retract',
+          retracted_message_id: message_observation_id,
+          retracted_by_session_id: session_id,
+          ts: now,
+        },
+      });
+      this.store.storage.touchTask(this.task_id, now);
+    });
+  }
+
+  /**
+   * Claim a `to_agent='any'` broadcast. Once claimed, the message drops
+   * out of every other recipient's inbox; only the claimer keeps seeing
+   * it. Directed messages cannot be claimed (NOT_BROADCAST). Replying to
+   * a still-unclaimed broadcast auto-claims via `postMessage`, so this
+   * call is for the "silently take ownership without yet replying" case.
+   */
+  claimBroadcastMessage(
+    message_observation_id: number,
+    session_id: string,
+    agent: string,
+  ): MessageMetadata {
+    const obs = this.store.storage.getObservation(message_observation_id);
+    if (!obs || obs.kind !== 'message') {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_MESSAGE,
+        `observation ${message_observation_id} is not a message`,
+      );
+    }
+    if (obs.task_id !== this.task_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.TASK_MISMATCH,
+        `message belongs to task ${obs.task_id}, not ${this.task_id}`,
+      );
+    }
+    const meta = parseMessage(obs.metadata);
+    if (!meta) {
+      throw taskError(TASK_THREAD_ERROR_CODES.METADATA_MISSING, 'message metadata missing');
+    }
+    if (!isBroadcastMessage(meta)) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_BROADCAST,
+        'only to_agent=any broadcasts can be claimed',
+      );
+    }
+    if (meta.from_session_id === session_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_SESSION,
+        'sender cannot claim their own broadcast',
+      );
+    }
+    const myAgent = this.store.storage.getParticipantAgent(this.task_id, session_id);
+    if (!myAgent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_PARTICIPANT,
+        'session is not a participant on this task',
+      );
+    }
+    if (meta.status === 'retracted') {
+      throw taskError(TASK_THREAD_ERROR_CODES.ALREADY_RETRACTED, 'message has been retracted');
+    }
+    if (meta.expires_at !== null && Date.now() > meta.expires_at) {
+      throw taskError(TASK_THREAD_ERROR_CODES.MESSAGE_EXPIRED, 'broadcast expired');
+    }
+    if (meta.claimed_by_session_id !== null) {
+      if (meta.claimed_by_session_id === session_id) return meta; // idempotent
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.ALREADY_CLAIMED,
+        `broadcast already claimed by ${meta.claimed_by_agent ?? meta.claimed_by_session_id}`,
+      );
+    }
+    meta.claimed_by_session_id = session_id;
+    meta.claimed_by_agent = agent;
+    meta.claimed_at = Date.now();
+    this.store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));
+    this.store.storage.touchTask(this.task_id);
+    return meta;
+  }
+
   /** Unread messages addressed to `session_id` / `agent`. Broadcast
    *  messages (to_agent='any') are visible to every participant but the
-   *  sender. */
+   *  sender, except once a broadcast has been claimed only the claimer
+   *  keeps seeing it. Past-TTL messages and retracted messages are also
+   *  hidden — list reads are pure filters and do not mutate storage. */
   pendingMessagesFor(session_id: string, agent: string): MessageObservation[] {
+    const now = Date.now();
     return this.store.storage
       .taskObservationsByKind(this.task_id, 'message')
       .map((row) => {
@@ -811,10 +1069,24 @@ export class TaskThread {
       .filter(
         ({ meta }) =>
           meta.status === 'unread' &&
+          (meta.expires_at === null || now < meta.expires_at) &&
           meta.from_session_id !== session_id &&
-          isMessageAddressedTo(meta, session_id, agent),
+          isMessageAddressedTo(meta, session_id, agent) &&
+          isVisibleToBroadcastClaimant(meta, session_id),
       );
   }
+}
+
+function isReplyableStatus(status: MessageStatus): boolean {
+  return status === 'unread' || status === 'read';
+}
+
+/** A claimed broadcast is invisible to non-claimer recipients. Directed
+ *  messages and unclaimed broadcasts pass through. */
+export function isVisibleToBroadcastClaimant(meta: MessageMetadata, session_id: string): boolean {
+  if (!isBroadcastMessage(meta)) return true;
+  if (meta.claimed_by_session_id === null) return true;
+  return meta.claimed_by_session_id === session_id;
 }
 
 function parseHandoff(metadata: string | null): HandoffMetadata | null {
@@ -843,14 +1115,28 @@ function parseWake(metadata: string | null): WakeRequestMetadata | null {
   }
 }
 
-function parseMessage(metadata: string | null): MessageMetadata | null {
+export function parseMessage(metadata: string | null): MessageMetadata | null {
   if (!metadata) return null;
   try {
     const parsed = JSON.parse(metadata) as unknown;
     if (!parsed || typeof parsed !== 'object') return null;
     const m = parsed as Partial<MessageMetadata>;
     if (m.kind !== 'message' || typeof m.status !== 'string') return null;
-    return parsed as MessageMetadata;
+    // Backfill the fields added in the messaging-overhaul change. Legacy
+    // rows persisted before this PR shipped have these keys absent (not
+    // explicitly null), and the visibility predicates below use strict
+    // `=== null` comparisons. Defaulting at parse time keeps every
+    // downstream check honest without a database migration. Use `??` so
+    // newer rows that explicitly set the field to a non-null value are
+    // preserved unchanged.
+    const meta = parsed as MessageMetadata;
+    meta.expires_at = meta.expires_at ?? null;
+    meta.retracted_at = meta.retracted_at ?? null;
+    meta.retract_reason = meta.retract_reason ?? null;
+    meta.claimed_by_session_id = meta.claimed_by_session_id ?? null;
+    meta.claimed_by_agent = meta.claimed_by_agent ?? null;
+    meta.claimed_at = meta.claimed_at ?? null;
+    return meta;
   } catch {
     return null;
   }

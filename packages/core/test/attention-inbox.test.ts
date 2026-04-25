@@ -124,6 +124,147 @@ describe('buildAttentionInbox', () => {
     expect(inbox.unread_messages).toHaveLength(0);
   });
 
+  it('blocking unread messages set summary.blocked and the message-first next_action', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-blocked',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'schema choice blocking next slice',
+      urgency: 'blocking',
+    });
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+    });
+    expect(inbox.summary.blocked).toBe(true);
+    expect(inbox.summary.next_action).toMatch(/blocking task messages/i);
+
+    // No blocking → blocked=false even with other unread messages.
+    const thread2 = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-not-blocked',
+      session_id: 'claude',
+    });
+    thread2.join('claude', 'claude');
+    thread2.join('codex', 'codex');
+    thread2.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'fyi only',
+      urgency: 'fyi',
+    });
+    const inbox2 = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread2.task_id],
+    });
+    expect(inbox2.summary.blocked).toBe(false);
+  });
+
+  it('coalesces non-blocking messages by (task, sender, urgency); blocking groups stay size 1', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/coalesce',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'fyi 1',
+      urgency: 'fyi',
+    });
+    thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'fyi 2',
+      urgency: 'fyi',
+    });
+    thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'urgent',
+      urgency: 'blocking',
+    });
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+    });
+    expect(inbox.unread_messages).toHaveLength(3);
+
+    // Two fyi from same sender on same task should coalesce into one group.
+    const fyiGroup = inbox.coalesced_messages.find((g) => g.urgency === 'fyi');
+    expect(fyiGroup?.count).toBe(2);
+    expect(fyiGroup?.message_ids).toHaveLength(2);
+
+    // Blocking always stays as its own group of size 1.
+    const blockingGroups = inbox.coalesced_messages.filter((g) => g.urgency === 'blocking');
+    expect(blockingGroups).toHaveLength(1);
+    expect(blockingGroups[0]?.count).toBe(1);
+  });
+
+  it('surfaces read receipts for needs_reply messages that have been read but not replied', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-receipts',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const id = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'please review',
+      urgency: 'needs_reply',
+    });
+    thread.markMessageRead(id, 'codex');
+
+    const senderInbox = buildAttentionInbox(store, {
+      session_id: 'claude',
+      agent: 'claude',
+      task_ids: [thread.task_id],
+    });
+    expect(senderInbox.read_receipts).toHaveLength(1);
+    expect(senderInbox.read_receipts[0]?.read_message_id).toBe(id);
+    expect(senderInbox.read_receipts[0]?.urgency).toBe('needs_reply');
+    expect(senderInbox.summary.next_action).toMatch(/recipients have read/i);
+
+    // A reply removes the receipt — the reply is a stronger signal.
+    thread.postMessage({
+      from_session_id: 'codex',
+      from_agent: 'codex',
+      to_agent: 'claude',
+      content: 'looking',
+      reply_to: id,
+    });
+    const after = buildAttentionInbox(store, {
+      session_id: 'claude',
+      agent: 'claude',
+      task_ids: [thread.task_id],
+    });
+    expect(after.read_receipts).toHaveLength(0);
+  });
+
   it('returns the quiet-inbox next_action hint when nothing is pending', () => {
     seed('codex');
     const thread = TaskThread.open(store, {

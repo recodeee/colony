@@ -62,6 +62,45 @@ export interface InboxRecentClaim {
   claimed_at: number;
 }
 
+/**
+ * Coalesced view: a group of inbox messages that share `(task_id,
+ * from_session_id, urgency)`. Lets the preface render "B sent 4 fyi
+ * messages on task #12, latest: …" instead of four near-identical lines.
+ *
+ * `blocking` urgency lands in groups of size 1 — every blocking message
+ * stays its own row so no critical signal gets folded into a counter.
+ * Single-message groups for non-blocking urgencies still ship as a group
+ * (size 1) so consumers iterate one structure.
+ */
+export interface CoalescedMessageGroup {
+  task_id: number;
+  from_session_id: string;
+  from_agent: string;
+  urgency: MessageSummary['urgency'];
+  count: number;
+  message_ids: number[];
+  latest_id: number;
+  latest_ts: number;
+  latest_preview: string;
+}
+
+/**
+ * Read-receipt surfaced to the original sender. Built from sibling
+ * `message_read` observations whose metadata names this session as the
+ * `original_sender_session_id`. The "still-awaiting-reply" predicate is
+ * computed against the read message's *current* status: if the recipient
+ * has since replied, the receipt is dropped — the reply is the stronger
+ * signal and the inbox shouldn't double-surface.
+ */
+export interface ReadReceipt {
+  task_id: number;
+  read_message_id: number;
+  read_at: number;
+  read_by_session_id: string;
+  read_by_agent: string;
+  urgency: MessageSummary['urgency'];
+}
+
 export interface AttentionInbox {
   generated_at: number;
   session_id: string;
@@ -72,11 +111,24 @@ export interface AttentionInbox {
     unread_message_count: number;
     stalled_lane_count: number;
     recent_other_claim_count: number;
+    /**
+     * True iff at least one unread message is `urgency='blocking'`. The
+     * preface renderer should use this to gate non-message sections —
+     * advisory only at this layer (we still populate the other fields)
+     * because a hard hide here would also hide the inbox surface that
+     * lets consumers debug why they were blocked.
+     */
+    blocked: boolean;
     next_action: string;
   };
   pending_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
   unread_messages: InboxMessage[];
+  /** Same set of unread messages, grouped by (task, sender, urgency). */
+  coalesced_messages: CoalescedMessageGroup[];
+  /** `message_read` siblings for messages this session originally sent
+   *  that have not been replied to. Sized by `read_receipt_window_ms`. */
+  read_receipts: ReadReceipt[];
   stalled_lanes: InboxLane[];
   recent_other_claims: InboxRecentClaim[];
 }
@@ -100,10 +152,17 @@ export interface AttentionInboxOptions {
   unread_message_limit?: number;
   /** Defaults true; hooks can disable filesystem hivemind reads for hot paths. */
   include_stalled_lanes?: boolean;
+  /** Window (ms) for read-receipt surfacing. Receipts older than this drop
+   *  out so a long-running session doesn't accumulate stale "B read your
+   *  message 3 days ago" hints. Default 6h. */
+  read_receipt_window_ms?: number;
+  read_receipt_limit?: number;
 }
 
 const DEFAULT_RECENT_CLAIM_WINDOW_MS = 15 * 60_000;
 const DEFAULT_RECENT_CLAIM_LIMIT = 20;
+const DEFAULT_READ_RECEIPT_WINDOW_MS = 6 * 60 * 60_000;
+const DEFAULT_READ_RECEIPT_LIMIT = 20;
 
 /**
  * Aggregate "things that need this session's attention" across tasks and
@@ -153,18 +212,24 @@ export function buildAttentionInbox(
 
   const stalled_lanes = opts.include_stalled_lanes === false ? [] : collectStalledLanes(opts);
 
+  const read_receipts = collectReadReceipts(store, opts, taskIds, now);
+  const coalesced_messages = coalesceMessages(unread_messages);
+  const blocked = unread_messages.some((m) => m.urgency === 'blocking');
+
   const summary = {
     pending_handoff_count: pending_handoffs.length,
     pending_wake_count: pending_wakes.length,
     unread_message_count: unread_messages.length,
     stalled_lane_count: stalled_lanes.length,
     recent_other_claim_count: recent_other_claims.length,
+    blocked,
     next_action: deriveNextAction({
       pending_handoffs,
       pending_wakes,
       unread_messages,
       stalled_lanes,
       recent_other_claims,
+      read_receipts,
     }),
   };
 
@@ -176,9 +241,110 @@ export function buildAttentionInbox(
     pending_handoffs,
     pending_wakes,
     unread_messages,
+    coalesced_messages,
+    read_receipts,
     stalled_lanes,
     recent_other_claims,
   };
+}
+
+/**
+ * Group unread messages by `(task_id, from_session_id, urgency)`. Blocking
+ * urgency is intentionally still grouped — blocking messages from the same
+ * sender on the same task collapse just like fyi ones — but a blocking
+ * group of size N still renders as N separate rows in the preface because
+ * blocking signals don't tolerate folding into a counter.
+ */
+function coalesceMessages(messages: InboxMessage[]): CoalescedMessageGroup[] {
+  const groups = new Map<string, InboxMessage[]>();
+  for (const m of messages) {
+    const key = `${m.task_id} ${m.from_session_id} ${m.urgency}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(m);
+    else groups.set(key, [m]);
+  }
+  const out: CoalescedMessageGroup[] = [];
+  for (const bucket of groups.values()) {
+    bucket.sort((a, b) => a.ts - b.ts);
+    const latest = bucket[bucket.length - 1];
+    if (!latest) continue;
+    out.push({
+      task_id: latest.task_id,
+      from_session_id: latest.from_session_id,
+      from_agent: latest.from_agent,
+      urgency: latest.urgency,
+      count: bucket.length,
+      message_ids: bucket.map((m) => m.id),
+      latest_id: latest.id,
+      latest_ts: latest.ts,
+      latest_preview: latest.preview,
+    });
+  }
+  // Newest group first, matching unread_messages ordering.
+  return out.sort((a, b) => b.latest_ts - a.latest_ts);
+}
+
+/**
+ * Walk task observation rows of kind 'message_read' and surface the ones
+ * whose metadata names the calling session as the original sender. Drops
+ * a receipt when the underlying message has since been replied to (the
+ * reply is the stronger signal) or when the receipt is older than
+ * `read_receipt_window_ms`.
+ */
+function collectReadReceipts(
+  store: MemoryStore,
+  opts: AttentionInboxOptions,
+  taskIds: number[],
+  now: number,
+): ReadReceipt[] {
+  const window = opts.read_receipt_window_ms ?? DEFAULT_READ_RECEIPT_WINDOW_MS;
+  const cap = opts.read_receipt_limit ?? DEFAULT_READ_RECEIPT_LIMIT;
+  const since = now - window;
+  const out: ReadReceipt[] = [];
+  for (const task_id of taskIds) {
+    const rows = store.storage.taskObservationsByKind(task_id, 'message_read', cap * 2);
+    for (const r of rows) {
+      if (r.ts < since) continue;
+      if (!r.metadata) continue;
+      let meta: {
+        kind?: string;
+        original_sender_session_id?: string;
+        read_message_id?: number;
+        read_by_session_id?: string;
+        read_by_agent?: string;
+        urgency?: MessageSummary['urgency'];
+        ts?: number;
+      };
+      try {
+        meta = JSON.parse(r.metadata);
+      } catch {
+        continue;
+      }
+      if (meta.kind !== 'message_read') continue;
+      if (meta.original_sender_session_id !== opts.session_id) continue;
+      if (typeof meta.read_message_id !== 'number') continue;
+      // Drop when the original message has since been replied to. The
+      // reply already reaches the sender as a fresh inbox entry, so a
+      // surviving receipt would be redundant noise.
+      const messageRow = store.storage.getObservation(meta.read_message_id);
+      if (!messageRow || messageRow.kind !== 'message') continue;
+      try {
+        const messageMeta = JSON.parse(messageRow.metadata ?? '{}') as { status?: string };
+        if (messageMeta.status === 'replied') continue;
+      } catch {
+        continue;
+      }
+      out.push({
+        task_id,
+        read_message_id: meta.read_message_id,
+        read_at: typeof meta.ts === 'number' ? meta.ts : r.ts,
+        read_by_session_id: meta.read_by_session_id ?? r.session_id,
+        read_by_agent: meta.read_by_agent ?? '',
+        urgency: meta.urgency ?? 'fyi',
+      });
+    }
+  }
+  return out.sort((a, b) => b.read_at - a.read_at).slice(0, cap);
 }
 
 function resolveTaskIds(store: MemoryStore, opts: AttentionInboxOptions): number[] {
@@ -282,6 +448,7 @@ function deriveNextAction(parts: {
   unread_messages: InboxMessage[];
   stalled_lanes: InboxLane[];
   recent_other_claims: InboxRecentClaim[];
+  read_receipts: ReadReceipt[];
 }): string {
   if (parts.unread_messages.some((m) => m.urgency === 'blocking')) {
     return 'Answer blocking task messages first; another agent is explicitly blocked on you.';
@@ -297,6 +464,9 @@ function deriveNextAction(parts: {
   }
   if (parts.unread_messages.length > 0) {
     return 'Review unread FYI task messages when context allows.';
+  }
+  if (parts.read_receipts.some((r) => r.urgency !== 'fyi')) {
+    return 'Recipients have read your needs_reply messages without responding — consider following up.';
   }
   if (parts.stalled_lanes.length > 0) {
     return 'Review stalled lanes — takeover may be safer than waiting for the owner to return.';

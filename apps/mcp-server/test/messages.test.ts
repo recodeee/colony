@@ -402,4 +402,165 @@ describe('task threads — direct messages', () => {
     });
     expect(target.status).toBe('read');
   });
+
+  it('expires_in_minutes hides past-TTL messages from unread_only and blocks mark_read', async () => {
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+    const { message_observation_id } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'codex',
+        content: 'short-lived',
+        urgency: 'fyi',
+        expires_in_minutes: 1,
+      },
+    );
+
+    // Push expires_at into the past to simulate elapsed TTL.
+    const row = store.storage.getObservation(message_observation_id);
+    const meta = JSON.parse(row?.metadata ?? '{}') as { expires_at: number };
+    meta.expires_at = Date.now() - 1000;
+    store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));
+
+    const inbox = await call<Array<{ id: number; status: string }>>('task_messages', {
+      session_id: sessionB,
+      agent: 'codex',
+      unread_only: true,
+    });
+    expect(inbox.find((m) => m.id === message_observation_id)).toBeUndefined();
+
+    const err = await callError('task_message_mark_read', {
+      message_observation_id,
+      session_id: sessionB,
+    });
+    expect(err.code).toBe(TASK_THREAD_ERROR_CODES.MESSAGE_EXPIRED);
+  });
+
+  it('task_message_retract hides body from recipients but FTS still indexes it', async () => {
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+    const { message_observation_id } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'codex',
+        content: 'unique-needle-token-for-fts',
+      },
+    );
+
+    const before = await call<Array<{ id: number }>>('task_messages', {
+      session_id: sessionB,
+      agent: 'codex',
+    });
+    expect(before.find((m) => m.id === message_observation_id)).toBeDefined();
+
+    const { status } = await call<{ status: string }>('task_message_retract', {
+      message_observation_id,
+      session_id: sessionA,
+      reason: 'duplicate',
+    });
+    expect(status).toBe('retracted');
+
+    const after = await call<Array<{ id: number }>>('task_messages', {
+      session_id: sessionB,
+      agent: 'codex',
+    });
+    expect(after.find((m) => m.id === message_observation_id)).toBeUndefined();
+
+    // Body still findable via FTS.
+    const hits = store.storage.searchFts('"unique-needle-token-for-fts"');
+    expect(hits.find((h) => h.id === message_observation_id)).toBeDefined();
+  });
+
+  it('task_message_retract refuses non-senders with NOT_SENDER', async () => {
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+    const { message_observation_id } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'codex',
+        content: 'mine to retract',
+      },
+    );
+    const err = await callError('task_message_retract', {
+      message_observation_id,
+      session_id: sessionB,
+    });
+    expect(err.code).toBe(TASK_THREAD_ERROR_CODES.NOT_SENDER);
+  });
+
+  it('task_message_claim hides broadcast from non-claimers and rejects directed messages', async () => {
+    const { task_id, sessionA, sessionB, sessionC } = seedThreeSessionTask();
+    const { message_observation_id } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'any',
+        content: 'broadcast for claim',
+      },
+    );
+
+    // Pre-claim: B and C both see it.
+    expect(
+      (
+        await call<Array<{ id: number; is_claimable_broadcast: boolean }>>('task_messages', {
+          session_id: sessionB,
+          agent: 'codex',
+          task_ids: [task_id],
+        })
+      ).find((m) => m.id === message_observation_id)?.is_claimable_broadcast,
+    ).toBe(true);
+
+    const claim = await call<{ status: string; claimed_by_session_id: string }>(
+      'task_message_claim',
+      {
+        message_observation_id,
+        session_id: sessionB,
+        agent: 'codex',
+      },
+    );
+    expect(claim.status).toBe('claimed');
+    expect(claim.claimed_by_session_id).toBe(sessionB);
+
+    // C no longer sees the broadcast in their inbox.
+    const cInbox = await call<Array<{ id: number }>>('task_messages', {
+      session_id: sessionC,
+      agent: 'claude',
+      task_ids: [task_id],
+    });
+    expect(cInbox.find((m) => m.id === message_observation_id)).toBeUndefined();
+
+    // Second claimer rejected with ALREADY_CLAIMED.
+    const dupe = await callError('task_message_claim', {
+      message_observation_id,
+      session_id: sessionC,
+      agent: 'claude',
+    });
+    expect(dupe.code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_CLAIMED);
+
+    // Directed message can't be claimed.
+    const { message_observation_id: directedId } = await call<{ message_observation_id: number }>(
+      'task_message',
+      {
+        task_id,
+        session_id: sessionA,
+        agent: 'claude',
+        to_agent: 'codex',
+        content: 'directed',
+      },
+    );
+    const notBroadcast = await callError('task_message_claim', {
+      message_observation_id: directedId,
+      session_id: sessionB,
+      agent: 'codex',
+    });
+    expect(notBroadcast.code).toBe(TASK_THREAD_ERROR_CODES.NOT_BROADCAST);
+  });
 });
