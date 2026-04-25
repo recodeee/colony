@@ -69,7 +69,17 @@ export function mcpError(err: unknown): {
 }
 
 export function mcpErrorResponse(
-  code: TaskThreadErrorCode | 'SPEC_TASK_NOT_FOUND' | 'SPEC_CHANGE_NOT_FOUND',
+  code:
+    | TaskThreadErrorCode
+    | 'SPEC_TASK_NOT_FOUND'
+    | 'SPEC_CHANGE_NOT_FOUND'
+    | 'PLAN_INVALID_DEPENDENCY'
+    | 'PLAN_SCOPE_OVERLAP'
+    | 'PLAN_SUBTASK_NOT_FOUND'
+    | 'PLAN_SUBTASK_DEPS_UNMET'
+    | 'PLAN_SUBTASK_NOT_AVAILABLE'
+    | 'PLAN_SUBTASK_NOT_CLAIMED'
+    | 'PLAN_SUBTASK_NOT_YOURS',
   error: string,
 ): {
   content: Array<{ type: 'text'; text: string }>;

@@ -1,0 +1,7 @@
+---
+"@colony/core": minor
+"@colony/mcp-server": minor
+"@colony/worker": minor
+---
+
+Add a plan publication lane on top of the existing task-thread + spec primitives. `task_plan_publish` writes a spec change document and opens one task thread per sub-task on `spec/<slug>/sub-N` branches, linking them via `metadata.parent_plan_slug`. Independent sub-tasks must not share file scopes; sequence overlapping work via `depends_on` (zero-based, must point at earlier indices). `task_plan_list` returns plan-level rollups with sub-task counts (`available | claimed | completed | blocked`) and a `next_available` list of unblocked, unclaimed sub-tasks; filterable by `repo_root`, `only_with_available_subtasks`, and `capability_match`. `task_plan_claim_subtask` claims an available sub-task race-safely (scan-before-stamp inside a SQLite transaction so two concurrent claims serialize through the write lock — first wins, second sees the prior claim observation and rejects with `PLAN_SUBTASK_NOT_AVAILABLE`); on success it joins the caller to the sub-task thread and activates file claims. `task_plan_complete_subtask` releases file claims and stamps a completion observation; downstream sub-tasks become available automatically. New observation kinds: `plan-subtask` (initial advertisement) and `plan-subtask-claim` (lifecycle transitions). New worker route `GET /api/colony/plans` exposes the same rollup to the read-only viewer. No schema migration; the lane composes over existing `task_thread` and `@colony/spec` primitives.

@@ -70,3 +70,12 @@ export {
   type AgentProfile,
   type CandidateScore,
 } from './response-thresholds.js';
+export {
+  areDepsMet,
+  listPlans,
+  readSubtaskByBranch,
+  type ListPlansOptions,
+  type PlanInfo,
+  type SubtaskInfo,
+  type SubtaskStatus,
+} from './plan.js';
