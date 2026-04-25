@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expand } from '@colony/compress';
 import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
-import { type HivemindOptions, MemoryStore, readHivemind } from '@colony/core';
+import { type HivemindOptions, MemoryStore, listPlans, readHivemind } from '@colony/core';
 import { createEmbedder } from '@colony/embedding';
 import { isMainEntry, removePidFile, writePidFile } from '@colony/process';
 import { serve } from '@hono/node-server';
@@ -113,6 +113,21 @@ export function buildApp(
         ts: r.ts,
       })),
     });
+  });
+
+  app.get('/api/colony/plans', (c) => {
+    const repoRoot = c.req.query('repo_root');
+    const onlyAvailable = c.req.query('only_with_available_subtasks') === 'true';
+    const capability = c.req.query('capability_match');
+    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined;
+    return c.json(
+      listPlans(store, {
+        ...(repoRoot ? { repo_root: repoRoot } : {}),
+        ...(onlyAvailable ? { only_with_available_subtasks: true } : {}),
+        ...(capability ? { capability_match: capability } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    );
   });
 
   app.get('/api/sessions/:id/observations', (c) => {

@@ -687,6 +687,109 @@ Validate, three-way-merge, and archive an in-flight change. Atomic: either the a
 
 `strategy` ∈ `three_way | refuse_on_conflict | last_writer_wins`. Returns `{ status, archived_path, merged_root_hash, conflicts, applied }`. On `refuse_on_conflict` with real conflicts, the call returns `status: 'refused'` and `isError: true` so the caller sees the conflict set without committing.
 
+## `task_plan_publish`
+
+Publish a multi-task plan as a spec change with one task thread per sub-task. Sub-tasks live on `spec/<slug>/sub-N` branches and link back via `metadata.parent_plan_slug`. The originating agent does **not** auto-join sub-tasks — publishing is advertising, not claiming.
+
+```json
+{
+  "name": "task_plan_publish",
+  "input": {
+    "repo_root": "/abs/repo",
+    "slug": "add-widget-page",
+    "session_id": "sess_abc",
+    "agent": "claude",
+    "title": "Add widget page",
+    "problem": "No widget page exists yet; users have no entry point.",
+    "acceptance_criteria": ["Widget page renders", "Widget API returns rows"],
+    "subtasks": [
+      {
+        "title": "Build widget API",
+        "description": "Add GET /api/widgets that returns rows.",
+        "file_scope": ["apps/api/src/widgets.ts"],
+        "capability_hint": "api_work"
+      },
+      {
+        "title": "Build widget page",
+        "description": "Render the widget list with a card per row.",
+        "file_scope": ["apps/frontend/src/pages/widgets.tsx"],
+        "depends_on": [0],
+        "capability_hint": "ui_work"
+      }
+    ]
+  }
+}
+```
+
+Validation:
+
+- `subtasks` must contain at least 2 entries; for a single task use `task_thread` directly.
+- `depends_on` indices are zero-based and must point to **earlier** indices (cycle prevention).
+- Independent sub-tasks (no `depends_on` chain between them) cannot share `file_scope` entries. To overlap files, sequence the work via `depends_on`.
+
+Returns `{ plan_slug, spec_task_id, spec_change_path, subtasks: [{ subtask_index, branch, task_id, title }] }`. Errors: `PLAN_INVALID_DEPENDENCY`, `PLAN_SCOPE_OVERLAP`.
+
+## `task_plan_list`
+
+List published plans with a sub-task rollup.
+
+```json
+{
+  "name": "task_plan_list",
+  "input": {
+    "repo_root": "/abs/repo",
+    "only_with_available_subtasks": true,
+    "capability_match": "ui_work",
+    "limit": 25
+  }
+}
+```
+
+Returns `[{ plan_slug, repo_root, spec_task_id, title, created_at, subtask_counts: { available, claimed, completed, blocked }, subtasks: [...], next_available: [...] }]`. `next_available` is the list of sub-tasks whose status is `available` **and** whose `depends_on` chain is fully `completed`. `capability_match` filters plans where at least one sub-task in `next_available` has the matching `capability_hint`.
+
+## `task_plan_claim_subtask`
+
+Claim an available sub-task. The handler runs scan-before-stamp inside a SQLite transaction so two concurrent claims serialize through the write lock; the first commit wins, the second sees the prior claim observation and rejects.
+
+```json
+{
+  "name": "task_plan_claim_subtask",
+  "input": {
+    "plan_slug": "add-widget-page",
+    "subtask_index": 0,
+    "session_id": "sess_def",
+    "agent": "codex"
+  }
+}
+```
+
+On success: joins the caller to the sub-task thread and activates file claims for every entry in the sub-task `file_scope`. Returns `{ task_id, branch, file_scope }`. Errors: `PLAN_SUBTASK_NOT_FOUND`, `PLAN_SUBTASK_DEPS_UNMET`, `PLAN_SUBTASK_NOT_AVAILABLE`.
+
+## `task_plan_complete_subtask`
+
+Mark your claimed sub-task complete. Releases the sub-task file claims and stamps a `plan-subtask-claim` observation with `status: 'completed'`. Downstream sub-tasks (those whose `depends_on` includes this one) become available automatically — `task_plan_list` will surface them in `next_available` on the next read.
+
+```json
+{
+  "name": "task_plan_complete_subtask",
+  "input": {
+    "plan_slug": "add-widget-page",
+    "subtask_index": 0,
+    "session_id": "sess_def",
+    "summary": "Widget API landed: GET /api/widgets serving rows."
+  }
+}
+```
+
+Returns `{ status: 'completed' }`. Errors: `PLAN_SUBTASK_NOT_FOUND`, `PLAN_SUBTASK_NOT_CLAIMED`, `PLAN_SUBTASK_NOT_YOURS`.
+
+## Plan observation kinds
+
+The lane introduces two observation kinds on the sub-task threads. They are written through `MemoryStore.addObservation`, so content is compressed and `metadata` carries the structured payload.
+
+- `plan-subtask` — the initial advertisement, one per sub-task at publish time. `metadata` carries `parent_plan_slug`, `parent_plan_title`, `parent_spec_task_id`, `subtask_index`, `file_scope`, `depends_on`, `capability_hint`, and an initial `status: 'available'`.
+- `plan-subtask-claim` — every lifecycle transition (claim, complete). `metadata.status` is the new state; `metadata.session_id` and `metadata.agent` identify the actor. The latest `plan-subtask-claim` observation by timestamp is authoritative.
+
 ## Contract stability
 
 Fields may be added. Existing fields will not be removed or renamed within a minor version.
