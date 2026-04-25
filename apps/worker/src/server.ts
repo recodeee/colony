@@ -118,7 +118,20 @@ export function buildApp(
   app.get('/api/sessions/:id/observations', (c) => {
     const id = c.req.param('id');
     const limit = Number(c.req.query('limit') ?? 200);
-    const rows = store.timeline(id, undefined, limit);
+    const aroundRaw = c.req.query('around');
+    const around = aroundRaw !== undefined ? Number(aroundRaw) : undefined;
+    const aroundId =
+      around !== undefined && Number.isFinite(around) && around > 0 ? around : undefined;
+    // Storage.timeline filters by session_id but uses aroundId as a raw numeric
+    // anchor — passing an id from a different session won't bleed foreign rows
+    // in, but it WILL silently slice this session's history at the wrong
+    // position. Reject the foreign anchor up front instead so the response
+    // either centres on a real anchor or returns [].
+    if (aroundId !== undefined) {
+      const anchor = store.storage.getObservation(aroundId);
+      if (!anchor || anchor.session_id !== id) return c.json([]);
+    }
+    const rows = store.timeline(id, aroundId, limit);
     return c.json(rows.map((r) => ({ ...r, content: expand(r.content) })));
   });
 

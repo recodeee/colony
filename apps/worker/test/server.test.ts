@@ -176,6 +176,40 @@ describe('worker HTTP', () => {
     expect(rows.some((r) => r.content.includes('/etc/caveman.conf'))).toBe(true);
   });
 
+  it('GET /api/sessions/:id/observations honours ?around for paging within a session', async () => {
+    const { sessionId, a } = seed();
+    const res = await app.request(`/api/sessions/${sessionId}/observations?around=${a}&limit=2`);
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<{ id: number }>;
+    expect(rows.map((r) => r.id)).toContain(a);
+  });
+
+  it('GET /api/sessions/:id/observations with ?around pointing at a foreign-session id returns [] (no silent cross-session bleed)', async () => {
+    const { a } = seed();
+    store.startSession({ id: 's2', ide: 'codex', cwd: '/tmp' });
+    const foreign = store.addObservation({
+      session_id: 's2',
+      kind: 'note',
+      content: 'lives in s2',
+    });
+    expect(foreign).not.toBe(a);
+
+    // around=foreign-id while session=s1 must NOT spill s2's row into s1's
+    // window — Storage.timeline filters by session_id, so the result is [].
+    const res = await app.request(`/api/sessions/s1/observations?around=${foreign}&limit=10`);
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<{ id: number; session_id: string }>;
+    expect(rows).toEqual([]);
+  });
+
+  it('GET /api/sessions/:id/observations ignores a non-numeric ?around value', async () => {
+    seed();
+    const res = await app.request('/api/sessions/s1/observations?around=garbage');
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<unknown>;
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
   it('GET /api/search returns matching observations', async () => {
     seed();
     const res = await app.request('/api/search?q=config');

@@ -451,6 +451,50 @@ Mark a message as read. Idempotent — re-marking a read or replied message is a
 
 Errors include `{ code, error }` with stable codes like `NOT_MESSAGE`, `TASK_MISMATCH`, or `OBSERVATION_NOT_ON_TASK`.
 
+## `recall_session`
+
+Pull a compact timeline of a past session (your own or another agent's) and audit the recall as a `kind: 'recall'` observation in the calling session. Use this when you need to stand on context from an earlier lane without pasting bodies into your current session.
+
+```json
+{
+  "name": "recall_session",
+  "input": {
+    "target_session_id": "codex-abc-123",
+    "current_session_id": "claude-now-789",
+    "around_id": 4421,
+    "limit": 25
+  }
+}
+```
+
+`target_session_id` is the session whose memory you want to read. `current_session_id` is **your** session — it must already exist (the tool will not auto-create it). `around_id` centres the window on a specific observation id; `limit` caps the count (default 20, max 100).
+
+Returns:
+
+```json
+{
+  "recall_observation_id": 9012,
+  "session": { "id": "codex-abc-123", "ide": "codex", "cwd": "/repo", "started_at": 1714000000000, "ended_at": null },
+  "observations": [{ "id": 4418, "kind": "edit", "ts": 1714000000123 }, ...]
+}
+```
+
+Progressive disclosure: `observations` carries IDs only — fetch full bodies via `get_observations(ids[])`. The `recall_observation_id` is the audit row written into your current session, with metadata:
+
+```json
+{
+  "recalled_session_id": "codex-abc-123",
+  "owner_ide": "codex",
+  "observation_ids": [4418, 4419, 4420, 4421, 4422],
+  "around_id": 4421,
+  "limit": 25
+}
+```
+
+Wire contract: `kind: 'recall'`, plus `metadata.recalled_session_id`, `metadata.owner_ide`, and `metadata.observation_ids`. UI surfaces and search filters can key off these fields. `owner_ide` falls back to `inferIdeFromSessionId(target_session_id)` when the sessions row lists `ide` as `unknown`.
+
+Errors include `{ "code": "SESSION_NOT_FOUND", "error": "..." }` when either `target_session_id` or `current_session_id` is missing — the tool refuses to silently materialise a phantom session via `MemoryStore.ensureSession`.
+
 ## `attention_inbox`
 
 Compact list of what needs the caller's attention: pending handoffs, pending wakes, stalled lanes, and recent other-session file claims. Fetch full bodies via `get_observations`.

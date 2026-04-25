@@ -56,6 +56,7 @@ describe('MCP server', () => {
       'hivemind',
       'hivemind_context',
       'list_sessions',
+      'recall_session',
       'search',
       'spec_archive',
       'spec_build_context',
