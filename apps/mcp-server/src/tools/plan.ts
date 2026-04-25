@@ -1,11 +1,12 @@
 import {
+  type MemoryStore,
   type SubtaskInfo,
   TaskThread,
   areDepsMet,
   listPlans,
   readSubtaskByBranch,
 } from '@colony/core';
-import { SpecRepository } from '@colony/spec';
+import { SpecRepository, SyncEngine, parseSpec, serializeSpec } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
@@ -59,6 +60,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .min(2)
         .max(20)
         .describe('At least 2 sub-tasks — if it is one task, use task_thread directly.'),
+      auto_archive: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true, the parent spec change auto-archives via three-way merge after the last sub-task completes. Defaults to false because silent state change after the final completion is risky if the merged spec has not been verified — opt in per plan once you trust the lane. Conflicts block auto-archive (surface as a plan-archive-blocked observation) instead of forcing.',
+        ),
     },
     async (args) => {
       for (let i = 0; i < args.subtasks.length; i++) {
@@ -89,6 +96,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
         session_id: args.session_id,
         agent: args.agent,
         proposal,
+      });
+
+      // Stamp plan-level config on the parent spec task. Read back at
+      // completion time to decide whether to auto-archive. A separate
+      // observation (rather than encoding the flag on every sub-task)
+      // means lifecycle policy lives in one place and can grow more
+      // fields later without touching sub-task metadata.
+      store.addObservation({
+        session_id: args.session_id,
+        task_id: opened.task_id,
+        kind: 'plan-config',
+        content: `plan ${args.slug} config: auto_archive=${args.auto_archive ?? false}`,
+        metadata: {
+          plan_slug: args.slug,
+          auto_archive: args.auto_archive ?? false,
+        },
       });
 
       const subtaskThreads = args.subtasks.map((subtask, index) => {
@@ -317,11 +340,166 @@ export function register(server: McpServer, ctx: ToolContext): void {
         });
       });
 
+      // Auto-archive: when this completion was the last outstanding sub-task
+      // and the plan opted in at publish time, three-way-merge the change
+      // and archive it. Failures are non-fatal and surface as observations
+      // on the parent spec task rather than tearing down the completion.
+      const autoArchive = runAutoArchiveIfReady(store, {
+        plan_slug: args.plan_slug,
+        parent_spec_task_id: located.info.parent_spec_task_id,
+        session_id: args.session_id,
+      });
+
       return {
-        content: [{ type: 'text', text: JSON.stringify({ status: 'completed' }) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              status: 'completed',
+              auto_archive: autoArchive,
+            }),
+          },
+        ],
       };
     },
   );
+}
+
+interface AutoArchiveOutcome {
+  status: 'archived' | 'blocked' | 'error' | 'skipped';
+  reason?: string;
+  archived_path?: string;
+  merged_root_hash?: string;
+  applied?: number;
+  conflicts?: number;
+}
+
+function runAutoArchiveIfReady(
+  store: MemoryStore,
+  args: {
+    plan_slug: string;
+    parent_spec_task_id: number | null;
+    session_id: string;
+  },
+): AutoArchiveOutcome {
+  if (args.parent_spec_task_id == null) {
+    return { status: 'skipped', reason: 'no parent spec task linkage on sub-task' };
+  }
+
+  const config = readPlanConfig(store, args.parent_spec_task_id);
+  if (!config?.auto_archive) {
+    return { status: 'skipped', reason: 'auto_archive disabled' };
+  }
+
+  // Aggregate sibling sub-task statuses. The core `readSubtask` helper
+  // already resolves the claim/complete race with a terminal-state-wins
+  // rule, so a freshly-completed sub-task surfaces as `completed` here
+  // even when the prior `claimed` observation shares its millisecond
+  // timestamp.
+  const allTasks = store.storage.listTasks(2000);
+  const siblingBranchPrefix = `spec/${args.plan_slug}/sub-`;
+  const siblingTasks = allTasks.filter((t) => t.branch.startsWith(siblingBranchPrefix));
+  const siblingInfos = siblingTasks
+    .map((t) => readSubtaskByBranch(store, t.branch))
+    .filter((s): s is { task_id: number; info: SubtaskInfo } => s !== null)
+    .map((s) => s.info);
+  if (siblingInfos.length === 0) {
+    return { status: 'skipped', reason: 'no sub-tasks found' };
+  }
+  const allDone = siblingInfos.every((s) => s.status === 'completed');
+  if (!allDone) {
+    return { status: 'skipped', reason: 'sub-tasks still outstanding' };
+  }
+
+  const parentTask = allTasks.find((t) => t.id === args.parent_spec_task_id);
+  if (!parentTask) {
+    return { status: 'skipped', reason: 'parent spec task not found' };
+  }
+
+  try {
+    const repo = new SpecRepository({ repoRoot: parentTask.repo_root, store });
+    const currentRoot = repo.readRoot();
+    const change = repo.readChange(args.plan_slug);
+    const baseRoot =
+      currentRoot.rootHash === change.baseRootHash
+        ? currentRoot
+        : parseSpec(serializeSpec(currentRoot));
+    const engine = new SyncEngine('three_way');
+    const merge = engine.merge(currentRoot, baseRoot, change);
+
+    if (!merge.clean) {
+      store.addObservation({
+        session_id: args.session_id,
+        task_id: args.parent_spec_task_id,
+        kind: 'plan-archive-blocked',
+        content: `plan ${args.plan_slug} ready to archive but ${merge.conflicts.length} conflict(s) block the merge`,
+        metadata: {
+          plan_slug: args.plan_slug,
+          conflicts: merge.conflicts,
+          applied: merge.applied,
+        },
+      });
+      return {
+        status: 'blocked',
+        reason: 'three-way merge conflicts',
+        conflicts: merge.conflicts.length,
+        applied: merge.applied,
+      };
+    }
+
+    repo.writeRoot(merge.spec, {
+      session_id: args.session_id,
+      agent: 'plan-system',
+      reason: `Auto-archive ${args.plan_slug}: all ${siblingInfos.length} sub-tasks completed`,
+    });
+    const archivedPath = repo.archiveChange(args.plan_slug);
+
+    store.addObservation({
+      session_id: args.session_id,
+      task_id: args.parent_spec_task_id,
+      kind: 'plan-archived',
+      content: `plan ${args.plan_slug} auto-archived after all sub-tasks completed`,
+      metadata: {
+        plan_slug: args.plan_slug,
+        archived_path: archivedPath,
+        merged_root_hash: merge.spec.rootHash,
+        applied: merge.applied,
+      },
+    });
+    return {
+      status: 'archived',
+      archived_path: archivedPath,
+      merged_root_hash: merge.spec.rootHash,
+      applied: merge.applied,
+      conflicts: 0,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    store.addObservation({
+      session_id: args.session_id,
+      task_id: args.parent_spec_task_id,
+      kind: 'plan-archive-error',
+      content: `plan ${args.plan_slug} auto-archive failed: ${message}`,
+      metadata: { plan_slug: args.plan_slug, error: message },
+    });
+    return { status: 'error', reason: message };
+  }
+}
+
+function readPlanConfig(
+  store: MemoryStore,
+  parent_task_id: number,
+): { auto_archive: boolean } | null {
+  const rows = store.storage.taskObservationsByKind(parent_task_id, 'plan-config', 100);
+  // taskObservationsByKind returns DESC by ts; latest config wins.
+  const latest = rows[0];
+  if (!latest?.metadata) return null;
+  try {
+    const parsed = JSON.parse(latest.metadata) as { auto_archive?: unknown };
+    return { auto_archive: Boolean(parsed.auto_archive) };
+  } catch {
+    return null;
+  }
 }
 
 function detectScopeOverlap(

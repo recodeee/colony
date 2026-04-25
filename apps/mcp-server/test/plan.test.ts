@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -327,5 +327,79 @@ describe('task_plan_complete_subtask', () => {
       summary: 'nothing claimed',
     });
     expect(err.code).toBe('PLAN_SUBTASK_NOT_CLAIMED');
+  });
+});
+
+describe('task_plan auto-archive', () => {
+  async function claimAndComplete(slug: string, index: number, sessionId: string, agent: string) {
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: slug,
+      subtask_index: index,
+      session_id: sessionId,
+      agent,
+    });
+    return call<{ status: string; auto_archive: { status: string; reason?: string } }>(
+      'task_plan_complete_subtask',
+      {
+        plan_slug: slug,
+        subtask_index: index,
+        session_id: sessionId,
+        summary: `sub-${index} done`,
+      },
+    );
+  }
+
+  it('archives the change when the last sub-task completes and auto_archive is true', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({ slug: 'auto-archive-on', auto_archive: true }),
+    );
+
+    // First completion → still has outstanding work, no archive yet.
+    const first = await claimAndComplete('auto-archive-on', 0, 'B', 'codex');
+    expect(first.status).toBe('completed');
+    expect(first.auto_archive.status).toBe('skipped');
+    expect(first.auto_archive.reason).toMatch(/outstanding/);
+    expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-on/CHANGE.md'))).toBe(true);
+
+    // Last completion → archive runs.
+    const second = await claimAndComplete('auto-archive-on', 1, 'C', 'claude');
+    expect(second.status).toBe('completed');
+    expect(second.auto_archive.status).toBe('archived');
+    // Change moved to openspec/archive/<date>-<slug>/CHANGE.md
+    expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-on/CHANGE.md'))).toBe(false);
+  });
+
+  it('does not archive when auto_archive is omitted (default off)', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({ slug: 'auto-archive-default-off' }),
+    );
+    await claimAndComplete('auto-archive-default-off', 0, 'B', 'codex');
+    const last = await claimAndComplete('auto-archive-default-off', 1, 'C', 'claude');
+    expect(last.auto_archive.status).toBe('skipped');
+    expect(last.auto_archive.reason).toMatch(/disabled/);
+    // CHANGE.md stays in openspec/changes/.
+    expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-default-off/CHANGE.md'))).toBe(
+      true,
+    );
+  });
+
+  it('records a plan-archive-error observation when archive throws', async () => {
+    // Force a failure path: publish, complete sub-0, then delete the
+    // CHANGE.md file before the last completion. readChange will throw.
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({ slug: 'auto-archive-broken', auto_archive: true }),
+    );
+    await claimAndComplete('auto-archive-broken', 0, 'B', 'codex');
+    rmSync(join(repoRoot, 'openspec/changes/auto-archive-broken/CHANGE.md'), {
+      force: true,
+    });
+    const last = await claimAndComplete('auto-archive-broken', 1, 'C', 'claude');
+    // Completion still succeeds — the failure is recorded as an observation,
+    // not propagated as a tool error.
+    expect(last.status).toBe('completed');
+    expect(last.auto_archive.status).toBe('error');
   });
 });
