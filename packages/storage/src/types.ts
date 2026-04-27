@@ -75,6 +75,28 @@ export interface TaskClaimRow {
   claimed_at: number;
 }
 
+export interface TaskLinkRow {
+  low_id: number;
+  high_id: number;
+  created_by: string;
+  created_at: number;
+  note: string | null;
+}
+
+export interface NewTaskLink {
+  task_id_a: number;
+  task_id_b: number;
+  created_by: string;
+  note?: string;
+}
+
+export interface LinkedTask {
+  task_id: number;
+  linked_at: number;
+  linked_by: string;
+  note: string | null;
+}
+
 export interface PheromoneRow {
   task_id: number;
   file_path: string;

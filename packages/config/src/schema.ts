@@ -6,6 +6,12 @@ export type CompressionIntensity = z.infer<typeof CompressionIntensity>;
 export const EmbeddingProvider = z.enum(['local', 'ollama', 'openai', 'none']);
 export type EmbeddingProvider = z.infer<typeof EmbeddingProvider>;
 
+export const NotifyProvider = z.enum(['desktop', 'none']);
+export type NotifyProvider = z.infer<typeof NotifyProvider>;
+
+export const NotifyLevel = z.enum(['info', 'warn', 'error']);
+export type NotifyLevel = z.infer<typeof NotifyLevel>;
+
 export const SettingsSchema = z
   .object({
     dataDir: z
@@ -110,6 +116,19 @@ export const SettingsSchema = z
       .record(z.string(), z.boolean())
       .default({})
       .describe('Installed IDE integrations (set by `colony install`).'),
+    notify: z
+      .object({
+        provider: NotifyProvider.default('none').describe(
+          'Desktop notification provider. desktop = native (osascript on macOS, notify-send on Linux); none = silent. Default off so colony is unobtrusive on a fresh install.',
+        ),
+        minLevel: NotifyLevel.default('warn').describe(
+          'Drop messages below this level. error surfaces only failures; warn includes degraded states like a missing embedder.',
+        ),
+      })
+      .default({ provider: 'none', minLevel: 'warn' })
+      .describe(
+        'Background notifications. The worker uses this to surface conditions you would otherwise only see by reading stderr or running `colony status`.',
+      ),
     foraging: z
       .object({
         enabled: z

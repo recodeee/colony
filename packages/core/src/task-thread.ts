@@ -1,4 +1,11 @@
-import type { ObservationRow, TaskClaimRow, TaskParticipantRow, TaskRow } from '@colony/storage';
+import type {
+  LinkedTask,
+  ObservationRow,
+  TaskClaimRow,
+  TaskLinkRow,
+  TaskParticipantRow,
+  TaskRow,
+} from '@colony/storage';
 import type { MemoryStore } from './memory-store.js';
 import {
   type AgentProfile,
@@ -322,6 +329,34 @@ export class TaskThread {
 
   claims(): TaskClaimRow[] {
     return this.store.storage.listClaims(this.task_id);
+  }
+
+  /**
+   * Tasks linked to this one, in either direction. Cross-task links let an
+   * agent on a "frontend" task see decisions/blockers from a paired
+   * "backend" task without copy-paste — the inbox / preface scans
+   * linkedTimeline() the same way it scans this task's own timeline.
+   */
+  linkedTasks(): LinkedTask[] {
+    return this.store.storage.linkedTasks(this.task_id);
+  }
+
+  /**
+   * Symmetric link operation. Either side can call; the storage layer
+   * normalises (low_id, high_id) so re-links are idempotent. Note is
+   * optional and renders next to the link in attention prefaces.
+   */
+  link(other_task_id: number, created_by: string, note?: string): TaskLinkRow {
+    return this.store.storage.linkTasks({
+      task_id_a: this.task_id,
+      task_id_b: other_task_id,
+      created_by,
+      ...(note !== undefined ? { note } : {}),
+    });
+  }
+
+  unlink(other_task_id: number): boolean {
+    return this.store.storage.unlinkTasks(this.task_id, other_task_id);
   }
 
   timeline(limit = 50): ObservationRow[] {

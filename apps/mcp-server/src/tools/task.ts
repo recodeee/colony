@@ -104,4 +104,72 @@ export function register(server: McpServer, ctx: ToolContext): void {
       return { content: [{ type: 'text', text: JSON.stringify({ observation_id: id }) }] };
     },
   );
+
+  // --- task links ---
+  // Cross-task edges. Linking two tasks lets each side see the other's
+  // timeline + decisions in their own preface, without copy-paste. The
+  // storage layer stores one row per unordered pair; the MCP surface is
+  // symmetric so callers don't need to think about ordering.
+
+  server.tool(
+    'task_link',
+    'Link two tasks bidirectionally so each side sees the other in attention prefaces. Idempotent.',
+    {
+      task_id: z.number().int().positive(),
+      other_task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      note: z.string().max(280).optional(),
+    },
+    async ({ task_id, other_task_id, session_id, note }) => {
+      if (task_id === other_task_id) {
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ error: 'cannot link a task to itself' }) },
+          ],
+          isError: true,
+        };
+      }
+      const thread = new TaskThread(store, task_id);
+      const link = thread.link(other_task_id, session_id, note);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              low_id: link.low_id,
+              high_id: link.high_id,
+              created_at: link.created_at,
+              created_by: link.created_by,
+              note: link.note,
+            }),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    'task_unlink',
+    'Drop the bidirectional link between two tasks. Returns { removed: boolean }.',
+    {
+      task_id: z.number().int().positive(),
+      other_task_id: z.number().int().positive(),
+    },
+    async ({ task_id, other_task_id }) => {
+      const thread = new TaskThread(store, task_id);
+      const removed = thread.unlink(other_task_id);
+      return { content: [{ type: 'text', text: JSON.stringify({ removed }) }] };
+    },
+  );
+
+  server.tool(
+    'task_links',
+    'List tasks linked to a task. Returns the other side of each edge with link metadata.',
+    { task_id: z.number().int().positive() },
+    async ({ task_id }) => {
+      const thread = new TaskThread(store, task_id);
+      const links = thread.linkedTasks();
+      return { content: [{ type: 'text', text: JSON.stringify(links) }] };
+    },
+  );
 }

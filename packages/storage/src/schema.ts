@@ -164,6 +164,24 @@ CREATE TABLE IF NOT EXISTS agent_profiles (
   updated_at INTEGER NOT NULL
 );
 
+-- Cross-task links: bidirectional edges between two tasks so an agent on
+-- task A can see B's timeline events in their own preface (e.g. frontend
+-- lane needs the backend lane's decisions). Stored once per unordered pair
+-- with low_id < high_id so (A,B) and (B,A) collapse into one row, and
+-- listing is symmetric: linked_to(A) returns B regardless of which side
+-- created the link. Soft-delete is unnecessary — unlinking just drops the
+-- row, the underlying tasks are unaffected.
+CREATE TABLE IF NOT EXISTS task_links (
+  low_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  high_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  note       TEXT,
+  PRIMARY KEY (low_id, high_id),
+  CHECK (low_id < high_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_links_high ON task_links(high_id);
+
 -- Foraging food sources: one row per indexed <repo_root>/examples/<name>.
 -- content_hash is sha256 over (manifest + filetree + key file sizes); the
 -- scanner uses it to skip work on repeat SessionStarts. observation_count
@@ -181,7 +199,7 @@ CREATE TABLE IF NOT EXISTS examples (
 );
 CREATE INDEX IF NOT EXISTS idx_examples_repo ON examples(repo_root);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (7);
+INSERT OR IGNORE INTO schema_version(version) VALUES (8);
 `;
 
 /**

@@ -5,6 +5,7 @@ import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import type {
   AgentProfileRow,
   ExampleRow,
+  LinkedTask,
   NewAgentProfile,
   NewExample,
   NewObservation,
@@ -13,6 +14,7 @@ import type {
   NewReinforcement,
   NewSummary,
   NewTask,
+  NewTaskLink,
   ObservationRow,
   PheromoneRow,
   ProposalRow,
@@ -22,6 +24,7 @@ import type {
   SessionRow,
   SummaryRow,
   TaskClaimRow,
+  TaskLinkRow,
   TaskParticipantRow,
   TaskRow,
 } from './types.js';
@@ -526,6 +529,65 @@ export class Storage {
         'SELECT * FROM task_claims WHERE task_id = ? AND claimed_at > ? ORDER BY claimed_at DESC LIMIT ?',
       )
       .all(task_id, since_ts, limit) as TaskClaimRow[];
+  }
+
+  // --- task links (cross-task edges) ---
+
+  /**
+   * Link two tasks bidirectionally. Stored once with (low_id, high_id) so
+   * order doesn't matter to callers — `linkTasks(A, B)` and `linkTasks(B, A)`
+   * collapse onto the same row. Idempotent: re-linking an existing pair is a
+   * no-op (the original `created_by` / `created_at` / `note` are preserved).
+   * Self-links are rejected — a task linking to itself is meaningless and
+   * indicates a caller bug.
+   */
+  linkTasks(p: NewTaskLink): TaskLinkRow {
+    if (p.task_id_a === p.task_id_b) {
+      throw new Error('cannot link a task to itself');
+    }
+    const [low_id, high_id] =
+      p.task_id_a < p.task_id_b ? [p.task_id_a, p.task_id_b] : [p.task_id_b, p.task_id_a];
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO task_links(low_id, high_id, created_by, created_at, note)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(low_id, high_id, p.created_by, now, p.note ?? null);
+    return this.db
+      .prepare('SELECT * FROM task_links WHERE low_id = ? AND high_id = ?')
+      .get(low_id, high_id) as TaskLinkRow;
+  }
+
+  unlinkTasks(task_id_a: number, task_id_b: number): boolean {
+    if (task_id_a === task_id_b) return false;
+    const [low_id, high_id] =
+      task_id_a < task_id_b ? [task_id_a, task_id_b] : [task_id_b, task_id_a];
+    const info = this.db
+      .prepare('DELETE FROM task_links WHERE low_id = ? AND high_id = ?')
+      .run(low_id, high_id);
+    return info.changes > 0;
+  }
+
+  /**
+   * Tasks linked to `task_id`, regardless of which side originally created
+   * the link. Returns the *other* task on each edge — never `task_id` itself
+   * — and exposes the link's metadata (created_by, created_at, note) so a
+   * preface can render "linked to #42 by claude — 'frontend ↔ backend lane'".
+   */
+  linkedTasks(task_id: number): LinkedTask[] {
+    return this.db
+      .prepare(
+        `SELECT
+           CASE WHEN low_id = ? THEN high_id ELSE low_id END AS task_id,
+           created_at AS linked_at,
+           created_by AS linked_by,
+           note
+         FROM task_links
+         WHERE low_id = ? OR high_id = ?
+         ORDER BY created_at DESC`,
+      )
+      .all(task_id, task_id, task_id) as LinkedTask[];
   }
 
   // --- pheromones (ambient decaying activity trails) ---

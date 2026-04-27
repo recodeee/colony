@@ -175,6 +175,110 @@ describe('tasks', () => {
     expect(recent.map((c) => c.file_path)).toEqual(['fresh.ts']);
   });
 
+  it('linkTasks normalises ordering and is idempotent', () => {
+    seedSessions('s-a');
+    const taskA = storage.findOrCreateTask({
+      title: 'A',
+      repo_root: '/r',
+      branch: 'a',
+      created_by: 's-a',
+    });
+    const taskB = storage.findOrCreateTask({
+      title: 'B',
+      repo_root: '/r',
+      branch: 'b',
+      created_by: 's-a',
+    });
+
+    const first = storage.linkTasks({
+      task_id_a: taskB.id,
+      task_id_b: taskA.id,
+      created_by: 's-a',
+      note: 'frontend ↔ backend',
+    });
+    // Stored canonically with low_id < high_id regardless of caller order.
+    expect(first.low_id).toBeLessThan(first.high_id);
+    expect(first.low_id).toBe(Math.min(taskA.id, taskB.id));
+    expect(first.high_id).toBe(Math.max(taskA.id, taskB.id));
+
+    // Re-linking the same pair (in either order) preserves the original
+    // metadata — no clobber of created_by / note.
+    const second = storage.linkTasks({
+      task_id_a: taskA.id,
+      task_id_b: taskB.id,
+      created_by: 's-other',
+      note: 'overwritten?',
+    });
+    expect(second.created_by).toBe('s-a');
+    expect(second.note).toBe('frontend ↔ backend');
+  });
+
+  it('linkedTasks returns the other side regardless of insertion order', () => {
+    seedSessions('s-a');
+    const a = storage.findOrCreateTask({
+      title: 'A',
+      repo_root: '/r',
+      branch: 'a',
+      created_by: 's-a',
+    });
+    const b = storage.findOrCreateTask({
+      title: 'B',
+      repo_root: '/r',
+      branch: 'b',
+      created_by: 's-a',
+    });
+    const c = storage.findOrCreateTask({
+      title: 'C',
+      repo_root: '/r',
+      branch: 'c',
+      created_by: 's-a',
+    });
+
+    storage.linkTasks({ task_id_a: a.id, task_id_b: b.id, created_by: 's-a' });
+    storage.linkTasks({ task_id_a: c.id, task_id_b: a.id, created_by: 's-a', note: 'paired' });
+
+    const fromA = storage.linkedTasks(a.id);
+    expect(fromA.map((l) => l.task_id).sort()).toEqual([b.id, c.id].sort());
+    const cLink = fromA.find((l) => l.task_id === c.id);
+    expect(cLink?.note).toBe('paired');
+
+    // The link is symmetric — listing from B sees A.
+    expect(storage.linkedTasks(b.id).map((l) => l.task_id)).toEqual([a.id]);
+  });
+
+  it('unlinkTasks reports whether a row was removed', () => {
+    seedSessions('s-a');
+    const a = storage.findOrCreateTask({
+      title: 'A',
+      repo_root: '/r',
+      branch: 'a',
+      created_by: 's-a',
+    });
+    const b = storage.findOrCreateTask({
+      title: 'B',
+      repo_root: '/r',
+      branch: 'b',
+      created_by: 's-a',
+    });
+    storage.linkTasks({ task_id_a: a.id, task_id_b: b.id, created_by: 's-a' });
+    expect(storage.unlinkTasks(b.id, a.id)).toBe(true);
+    expect(storage.unlinkTasks(b.id, a.id)).toBe(false);
+    expect(storage.linkedTasks(a.id)).toEqual([]);
+  });
+
+  it('linkTasks rejects self-links', () => {
+    seedSessions('s-a');
+    const a = storage.findOrCreateTask({
+      title: 'A',
+      repo_root: '/r',
+      branch: 'a',
+      created_by: 's-a',
+    });
+    expect(() =>
+      storage.linkTasks({ task_id_a: a.id, task_id_b: a.id, created_by: 's-a' }),
+    ).toThrow();
+  });
+
   it('reopening an existing database preserves the task schema', () => {
     seedSessions('s-a');
     storage.findOrCreateTask({

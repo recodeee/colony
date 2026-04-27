@@ -5,9 +5,10 @@ import { expand } from '@colony/compress';
 import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
 import { type HivemindOptions, MemoryStore, listPlans, readHivemind } from '@colony/core';
 import { createEmbedder } from '@colony/embedding';
-import { isMainEntry, removePidFile, writePidFile } from '@colony/process';
+import { isMainEntry, notify, removePidFile, writePidFile } from '@colony/process';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
+import { type CaffeinateHandle, startCaffeinate } from './caffeinate.js';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
 import { renderIndex, renderSession } from './viewer.js';
 
@@ -217,10 +218,12 @@ export async function start(): Promise<void> {
   writePidFile(pidFilePath(settings));
 
   let loop: EmbedLoopHandle | undefined;
+  let caffeinate: CaffeinateHandle | undefined;
   const servers: Array<ReturnType<typeof serve>> = [];
 
   const shutdown = async () => {
     removePidFile(pidFilePath(settings));
+    caffeinate?.stop();
     if (loop) await loop.stop();
     for (const s of servers) s.close();
     store.close();
@@ -244,6 +247,18 @@ export async function start(): Promise<void> {
   } catch (err) {
     embedderError = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[colony worker] embedder unavailable: ${embedderError}\n`);
+    notify(
+      {
+        level: 'warn',
+        title: 'colony: embedder unavailable',
+        body: `Semantic search disabled — BM25 still works. (${embedderError})`,
+      },
+      {
+        provider: settings.notify.provider,
+        minLevel: settings.notify.minLevel,
+        log: (line) => process.stderr.write(`${line}\n`),
+      },
+    );
   }
 
   if (embedder) {
@@ -255,6 +270,11 @@ export async function start(): Promise<void> {
         shutdown().finally(() => process.exit(0));
       },
     });
+    // Only hold the idle-sleep assertion while there's actual background work
+    // to protect. If the embedder failed to load we skip caffeinate entirely
+    // — the worker is then effectively just a viewer + state file writer and
+    // doesn't need to keep the laptop awake.
+    caffeinate = startCaffeinate((line) => process.stderr.write(`${line}\n`));
   } else {
     // Still write a minimal state file so `colony status` has something to show.
     writeFileSync(
