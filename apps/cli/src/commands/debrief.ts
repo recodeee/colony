@@ -1,5 +1,5 @@
 import { loadSettings } from '@colony/config';
-import type { ClaimCoverageStats, Storage } from '@colony/storage';
+import type { ClaimCoverageStats, ObservationRow, Storage, TaskRow } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { withStorage } from '../util/store.js';
@@ -60,6 +60,16 @@ interface CoordinationRatioPayload {
   }>;
 }
 
+interface QueenActivityPayload {
+  plans_published_by_queen: number;
+  plans_published_manual: number;
+  queen_subtasks_completed: number;
+  queen_subtasks_stalled: number;
+  queen_subtasks_total: number;
+  queen_subtask_completion_rate: number | null;
+  queen_plan_median_age_minutes: number | null;
+}
+
 const COMMIT_RATIO_COMMIT_EXAMPLES = [
   'task_relay',
   'task_hand_off',
@@ -69,6 +79,8 @@ const COMMIT_RATIO_COMMIT_EXAMPLES = [
 const COMMIT_RATIO_READ_EXAMPLES = ['hivemind_context', 'task_list', 'attention_inbox'];
 const MIRROR_ROW_NOTE =
   '*-mirror rows are passive copies of built-in TaskCreate/TaskUpdate calls attached to task threads.';
+const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
+const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-\d+$/;
 
 /**
  * Section 1 — did agents use the task tools at all?
@@ -315,6 +327,33 @@ function sectionBashCoordinationVolume(ctx: DebriefContext): string[] {
   return lines;
 }
 
+/**
+ * Section 10 — queen activity.
+ *
+ * Plan publish is the adoption proof surface: if queen never publishes
+ * plans, downstream agent boosts and docs cannot matter. This section
+ * classifies plan roots by their publish metadata and rolls up queen
+ * sub-task lifecycle state without requiring a new storage query.
+ */
+export function sectionQueenActivity(ctx: DebriefContext): string[] {
+  const lines = ['', kleur.bold('10. Queen activity')];
+  const payload = queenActivityPayload(ctx);
+  if (payload.plans_published_by_queen === 0) {
+    lines.push(kleur.dim('  No queen activity in window.'));
+    return lines;
+  }
+  lines.push(`  plans_published_by_queen:      ${payload.plans_published_by_queen}`);
+  lines.push(`  plans_published_manual:        ${payload.plans_published_manual}`);
+  lines.push(
+    `  queen_subtask_completion_rate: ${formatCompletionRate(payload)} (${payload.queen_subtasks_completed}/${payload.queen_subtasks_total} completed)`,
+  );
+  lines.push(`  queen_subtasks_stalled:        ${payload.queen_subtasks_stalled}`);
+  lines.push(
+    `  queen_plan_median_age_minutes: ${formatNullableMinutes(payload.queen_plan_median_age_minutes)}`,
+  );
+  return lines;
+}
+
 function claimCoveragePayload(ctx: DebriefContext): ClaimCoveragePayload {
   const stats = ctx.storage.claimCoverageStats(ctx.since);
   const explicitRatio = stats.edit_count > 0 ? stats.explicit_claim_count / stats.edit_count : null;
@@ -380,6 +419,147 @@ function coordinationRatioPayload(ctx: DebriefContext): CoordinationRatioPayload
   };
 }
 
+function queenActivityPayload(ctx: DebriefContext): QueenActivityPayload {
+  const tasks = ctx.storage.listTasks(2000);
+  const subtasksByPlanSlug = new Map<string, TaskRow[]>();
+  for (const task of tasks) {
+    const match = task.branch.match(PLAN_SUBTASK_BRANCH_RE);
+    const slug = match?.[1];
+    if (!slug) continue;
+    const bucket = subtasksByPlanSlug.get(slug) ?? [];
+    bucket.push(task);
+    subtasksByPlanSlug.set(slug, bucket);
+  }
+
+  let plansPublishedByQueen = 0;
+  let plansPublishedManual = 0;
+  let queenSubtasksCompleted = 0;
+  let queenSubtasksStalled = 0;
+  let queenSubtasksTotal = 0;
+  const queenPlanAgesMinutes: number[] = [];
+  const now = Date.now();
+
+  for (const task of tasks) {
+    if (task.created_at < ctx.since) continue;
+    const match = task.branch.match(PLAN_ROOT_BRANCH_RE);
+    const slug = match?.[1];
+    if (!slug) continue;
+
+    const subtaskTasks = subtasksByPlanSlug.get(slug) ?? [];
+    if (subtaskTasks.length === 0) continue;
+
+    const planConfigRows = ctx.storage.taskObservationsByKind(task.id, 'plan-config', 20);
+    const queenPublished = isQueenPublishedPlan(task, planConfigRows);
+    if (queenPublished) {
+      plansPublishedByQueen++;
+      queenPlanAgesMinutes.push(Math.max(0, (now - task.created_at) / 60_000));
+      for (const subtaskTask of subtaskTasks) {
+        const status = planSubtaskStatus(ctx.storage.taskTimeline(subtaskTask.id, 500));
+        if (status === null) continue;
+        queenSubtasksTotal++;
+        if (status === 'completed') queenSubtasksCompleted++;
+        if (status === 'blocked' || status === 'stalled') queenSubtasksStalled++;
+      }
+      continue;
+    }
+
+    if (!isAutoPromotedPlan(planConfigRows)) {
+      plansPublishedManual++;
+    }
+  }
+
+  return {
+    plans_published_by_queen: plansPublishedByQueen,
+    plans_published_manual: plansPublishedManual,
+    queen_subtasks_completed: queenSubtasksCompleted,
+    queen_subtasks_stalled: queenSubtasksStalled,
+    queen_subtasks_total: queenSubtasksTotal,
+    queen_subtask_completion_rate:
+      queenSubtasksTotal > 0 ? queenSubtasksCompleted / queenSubtasksTotal : null,
+    queen_plan_median_age_minutes: median(queenPlanAgesMinutes),
+  };
+}
+
+function isQueenPublishedPlan(task: TaskRow, planConfigRows: ObservationRow[]): boolean {
+  const signals = [task.created_by, ...planConfigRows.flatMap(queenSignalValues)];
+  return signals.some(isQueenSignal);
+}
+
+function isAutoPromotedPlan(planConfigRows: ObservationRow[]): boolean {
+  return planConfigRows.flatMap(queenSignalValues).some((value) => value === 'auto-promoted');
+}
+
+function queenSignalValues(row: ObservationRow): string[] {
+  const metadata = parseJsonObject(row.metadata);
+  const values = [
+    row.session_id,
+    ...stringMetadataValues(metadata, [
+      'source',
+      'source_tool',
+      'origin',
+      'publisher',
+      'published_by',
+      'published_by_agent',
+      'published_via',
+      'planner',
+      'agent',
+      'tool',
+      'created_by_tool',
+      'generated_by',
+      'trigger',
+      'triggered_by',
+      'via',
+    ]),
+  ];
+  if (row.content.includes('queen_plan_goal')) values.push(row.content);
+  return values.map((value) => value.toLowerCase());
+}
+
+function isQueenSignal(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return normalized.includes('queen_plan_goal') || /(^|[^a-z])queen([^a-z]|$)/.test(normalized);
+}
+
+function stringMetadataValues(metadata: Record<string, unknown>, keys: string[]): string[] {
+  return keys.flatMap((key) => {
+    const value = metadata[key];
+    return typeof value === 'string' ? [value] : [];
+  });
+}
+
+function planSubtaskStatus(rows: ObservationRow[]): string | null {
+  const initial = rows.find((row) => row.kind === 'plan-subtask');
+  if (!initial) return null;
+  const claimRows = rows.filter((row) => row.kind === 'plan-subtask-claim');
+  for (const precedence of ['completed', 'stalled', 'blocked', 'claimed'] as const) {
+    if (claimRows.some((row) => parseJsonObject(row.metadata).status === precedence)) {
+      return precedence;
+    }
+  }
+  const initialStatus = parseJsonObject(initial.metadata).status;
+  return typeof initialStatus === 'string' ? initialStatus : 'available';
+}
+
+function parseJsonObject(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid] ?? null;
+  const lower = sorted[mid - 1];
+  const upper = sorted[mid];
+  return lower === undefined || upper === undefined ? null : (lower + upper) / 2;
+}
+
 function debriefJson(ctx: DebriefContext): Record<string, unknown> {
   const sessions = ctx.storage
     .listSessions(200)
@@ -421,6 +601,7 @@ function debriefJson(ctx: DebriefContext): Record<string, unknown> {
     tool_distribution: toolDistribution,
     coordination_ratio: coordinationRatioPayload(ctx),
     bash_coordination_volume: bashCoordinationVolume,
+    queen_activity: queenActivityPayload(ctx),
     timeline: ctx.storage.mixedTimeline(ctx.since, ctx.taskId),
   };
 }
@@ -453,6 +634,7 @@ export function registerDebriefCommand(program: Command): void {
           sectionCoordinationRatio(ctx),
           sectionTimeline(ctx),
           sectionBashCoordinationVolume(ctx),
+          sectionQueenActivity(ctx),
         ];
         for (const s of sections) process.stdout.write(`${s.join('\n')}\n`);
 
@@ -464,6 +646,9 @@ export function registerDebriefCommand(program: Command): void {
           '  • Which failures were missing-tool vs. tool-not-called vs. structural?\n',
         );
         process.stdout.write('  • What was the most valuable moment the system created?\n');
+        process.stdout.write(
+          '  • If queen activity is low, check whether any agent or human is actually invoking queen_plan_goal — the substrate works only if called.\n',
+        );
       });
     });
 }
@@ -474,6 +659,16 @@ function formatRatio(ratio: number | null): string {
 
 function formatPercentRatio(ratio: number | null): string {
   return ratio === null ? 'n/a' : `${Math.round(ratio * 100)}%`;
+}
+
+function formatCompletionRate(payload: QueenActivityPayload): string {
+  return payload.queen_subtask_completion_rate === null
+    ? 'n/a'
+    : formatPercentRatio(payload.queen_subtask_completion_rate);
+}
+
+function formatNullableMinutes(minutes: number | null): string {
+  return minutes === null ? 'n/a' : String(Math.round(minutes));
 }
 
 function formatKindCounts(rows: ClaimCoverageStats['explicit_claim_kinds']): string {

@@ -42,6 +42,30 @@ interface TestBashCoordinationVolume {
   top_files_by_file_op: Array<{ file_path: string; count: number }>;
 }
 
+interface TestTask {
+  id: number;
+  title: string;
+  repo_root: string;
+  branch: string;
+  status: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+interface TestObservation {
+  id: number;
+  session_id: string;
+  kind: string;
+  content: string;
+  compressed: 0 | 1;
+  intensity: string | null;
+  ts: number;
+  metadata: string | null;
+  task_id: number | null;
+  reply_to: number | null;
+}
+
 beforeEach(() => {
   mocks.loadSettings.mockClear();
   mocks.withStorage.mockReset();
@@ -49,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   kleur.enabled = true;
 });
@@ -201,6 +226,37 @@ describe('debrief --json', () => {
     });
     expect(json.bash_coordination_volume).toEqual(bashCoordinationVolume);
   });
+
+  it('emits queen activity payloads', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-28T12:00:00Z'));
+    const seeded = queenActivitySeed(Date.now());
+    const storage = fakeStorage(activity({ commits: 0, reads: 0 }), seeded);
+    mocks.withStorage.mockImplementation(
+      async (_settings: unknown, run: (storage: unknown) => unknown) => run(storage),
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerDebriefCommand(program);
+
+    await program.parseAsync(['node', 'test', 'debrief', '--json'], { from: 'node' });
+
+    const json = JSON.parse(output.join(''));
+    expect(json.queen_activity).toMatchObject({
+      plans_published_by_queen: 2,
+      plans_published_manual: 1,
+      queen_subtasks_completed: 2,
+      queen_subtasks_stalled: 1,
+      queen_subtasks_total: 3,
+      queen_plan_median_age_minutes: 60,
+    });
+    expect(json.queen_activity.queen_subtask_completion_rate).toBeCloseTo(2 / 3);
+  });
 });
 
 describe('debrief output', () => {
@@ -227,6 +283,63 @@ describe('debrief output', () => {
       '*-mirror rows are passive copies of built-in TaskCreate/TaskUpdate calls attached to task threads.',
     );
   });
+
+  it('renders queen activity counts and the queen invocation prompt', async () => {
+    kleur.enabled = false;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-28T12:00:00Z'));
+    const storage = fakeStorage(activity({ commits: 0, reads: 0 }), queenActivitySeed(Date.now()));
+    mocks.withStorage.mockImplementation(
+      async (_settings: unknown, run: (storage: unknown) => unknown) => run(storage),
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerDebriefCommand(program);
+
+    await program.parseAsync(['node', 'test', 'debrief'], { from: 'node' });
+
+    const text = output.join('');
+    expect(text).toContain('10. Queen activity');
+    expect(text).toContain('plans_published_by_queen:      2');
+    expect(text).toContain('plans_published_manual:        1');
+    expect(text).toContain('queen_subtask_completion_rate: 67% (2/3 completed)');
+    expect(text).toContain('queen_subtasks_stalled:        1');
+    expect(text).toContain('queen_plan_median_age_minutes: 60');
+    expect(text).toContain(
+      '• If queen activity is low, check whether any agent or human is actually invoking queen_plan_goal — the substrate works only if called.',
+    );
+  });
+
+  it('prints a single no-activity line and skips queen metrics when there are no queen plans', async () => {
+    kleur.enabled = false;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-28T12:00:00Z'));
+    const storage = fakeStorage(activity({ commits: 0, reads: 0 }), manualPlanSeed(Date.now()));
+    mocks.withStorage.mockImplementation(
+      async (_settings: unknown, run: (storage: unknown) => unknown) => run(storage),
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerDebriefCommand(program);
+
+    await program.parseAsync(['node', 'test', 'debrief'], { from: 'node' });
+
+    const text = output.join('');
+    expect(text.match(/No queen activity in window\./g)).toHaveLength(1);
+    expect(text).not.toContain('plans_published_by_queen:');
+    expect(text).not.toContain('queen_subtask_completion_rate:');
+    expect(text).not.toContain('queen_plan_median_age_minutes:');
+  });
 });
 
 function renderSection(coordinationActivity: TestCoordinationActivity): string {
@@ -241,10 +354,13 @@ function fakeStorage(
   opts: {
     bashCoordinationVolume?: TestBashCoordinationVolume;
     claimCoverage?: TestClaimCoverage;
+    observations?: TestObservation[];
+    tasks?: TestTask[];
     toolDistribution?: Array<{ tool: string; count: number }>;
   } = {},
 ): never {
   const claimCoverage = opts.claimCoverage ?? emptyClaimCoverage();
+  const observations = opts.observations ?? [];
   return {
     coordinationActivity: vi.fn(() => coordinationActivity),
     listSessions: vi.fn(() =>
@@ -276,6 +392,7 @@ function fakeStorage(
       pending: 0,
     })),
     handoffAcceptLatencies: vi.fn(() => []),
+    listTasks: vi.fn(() => opts.tasks ?? []),
     toolUsageBySession: vi.fn(() => []),
     toolInvocationDistribution: vi.fn(() => opts.toolDistribution ?? []),
     bashCoordinationVolume: vi.fn(
@@ -286,8 +403,93 @@ function fakeStorage(
           top_files_by_file_op: [],
         },
     ),
+    taskObservationsByKind: vi.fn((taskId: number, kind: string, limit = 100) =>
+      observations
+        .filter((row) => row.task_id === taskId && row.kind === kind)
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, limit),
+    ),
+    taskTimeline: vi.fn((taskId: number, limit = 50) =>
+      observations
+        .filter((row) => row.task_id === taskId)
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, limit),
+    ),
     mixedTimeline: vi.fn(() => []),
   } as never;
+}
+
+function queenActivitySeed(now: number): { tasks: TestTask[]; observations: TestObservation[] } {
+  return {
+    tasks: [
+      testTask(1, 'spec/queen-one', now - 90 * 60_000, 'agent-3'),
+      testTask(2, 'spec/queen-one/sub-0', now - 89 * 60_000, 'agent-3'),
+      testTask(3, 'spec/queen-one/sub-1', now - 88 * 60_000, 'agent-3'),
+      testTask(4, 'spec/queen-two', now - 30 * 60_000, 'planner'),
+      testTask(5, 'spec/queen-two/sub-0', now - 29 * 60_000, 'planner'),
+      testTask(6, 'spec/manual-one', now - 10 * 60_000, 'human'),
+      testTask(7, 'spec/manual-one/sub-0', now - 9 * 60_000, 'human'),
+    ],
+    observations: [
+      testObservation(1, 1, 'plan-config', { source: 'queen_plan_goal' }, now - 90 * 60_000),
+      testObservation(2, 2, 'plan-subtask', { status: 'available' }, now - 89 * 60_000),
+      testObservation(3, 2, 'plan-subtask-claim', { status: 'completed' }, now - 80 * 60_000),
+      testObservation(4, 3, 'plan-subtask', { status: 'available' }, now - 88 * 60_000),
+      testObservation(5, 3, 'plan-subtask-claim', { status: 'blocked' }, now - 70 * 60_000),
+      testObservation(6, 4, 'plan-config', { published_by: 'queen' }, now - 30 * 60_000),
+      testObservation(7, 5, 'plan-subtask', { status: 'available' }, now - 29 * 60_000),
+      testObservation(8, 5, 'plan-subtask-claim', { status: 'completed' }, now - 20 * 60_000),
+      testObservation(9, 6, 'plan-config', {}, now - 10 * 60_000),
+      testObservation(10, 7, 'plan-subtask', { status: 'available' }, now - 9 * 60_000),
+    ],
+  };
+}
+
+function manualPlanSeed(now: number): { tasks: TestTask[]; observations: TestObservation[] } {
+  return {
+    tasks: [
+      testTask(6, 'spec/manual-one', now - 10 * 60_000, 'human'),
+      testTask(7, 'spec/manual-one/sub-0', now - 9 * 60_000, 'human'),
+    ],
+    observations: [
+      testObservation(9, 6, 'plan-config', {}, now - 10 * 60_000),
+      testObservation(10, 7, 'plan-subtask', { status: 'available' }, now - 9 * 60_000),
+    ],
+  };
+}
+
+function testTask(id: number, branch: string, createdAt: number, createdBy: string): TestTask {
+  return {
+    id,
+    title: branch,
+    repo_root: '/repo',
+    branch,
+    status: 'open',
+    created_by: createdBy,
+    created_at: createdAt,
+    updated_at: createdAt,
+  };
+}
+
+function testObservation(
+  id: number,
+  taskId: number,
+  kind: string,
+  metadata: Record<string, unknown>,
+  ts: number,
+): TestObservation {
+  return {
+    id,
+    session_id: 'planner',
+    kind,
+    content: `${kind} ${id}`,
+    compressed: 0,
+    intensity: null,
+    ts,
+    metadata: JSON.stringify(metadata),
+    task_id: taskId,
+    reply_to: null,
+  };
 }
 
 function emptyClaimCoverage(): TestClaimCoverage {
