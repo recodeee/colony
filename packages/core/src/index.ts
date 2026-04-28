@@ -97,3 +97,12 @@ export {
   computeTaskEmbedding,
   getOrComputeTaskEmbedding,
 } from './task-embeddings.js';
+export {
+  classifyStatus,
+  cosineSimilarity,
+  findSimilarTasks,
+  type FindSimilarOptions,
+  type SimilarTask,
+  type TaskStatus,
+} from './similarity-search.js';
+export { ABANDONED_TASK_DAYS, SUGGESTION_THRESHOLDS } from './suggestion-thresholds.js';
