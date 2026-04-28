@@ -499,4 +499,300 @@ describe('TaskThread', () => {
       expect((err as TaskThreadError).code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_CANCELLED);
     }
   });
+
+  it('relay drops sender claims at emit and re-claims them on accept', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.claimFile({ session_id: 'claude', file_path: 'src/api/tasks.ts' });
+    thread.claimFile({ session_id: 'claude', file_path: 'src/viewer.tsx' });
+
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'halfway through replacing auth middleware',
+      base_branch: 'main',
+    });
+
+    // Sender's claims dropped at emit time so a third agent can't grab the
+    // file in the gap before the receiver accepts.
+    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')).toBeUndefined();
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')).toBeUndefined();
+
+    // Snapshot of metadata: inherit_claims captured both files at emit; the
+    // receiver re-claims them through that recipe.
+    const row = store.storage.getObservation(relayId);
+    const meta = JSON.parse(row?.metadata ?? '{}') as {
+      worktree_recipe: { inherit_claims: string[]; fetch_files_at: string | null };
+    };
+    expect(meta.worktree_recipe.inherit_claims.sort()).toEqual([
+      'src/api/tasks.ts',
+      'src/viewer.tsx',
+    ]);
+    expect(meta.worktree_recipe.fetch_files_at).toBeNull();
+
+    thread.acceptRelay(relayId, 'codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')?.session_id).toBe('codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe('codex');
+
+    // Second accept must fail — already accepted.
+    try {
+      thread.acceptRelay(relayId, 'codex');
+      throw new Error('expected second accept to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskThreadError);
+      expect((err as TaskThreadError).code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_ACCEPTED);
+    }
+  });
+
+  it('relay flags untracked files when fetch_files_at is omitted', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    // Seed PostToolUse-shaped tool_use observations so synthesis picks them
+    // up and treats their paths as "edited but maybe uncommitted".
+    store.addObservation({
+      session_id: 'claude',
+      kind: 'tool_use',
+      content: 'Edit input=…',
+      task_id: thread.task_id,
+      metadata: { tool: 'Edit', file_path: 'src/auth.ts' },
+    });
+    store.addObservation({
+      session_id: 'claude',
+      kind: 'tool_use',
+      content: 'Write input=…',
+      task_id: thread.task_id,
+      metadata: { tool: 'Write', file_path: 'src/auth.test.ts' },
+    });
+
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'turn-cap',
+      one_line: 'splitting auth into modules',
+      base_branch: 'main',
+    });
+    const row = store.storage.getObservation(relayId);
+    const meta = JSON.parse(row?.metadata ?? '{}') as {
+      worktree_recipe: { untracked_files_warning: string[]; fetch_files_at: string | null };
+      resumable_state: { last_files_edited: Array<{ file_path: string }> };
+    };
+    expect(meta.worktree_recipe.fetch_files_at).toBeNull();
+    expect(meta.worktree_recipe.untracked_files_warning.sort()).toEqual([
+      'src/auth.test.ts',
+      'src/auth.ts',
+    ]);
+    expect(meta.resumable_state.last_files_edited.map((e) => e.file_path).sort()).toEqual([
+      'src/auth.test.ts',
+      'src/auth.ts',
+    ]);
+
+    // With a sha provided, the warning is empty — receiver can reproduce
+    // the tree from git.
+    const relayId2 = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'turn-cap',
+      one_line: 'committed split',
+      base_branch: 'main',
+      fetch_files_at: 'deadbeef',
+    });
+    const row2 = store.storage.getObservation(relayId2);
+    const meta2 = JSON.parse(row2?.metadata ?? '{}') as {
+      worktree_recipe: { untracked_files_warning: string[]; fetch_files_at: string | null };
+    };
+    expect(meta2.worktree_recipe.fetch_files_at).toBe('deadbeef');
+    expect(meta2.worktree_recipe.untracked_files_warning).toEqual([]);
+  });
+
+  it('pendingRelaysFor hides the sender, expired and addressed-elsewhere relays', () => {
+    seed('claude', 'codex', 'gemini');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.join('gemini', 'gemini');
+
+    // 1. Broadcast — visible to everyone but the sender.
+    const broadcastId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'broadcast',
+      base_branch: 'main',
+    });
+    // 2. Directed to codex — invisible to gemini.
+    thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'codex only',
+      base_branch: 'main',
+      to_agent: 'codex',
+    });
+    // 3. Already-expired relay — invisible to anyone.
+    const expiredId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'manual',
+      one_line: 'stale',
+      base_branch: 'main',
+      expires_in_ms: 1,
+    });
+    // Force expiry past the TTL.
+    const expiredRow = store.storage.getObservation(expiredId);
+    const expiredMeta = JSON.parse(expiredRow?.metadata ?? '{}') as Record<string, unknown>;
+    expiredMeta.expires_at = 1;
+    store.storage.updateObservationMetadata(expiredId, JSON.stringify(expiredMeta));
+
+    expect(thread.pendingRelaysFor('claude', 'claude')).toEqual([]); // sender hidden
+    const codexInbox = thread.pendingRelaysFor('codex', 'codex').map((r) => r.id);
+    expect(codexInbox).toContain(broadcastId);
+    expect(codexInbox).toHaveLength(2);
+    const geminiInbox = thread.pendingRelaysFor('gemini', 'gemini').map((r) => r.id);
+    expect(geminiInbox).toEqual([broadcastId]); // directed-to-codex hidden
+  });
+
+  it('acceptRelay refuses agents the relay was not addressed to', () => {
+    seed('claude', 'codex', 'gemini');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.join('gemini', 'gemini');
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'codex only',
+      base_branch: 'main',
+      to_agent: 'codex',
+    });
+    try {
+      thread.acceptRelay(relayId, 'gemini');
+      throw new Error('expected accept to be refused');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskThreadError);
+      expect((err as TaskThreadError).code).toBe(TASK_THREAD_ERROR_CODES.NOT_TARGET_AGENT);
+    }
+  });
+
+  it('acceptRelay returns RELAY_EXPIRED past the TTL', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'time bomb',
+      base_branch: 'main',
+    });
+    // Force expiry into the past.
+    const row = store.storage.getObservation(relayId);
+    const meta = JSON.parse(row?.metadata ?? '{}') as Record<string, unknown>;
+    meta.expires_at = Date.now() - 1000;
+    store.storage.updateObservationMetadata(relayId, JSON.stringify(meta));
+    try {
+      thread.acceptRelay(relayId, 'codex');
+      throw new Error('expected expiry');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskThreadError);
+      expect((err as TaskThreadError).code).toBe(TASK_THREAD_ERROR_CODES.RELAY_EXPIRED);
+    }
+  });
+
+  it('declineRelay cancels and prevents subsequent accept', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'manual',
+      one_line: 'try someone else',
+      base_branch: 'main',
+    });
+    thread.declineRelay(relayId, 'codex', 'busy on other task');
+    const row = store.storage.getObservation(relayId);
+    const meta = JSON.parse(row?.metadata ?? '{}') as { status: string };
+    expect(meta.status).toBe('cancelled');
+    try {
+      thread.acceptRelay(relayId, 'codex');
+      throw new Error('expected accept after decline to fail');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskThreadError);
+      expect((err as TaskThreadError).code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_CANCELLED);
+    }
+  });
+
+  it('last_handoff_summary picks the most recent baton-pass regardless of kind', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    // Earlier handoff carries `summary`.
+    thread.handOff({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      summary: 'older summary',
+    });
+    // Later relay carries `one_line` — heterogeneous metadata. The newest
+    // baton wins, and the field branches on kind so we don't crash trying
+    // to read `summary` off a relay row.
+    const relayId = thread.relay({
+      from_session_id: 'codex',
+      from_agent: 'codex',
+      reason: 'manual',
+      one_line: 'newer relay one_line',
+      base_branch: 'main',
+    });
+    // A subsequent relay is what carries the synthesised summary back.
+    const synthRelayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'manual',
+      one_line: 'snapshot probe',
+      base_branch: 'main',
+    });
+    expect(synthRelayId).toBeGreaterThan(relayId);
+    const row = store.storage.getObservation(synthRelayId);
+    const meta = JSON.parse(row?.metadata ?? '{}') as {
+      resumable_state: { last_handoff_summary: string | null };
+    };
+    expect(meta.resumable_state.last_handoff_summary).toBe('newer relay one_line');
+  });
 });

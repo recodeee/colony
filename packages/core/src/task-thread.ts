@@ -28,7 +28,8 @@ export type CoordinationKind =
   | 'wake_cancel'
   | 'message'
   | 'message_read'
-  | 'message_retract';
+  | 'message_retract'
+  | 'relay';
 
 export type HandoffStatus = 'pending' | 'accepted' | 'expired' | 'cancelled';
 export type HandoffTarget = 'claude' | 'codex' | 'any';
@@ -39,6 +40,10 @@ export type WakeTarget = 'claude' | 'codex' | 'any';
 export type MessageStatus = 'unread' | 'read' | 'replied' | 'expired' | 'retracted';
 export type MessageTarget = 'claude' | 'codex' | 'any';
 export type MessageUrgency = 'fyi' | 'needs_reply' | 'blocking';
+
+export type RelayStatus = 'pending' | 'accepted' | 'expired' | 'cancelled';
+export type RelayTarget = 'claude' | 'codex' | 'any';
+export type RelayReason = 'quota' | 'rate-limit' | 'turn-cap' | 'manual' | 'unspecified';
 
 export const TASK_THREAD_ERROR_CODES = {
   OBSERVATION_NOT_ON_TASK: 'OBSERVATION_NOT_ON_TASK',
@@ -56,11 +61,13 @@ export const TASK_THREAD_ERROR_CODES = {
   HANDOFF_EXPIRED: 'HANDOFF_EXPIRED',
   WAKE_EXPIRED: 'WAKE_EXPIRED',
   MESSAGE_EXPIRED: 'MESSAGE_EXPIRED',
+  RELAY_EXPIRED: 'RELAY_EXPIRED',
   NOT_BROADCAST: 'NOT_BROADCAST',
   NOT_SENDER: 'NOT_SENDER',
   NOT_TARGET_SESSION: 'NOT_TARGET_SESSION',
   NOT_PARTICIPANT: 'NOT_PARTICIPANT',
   NOT_TARGET_AGENT: 'NOT_TARGET_AGENT',
+  NOT_RELAY: 'NOT_RELAY',
 } as const;
 
 export type TaskThreadErrorCode =
@@ -81,16 +88,16 @@ function taskError(code: TaskThreadErrorCode, message: string): TaskThreadError 
 }
 
 function statusErrorCode(
-  status: HandoffStatus | WakeStatus,
-  kind: 'handoff' | 'wake',
+  status: HandoffStatus | WakeStatus | RelayStatus,
+  kind: 'handoff' | 'wake' | 'relay',
 ): TaskThreadErrorCode {
   if (status === 'accepted') return TASK_THREAD_ERROR_CODES.ALREADY_ACCEPTED;
   if (status === 'acknowledged') return TASK_THREAD_ERROR_CODES.ALREADY_ACKNOWLEDGED;
   if (status === 'cancelled') return TASK_THREAD_ERROR_CODES.ALREADY_CANCELLED;
   if (status === 'expired') {
-    return kind === 'handoff'
-      ? TASK_THREAD_ERROR_CODES.HANDOFF_EXPIRED
-      : TASK_THREAD_ERROR_CODES.WAKE_EXPIRED;
+    if (kind === 'handoff') return TASK_THREAD_ERROR_CODES.HANDOFF_EXPIRED;
+    if (kind === 'wake') return TASK_THREAD_ERROR_CODES.WAKE_EXPIRED;
+    return TASK_THREAD_ERROR_CODES.RELAY_EXPIRED;
   }
   return TASK_THREAD_ERROR_CODES.METADATA_MISSING;
 }
@@ -275,6 +282,78 @@ export function isMessageAddressedTo(
   return meta.to_agent === agent;
 }
 
+/**
+ * Structured payload for a relay observation. Relays are what happens when
+ * an agent has to stop mid-task — quota cut, rate limit, turn cap — and
+ * another agent needs to continue without rebuilding context. The sender
+ * writes a one-line reason; the rest is auto-synthesized from the task
+ * thread so a hook firing seconds before the process dies still produces a
+ * resumable packet.
+ *
+ * Difference from HandoffMetadata: handoffs assume the sender can write
+ * `next_steps`; relays assume the sender is gone, drop their claims rather
+ * than transferring (no recipient is bound at emit time), and bundle a
+ * `worktree_recipe` so a receiver in a different worktree knows how to set
+ * up their tree before editing.
+ */
+export interface RelayMetadata {
+  kind: 'relay';
+  from_session_id: string;
+  from_agent: string;
+  to_agent: RelayTarget;
+  to_session_id: string | null;
+  reason: RelayReason;
+  /** One sentence the sender provides; everything else is synthesized. */
+  one_line: string;
+  /**
+   * Snapshot of recent task activity, built once at emit time so the
+   * receiver sees a stable view rather than racing concurrent writes.
+   */
+  resumable_state: {
+    last_files_edited: Array<{ file_path: string; ts: number; session_id: string }>;
+    active_claims: Array<{ file_path: string; held_by: string }>;
+    /** Last handoff summary or relay one_line, whichever is more recent. */
+    last_handoff_summary: string | null;
+    recent_decisions: Array<{ id: number; content: string; ts: number }>;
+    open_blockers: Array<{ id: number; content: string; ts: number }>;
+    relevant_search_seeds: string[];
+  };
+  /**
+   * Recipe for setting up an equivalent worktree. `fetch_files_at` is the
+   * git sha the sender was at when their work was committed; null means the
+   * work was uncommitted and `untracked_files_warning` lists paths the
+   * receiver cannot reproduce from git alone.
+   */
+  worktree_recipe: {
+    base_branch: string;
+    inherit_claims: string[];
+    fetch_files_at: string | null;
+    untracked_files_warning: string[];
+  };
+  status: RelayStatus;
+  accepted_by_session_id: string | null;
+  accepted_at: number | null;
+  expires_at: number;
+}
+
+export interface RelayObservation {
+  id: number;
+  ts: number;
+  meta: RelayMetadata;
+}
+
+export interface RelayArgs {
+  from_session_id: string;
+  from_agent: string;
+  reason: RelayReason;
+  one_line: string;
+  base_branch: string;
+  to_agent?: RelayTarget;
+  to_session_id?: string;
+  fetch_files_at?: string;
+  expires_in_ms?: number;
+}
+
 /** True when this message was sent as a broadcast (`to_agent='any'`,
  *  no specific `to_session_id`). Broadcasts can be claimed; directed
  *  messages cannot. */
@@ -284,6 +363,10 @@ export function isBroadcastMessage(meta: MessageMetadata): boolean {
 
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_WAKE_TTL_MS = 24 * 60 * 60 * 1000;
+// Relays expire faster than handoffs because the work they describe goes
+// stale fast. A relay 6+ hours old usually means the codebase has moved and
+// a fresh agent should re-plan, not pick up.
+const DEFAULT_RELAY_TTL_MS = 4 * 60 * 60 * 1000;
 
 /**
  * TaskThread wraps MemoryStore + Storage with task-scoped coordination
@@ -376,7 +459,7 @@ export class TaskThread {
    */
   post(p: {
     session_id: string;
-    kind: Exclude<CoordinationKind, 'handoff' | 'message'>;
+    kind: Exclude<CoordinationKind, 'handoff' | 'message' | 'relay'>;
     content: string;
     reply_to?: number;
     metadata?: Record<string, unknown>;
@@ -1110,6 +1193,250 @@ export class TaskThread {
           isVisibleToBroadcastClaimant(meta, session_id),
       );
   }
+
+  /**
+   * Emit a relay. Sender provides only `reason` + `one_line` + worktree
+   * basics; everything else is synthesized from the last 30 minutes of task
+   * activity so a Stop / SessionEnd hook firing seconds before the process
+   * dies still produces something the receiver can resume from. Sender's
+   * existing claims are *dropped* (not transferred) — relays assume the
+   * sender is gone, and the receiver re-claims via
+   * `worktree_recipe.inherit_claims` on accept. This mirrors the
+   * `transferred_files` invariant of handoffs and prevents a third agent
+   * from grabbing files in the gap.
+   */
+  relay(args: RelayArgs): number {
+    const now = Date.now();
+    const since = now - RELAY_LOOKBACK_MS;
+    const resumable_state = this.synthesizeRelayState(args.from_session_id, since);
+    const worktree_recipe = synthesizeRelayRecipe(args, resumable_state);
+    const meta: RelayMetadata = {
+      kind: 'relay',
+      from_session_id: args.from_session_id,
+      from_agent: args.from_agent,
+      to_agent: args.to_agent ?? 'any',
+      to_session_id: args.to_session_id ?? null,
+      reason: args.reason,
+      one_line: args.one_line,
+      resumable_state,
+      worktree_recipe,
+      status: 'pending',
+      accepted_by_session_id: null,
+      accepted_at: null,
+      expires_at: now + (args.expires_in_ms ?? DEFAULT_RELAY_TTL_MS),
+    };
+    return this.store.storage.transaction(() => {
+      for (const claim of resumable_state.active_claims) {
+        if (claim.held_by === args.from_session_id) {
+          this.store.storage.releaseClaim({
+            task_id: this.task_id,
+            file_path: claim.file_path,
+            session_id: args.from_session_id,
+          });
+        }
+      }
+      const id = this.store.addObservation({
+        session_id: args.from_session_id,
+        kind: 'relay',
+        content: renderRelayContent(meta),
+        task_id: this.task_id,
+        metadata: meta as unknown as Record<string, unknown>,
+      });
+      this.store.storage.touchTask(this.task_id, now);
+      return id;
+    });
+  }
+
+  /**
+   * Receiver-side. Re-claims `worktree_recipe.inherit_claims` under the
+   * accepting session and flips status. Targeting + expiry checks mirror
+   * `acceptHandoff`.
+   */
+  acceptRelay(relay_observation_id: number, session_id: string): void {
+    const obs = this.store.storage.getObservation(relay_observation_id);
+    if (!obs || obs.kind !== 'relay') {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_RELAY,
+        `observation ${relay_observation_id} is not a relay`,
+      );
+    }
+    if (obs.task_id !== this.task_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.TASK_MISMATCH,
+        `relay belongs to task ${obs.task_id}, not ${this.task_id}`,
+      );
+    }
+    const meta = parseRelay(obs.metadata);
+    if (!meta) {
+      throw taskError(TASK_THREAD_ERROR_CODES.METADATA_MISSING, 'relay metadata missing');
+    }
+    if (meta.status !== 'pending') {
+      throw taskError(
+        statusErrorCode(meta.status, 'relay'),
+        `relay is ${meta.status}, cannot accept`,
+      );
+    }
+    if (Date.now() > meta.expires_at) {
+      meta.status = 'expired';
+      this.store.storage.updateObservationMetadata(relay_observation_id, JSON.stringify(meta));
+      throw taskError(TASK_THREAD_ERROR_CODES.RELAY_EXPIRED, 'relay expired');
+    }
+    if (meta.to_session_id && meta.to_session_id !== session_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_SESSION,
+        'relay is addressed to a different session',
+      );
+    }
+    const myAgent = this.store.storage.getParticipantAgent(this.task_id, session_id);
+    if (!myAgent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_PARTICIPANT,
+        'session is not a participant on this task',
+      );
+    }
+    if (meta.to_agent !== 'any' && meta.to_agent !== myAgent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_AGENT,
+        `relay is for ${meta.to_agent}, not ${myAgent}`,
+      );
+    }
+
+    this.store.storage.transaction(() => {
+      for (const file_path of meta.worktree_recipe.inherit_claims) {
+        this.store.storage.claimFile({
+          task_id: this.task_id,
+          file_path,
+          session_id,
+        });
+      }
+      meta.status = 'accepted';
+      meta.accepted_by_session_id = session_id;
+      meta.accepted_at = Date.now();
+      this.store.storage.updateObservationMetadata(relay_observation_id, JSON.stringify(meta));
+      this.store.storage.touchTask(this.task_id);
+    });
+  }
+
+  /** Decline a pending relay. Records a `decline` observation replying to
+   *  the relay and flips status to `cancelled`. No claim state changes. */
+  declineRelay(relay_observation_id: number, session_id: string, reason?: string): void {
+    const obs = this.store.storage.getObservation(relay_observation_id);
+    if (!obs || obs.kind !== 'relay') {
+      throw taskError(TASK_THREAD_ERROR_CODES.NOT_RELAY, 'not a relay');
+    }
+    if (obs.task_id !== this.task_id) {
+      throw taskError(TASK_THREAD_ERROR_CODES.TASK_MISMATCH, 'relay belongs to a different task');
+    }
+    const meta = parseRelay(obs.metadata);
+    if (!meta) {
+      throw taskError(TASK_THREAD_ERROR_CODES.METADATA_MISSING, 'relay metadata missing');
+    }
+    if (meta.status !== 'pending') {
+      throw taskError(statusErrorCode(meta.status, 'relay'), `relay is ${meta.status}`);
+    }
+    this.store.storage.transaction(() => {
+      meta.status = 'cancelled';
+      this.store.storage.updateObservationMetadata(relay_observation_id, JSON.stringify(meta));
+      this.store.addObservation({
+        session_id,
+        kind: 'decline',
+        content: reason
+          ? `declined relay #${relay_observation_id}: ${reason}`
+          : `declined relay #${relay_observation_id}`,
+        task_id: this.task_id,
+        reply_to: relay_observation_id,
+        metadata: { kind: 'decline', declined_relay: relay_observation_id },
+      });
+      this.store.storage.touchTask(this.task_id);
+    });
+  }
+
+  /** Pending, unexpired relays visible to `session_id` / `agent`. */
+  pendingRelaysFor(session_id: string, agent: string): RelayObservation[] {
+    const now = Date.now();
+    return this.store.storage
+      .taskObservationsByKind(this.task_id, 'relay')
+      .map((row) => {
+        const meta = parseRelay(row.metadata);
+        return meta ? { id: row.id, ts: row.ts, meta } : null;
+      })
+      .filter((x): x is RelayObservation => x !== null)
+      .filter(
+        ({ meta }) =>
+          meta.status === 'pending' &&
+          now < meta.expires_at &&
+          meta.from_session_id !== session_id &&
+          (meta.to_session_id === session_id || meta.to_agent === 'any' || meta.to_agent === agent),
+      );
+  }
+
+  private synthesizeRelayState(
+    sender_session_id: string,
+    since: number,
+  ): RelayMetadata['resumable_state'] {
+    const recent = this.store.storage.taskObservationsSince(this.task_id, since, 100);
+    // PostToolUse writes kind='tool_use' with metadata.file_path holding
+    // the touched path (single string, not nested under tool_input). We
+    // read directly off the metadata field rather than the compressed
+    // content body — fast, exact, and survives compression.
+    const last_files_edited = recent
+      .filter((o) => o.session_id === sender_session_id && o.kind === 'tool_use')
+      .map((o) => {
+        const m = parseObservationMetadata(o.metadata);
+        const file_path = m.file_path;
+        return typeof file_path === 'string' && file_path.length > 0
+          ? { file_path, ts: o.ts, session_id: o.session_id }
+          : null;
+      })
+      .filter((x): x is { file_path: string; ts: number; session_id: string } => x !== null)
+      .slice(-8);
+
+    const active_claims = this.store.storage.listClaims(this.task_id).map((c) => ({
+      file_path: c.file_path,
+      held_by: c.session_id,
+    }));
+
+    // Most recent prior baton-pass — handoff or relay, whichever ran last —
+    // gives the receiver the conversational arc, not just immediate state.
+    // Different metadata shape per kind: handoffs carry `summary`, relays
+    // carry `one_line`. Branch on kind so the snapshot is honest about
+    // whichever happened more recently.
+    const lastBaton = [
+      ...this.store.storage.taskObservationsByKind(this.task_id, 'handoff'),
+      ...this.store.storage.taskObservationsByKind(this.task_id, 'relay'),
+    ]
+      .sort((a, b) => a.ts - b.ts)
+      .at(-1);
+    let last_handoff_summary: string | null = null;
+    if (lastBaton) {
+      const m = parseObservationMetadata(lastBaton.metadata);
+      if (lastBaton.kind === 'handoff' && typeof m.summary === 'string') {
+        last_handoff_summary = m.summary;
+      } else if (lastBaton.kind === 'relay' && typeof m.one_line === 'string') {
+        last_handoff_summary = m.one_line;
+      }
+    }
+
+    const recent_decisions = recent
+      .filter((o) => o.kind === 'decision')
+      .slice(-3)
+      .map((o) => ({ id: o.id, content: o.content.slice(0, 200), ts: o.ts }));
+    const open_blockers = recent
+      .filter((o) => o.kind === 'blocker')
+      .slice(-3)
+      .map((o) => ({ id: o.id, content: o.content.slice(0, 200), ts: o.ts }));
+
+    const relevant_search_seeds = extractRelayKeywords(recent.map((o) => o.content));
+
+    return {
+      last_files_edited,
+      active_claims,
+      last_handoff_summary,
+      recent_decisions,
+      open_blockers,
+      relevant_search_seeds,
+    };
+  }
 }
 
 function isReplyableStatus(status: MessageStatus): boolean {
@@ -1202,4 +1529,117 @@ function renderHandoffContent(m: HandoffMetadata): string {
     lines.push(`Claims released: ${m.released_files.join(', ')}`);
   }
   return lines.join('\n');
+}
+
+// 30 minutes — the "what was I just doing" window. Long enough to catch a
+// turn that was paused mid-edit; short enough that the synthesised state
+// reflects current intent rather than a whole working session.
+const RELAY_LOOKBACK_MS = 30 * 60_000;
+
+function parseRelay(metadata: string | null): RelayMetadata | null {
+  if (!metadata) return null;
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const m = parsed as Partial<RelayMetadata>;
+    if (m.kind !== 'relay' || typeof m.status !== 'string') return null;
+    return parsed as RelayMetadata;
+  } catch {
+    return null;
+  }
+}
+
+function renderRelayContent(m: RelayMetadata): string {
+  const target = m.to_session_id ?? m.to_agent;
+  const lines = [`RELAY from ${m.from_agent} (${m.reason}) -> ${target}`, m.one_line];
+  if (m.resumable_state.last_files_edited.length) {
+    const paths = Array.from(
+      new Set(m.resumable_state.last_files_edited.map((e) => e.file_path)),
+    );
+    lines.push(`Recently edited: ${paths.join(', ')}`);
+  }
+  if (m.resumable_state.recent_decisions.length) {
+    lines.push(
+      `Recent decisions: ${m.resumable_state.recent_decisions
+        .map((d) => d.content.slice(0, 80))
+        .join(' | ')}`,
+    );
+  }
+  if (m.resumable_state.open_blockers.length) {
+    lines.push(
+      `Open blockers: ${m.resumable_state.open_blockers
+        .map((b) => b.content.slice(0, 80))
+        .join(' | ')}`,
+    );
+  }
+  if (m.worktree_recipe.inherit_claims.length) {
+    lines.push(`Claims to inherit: ${m.worktree_recipe.inherit_claims.join(', ')}`);
+  }
+  if (m.worktree_recipe.untracked_files_warning.length) {
+    lines.push(
+      `WARN uncommitted in sender worktree: ${m.worktree_recipe.untracked_files_warning.join(', ')}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+function parseObservationMetadata(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function synthesizeRelayRecipe(
+  args: RelayArgs,
+  state: RelayMetadata['resumable_state'],
+): RelayMetadata['worktree_recipe'] {
+  // Inherit only files the sender held. Recently-edited-but-not-claimed
+  // files don't transfer ownership; the receiver may not need to own them.
+  const inherit_claims = state.active_claims
+    .filter((c) => c.held_by === args.from_session_id)
+    .map((c) => c.file_path);
+  // No fetch_files_at sha → every recent edit is potentially uncommitted,
+  // so flag the lot. With a sha the receiver can reproduce the tree from
+  // git, and we leave the warning empty.
+  const untracked_files_warning =
+    args.fetch_files_at === undefined
+      ? Array.from(new Set(state.last_files_edited.map((e) => e.file_path)))
+      : [];
+  return {
+    base_branch: args.base_branch,
+    inherit_claims,
+    fetch_files_at: args.fetch_files_at ?? null,
+    untracked_files_warning,
+  };
+}
+
+const RELAY_KEYWORD_STOPWORDS = new Set([
+  'function',
+  'should',
+  'because',
+  'instead',
+  'really',
+  'session',
+  'observation',
+  'metadata',
+  'content',
+  'message',
+]);
+
+function extractRelayKeywords(contents: string[]): string[] {
+  const text = contents.join(' ').toLowerCase();
+  const tokens = text.match(/[a-z][a-z_-]{4,}/g) ?? [];
+  const counts = new Map<string, number>();
+  for (const t of tokens) {
+    if (RELAY_KEYWORD_STOPWORDS.has(t)) continue;
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([k]) => k);
 }

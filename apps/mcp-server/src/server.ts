@@ -16,6 +16,7 @@ import * as plan from './tools/plan.js';
 import * as profile from './tools/profile.js';
 import * as proposal from './tools/proposal.js';
 import * as recall from './tools/recall.js';
+import * as relay from './tools/relay.js';
 import * as search from './tools/search.js';
 import * as spec from './tools/spec.js';
 import * as task from './tools/task.js';
@@ -75,6 +76,7 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   profile.register(server, ctx);
   wake.register(server, ctx);
   message.register(server, ctx);
+  relay.register(server, ctx);
   plan.register(server, ctx);
   recall.register(server, ctx);
 
