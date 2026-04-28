@@ -35,11 +35,28 @@ export interface StorageOptions {
   readonly?: boolean;
 }
 
+export interface FindStrandedSessionsOptions {
+  stranded_after_ms?: number;
+}
+
+export interface StrandedSessionRow {
+  session_id: string;
+  ide: string;
+  cwd: string | null;
+  last_observation_ts: number;
+  held_claims_json: string;
+  last_tool_error: string | null;
+}
+
+const DEFAULT_STRANDED_AFTER_MS = 10 * 60_000;
+
 export class Storage {
   private db: Database.Database;
   private getTaskEmbeddingStmt!: Database.Statement;
   private upsertTaskEmbeddingStmt: Database.Statement | undefined;
   private countTaskObservationsStmt!: Database.Statement;
+  private findStrandedSessionsStmt!: Database.Statement;
+  private recentToolErrorsStmt!: Database.Statement;
 
   constructor(dbPath: string, opts: StorageOptions = {}) {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -83,6 +100,44 @@ export class Storage {
     );
     this.countTaskObservationsStmt = this.db.prepare(
       'SELECT COUNT(*) AS n FROM observations WHERE task_id = ?',
+    );
+    this.findStrandedSessionsStmt = this.db.prepare(
+      `SELECT s.id AS session_id,
+              s.ide,
+              s.cwd,
+              COALESCE(MAX(o.ts), s.started_at) AS last_observation_ts,
+              (SELECT json_group_array(json_object(
+                  'task_id', tc.task_id,
+                  'file_path', tc.file_path,
+                  'claimed_at', tc.claimed_at
+              )) FROM task_claims tc WHERE tc.session_id = s.id) AS held_claims_json,
+              (SELECT json_extract(o2.metadata, '$.error') FROM observations o2
+               WHERE o2.session_id = s.id AND o2.kind = 'tool_use'
+               ORDER BY o2.ts DESC LIMIT 1) AS last_tool_error
+       FROM sessions s
+       LEFT JOIN observations o ON o.session_id = s.id
+       WHERE s.ended_at IS NULL
+       GROUP BY s.id
+       HAVING last_observation_ts < ?
+          AND held_claims_json != '[]'
+          AND held_claims_json IS NOT NULL
+       ORDER BY last_observation_ts ASC`,
+    );
+    this.recentToolErrorsStmt = this.db.prepare(
+      `SELECT * FROM observations
+       WHERE session_id = ?
+         AND kind = 'tool_use'
+         AND ts > ?
+         AND (
+           json_type(metadata, '$.error') IS NOT NULL
+           OR lower(content) LIKE '%quota%'
+           OR lower(content) LIKE '%rate%limit%'
+           OR lower(content) LIKE '%approval%'
+           OR lower(content) LIKE '%rejected%'
+           OR lower(content) LIKE '%permission denied%'
+         )
+       ORDER BY ts DESC
+       LIMIT ?`,
     );
     if (!readonly) {
       this.upsertTaskEmbeddingStmt = this.db.prepare(
@@ -174,6 +229,16 @@ export class Storage {
     }
     tx(pending);
     return { scanned: rows.length, updated };
+  }
+
+  findStrandedSessions(options: FindStrandedSessionsOptions = {}): StrandedSessionRow[] {
+    const strandedAfterMs = options.stranded_after_ms ?? DEFAULT_STRANDED_AFTER_MS;
+    const cutoff = Date.now() - strandedAfterMs;
+    return this.findStrandedSessionsStmt.all(cutoff) as StrandedSessionRow[];
+  }
+
+  recentToolErrors(session_id: string, since_ts: number, limit = 20): ObservationRow[] {
+    return this.recentToolErrorsStmt.all(session_id, since_ts, limit) as ObservationRow[];
   }
 
   // --- observations ---
