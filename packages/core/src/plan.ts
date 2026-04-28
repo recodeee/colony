@@ -16,6 +16,10 @@ export interface SubtaskInfo {
   parent_plan_slug: string;
   parent_plan_title: string | null;
   parent_spec_task_id: number | null;
+  // Optional binding to a §V/§I/§T/§B row in the parent change's root spec.
+  // When set, completing the sub-task appends a modify delta against this
+  // row so the spec lane and the plan lane stop running side by side.
+  spec_row_id: string | null;
 }
 
 export interface PlanInfo {
@@ -96,6 +100,7 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
       typeof meta.parent_plan_title === 'string' ? (meta.parent_plan_title as string) : null,
     parent_spec_task_id:
       typeof meta.parent_spec_task_id === 'number' ? (meta.parent_spec_task_id as number) : null,
+    spec_row_id: typeof meta.spec_row_id === 'string' ? (meta.spec_row_id as string) : null,
   };
 }
 

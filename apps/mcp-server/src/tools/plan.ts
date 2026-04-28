@@ -1,12 +1,20 @@
 import {
   type MemoryStore,
   type SubtaskInfo,
+  type SubtaskStatus,
   TaskThread,
   areDepsMet,
   listPlans,
   readSubtaskByBranch,
 } from '@colony/core';
-import { SpecRepository, SyncEngine, parseSpec, serializeSpec } from '@colony/spec';
+import { type Spec, SpecRepository, SyncEngine, parseSpec, serializeSpec } from '@colony/spec';
+
+// Pipe-table row shape used inside §V/§I/§T/§B sections.
+// Matches the (non-exported) SpecRow shape from @colony/spec/grammar.
+interface SpecRowCells {
+  id: string;
+  cells: string[];
+}
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
@@ -20,6 +28,13 @@ const SubtaskInputSchema = z.object({
   capability_hint: z
     .enum(['ui_work', 'api_work', 'test_work', 'infra_work', 'doc_work'])
     .optional(),
+  spec_row_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Optional binding to a §V/§I/§T/§B row in the parent repo SPEC.md. When set, completing this sub-task appends a modify delta marking the row done so the spec lane and plan lane share state.',
+    ),
 });
 
 type SubtaskInput = z.infer<typeof SubtaskInputSchema>;
@@ -90,6 +105,32 @@ export function register(server: McpServer, ctx: ToolContext): void {
       }
 
       const repo = new SpecRepository({ repoRoot: args.repo_root, store });
+
+      // Validate spec_row_id bindings up-front. A typo'd row id should
+      // fail fast at publish, not silently no-op at completion. Read the
+      // root once and look up every requested row id.
+      let cachedRoot: Spec | null = null;
+      for (let i = 0; i < args.subtasks.length; i++) {
+        const subtask = args.subtasks[i];
+        if (!subtask?.spec_row_id) continue;
+        if (!cachedRoot) {
+          try {
+            cachedRoot = repo.readRoot();
+          } catch (err) {
+            return mcpErrorResponse(
+              'PLAN_SPEC_ROOT_MISSING',
+              `spec_row_id requested but root SPEC.md is unreadable: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        if (!findSpecRow(cachedRoot, subtask.spec_row_id)) {
+          return mcpErrorResponse(
+            'PLAN_SPEC_ROW_NOT_FOUND',
+            `sub-task ${i} bound to unknown spec row '${subtask.spec_row_id}' (no §V/§I/§T/§B row with that id)`,
+          );
+        }
+      }
+
       const proposal = renderProposal(args);
       const opened = repo.openChange({
         slug: args.slug,
@@ -135,6 +176,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
             depends_on: subtask.depends_on ?? [],
             capability_hint: subtask.capability_hint ?? null,
             status: 'available',
+            spec_row_id: subtask.spec_row_id ?? null,
           },
         });
         return {
@@ -340,6 +382,18 @@ export function register(server: McpServer, ctx: ToolContext): void {
         });
       });
 
+      // Spec-row binding: if the sub-task carries a spec_row_id, append
+      // a modify delta to the parent change so the row flips to `done`
+      // when the change archives. Best-effort — failures surface as
+      // observations rather than tearing down the completion (the SQL
+      // state is already committed at this point).
+      const specRowDelta = appendSpecRowDoneDelta(store, {
+        plan_slug: args.plan_slug,
+        spec_row_id: located.info.spec_row_id,
+        parent_spec_task_id: located.info.parent_spec_task_id,
+        session_id: args.session_id,
+      });
+
       // Auto-archive: when this completion was the last outstanding sub-task
       // and the plan opted in at publish time, three-way-merge the change
       // and archive it. Failures are non-fatal and surface as observations
@@ -357,7 +411,28 @@ export function register(server: McpServer, ctx: ToolContext): void {
             text: JSON.stringify({
               status: 'completed',
               auto_archive: autoArchive,
+              spec_row_delta: specRowDelta,
             }),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    'task_plan_status_for_spec_row',
+    'Look up which plan / sub-task (if any) is currently bound to a §V/§I/§T/§B row in a repo SPEC.md. Returns the binding plus current status, or null when no sub-task references the row. Useful for answering "is anyone working on T7 right now?" without scanning every plan.',
+    {
+      repo_root: z.string().min(1),
+      spec_row_id: z.string().min(1),
+    },
+    async (args) => {
+      const binding = findSubtaskBySpecRow(store, args.repo_root, args.spec_row_id);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(binding ?? null),
           },
         ],
       };
@@ -556,4 +631,203 @@ function parseRowMeta(raw: string | null): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+const SPEC_ROW_SECTIONS = ['V', 'I', 'T', 'B'] as const;
+const KNOWN_STATUS_VALUES = new Set([
+  'todo',
+  'doing',
+  'wip',
+  'in-progress',
+  'in_progress',
+  'blocked',
+  'review',
+  'pending',
+  'done',
+  'completed',
+]);
+
+function findSpecRow(spec: Spec, row_id: string): SpecRowCells | null {
+  for (const section of SPEC_ROW_SECTIONS) {
+    const rows = spec.sections[section]?.rows;
+    if (!rows) continue;
+    const found = rows.find((r) => r.id === row_id);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Build the new cells for a `modify` delta that flips the row to `done`.
+// The change document's table shape is `id|status|task|cites`, while the
+// root spec may be `id|task|cites` with no status column. To handle both
+// shapes idempotently:
+//   - if cells[1] looks like a known status value, replace it with `done`
+//   - otherwise insert `done` between the id and the rest
+// Either way the outcome is deterministic and the row's task/cites text
+// is preserved.
+function buildDoneCells(existing: SpecRowCells): string[] {
+  if (existing.cells.length === 0) return [existing.id, 'done'];
+  const [first, second, ...rest] = existing.cells;
+  const idCell = first ?? existing.id;
+  if (second !== undefined && KNOWN_STATUS_VALUES.has(second.toLowerCase())) {
+    return [idCell, 'done', ...rest];
+  }
+  return [idCell, 'done', ...existing.cells.slice(1)];
+}
+
+interface SpecRowDeltaOutcome {
+  status: 'appended' | 'skipped' | 'error';
+  reason?: string;
+  spec_row_id?: string;
+}
+
+function appendSpecRowDoneDelta(
+  store: MemoryStore,
+  args: {
+    plan_slug: string;
+    spec_row_id: string | null;
+    parent_spec_task_id: number | null;
+    session_id: string;
+  },
+): SpecRowDeltaOutcome {
+  if (!args.spec_row_id) {
+    return { status: 'skipped', reason: 'no spec_row_id binding' };
+  }
+  if (args.parent_spec_task_id == null) {
+    return { status: 'skipped', reason: 'no parent spec task linkage' };
+  }
+
+  // Resolve the repo root from the parent spec task.
+  const parentTask = store.storage.listTasks(2000).find((t) => t.id === args.parent_spec_task_id);
+  if (!parentTask) {
+    return { status: 'skipped', reason: 'parent spec task not found' };
+  }
+
+  try {
+    const repo = new SpecRepository({ repoRoot: parentTask.repo_root, store });
+    const root = repo.readRoot();
+    const existing = findSpecRow(root, args.spec_row_id);
+    if (!existing) {
+      // Row was removed between publish and complete. Record the drift
+      // but don't fail the completion — the operator can resolve it
+      // when they archive the change.
+      store.addObservation({
+        session_id: args.session_id,
+        task_id: args.parent_spec_task_id,
+        kind: 'plan-spec-row-missing',
+        content: `sub-task complete but bound spec row '${args.spec_row_id}' is no longer in SPEC.md for plan ${args.plan_slug}`,
+        metadata: { plan_slug: args.plan_slug, spec_row_id: args.spec_row_id },
+      });
+      return {
+        status: 'skipped',
+        reason: 'bound spec row missing from current root',
+        spec_row_id: args.spec_row_id,
+      };
+    }
+
+    const change = repo.readChange(args.plan_slug);
+    const newCells = buildDoneCells(existing);
+    change.deltaRows.push({
+      op: 'modify',
+      target: args.spec_row_id,
+      row: { id: args.spec_row_id, cells: newCells },
+    });
+    repo.writeChange(change);
+
+    // Audit observation on the parent spec task. Mirrors what
+    // spec_change_add_delta does so the change history reads uniformly
+    // regardless of whether the delta came from a tool call or from
+    // sub-task completion.
+    store.addObservation({
+      session_id: args.session_id,
+      task_id: args.parent_spec_task_id,
+      kind: 'spec-delta',
+      content: `modify ${args.spec_row_id} = ${newCells.join(' | ')}`,
+      metadata: {
+        plan_slug: args.plan_slug,
+        spec_row_id: args.spec_row_id,
+        op: 'modify',
+        source: 'plan-subtask-complete',
+      },
+    });
+    return { status: 'appended', spec_row_id: args.spec_row_id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    store.addObservation({
+      session_id: args.session_id,
+      task_id: args.parent_spec_task_id,
+      kind: 'plan-spec-delta-error',
+      content: `failed to append spec row done-delta for plan ${args.plan_slug}: ${message}`,
+      metadata: {
+        plan_slug: args.plan_slug,
+        spec_row_id: args.spec_row_id,
+        error: message,
+      },
+    });
+    return { status: 'error', reason: message, spec_row_id: args.spec_row_id };
+  }
+}
+
+interface SpecRowBinding {
+  task_id: number;
+  plan_slug: string;
+  subtask_index: number;
+  status: SubtaskStatus;
+  branch: string;
+}
+
+// Linear scan of plan-subtask observations for the binding. Inlined here
+// rather than exported from @colony/core because every consumer lives in
+// this MCP-server process and the package boundary buys nothing.
+function findSubtaskBySpecRow(
+  store: MemoryStore,
+  repo_root: string,
+  spec_row_id: string,
+): SpecRowBinding | null {
+  const tasks = store.storage.listTasks(2000);
+  for (const t of tasks) {
+    if (t.repo_root !== repo_root) continue;
+    if (!/^spec\/[a-z0-9-]+\/sub-\d+$/.test(t.branch)) continue;
+    const located = readSubtaskByBranch(store, t.branch);
+    if (!located) continue;
+    if (located.info.spec_row_id !== spec_row_id) continue;
+    return {
+      task_id: t.id,
+      plan_slug: located.info.parent_plan_slug,
+      subtask_index: located.info.subtask_index,
+      status: located.info.status,
+      branch: t.branch,
+    };
+  }
+  return null;
+}
+
+interface SpecRowBindingSummary {
+  plan_slug: string;
+  subtask_index: number;
+  status: SubtaskStatus;
+}
+
+// Map every spec_row_id currently bound to a sub-task in this repo.
+// Exposed via a sibling field on spec_read so consumers can spot
+// "this row is in flight" without re-scanning every plan themselves.
+export function listSpecRowBindings(
+  store: MemoryStore,
+  repo_root: string,
+): Record<string, SpecRowBindingSummary> {
+  const bindings: Record<string, SpecRowBindingSummary> = {};
+  const tasks = store.storage.listTasks(2000);
+  for (const t of tasks) {
+    if (t.repo_root !== repo_root) continue;
+    if (!/^spec\/[a-z0-9-]+\/sub-\d+$/.test(t.branch)) continue;
+    const located = readSubtaskByBranch(store, t.branch);
+    const rowId = located?.info.spec_row_id;
+    if (!rowId) continue;
+    bindings[rowId] = {
+      plan_slug: located.info.parent_plan_slug,
+      subtask_index: located.info.subtask_index,
+      status: located.info.status,
+    };
+  }
+  return bindings;
 }

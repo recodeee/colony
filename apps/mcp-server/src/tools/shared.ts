@@ -79,7 +79,9 @@ export function mcpErrorResponse(
     | 'PLAN_SUBTASK_DEPS_UNMET'
     | 'PLAN_SUBTASK_NOT_AVAILABLE'
     | 'PLAN_SUBTASK_NOT_CLAIMED'
-    | 'PLAN_SUBTASK_NOT_YOURS',
+    | 'PLAN_SUBTASK_NOT_YOURS'
+    | 'PLAN_SPEC_ROW_NOT_FOUND'
+    | 'PLAN_SPEC_ROOT_MISSING',
   error: string,
 ): {
   content: Array<{ type: 'text'; text: string }>;

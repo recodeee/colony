@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -401,5 +401,182 @@ describe('task_plan auto-archive', () => {
     // not propagated as a tool error.
     expect(last.status).toBe('completed');
     expect(last.auto_archive.status).toBe('error');
+  });
+});
+
+interface CompleteResult {
+  status: string;
+  auto_archive: { status: string; reason?: string };
+  spec_row_delta: { status: string; reason?: string; spec_row_id?: string };
+}
+
+interface SpecRowBindingResult {
+  task_id: number;
+  plan_slug: string;
+  subtask_index: number;
+  status: string;
+  branch: string;
+}
+
+describe('spec_row_id sub-task ↔ spec row binding', () => {
+  function bindingPublishArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return basicPublishArgs({
+      slug: 'spec-bound-plan',
+      subtasks: [
+        {
+          title: 'Implement T1',
+          description: 'Bound to T1.',
+          file_scope: ['apps/api/src/widgets.ts'],
+          spec_row_id: 'T1',
+        },
+        {
+          title: 'Unbound follow-up',
+          description: 'Has no spec row binding.',
+          file_scope: ['apps/frontend/src/pages/widgets.tsx'],
+          depends_on: [0],
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  it('rejects publish when spec_row_id does not resolve to a row in SPEC.md', async () => {
+    const err = await callError(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'bad-row',
+        subtasks: [
+          {
+            title: 'Bind to nothing',
+            description: 'spec_row_id points to a missing row.',
+            file_scope: ['apps/foo.ts'],
+            spec_row_id: 'T999',
+          },
+          {
+            title: 'Other',
+            description: 'second',
+            file_scope: ['apps/bar.ts'],
+          },
+        ],
+      }),
+    );
+    expect(err.code).toBe('PLAN_SPEC_ROW_NOT_FOUND');
+  });
+
+  it('completes a bound sub-task and writes a modify delta with done in the change doc', async () => {
+    await call<PublishResult>('task_plan_publish', bindingPublishArgs());
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+    const done = await call<CompleteResult>('task_plan_complete_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 0,
+      session_id: 'B',
+      summary: 'T1 implemented.',
+    });
+    expect(done.spec_row_delta.status).toBe('appended');
+    expect(done.spec_row_delta.spec_row_id).toBe('T1');
+
+    const changeDoc = readFileSync(
+      join(repoRoot, 'openspec/changes/spec-bound-plan/CHANGE.md'),
+      'utf8',
+    );
+    // The §S delta section should now contain `modify|T1|...done...`.
+    const deltaSection = changeDoc.match(/## §S[\s\S]*?(?=## §|$)/);
+    expect(deltaSection).not.toBeNull();
+    expect(deltaSection?.[0]).toMatch(/modify\|T1/);
+    expect(deltaSection?.[0]).toMatch(/done/);
+  });
+
+  it('produces no delta when the sub-task carries no spec_row_id', async () => {
+    await call<PublishResult>('task_plan_publish', bindingPublishArgs());
+
+    // sub-0 has spec_row_id='T1'; sub-1 has none. Complete sub-0 first
+    // (it's the dependency for sub-1), then sub-1.
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+    const bound = await call<CompleteResult>('task_plan_complete_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 0,
+      session_id: 'B',
+      summary: 'sub-0 done',
+    });
+    expect(bound.spec_row_delta.status).toBe('appended');
+
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 1,
+      session_id: 'C',
+      agent: 'claude',
+    });
+    const unbound = await call<CompleteResult>('task_plan_complete_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 1,
+      session_id: 'C',
+      summary: 'sub-1 done',
+    });
+    expect(unbound.spec_row_delta.status).toBe('skipped');
+    expect(unbound.spec_row_delta.reason).toMatch(/no spec_row_id/);
+
+    // Only one delta in the change doc — the bound one.
+    const changeDoc = readFileSync(
+      join(repoRoot, 'openspec/changes/spec-bound-plan/CHANGE.md'),
+      'utf8',
+    );
+    const deltaSection = changeDoc.match(/## §S[\s\S]*?(?=## §|$)/)?.[0] ?? '';
+    const modifyLines = deltaSection
+      .split('\n')
+      .filter((l) => l.startsWith('modify|') || l.startsWith('add|') || l.startsWith('remove|'));
+    expect(modifyLines).toHaveLength(1);
+    expect(modifyLines[0]).toMatch(/modify\|T1/);
+  });
+
+  it('task_plan_status_for_spec_row returns the binding for a claimed sub-task', async () => {
+    await call<PublishResult>('task_plan_publish', bindingPublishArgs());
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+
+    const binding = await call<SpecRowBindingResult | null>('task_plan_status_for_spec_row', {
+      repo_root: repoRoot,
+      spec_row_id: 'T1',
+    });
+    expect(binding).not.toBeNull();
+    expect(binding?.plan_slug).toBe('spec-bound-plan');
+    expect(binding?.subtask_index).toBe(0);
+    expect(binding?.status).toBe('claimed');
+    expect(binding?.branch).toBe('spec/spec-bound-plan/sub-0');
+  });
+
+  it('task_plan_status_for_spec_row returns null for an unbound row', async () => {
+    await call<PublishResult>('task_plan_publish', bindingPublishArgs());
+    const binding = await call<SpecRowBindingResult | null>('task_plan_status_for_spec_row', {
+      repo_root: repoRoot,
+      spec_row_id: 'V1',
+    });
+    expect(binding).toBeNull();
+  });
+
+  it('spec_read surfaces bound_subtasks for in-flight bindings', async () => {
+    await call<PublishResult>('task_plan_publish', bindingPublishArgs());
+    const specRead = await call<{
+      bound_subtasks: Record<string, { plan_slug: string; subtask_index: number; status: string }>;
+    }>('spec_read', { repo_root: repoRoot });
+    expect(specRead.bound_subtasks.T1).toEqual({
+      plan_slug: 'spec-bound-plan',
+      subtask_index: 0,
+      status: 'available',
+    });
+    expect(specRead.bound_subtasks.V1).toBeUndefined();
   });
 });

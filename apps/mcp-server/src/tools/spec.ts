@@ -11,6 +11,7 @@ import {
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
+import { listSpecRowBindings } from './plan.js';
 import { mcpErrorResponse } from './shared.js';
 
 export function register(server: McpServer, ctx: ToolContext): void {
@@ -18,11 +19,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_read',
-    'Read the root SPEC.md for a repo. Returns parsed sections + rootHash.',
+    'Read the root SPEC.md for a repo. Returns parsed sections + rootHash plus bound_subtasks: a sibling map of spec row id → { plan_slug, subtask_index, status } for every §V/§I/§T/§B row currently bound to a sub-task in this repo. Lets callers spot in-flight rows without scanning every plan.',
     { repo_root: z.string().min(1) },
     async ({ repo_root }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
       const spec = repo.readRoot();
+      const boundSubtasks = listSpecRowBindings(store, repo_root);
       return {
         content: [
           {
@@ -36,6 +38,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
                 ]),
               ),
               alwaysInvariants: spec.alwaysInvariants,
+              bound_subtasks: boundSubtasks,
             }),
           },
         ],
