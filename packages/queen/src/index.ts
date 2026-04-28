@@ -1,12 +1,19 @@
 export {
   capabilityHintForFiles,
+  orderedPlanFromWaves,
   planGoal,
   slugFromTitle,
   type CapabilityHint,
   type Goal,
+  type QueenExecutionStrategy,
+  type QueenOrderedPlan,
+  type QueenOrderedPlanInput,
   type PlanGoalOptions,
   type QueenPlan,
+  type QueenPlanWave,
+  type QueenPlanWaveInput,
   type QueenSubtask,
+  type QueenWaveSubtask,
 } from './decompose.js';
 
 export {

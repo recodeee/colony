@@ -29,6 +29,49 @@ export interface QueenPlan {
   subtasks: QueenSubtask[];
 }
 
+export interface QueenExecutionStrategy {
+  mode: 'flat_subtasks' | 'ordered_waves';
+  claim_model: 'agent_pull';
+  scheduler: 'none';
+  wave_dependency: 'none' | 'previous_wave';
+}
+
+export interface QueenPlanWave {
+  id: string;
+  title: string;
+  description?: string;
+  subtask_indexes: number[];
+}
+
+export interface QueenOrderedPlan extends QueenPlan {
+  execution_strategy: QueenExecutionStrategy;
+  waves: QueenPlanWave[];
+}
+
+export type QueenWaveSubtask = Omit<QueenSubtask, 'depends_on'> & {
+  /**
+   * Optional flat `task_plan` dependencies for exceptional earlier-wave edges.
+   * Same-wave dependencies are intentionally rejected: sub-tasks in one wave
+   * are supposed to be claimable in parallel.
+   */
+  depends_on?: number[];
+};
+
+export interface QueenPlanWaveInput {
+  id?: string;
+  title: string;
+  description?: string;
+  subtasks: QueenWaveSubtask[];
+}
+
+export interface QueenOrderedPlanInput {
+  slug: string;
+  title: string;
+  problem: string;
+  acceptance_criteria: string[];
+  waves: QueenPlanWaveInput[];
+}
+
 interface DraftGroup {
   kind: 'storage' | 'api' | 'web' | 'infra' | 'tests' | 'docs';
   title: string;
@@ -56,6 +99,67 @@ export function planGoal(goal: Goal, options: PlanGoalOptions = {}): QueenPlan {
       goal.acceptance_criteria && goal.acceptance_criteria.length > 0
         ? [...goal.acceptance_criteria]
         : [`Complete ${goal.title}`],
+    subtasks,
+  };
+}
+
+export function orderedPlanFromWaves(input: QueenOrderedPlanInput): QueenOrderedPlan {
+  if (input.waves.length === 0) {
+    throw new Error('ordered queen plan needs at least one wave');
+  }
+
+  const subtasks: QueenSubtask[] = [];
+  const waves: QueenPlanWave[] = [];
+  let previousWaveIndexes: number[] = [];
+
+  for (let waveIndex = 0; waveIndex < input.waves.length; waveIndex++) {
+    const wave = input.waves[waveIndex];
+    if (!wave) continue;
+    if (wave.subtasks.length === 0) {
+      throw new Error(`ordered queen plan wave ${waveIndex} needs at least one sub-task`);
+    }
+
+    const firstIndexInWave = subtasks.length;
+    const subtaskIndexes: number[] = [];
+
+    for (const subtask of wave.subtasks) {
+      const { depends_on: explicitDependsOn = [], ...draft } = subtask;
+      for (const dep of explicitDependsOn) {
+        if (!Number.isInteger(dep) || dep < 0 || dep >= firstIndexInWave) {
+          throw new Error(
+            `ordered queen plan wave ${waveIndex} has invalid dependency ${dep}; wave subtasks may only depend on earlier waves`,
+          );
+        }
+      }
+
+      subtasks.push({
+        ...draft,
+        depends_on: uniqueSorted([...explicitDependsOn, ...previousWaveIndexes]),
+      });
+      subtaskIndexes.push(subtasks.length - 1);
+    }
+
+    waves.push({
+      id: wave.id ?? `wave-${waveIndex + 1}`,
+      title: wave.title,
+      ...(wave.description !== undefined ? { description: wave.description } : {}),
+      subtask_indexes: subtaskIndexes,
+    });
+    previousWaveIndexes = subtaskIndexes;
+  }
+
+  return {
+    slug: input.slug,
+    title: input.title,
+    problem: input.problem,
+    acceptance_criteria: [...input.acceptance_criteria],
+    execution_strategy: {
+      mode: 'ordered_waves',
+      claim_model: 'agent_pull',
+      scheduler: 'none',
+      wave_dependency: 'previous_wave',
+    },
+    waves,
     subtasks,
   };
 }
@@ -245,6 +349,10 @@ function normalizeFiles(files: string[]): string[] {
         .filter((file) => file.length > 0),
     ),
   ];
+}
+
+function uniqueSorted(values: number[]): number[] {
+  return [...new Set(values)].sort((a, b) => a - b);
 }
 
 function isTestFile(file: string): boolean {

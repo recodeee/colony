@@ -90,6 +90,99 @@ MCP workflow:
    sub-task completes and `auto_archive` is enabled, the parent plan archives
    automatically unless conflicts block it.
 
+## ordered waves
+
+Queen can describe an ordered plan as waves without creating a scheduler. A
+wave is an authoring model for a set of sub-tasks that may run in parallel. The
+published contract is still the existing flat `task_plan.subtasks` list, and
+agents still pull claimable work through `task_ready_for_agent` and
+`task_plan_claim_subtask`.
+
+The model:
+
+```ts
+interface QueenExecutionStrategy {
+  mode: 'flat_subtasks' | 'ordered_waves';
+  claim_model: 'agent_pull';
+  scheduler: 'none';
+  wave_dependency: 'none' | 'previous_wave';
+}
+
+interface QueenPlanWave {
+  id: string;
+  title: string;
+  description?: string;
+  subtask_indexes: number[];
+}
+
+interface QueenOrderedPlan extends QueenPlan {
+  execution_strategy: QueenExecutionStrategy;
+  waves: QueenPlanWave[];
+}
+```
+
+Mapping to `task_plan`:
+
+- Wave 1 sub-tasks publish with empty `depends_on` unless the author adds an
+  explicit earlier dependency.
+- Each later wave publishes as normal `task_plan` sub-tasks whose `depends_on`
+  points at the previous wave's sub-task indexes.
+- Because `task_plan_list.next_available` only exposes sub-tasks whose direct
+  dependencies are completed, wave 2 stays blocked until wave 1 completes, and
+  wave 3 stays blocked until wave 2 completes.
+- Same-wave dependencies should be avoided. If one sub-task must wait for
+  another, split them into separate waves.
+- Extra `depends_on` edges are still valid when a specific sub-task must wait
+  for an earlier-wave sub-task. The wave model does not replace existing
+  dependency semantics.
+
+Example ordered plan shape:
+
+```json
+{
+  "execution_strategy": {
+    "mode": "ordered_waves",
+    "claim_model": "agent_pull",
+    "scheduler": "none",
+    "wave_dependency": "previous_wave"
+  },
+  "waves": [
+    {
+      "id": "wave-1",
+      "title": "Low-risk discoverability",
+      "subtask_indexes": [0, 1, 2, 3, 4]
+    },
+    {
+      "id": "wave-2",
+      "title": "Deeper product work",
+      "subtask_indexes": [5, 6, 7, 8]
+    },
+    {
+      "id": "wave-3",
+      "title": "Docs and integration",
+      "subtask_indexes": [9]
+    }
+  ],
+  "subtasks": [
+    { "title": "Agent 2 task", "depends_on": [] },
+    { "title": "Agent 3 task", "depends_on": [] },
+    { "title": "Agent 5 task", "depends_on": [] },
+    { "title": "Agent 6 task", "depends_on": [] },
+    { "title": "Agent 10 task", "depends_on": [] },
+    { "title": "Agent 4 task", "depends_on": [0, 1, 2, 3, 4] },
+    { "title": "Agent 7 task", "depends_on": [0, 1, 2, 3, 4] },
+    { "title": "Agent 8 task", "depends_on": [0, 1, 2, 3, 4] },
+    { "title": "Agent 9 task", "depends_on": [0, 1, 2, 3, 4] },
+    { "title": "Agent 1 task", "depends_on": [5, 6, 7, 8] }
+  ]
+}
+```
+
+This represents: Wave 1 has Agents 2, 3, 5, 6, and 10; Wave 2 has Agents 4, 7,
+8, and 9; Wave 3 has Agent 1. Queen publishes the flat sub-task structure, so
+existing `task_plan_publish`, `task_plan_validate`, claim, completion, and
+dependency-unlock behavior remain the only execution mechanism.
+
 Example: add Stripe webhook with four sub-tasks.
 
 ```json

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { type QueenPlan, planGoal, slugFromTitle } from '../src/decompose.js';
+import {
+  type CapabilityHint,
+  type QueenPlan,
+  type QueenWaveSubtask,
+  orderedPlanFromWaves,
+  planGoal,
+  slugFromTitle,
+} from '../src/decompose.js';
 
 interface Overlap {
   a: number;
@@ -186,6 +193,61 @@ describe('planGoal', () => {
   });
 });
 
+describe('orderedPlanFromWaves', () => {
+  it('maps ordered waves to flat task_plan dependencies', () => {
+    const plan = orderedPlanFromWaves({
+      slug: 'queen-ordered-agent-plan',
+      title: 'Queen ordered agent plan',
+      problem: 'Agents need discoverability work first, product work second, and docs last.',
+      acceptance_criteria: ['Agents pull claimable sub-tasks in wave order.'],
+      waves: [
+        {
+          id: 'wave-1',
+          title: 'Low-risk discoverability',
+          subtasks: [2, 3, 5, 6, 10].map((agent) => agentSubtask(agent, 'infra_work')),
+        },
+        {
+          id: 'wave-2',
+          title: 'Deeper product work',
+          subtasks: [4, 7, 8, 9].map((agent) => agentSubtask(agent, 'api_work')),
+        },
+        {
+          id: 'wave-3',
+          title: 'Docs and integration',
+          subtasks: [agentSubtask(1, 'doc_work')],
+        },
+      ],
+    });
+
+    expect(plan.execution_strategy).toEqual({
+      mode: 'ordered_waves',
+      claim_model: 'agent_pull',
+      scheduler: 'none',
+      wave_dependency: 'previous_wave',
+    });
+    expect(plan.waves.map((wave) => wave.subtask_indexes)).toEqual([
+      [0, 1, 2, 3, 4],
+      [5, 6, 7, 8],
+      [9],
+    ]);
+    expect(plan.subtasks.slice(0, 5).map((subtask) => subtask.depends_on)).toEqual([
+      [],
+      [],
+      [],
+      [],
+      [],
+    ]);
+    expect(plan.subtasks.slice(5, 9).map((subtask) => subtask.depends_on)).toEqual([
+      [0, 1, 2, 3, 4],
+      [0, 1, 2, 3, 4],
+      [0, 1, 2, 3, 4],
+      [0, 1, 2, 3, 4],
+    ]);
+    expect(plan.subtasks.at(-1)?.title).toBe('Agent 1 task');
+    expect(plan.subtasks.at(-1)?.depends_on).toEqual([5, 6, 7, 8]);
+  });
+});
+
 describe('slugFromTitle', () => {
   it('generates kebab-case slugs capped at 40 characters', () => {
     expect(slugFromTitle('Árvíztűrő User Authentication Flow With Extra Words')).toBe(
@@ -193,3 +255,12 @@ describe('slugFromTitle', () => {
     );
   });
 });
+
+function agentSubtask(agent: number, capability_hint: CapabilityHint): QueenWaveSubtask {
+  return {
+    title: `Agent ${agent} task`,
+    description: `Agent ${agent} handles its scoped work.`,
+    file_scope: [`agents/agent-${agent}.md`],
+    capability_hint,
+  };
+}
