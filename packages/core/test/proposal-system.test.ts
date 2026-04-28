@@ -259,6 +259,12 @@ describe('ProposalSystem.foragingReport', () => {
     expect(report.promoted[0].task_id).toBeGreaterThan(0);
     expect(report.pending.find((p) => p.id === promoted)).toBeUndefined();
     expect(report.pending.find((p) => p.id === strong)?.reinforcement_count).toBe(2);
+    expect(report.pending.find((p) => p.id === strong)?.signal_metadata).toMatchObject({
+      signal_kind: 'proposal',
+      source_session_id: 'A',
+      half_life_minutes: 60,
+      reinforced_by_sessions: ['A', 'B'],
+    });
   });
 
   it('filters proposals whose strength has evaporated below NOISE_FLOOR', () => {
