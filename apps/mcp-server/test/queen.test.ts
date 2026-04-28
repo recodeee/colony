@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { MemoryStore } from '@colony/core';
+import { type CapabilityHint, orderedPlanFromWaves, sweepQueenPlans } from '@colony/queen';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,6 +25,28 @@ interface QueenPublishResult {
   plan_slug: string;
   spec_task_id: number;
   subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
+}
+
+interface PlanRollup {
+  plan_slug: string;
+  next_available: Array<{ subtask_index: number }>;
+  subtasks: Array<{ subtask_index: number; status: string; claimed_by_session_id: string | null }>;
+}
+
+interface ReadyQueueResult {
+  ready: Array<{ plan_slug: string; subtask_index: number }>;
+  total_available: number;
+}
+
+interface ClaimResult {
+  task_id: number;
+  branch: string;
+  file_scope: string[];
+}
+
+interface CompleteResult {
+  status: string;
+  auto_archive: { status: string; reason?: string };
 }
 
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
@@ -204,4 +227,160 @@ describe('queen_plan_goal', () => {
     expect(err.code).toBe('QUEEN_INVALID_GOAL');
     expect(err.fields).toEqual(expect.arrayContaining(['goal_title', 'acceptance_criteria']));
   });
+
+  it('protects ordered wave publication, ready queue, claims, completion, and sweep', async () => {
+    const plan = orderedPlanFromWaves({
+      slug: 'queen-ordered-wave-loop',
+      title: 'Queen ordered wave loop',
+      problem: 'Agents need low-risk work first, product depth second, and docs last.',
+      acceptance_criteria: ['Only the current wave is claimable', 'Manual archive is surfaced'],
+      waves: [
+        {
+          id: 'wave-1',
+          title: 'Low-risk subtasks',
+          subtasks: [1, 2, 3, 4, 5].map((n) =>
+            waveSubtask(n, 'Low-risk setup', 'infra_work', `packages/core/src/wave-${n}.ts`),
+          ),
+        },
+        {
+          id: 'wave-2',
+          title: 'Deeper product subtasks',
+          subtasks: [6, 7, 8, 9].map((n) =>
+            waveSubtask(n, 'Product behavior', 'api_work', `apps/mcp-server/src/wave-${n}.ts`),
+          ),
+        },
+        {
+          id: 'wave-3',
+          title: 'Docs and integration',
+          subtasks: [
+            waveSubtask(10, 'Docs integration', 'doc_work', 'docs/queen-ordered-waves.md'),
+          ],
+        },
+      ],
+    });
+
+    const wave1 = [0, 1, 2, 3, 4];
+    const wave2 = [5, 6, 7, 8];
+    const wave3 = [9];
+
+    const published = await call<QueenPublishResult>('task_plan_publish', {
+      repo_root: repoRoot,
+      slug: plan.slug,
+      session_id: 'lead-session',
+      agent: 'queen',
+      title: plan.title,
+      problem: plan.problem,
+      acceptance_criteria: plan.acceptance_criteria,
+      subtasks: plan.subtasks,
+      auto_archive: false,
+    });
+
+    expect(published.subtasks.map((subtask) => subtask.subtask_index)).toEqual([
+      ...wave1,
+      ...wave2,
+      ...wave3,
+    ]);
+    expect(plan.waves.map((wave) => wave.subtask_indexes)).toEqual([wave1, wave2, wave3]);
+    await expectReadyOnly(plan.slug, wave1);
+
+    const wave1Claims = await claimWave(plan.slug, wave1, 'wave-1');
+    await expectReadyOnly(plan.slug, []);
+    await completeWave(plan.slug, wave1Claims);
+    await expectReadyOnly(plan.slug, wave2);
+
+    const wave2Claims = await claimWave(plan.slug, wave2, 'wave-2');
+    await expectReadyOnly(plan.slug, []);
+    await completeWave(plan.slug, wave2Claims);
+    await expectReadyOnly(plan.slug, wave3);
+
+    const wave3Claims = await claimWave(plan.slug, wave3, 'wave-3');
+    await expectReadyOnly(plan.slug, []);
+    const [finalCompletion] = await completeWave(plan.slug, wave3Claims);
+    expect(finalCompletion?.auto_archive).toMatchObject({
+      status: 'skipped',
+      reason: expect.stringMatching(/disabled/),
+    });
+    await expectReadyOnly(plan.slug, []);
+
+    const sweep = sweepQueenPlans(store, { repo_root: repoRoot });
+    expect(sweep).toHaveLength(1);
+    expect(sweep[0]?.items).toContainEqual({
+      reason: 'ready-to-archive',
+      plan_slug: plan.slug,
+      plan_title: plan.title,
+      repo_root: repoRoot,
+      spec_task_id: published.spec_task_id,
+      completed_subtask_count: 10,
+    });
+  });
 });
+
+function waveSubtask(n: number, label: string, capability_hint: CapabilityHint, file: string) {
+  return {
+    title: `${label} ${n}`,
+    description: `${label} subtask ${n}.`,
+    file_scope: [file],
+    capability_hint,
+  };
+}
+
+async function expectReadyOnly(planSlug: string, indexes: number[]): Promise<void> {
+  const listed = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+  const plan = listed.find((candidate) => candidate.plan_slug === planSlug);
+  expect(plan).toBeDefined();
+  expect(sortedIndexes(plan?.next_available ?? [])).toEqual(indexes);
+
+  const queue = await call<ReadyQueueResult>('task_ready_for_agent', {
+    repo_root: repoRoot,
+    session_id: 'ready-session',
+    agent: 'codex',
+    limit: 20,
+  });
+  const readyForPlan = queue.ready.filter((item) => item.plan_slug === planSlug);
+  expect(sortedIndexes(readyForPlan)).toEqual(indexes);
+  expect(queue.total_available).toBe(indexes.length);
+}
+
+async function claimWave(
+  planSlug: string,
+  indexes: number[],
+  sessionPrefix: string,
+): Promise<Array<{ index: number; session_id: string }>> {
+  const claims: Array<{ index: number; session_id: string }> = [];
+  for (const index of indexes) {
+    const sessionId = `${sessionPrefix}-session-${index}`;
+    store.startSession({ id: sessionId, ide: 'codex', cwd: repoRoot });
+    const claim = await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: planSlug,
+      subtask_index: index,
+      session_id: sessionId,
+      agent: 'codex',
+    });
+    expect(claim.branch).toBe(`spec/${planSlug}/sub-${index}`);
+    expect(claim.task_id).toBeGreaterThan(0);
+    claims.push({ index, session_id: sessionId });
+  }
+  return claims;
+}
+
+async function completeWave(
+  planSlug: string,
+  claims: Array<{ index: number; session_id: string }>,
+): Promise<CompleteResult[]> {
+  const completions: CompleteResult[] = [];
+  for (const claim of claims) {
+    const completion = await call<CompleteResult>('task_plan_complete_subtask', {
+      plan_slug: planSlug,
+      subtask_index: claim.index,
+      session_id: claim.session_id,
+      summary: `sub-${claim.index} done`,
+    });
+    expect(completion.status).toBe('completed');
+    completions.push(completion);
+  }
+  return completions;
+}
+
+function sortedIndexes(items: Array<{ subtask_index: number }>): number[] {
+  return items.map((item) => item.subtask_index).sort((a, b) => a - b);
+}
