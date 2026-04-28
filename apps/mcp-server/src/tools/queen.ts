@@ -29,7 +29,7 @@ interface NormalizedQueenPlan {
   title: string;
   problem: string;
   acceptance_criteria: string[];
-  auto_archive: true;
+  auto_archive: boolean;
   subtasks: NormalizedSubtask[];
 }
 
@@ -230,7 +230,7 @@ function publishPlan(args: {
     repo_root: args.repo_root,
     session_id: args.session_id,
     agent: 'queen',
-    auto_archive: true,
+    auto_archive: args.plan.auto_archive,
     plan: args.plan,
   });
 }

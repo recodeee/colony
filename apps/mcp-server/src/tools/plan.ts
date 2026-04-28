@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   type MemoryStore,
   type SubtaskInfo,
@@ -16,6 +18,7 @@ import {
   SyncEngine,
   parseSpec,
   publishPlan,
+  serializeChange,
   serializeSpec,
   syncPlanWorkspaceTasks,
 } from '@colony/spec';
@@ -257,36 +260,48 @@ export function register(server: McpServer, ctx: ToolContext): void {
         );
       }
 
-      store.storage.transaction(() => {
-        for (const file of located.info.file_scope) {
-          store.storage.releaseClaim({
-            task_id: located.task_id,
-            file_path: file,
-            session_id: args.session_id,
-          });
-        }
-        store.addObservation({
-          session_id: args.session_id,
-          task_id: located.task_id,
-          kind: 'plan-subtask-claim',
-          content: args.summary,
-          metadata: {
-            status: 'completed',
-            session_id: args.session_id,
-            agent: located.info.claimed_by_agent ?? 'unknown',
-            plan_slug: args.plan_slug,
-            subtask_index: args.subtask_index,
-            completed_at: Date.now(),
-          },
-        });
-        if (located.info.spec_row_id !== null) {
-          appendSpecRowCompletionDelta(store, {
-            plan_slug: args.plan_slug,
-            session_id: args.session_id,
-            subtask: located.info,
-          });
-        }
+      const specDelta = prepareSpecRowCompletionDelta(store, {
+        plan_slug: args.plan_slug,
+        subtask: located.info,
       });
+      if (specDelta) writeFileAtomic(specDelta.path, specDelta.nextContent);
+
+      try {
+        store.storage.transaction(() => {
+          for (const file of located.info.file_scope) {
+            store.storage.releaseClaim({
+              task_id: located.task_id,
+              file_path: file,
+              session_id: args.session_id,
+            });
+          }
+          store.addObservation({
+            session_id: args.session_id,
+            task_id: located.task_id,
+            kind: 'plan-subtask-claim',
+            content: args.summary,
+            metadata: {
+              status: 'completed',
+              session_id: args.session_id,
+              agent: located.info.claimed_by_agent ?? 'unknown',
+              plan_slug: args.plan_slug,
+              subtask_index: args.subtask_index,
+              completed_at: Date.now(),
+            },
+          });
+          if (specDelta) {
+            store.addObservation({
+              session_id: args.session_id,
+              task_id: located.info.parent_spec_task_id as number,
+              kind: 'spec-delta',
+              content: `modify ${specDelta.specRowId} = ${specDelta.rowCells.join(' | ')}`,
+            });
+          }
+        });
+      } catch (err) {
+        if (specDelta) revertSpecChange(specDelta);
+        throw err;
+      }
 
       const parentTask = store.storage
         .listTasks(2000)
@@ -377,16 +392,23 @@ export function register(server: McpServer, ctx: ToolContext): void {
   );
 }
 
-function appendSpecRowCompletionDelta(
+interface PreparedSpecRowCompletionDelta {
+  path: string;
+  previousContent: string;
+  nextContent: string;
+  specRowId: string;
+  rowCells: string[];
+}
+
+function prepareSpecRowCompletionDelta(
   store: MemoryStore,
   args: {
     plan_slug: string;
-    session_id: string;
     subtask: SubtaskInfo;
   },
-): void {
+): PreparedSpecRowCompletionDelta | null {
   const specRowId = args.subtask.spec_row_id;
-  if (specRowId === null) return;
+  if (specRowId === null) return null;
   if (args.subtask.parent_spec_task_id === null) {
     throw new Error(
       `bound sub-task ${args.plan_slug}/${args.subtask.subtask_index} has no parent spec task`,
@@ -408,13 +430,55 @@ function appendSpecRowCompletionDelta(
     target: specRowId,
     row: { id: specRowId, cells: rowCells },
   });
-  repo.writeChange(change);
-  store.addObservation({
-    session_id: args.session_id,
-    task_id: args.subtask.parent_spec_task_id,
-    kind: 'spec-delta',
-    content: `modify ${specRowId} = ${rowCells.join(' | ')}`,
-  });
+  const path = specChangePath(parentTask.repo_root, args.plan_slug);
+  return {
+    path,
+    previousContent: readFileSync(path, 'utf8'),
+    nextContent: serializeChange(change),
+    specRowId,
+    rowCells,
+  };
+}
+
+function writeFileAtomic(path: string, content: string): void {
+  const tmpPath = join(
+    dirname(path),
+    `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  try {
+    writeFileSync(tmpPath, content, 'utf8');
+    renameSync(tmpPath, path);
+  } catch (err) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // best-effort cleanup only
+    }
+    throw err;
+  }
+}
+
+function revertSpecChange(delta: PreparedSpecRowCompletionDelta): void {
+  try {
+    writeFileAtomic(delta.path, delta.previousContent);
+  } catch {
+    // best-effort rollback only
+  }
+}
+
+function specChangePath(repoRoot: string, slug: string): string {
+  return join(repoRoot, 'openspec/changes', slug, 'CHANGE.md');
+}
+
+function restoreStagedArchive(repoRoot: string, slug: string): void {
+  const changeDir = dirname(specChangePath(repoRoot, slug));
+  const stagingPath = join(repoRoot, 'openspec/changes/archive', `.staging-${slug}`);
+  if (existsSync(changeDir) || !existsSync(stagingPath)) return;
+  try {
+    renameSync(stagingPath, changeDir);
+  } catch {
+    // best-effort archive rollback only
+  }
 }
 
 function completedSpecRowCells(spec: Spec, specRowId: string): string[] {
@@ -542,6 +606,7 @@ function runAutoArchiveIfReady(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    restoreStagedArchive(parentTask.repo_root, args.plan_slug);
     store.addObservation({
       session_id: args.session_id,
       task_id: args.parent_spec_task_id,

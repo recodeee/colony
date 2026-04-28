@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -676,6 +676,55 @@ describe('task_plan auto-archive', () => {
     expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-default-off/CHANGE.md'))).toBe(
       true,
     );
+  });
+
+  it('delta written then archive throws', async () => {
+    const slug = 'delta-archive-throws';
+    const published = await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug,
+        auto_archive: true,
+        subtasks: [
+          {
+            title: 'Other task',
+            description: 'No row binding.',
+            file_scope: ['apps/api/src/other.ts'],
+          },
+          {
+            title: 'Bound row task',
+            description: 'Complete T5.',
+            file_scope: ['apps/api/src/bound.ts'],
+            spec_row_id: 'T5',
+          },
+        ],
+      }),
+    );
+
+    await claimAndComplete(slug, 0, 'B', 'codex');
+    const archiveDir = join(repoRoot, 'openspec/changes/archive');
+    mkdirSync(archiveDir, { recursive: true });
+    writeFileSync(
+      join(archiveDir, `${new Date().toISOString().slice(0, 10)}-${slug}`),
+      'block',
+      'utf8',
+    );
+
+    const last = await claimAndComplete(slug, 1, 'C', 'claude');
+    expect(last.status).toBe('completed');
+    expect(last.auto_archive.status).toBe('error');
+
+    const changeText = readChangeText(slug);
+    const deltaLines = changeText.split('\n').filter((line) => line.startsWith('modify|T5|'));
+    expect(deltaLines).toEqual(['modify|T5|T5 done bound plan task V1']);
+
+    const archiveErrors = store.storage.taskObservationsByKind(
+      published.spec_task_id,
+      'plan-archive-error',
+      10,
+    );
+    expect(archiveErrors).toHaveLength(1);
+    expect(archiveErrors[0]?.content).toContain('auto-archive failed');
   });
 
   it('records a plan-archive-error observation when archive throws', async () => {

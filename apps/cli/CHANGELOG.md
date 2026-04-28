@@ -1,6 +1,8 @@
 # @imdeadpool/colony-cli
 
-## telemetry-driven coordination tightening
+## Unreleased
+
+### telemetry-driven coordination tightening
 
 - Worker viewer now surfaces coordination drift from telemetry: edits without claims, sessions without handoff, blockers without messages, and abandoned proposals.
 - `colony debrief` now reports coordination write/read ratio so release checks can see whether agents only read state or also leave durable coordination writes.
