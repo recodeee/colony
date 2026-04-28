@@ -366,6 +366,8 @@ describe('task threads — handoff lifecycle', () => {
     expect(store.storage.getObservation(id)).toMatchObject({
       id,
       kind: 'note',
+      content: 'agent-15 inspect inbox routing before release.',
+      compressed: 1,
     });
   });
 

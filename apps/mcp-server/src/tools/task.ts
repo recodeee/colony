@@ -161,7 +161,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_note_working',
-    'Save current working state to the active Colony task. First write path/notepad replacement: write working note; save current state; remember progress; log what I am doing. Resolves by repo_root/branch; returns compact candidates.',
+    'Save current working state to the active Colony task. First write path/notepad replacement: write working note; save current state; log what I am doing; remember progress. repo_root/branch resolves by task_id; returns compact candidates.',
     {
       session_id: z.string().min(1),
       content: z.string().min(1),

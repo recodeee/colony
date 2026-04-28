@@ -66,6 +66,8 @@ export interface InboxMessageMarkReadArgs {
 }
 
 export interface InboxMessage extends MessageActionSummary {
+  reply_tool: 'task_message';
+  mark_read_tool: 'task_message_mark_read';
   reply_with_tool: 'task_message';
   reply_with_args: InboxMessageReplyArgs;
   mark_read_with_tool: 'task_message_mark_read';
