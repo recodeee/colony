@@ -1,4 +1,4 @@
-import { readHivemind, type SearchResult } from '@colony/core';
+import { type SearchResult, readHivemind } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
@@ -9,7 +9,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'hivemind',
-    'Summarize active agent sessions and task ownership from proxy-runtime state files.',
+    'See what other agents are doing right now. Summarizes active sessions, branches, task ownership, and stale lanes from runtime state.',
     {
       repo_root: z.string().min(1).optional(),
       repo_roots: z.array(z.string().min(1)).max(20).optional(),
@@ -29,7 +29,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'hivemind_context',
-    'Return active task ownership plus compact relevant memory hits. Use before fetching full observations.',
+    'Use this BEFORE editing to see active lanes, file ownership, and memory hints. Returns compact situational awareness before fetching full observations.',
     {
       repo_root: z.string().min(1).optional(),
       repo_roots: z.array(z.string().min(1)).max(20).optional(),

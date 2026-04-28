@@ -1,4 +1,9 @@
-import { type AgentCapabilities, DEFAULT_CAPABILITIES, loadProfile, saveProfile } from '@colony/core';
+import {
+  type AgentCapabilities,
+  DEFAULT_CAPABILITIES,
+  loadProfile,
+  saveProfile,
+} from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
@@ -8,7 +13,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'agent_upsert_profile',
-    "Set or update an agent's capability profile (ui_work, api_work, test_work, infra_work, doc_work). Weights are 0..1; missing weights keep their current value (or the 0.5 default for first-time profiles). Used by the handoff router to suggest which agent is the best fit for a broadcast ('any') handoff.",
+    'Set an agent skill profile for routing handoffs or ready work. Capability weights cover ui_work, api_work, test_work, infra_work, and doc_work from 0..1; missing weights keep their current value.',
     {
       agent: z.string().min(1),
       capabilities: z
@@ -32,7 +37,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'agent_get_profile',
-    'Read an agent capability profile. Unknown agents return the default (0.5 across all dimensions).',
+    'Read an agent skill profile for routing or fit checks. Unknown agents return the default 0.5 capability weights.',
     { agent: z.string().min(1) },
     async ({ agent }) => {
       const profile = loadProfile(store.storage, agent);

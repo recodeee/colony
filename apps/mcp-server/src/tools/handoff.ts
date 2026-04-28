@@ -16,7 +16,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_hand_off',
     [
-      'Hand off work to another agent on this task. Atomically releases/transfers file claims.',
+      'Give work to another agent and transfer or release file claims. Use when you need to pass ownership, unblock yourself, or route work to a better owner.',
       RELAY_FALLBACK_RULE,
     ].join(' '),
     {
@@ -60,7 +60,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_accept_handoff',
-    'Accept a pending handoff addressed to you. Installs transferred file claims under your session.',
+    'Take over work from a pending handoff addressed to you. Installs transferred file claims under your session.',
     {
       handoff_observation_id: z.number().int().positive(),
       session_id: z.string().min(1),
@@ -85,7 +85,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_decline_handoff',
-    'Decline a pending handoff. Records a reason and cancels the handoff so the sender can reissue.',
+    'Decline a handoff you cannot take. Records a reason and cancels the pending transfer so the sender can reissue.',
     {
       handoff_observation_id: z.number().int().positive(),
       session_id: z.string().min(1),

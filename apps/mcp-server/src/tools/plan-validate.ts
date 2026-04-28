@@ -51,7 +51,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_validate',
-    'Preview the partition of a multi-task plan before publishing. Returns conflicts with current claims and pairwise overlaps between independent sub-tasks.',
+    'Check a multi-agent plan for file conflicts before publishing. Returns live claim collisions and pairwise overlaps between independent sub-tasks.',
     {
       repo_root: z.string().min(1),
       subtasks: z.array(SubtaskInputSchema).min(2).max(20),

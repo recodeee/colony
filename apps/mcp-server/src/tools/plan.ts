@@ -37,7 +37,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_plan_publish',
     [
-      'Publish a multi-task plan. Creates a spec change document at',
+      'Split a large task into claimable sub-tasks. Creates a spec change document at',
       'openspec/changes/<slug>/CHANGE.md, opens one task thread per sub-task on',
       'spec/<slug>/sub-N branches, and links them via metadata.parent_plan_slug.',
       'Refuses to publish if independent sub-tasks have overlapping file scopes',
@@ -167,7 +167,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_list',
-    'List published plans. Returns plan-level rollup with sub-task counts by status (available/claimed/completed/blocked) and a next_available list of unblocked, unclaimed sub-tasks. Filter by repo_root, only_with_available_subtasks, or capability_match.',
+    'Find available plan sub-tasks and rollups. Lists published plans with counts by status and next_available unblocked, unclaimed work. Filter by repo_root, only_with_available_subtasks, or capability_match.',
     {
       repo_root: z.string().min(1).optional(),
       only_with_available_subtasks: z.boolean().optional(),
@@ -191,7 +191,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_claim_subtask',
-    'Claim an available sub-task on a published plan. Joins you to the sub-task thread and activates file claims for the sub-task file_scope. Refuses if dependencies are not met or another agent already holds the claim.',
+    'Claim a plan sub-task and its files. Joins you to the sub-task thread, activates file claims, and refuses unmet dependencies or already-claimed work.',
     {
       plan_slug: z.string().min(1),
       subtask_index: z.number().int().nonnegative(),
@@ -294,7 +294,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_complete_subtask',
-    'Mark your claimed sub-task complete. Releases file claims; downstream sub-tasks (if any) become available.',
+    'Mark a plan sub-task done and release its file claims. Downstream dependent sub-tasks become available after completion.',
     {
       plan_slug: z.string().min(1),
       subtask_index: z.number().int().nonnegative(),
@@ -377,7 +377,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_status_for_spec_row',
-    'Find the plan sub-task bound to a spec row and return its current status, if any.',
+    'Check whether a spec row is already covered by a plan sub-task. Returns the bound sub-task and current status if one exists.',
     {
       repo_root: z.string().min(1),
       spec_row_id: z.string().min(1),

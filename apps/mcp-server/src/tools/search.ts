@@ -7,7 +7,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'search',
-    'Search memory. Returns compact hits — fetch full bodies via get_observations.',
+    'Search memory for prior decisions, errors, or notes. Returns compact hits; fetch full bodies with get_observations.',
     { query: z.string().min(1), limit: z.number().int().positive().max(50).optional() },
     async ({ query, limit }) => {
       const e = (await resolveEmbedder()) ?? undefined;
@@ -20,7 +20,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'timeline',
-    'Chronological observation IDs for a session. Use to locate context around a point.',
+    'See a session timeline around an observation. Returns chronological IDs so you can locate neighboring context before fetching bodies.',
     {
       session_id: z.string().min(1),
       around_id: z.number().int().positive().optional(),
@@ -35,7 +35,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'get_observations',
-    'Fetch full observation bodies by ID. Returns expanded text by default.',
+    'Read full observation bodies by ID. Use after search, timeline, inbox, or task tools return compact observation IDs.',
     {
       ids: z.array(z.number().int().positive()).min(1).max(50),
       expand: z.boolean().optional(),
@@ -56,7 +56,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'list_sessions',
-    'List recent sessions in reverse chronological order. Use to navigate before calling timeline.',
+    'Find recent sessions to inspect or recall. Lists sessions in reverse chronological order before you call timeline.',
     { limit: z.number().int().positive().max(200).optional() },
     async ({ limit }) => {
       const sessions = store.storage.listSessions(limit ?? 20);

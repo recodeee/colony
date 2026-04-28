@@ -29,7 +29,7 @@ export function register(
 
   server.tool(
     'rescue_stranded_scan',
-    'Preview stranded-session rescues without mutating state. Use this to ask whether anything is stranded right now.',
+    'Find stranded sessions or abandoned file claims without changing state. Dry-run scan for stuck work before running a rescue.',
     {
       stranded_after_minutes: z.number().positive().optional(),
     },
@@ -46,7 +46,7 @@ export function register(
 
   server.tool(
     'rescue_stranded_run',
-    'Run stranded-session rescue. Requires confirm: true because this drops stranded file claims and emits relays.',
+    'Rescue stranded sessions and emit relays after confirmation. Requires confirm: true because this drops stranded file claims.',
     {
       stranded_after_minutes: z.number().positive().optional(),
       confirm: z.boolean().optional(),

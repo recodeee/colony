@@ -17,7 +17,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_list',
-    'List recent task threads. Each task groups sessions collaborating on the same (repo_root, branch).',
+    'Find task threads for this repo or branch. Lists recent shared work lanes where sessions collaborate on the same repo_root and branch.',
     { limit: z.number().int().positive().max(200).optional() },
     async ({ limit }) => {
       const tasks = store.storage.listTasks(limit ?? 50);
@@ -27,7 +27,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_timeline',
-    'Recent observations on a task thread (compact: id, kind, session_id, ts, reply_to).',
+    'See recent task-thread activity. Returns compact observation IDs, kinds, authors, timestamps, and reply links for follow-up reads.',
     {
       task_id: z.number().int().positive(),
       limit: z.number().int().positive().max(200).optional(),
@@ -47,7 +47,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_updates_since',
-    "Task-thread observations after a cursor ts, excluding this session's own posts.",
+    "Check unread task updates since a timestamp. Excludes this session's own posts so you can catch other-agent changes.",
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1),
@@ -71,8 +71,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_post',
     [
-      'Post a coordination message on a task thread. Use specific tools for claim / hand_off / accept.',
+      'Send a coordination note on a task thread. Use for questions, answers, decisions, blockers, and general notes when no direct message is needed.',
       "Deprecation note: use task_message for non-broadcast agent-to-agent coordination; keep task_post for kind:'note'|'blocker'|'question'|'answer'|'decision' style threading.",
+      'Use specific tools for claim / hand_off / accept.',
       RELAY_FALLBACK_POST_RULE,
     ].join(' '),
     {
@@ -96,7 +97,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_claim_file',
-    'Claim a file on a task thread so overlapping edits from other sessions surface a warning next turn.',
+    'Claim a file before editing so other agents see ownership. Overlapping edits from other sessions surface as warnings next turn.',
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1),
@@ -122,7 +123,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_link',
-    'Link two tasks bidirectionally so each side sees the other in attention prefaces. Idempotent.',
+    "Link related tasks so each thread sees the other's decisions. Bidirectional and idempotent for cross-task coordination.",
     {
       task_id: z.number().int().positive(),
       other_task_id: z.number().int().positive(),
@@ -159,7 +160,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_unlink',
-    'Drop the bidirectional link between two tasks. Returns { removed: boolean }.',
+    'Unlink related tasks when cross-thread coordination is no longer needed. Drops the bidirectional edge and returns { removed: boolean }.',
     {
       task_id: z.number().int().positive(),
       other_task_id: z.number().int().positive(),
@@ -173,7 +174,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_links',
-    'List tasks linked to a task. Returns the other side of each edge with link metadata.',
+    'List related tasks linked to this task thread. Returns the other side of each edge with link metadata.',
     { task_id: z.number().int().positive() },
     async ({ task_id }) => {
       const thread = new TaskThread(store, task_id);

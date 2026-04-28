@@ -8,7 +8,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'attention_inbox',
-    'Compact list of what needs your attention: pending handoffs, pending wakes, stalled lanes, recent other-session file claims. Fetch bodies via get_observations.',
+    'See what needs your attention: pending, unread, and blocking items. Includes handoffs, stalled lanes, pending reminders, and recent other-session file claims.',
     {
       session_id: z.string().min(1),
       agent: z.string().min(1),
@@ -39,7 +39,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_foraging_report',
-    'List pending and recently promoted proposals on a (repo_root, branch). Pending proposals whose strength has evaporated below the noise floor are omitted.',
+    'Find proposed work on this repo branch. Lists pending and recently promoted proposals; weak expired proposals are omitted.',
     {
       repo_root: z.string().min(1),
       branch: z.string().min(1),

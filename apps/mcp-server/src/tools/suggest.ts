@@ -12,7 +12,7 @@ import type { ToolContext } from './context.js';
 export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_suggest_approach',
-    'Suggest an approach for a new task from similar past task history, or return insufficient_data_reason when the corpus cannot support a confident suggestion.',
+    'Find a proven approach from similar past tasks. Use before planning or implementation; returns insufficient_data_reason when history is not strong enough.',
     {
       query: z.string().min(1),
       repo_root: z.string().min(1).optional(),

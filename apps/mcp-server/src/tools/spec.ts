@@ -18,7 +18,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_read',
-    'Read the root SPEC.md for a repo. Returns parsed sections + rootHash.',
+    'Read the repo SPEC.md contract before changing behavior. Returns parsed sections and rootHash for scoped planning.',
     { repo_root: z.string().min(1) },
     async ({ repo_root }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
@@ -45,7 +45,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_change_open',
-    'Open a new spec change. Creates openspec/changes/<slug>/CHANGE.md, opens a task-thread on spec/<slug>, joins caller as participant.',
+    'Start a spec change and task thread for planned work. Creates openspec/changes/<slug>/CHANGE.md and joins the caller.',
     {
       repo_root: z.string().min(1),
       slug: z
@@ -81,7 +81,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_change_add_delta',
-    'Append a delta row to an in-flight change. op ∈ add|modify|remove; target is a root spec id like V.3 or T.12.',
+    'Record a spec delta for an in-flight change. Append add, modify, or remove rows against root spec IDs like V.3 or T.12.',
     {
       repo_root: z.string().min(1),
       slug: z.string().min(1),
@@ -114,7 +114,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_build_context',
-    'Resolve cite-scoped context for a §T task id. Returns only the invariants and rows the task is obliged to respect plus §V.always entries — not the whole spec.',
+    'Fetch only the spec context required for a task row. Returns cited invariants, obliged rows, and always entries instead of the whole spec.',
     {
       repo_root: z.string().min(1),
       task_id: z.string().min(1).describe('§T row id, e.g. T5'),
@@ -143,7 +143,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_build_record_failure',
-    'Record a test failure during /co:build. Hashes the signature, appends §B, and — if the promote_after threshold is reached — proposes a §V invariant via colony ProposalSystem. Returns the decision.',
+    'Record a test failure and maybe propose a new invariant. Hashes the signature, appends a build row, and promotes to a proposal after the threshold.',
     {
       repo_root: z.string().min(1),
       slug: z.string().min(1),
@@ -197,7 +197,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'spec_archive',
-    'Validate, three-way-merge, and archive an in-flight change. Atomic: either the archive + root write both land, or neither does.',
+    'Archive a spec change after validation and merge it into SPEC.md. Atomic: either archive plus root write both land, or neither does.',
     {
       repo_root: z.string().min(1),
       slug: z.string().min(1),

@@ -114,6 +114,11 @@ describe('MCP server', () => {
     expect(byName.get('task_hand_off')?.description).toContain(
       'Fallback when task_relay is unavailable',
     );
+    expect(byName.get('task_message')?.description).toMatch(/^Send a message or note/);
+    expect(byName.get('attention_inbox')?.description).toMatch(/^See what needs your attention/);
+    expect(byName.get('task_ready_for_agent')?.description).toMatch(/^Find work to claim/);
+    expect(byName.get('task_hand_off')?.description).toMatch(/^Give work to another agent/);
+    expect(byName.get('hivemind_context')?.description).toContain('BEFORE editing');
   });
 
   it('hivemind returns compact active-session task state', async () => {
