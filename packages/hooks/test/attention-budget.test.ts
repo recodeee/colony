@@ -128,6 +128,43 @@ describe('SessionStart attention budget preface', () => {
     );
   });
 
+  it('uses the budgeted section for full SessionStart attention rendering', async () => {
+    const thread = createThread();
+    thread.postMessage({
+      from_session_id: 'A',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'blocking schema call',
+      urgency: 'blocking',
+      expires_in_ms: 60 * 60_000,
+    });
+    for (let i = 0; i < 4; i += 1) {
+      thread.postMessage({
+        from_session_id: 'A',
+        from_agent: 'claude',
+        to_agent: 'codex',
+        content: `reply ${i}`,
+        urgency: 'needs_reply',
+        expires_in_ms: (40 - i * 10) * 60_000,
+      });
+    }
+
+    const preface = await sessionStart(
+      store,
+      { session_id: 'B', ide: 'codex', cwd: repo },
+      noSuggestions,
+    );
+
+    expect(preface).toContain('Attention (3 of 5):');
+    expect(preface).toContain('→ blocking: claude: blocking schema call');
+    expect(preface).toContain(
+      'Plus 2 needs_reply items collapsed. Run attention_inbox to see all.',
+    );
+    expect(preface).not.toContain('BLOCKING MESSAGE');
+    expect(preface).not.toContain('MESSAGE NEEDS REPLY');
+    expect(preface).not.toContain('FYI MESSAGES');
+  });
+
   it('keeps blocking prominent before fyi and collapses fyi-only items', () => {
     const thread = createThread();
     for (let i = 0; i < 4; i += 1) {

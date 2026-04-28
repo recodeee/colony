@@ -91,7 +91,7 @@ export async function sessionStart(
   kickForagingScan(store, input);
 
   const priorPreface = buildPriorPreface(store, input);
-  const taskPreface = buildTaskPreface(store, input);
+  const taskPreface = buildTaskPreface(store, input, { includeAttentionItems: false });
   const suggestionPreface = await buildSuggestionPreface(store, input, deps);
   const proposalPreface = buildProposalPreface(store, input);
   const foragingPreface = buildForagingPreface(store, input);
@@ -159,11 +159,16 @@ export function buildAttentionBudgetSection(
   if (!detected) return '';
 
   const agent = deriveAgent(input.ide, detected.branch);
-  const inbox = buildAttentionInbox(store, {
-    session_id: input.session_id,
-    agent,
-    repo_root: detected.repo_root,
-  });
+  let inbox: ReturnType<typeof buildAttentionInbox>;
+  try {
+    inbox = buildAttentionInbox(store, {
+      session_id: input.session_id,
+      agent,
+      repo_root: detected.repo_root,
+    });
+  } catch {
+    return '';
+  }
   const budget = applyAttentionBudget(inbox);
   return renderAttentionBudget(budget, inbox.generated_at);
 }
@@ -238,6 +243,7 @@ function buildPriorPreface(store: MemoryStore, input: HookInput): string {
 export function buildTaskPreface(
   store: MemoryStore,
   input: Pick<HookInput, 'session_id' | 'cwd' | 'ide'>,
+  options: { includeAttentionItems?: boolean } = {},
 ): string {
   const cwd = input.cwd;
   if (!cwd) return '';
@@ -277,6 +283,9 @@ export function buildTaskPreface(
       `## Task thread #${thread.task_id} (${detected.branch})`,
       `Joined with: ${who}. Post coordination via MCP tools task_post / task_claim_file / task_hand_off.`,
     );
+  }
+  if (options.includeAttentionItems === false) {
+    return lines.join('\n');
   }
   appendMessagePreface(lines, unreadMessages, input.session_id, agent);
   for (const h of pending) {
