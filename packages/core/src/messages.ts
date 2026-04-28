@@ -39,6 +39,8 @@ export interface MessageSummary {
 export interface ListMessagesOptions {
   session_id: string;
   agent: string;
+  /** Injected clock for attention-inbox/tests; defaults to wall time. */
+  now?: number;
   /** Lower bound (inclusive) on observation ts. Default 0 = no bound. */
   since_ts?: number;
   /** Scope to a specific set of tasks. Default: every task the session
@@ -87,7 +89,7 @@ export function listMessagesForAgent(
   const since = opts.since_ts ?? 0;
   const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
   const previewLen = opts.previewLength ?? DEFAULT_PREVIEW_LENGTH;
-  const now = Date.now();
+  const now = opts.now ?? Date.now();
 
   const taskIds = opts.task_ids?.length
     ? [...new Set(opts.task_ids)].filter(

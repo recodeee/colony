@@ -48,10 +48,15 @@ export function applyAttentionBudget(
       return a.index - b.index;
     });
 
-  const prominent = ranked
-    .filter(({ item }) => item.urgency !== 'fyi')
-    .slice(0, maxProminent)
-    .map(({ item }) => item);
+  const blocking = ranked.filter(({ item }) => item.urgency === 'blocking').map(({ item }) => item);
+  const needsReplySlots = Math.max(0, maxProminent - blocking.length);
+  const prominent = [
+    ...blocking,
+    ...ranked
+      .filter(({ item }) => item.urgency === 'needs_reply')
+      .slice(0, needsReplySlots)
+      .map(({ item }) => item),
+  ];
   const prominentSet = new Set(prominent);
   const collapsed_counts = { blocking: 0, needs_reply: 0, fyi: 0 };
 

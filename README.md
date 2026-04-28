@@ -139,8 +139,8 @@ If the ready item needs implementation context, call `search` with the task titl
 | --- | --- |
 | `task_post` | Add a question, answer, decision, blocker, or note to a task; use `kind:"note"` to write working note, save current state, remember progress, or log what I am doing. |
 | `task_message` | Send a directed or broadcast message to another agent. |
-| `task_messages` | Read messages addressed to the current agent/session. |
-| `task_message_mark_read` | Acknowledge a message and emit a read receipt. |
+| `task_messages` | Read compact message previews; expired rows only surface for audit-style listing. |
+| `task_message_mark_read` | Acknowledge a message and emit a read receipt; expired rows return `MESSAGE_EXPIRED`. |
 | `task_message_claim` | Claim a broadcast message before replying. |
 | `task_message_retract` | Retract a message that has not been replied to. |
 | `task_claim_file` | Claim a file before editing so file ownership is visible and overlaps warn, not lock. |

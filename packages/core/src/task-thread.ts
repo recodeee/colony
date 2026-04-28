@@ -996,6 +996,9 @@ export class TaskThread {
         'message has been retracted by the sender',
       );
     }
+    if (meta.status === 'expired') {
+      throw taskError(TASK_THREAD_ERROR_CODES.MESSAGE_EXPIRED, 'message expired before read');
+    }
     if (meta.expires_at !== null && Date.now() > meta.expires_at && meta.status === 'unread') {
       meta.status = 'expired';
       this.store.storage.updateObservationMetadata(message_observation_id, JSON.stringify(meta));

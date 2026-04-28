@@ -197,6 +197,7 @@ export function buildAttentionInbox(
   const unread_messages = listMessagesForAgent(store, {
     session_id: opts.session_id,
     agent: opts.agent,
+    now,
     task_ids: taskIds,
     unread_only: true,
     ...(opts.unread_message_limit !== undefined ? { limit: opts.unread_message_limit } : {}),
@@ -260,38 +261,44 @@ export function buildAttentionInbox(
 
 /**
  * Group unread messages by `(task_id, from_session_id, urgency)`. Blocking
- * urgency is intentionally still grouped — blocking messages from the same
- * sender on the same task collapse just like fyi ones — but a blocking
- * group of size N still renders as N separate rows in the preface because
- * blocking signals don't tolerate folding into a counter.
+ * urgency never coalesces: every blocking message remains a singleton group
+ * so compact renderers cannot fold an active blocker into a counter.
  */
 function coalesceMessages(messages: InboxMessage[]): CoalescedMessageGroup[] {
   const groups = new Map<string, InboxMessage[]>();
+  const out: CoalescedMessageGroup[] = [];
   for (const m of messages) {
-    const key = `${m.task_id} ${m.from_session_id} ${m.urgency}`;
+    if (m.urgency === 'blocking') {
+      out.push(messageGroupFromBucket([m]));
+      continue;
+    }
+    const key = JSON.stringify([m.task_id, m.from_session_id, m.urgency]);
     const bucket = groups.get(key);
     if (bucket) bucket.push(m);
     else groups.set(key, [m]);
   }
-  const out: CoalescedMessageGroup[] = [];
   for (const bucket of groups.values()) {
-    bucket.sort((a, b) => a.ts - b.ts);
-    const latest = bucket[bucket.length - 1];
-    if (!latest) continue;
-    out.push({
-      task_id: latest.task_id,
-      from_session_id: latest.from_session_id,
-      from_agent: latest.from_agent,
-      urgency: latest.urgency,
-      count: bucket.length,
-      message_ids: bucket.map((m) => m.id),
-      latest_id: latest.id,
-      latest_ts: latest.ts,
-      latest_preview: latest.preview,
-    });
+    out.push(messageGroupFromBucket(bucket));
   }
   // Newest group first, matching unread_messages ordering.
   return out.sort((a, b) => b.latest_ts - a.latest_ts);
+}
+
+function messageGroupFromBucket(bucket: InboxMessage[]): CoalescedMessageGroup {
+  bucket.sort((a, b) => a.ts - b.ts);
+  const latest = bucket[bucket.length - 1];
+  if (!latest) throw new Error('message coalescing received an empty bucket');
+  return {
+    task_id: latest.task_id,
+    from_session_id: latest.from_session_id,
+    from_agent: latest.from_agent,
+    urgency: latest.urgency,
+    count: bucket.length,
+    message_ids: bucket.map((m) => m.id),
+    latest_id: latest.id,
+    latest_ts: latest.ts,
+    latest_preview: latest.preview,
+  };
 }
 
 /**

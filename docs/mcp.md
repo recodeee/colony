@@ -512,7 +512,7 @@ Send a message to another agent. Use for directed coordination that **doesn't** 
 - Minimum call: task_message(task_id, session_id, agent, content); it broadcasts to_agent='any' with urgency='fyi'. Use to_agent / to_session_id for direct coordination that doesn't transfer file claims; for 'hand off the work + files', use task_hand_off instead.
 - Urgency controls preface prominence: fyi (coalesced into a counter), needs_reply (rendered as a summary + expected action), blocking (top-of-preface, never coalesced).
 - Pass reply_to to chain onto an earlier message; the parent's immediate status flips to "replied". Reply chains are 1-deep authoritative: replies-to-replies are allowed but only the immediate parent flips, never a transitively-referenced ancestor.
-- expires_in_minutes is an optional TTL. Past-TTL messages drop out of unread inbox queries and any later mark_read fails with MESSAGE_EXPIRED; their bodies stay in storage for audit and FTS.
+- expires_in_minutes is an optional TTL. Past-TTL unread messages drop out of default inbox/attention queries and any later mark_read returns stable MESSAGE_EXPIRED; their bodies stay in storage for audit and FTS.
 - Replying to a still-unclaimed broadcast (to_agent=any) auto-claims it for you, hiding the broadcast from other recipients.
 - Retract sent message. Recipients stop seeing it in inboxes; only the original sender can retract before it is answered, and audit storage keeps body text searchable for FTS and reply-chain history.
 
@@ -541,7 +541,7 @@ Read unread messages. Lists messages addressed to you across tasks you participa
 }
 ```
 
-Returns `[ { id, task_id, ts, from_session_id, from_agent, to_agent, to_session_id, urgency, status, reply_to, preview, expires_at, is_claimable_broadcast, claimed_by_session_id, claimed_by_agent } ]`, newest-first. `status` reflects the effective state: an `unread` row past its TTL surfaces as `expired` even if the on-disk status hasn't been rewritten yet.
+Returns `[ { id, task_id, ts, from_session_id, from_agent, to_agent, to_session_id, urgency, status, reply_to, preview, expires_at, is_claimable_broadcast, claimed_by_session_id, claimed_by_agent } ]`, newest-first. `unread_only: true` is the default-inbox shape used by `attention_inbox`: expired unread rows are hidden there. With `unread_only: false`, `status` reflects the effective audit state: an `unread` row past its TTL surfaces as `expired` even if the on-disk status hasn't been rewritten yet.
 
 ## `task_message_mark_read`
 
@@ -554,7 +554,7 @@ Mark message read. Idempotent — re-marking a read or replied message is a no-o
 }
 ```
 
-Errors include `{ code, error }` with stable codes: `NOT_MESSAGE`, `TASK_MISMATCH`, `OBSERVATION_NOT_ON_TASK`, `NOT_PARTICIPANT`, `NOT_TARGET_SESSION`, `NOT_TARGET_AGENT`, `MESSAGE_EXPIRED` (TTL elapsed before read; status flips to `expired` on the same call), or `ALREADY_RETRACTED` (sender retracted the message).
+Errors include `{ code, error }` with stable codes: `NOT_MESSAGE`, `TASK_MISMATCH`, `OBSERVATION_NOT_ON_TASK`, `NOT_PARTICIPANT`, `NOT_TARGET_SESSION`, `NOT_TARGET_AGENT`, `MESSAGE_EXPIRED` (TTL elapsed before read; status flips to `expired` on the first call and later calls keep returning `MESSAGE_EXPIRED`), or `ALREADY_RETRACTED` (sender retracted the message).
 
 ## `task_message_retract`
 
@@ -636,7 +636,7 @@ Errors include `{ "code": "SESSION_NOT_FOUND", "error": "..." }` when either `ta
 
 ## `attention_inbox`
 
-Compact post-`hivemind_context` attention check for pending handoffs, unread messages, blockers, stalled lanes, pending wakes, and recent other-session file claims. This is the main surface where `task_message` items show up; use `task_messages` for a focused message-only inbox. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
+Compact post-`hivemind_context` attention check for pending handoffs, unread messages, blockers, stalled lanes, pending wakes, and recent other-session file claims. This is the main surface where live `task_message` items show up: expired unread messages are hidden, read/replied messages stop triggering attention, and blocking messages remain prominent until read, replied, retracted, or expired. Use `task_messages` for a focused message-only inbox. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
 
 ```json
 {

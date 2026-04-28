@@ -199,6 +199,40 @@ describe('SessionStart attention budget preface', () => {
     expect(section).toContain('Plus 4 fyi items collapsed. Run attention_inbox to see all.');
   });
 
+  it('keeps every blocking message prominent even past the normal cap', () => {
+    const thread = createThread();
+    for (let i = 0; i < 4; i += 1) {
+      thread.postMessage({
+        from_session_id: 'A',
+        from_agent: 'claude',
+        to_agent: 'codex',
+        content: `blocking ${i}`,
+        urgency: 'blocking',
+        expires_in_ms: (i + 1) * 60_000,
+      });
+    }
+    thread.postMessage({
+      from_session_id: 'A',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'needs reply',
+      urgency: 'needs_reply',
+      expires_in_ms: 60 * 60_000,
+    });
+
+    const section = buildAttentionBudgetSection(store, {
+      session_id: 'B',
+      ide: 'codex',
+      cwd: repo,
+    });
+
+    expect(section).toContain('Attention (4 of 5):');
+    expect(section).toMatch(
+      /blocking: claude: blocking 0[\s\S]*blocking: claude: blocking 1[\s\S]*blocking: claude: blocking 2[\s\S]*blocking: claude: blocking 3/,
+    );
+    expect(section).toContain('Plus 1 needs_reply item collapsed. Run attention_inbox to see all.');
+  });
+
   it('sorts same-urgency items by expires_at ascending', () => {
     const inbox = baseInbox({
       pending_handoffs: [

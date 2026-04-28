@@ -5,6 +5,7 @@ import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildAttentionInbox } from '../src/attention-inbox.js';
 import { MemoryStore } from '../src/memory-store.js';
+import { listMessagesForAgent } from '../src/messages.js';
 import { TaskThread } from '../src/task-thread.js';
 
 let dir: string;
@@ -172,7 +173,7 @@ describe('buildAttentionInbox', () => {
     expect(inbox2.summary.blocked).toBe(false);
   });
 
-  it('coalesces non-blocking messages by (task, sender, urgency); blocking groups stay size 1', () => {
+  it('coalesces fyi messages while keeping blocking messages as singleton groups', () => {
     seed('claude', 'codex');
     const thread = TaskThread.open(store, {
       repo_root: '/r',
@@ -202,23 +203,116 @@ describe('buildAttentionInbox', () => {
       content: 'urgent',
       urgency: 'blocking',
     });
+    thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'still blocked',
+      urgency: 'blocking',
+    });
 
     const inbox = buildAttentionInbox(store, {
       session_id: 'codex',
       agent: 'codex',
       task_ids: [thread.task_id],
     });
-    expect(inbox.unread_messages).toHaveLength(3);
+    expect(inbox.unread_messages).toHaveLength(4);
 
     // Two fyi from same sender on same task should coalesce into one group.
     const fyiGroup = inbox.coalesced_messages.find((g) => g.urgency === 'fyi');
     expect(fyiGroup?.count).toBe(2);
     expect(fyiGroup?.message_ids).toHaveLength(2);
 
-    // Blocking always stays as its own group of size 1.
+    // Blocking always stays as its own group of size 1, even from the
+    // same sender on the same task.
     const blockingGroups = inbox.coalesced_messages.filter((g) => g.urgency === 'blocking');
-    expect(blockingGroups).toHaveLength(1);
-    expect(blockingGroups[0]?.count).toBe(1);
+    expect(blockingGroups).toHaveLength(2);
+    expect(blockingGroups.every((g) => g.count === 1)).toBe(true);
+  });
+
+  it('hides expired unread messages from attention while audit listing surfaces expired', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-expired',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const id = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'short ttl',
+      urgency: 'blocking',
+      expires_in_ms: 60_000,
+    });
+
+    const row = store.storage.getObservation(id);
+    const meta = JSON.parse(row?.metadata ?? '{}') as { expires_at: number };
+    meta.expires_at = Date.now() - 1000;
+    store.storage.updateObservationMetadata(id, JSON.stringify(meta));
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+      now: Date.now(),
+    });
+    expect(inbox.unread_messages).toHaveLength(0);
+    expect(inbox.summary.blocked).toBe(false);
+
+    const audit = listMessagesForAgent(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+      unread_only: false,
+      now: Date.now(),
+    });
+    expect(audit.find((m) => m.id === id)?.status).toBe('expired');
+  });
+
+  it('drops read and replied messages from attention triggers', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-handled',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const readId = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'read this when possible',
+      urgency: 'needs_reply',
+    });
+    const repliedId = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'reply to this',
+      urgency: 'blocking',
+    });
+
+    thread.markMessageRead(readId, 'codex');
+    thread.postMessage({
+      from_session_id: 'codex',
+      from_agent: 'codex',
+      to_agent: 'claude',
+      content: 'handled',
+      reply_to: repliedId,
+    });
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+    });
+    expect(inbox.unread_messages.map((m) => m.id)).not.toContain(readId);
+    expect(inbox.unread_messages.map((m) => m.id)).not.toContain(repliedId);
+    expect(inbox.summary.unread_message_count).toBe(0);
   });
 
   it('surfaces read receipts for needs_reply messages that have been read but not replied', () => {

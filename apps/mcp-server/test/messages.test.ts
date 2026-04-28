@@ -467,11 +467,30 @@ describe('task threads — direct messages', () => {
     });
     expect(inbox.find((m) => m.id === message_observation_id)).toBeUndefined();
 
+    const audit = await call<Array<{ id: number; status: string }>>('task_messages', {
+      session_id: sessionB,
+      agent: 'codex',
+      task_ids: [task_id],
+      unread_only: false,
+    });
+    expect(audit.find((m) => m.id === message_observation_id)?.status).toBe('expired');
+
     const err = await callError('task_message_mark_read', {
       message_observation_id,
       session_id: sessionB,
     });
     expect(err.code).toBe(TASK_THREAD_ERROR_CODES.MESSAGE_EXPIRED);
+
+    const retry = await callError('task_message_mark_read', {
+      message_observation_id,
+      session_id: sessionB,
+    });
+    expect(retry.code).toBe(TASK_THREAD_ERROR_CODES.MESSAGE_EXPIRED);
+
+    const afterMeta = JSON.parse(
+      store.storage.getObservation(message_observation_id)?.metadata ?? '{}',
+    );
+    expect(afterMeta.status).toBe('expired');
   });
 
   it('task_message_retract hides body from recipients but FTS still indexes it', async () => {
