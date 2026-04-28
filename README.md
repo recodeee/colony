@@ -139,7 +139,7 @@ If the ready item needs implementation context, call `search` with the task titl
 | Tool | Use it for |
 | --- | --- |
 | `task_post` | Add shared questions, answers, decisions, blockers, notes, or negative warnings to a task; use `task_message` for directed agent-to-agent coordination. |
-| `task_note_working` | Save current working state to the active Colony task without manually resolving `task_id`; optionally emits only a tiny OMX notepad pointer during transition. |
+| `task_note_working` | Save current working state to the active Colony task; write working note, remember progress, log what I am doing, and replace ad hoc notepad writes without manually resolving `task_id`. |
 | `task_message` | Send a directed or broadcast message to another agent. |
 | `task_messages` | Read compact message previews; expired rows only surface for audit-style listing. |
 | `task_message_mark_read` | Acknowledge a message and emit a read receipt; expired rows return `MESSAGE_EXPIRED`. |
@@ -150,6 +150,8 @@ If the ready item needs implementation context, call `search` with the task titl
 | `task_accept_handoff` / `task_decline_handoff` | Accept or decline pending handoffs; expired handoffs return `HANDOFF_EXPIRED`. |
 
 `attention_inbox` unread message entries carry `reply_with_tool: "task_message"` and `mark_read_with_tool: "task_message_mark_read"` plus compact args. `blocking` and `needs_reply` entries also include `next_action`, so agents can reply or mark read without re-deriving the lifecycle.
+
+If you do not know `task_id` but need to save current state, call `task_note_working` with `session_id`, optional `repo_root` / `branch`, and a compact `branch; task; blocker; next; evidence` note.
 
 Negative warning kinds are `failed_approach`, `blocked_path`, `conflict_warning`, and `reverted_solution`. Use them only when another agent should avoid repeating a concrete path: failed paths, blocked approaches, reverted solutions, flaky routes, or do-not-touch warnings. `search`, `hivemind_context`, and `task_ready_for_agent` surface relevant warnings compactly before implementation; they do not penalize ready-work ranking or turn ordinary trial-and-error into blockers.
 

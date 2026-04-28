@@ -565,7 +565,7 @@ Returns: `[ { id, kind, session_id, ts } ]`.
 
 ## `task_post`
 
-Post shared notes, decisions, blockers, questions, and answers on a task thread. Use `task_message` for directed agent-to-agent coordination. Use the dedicated tools (`task_claim_file`, `task_hand_off`, `task_accept_handoff`) for structured actions; `task_post` is for free-form shared thread state tagged with a `kind`.
+Post shared notes, decisions, blockers, questions, and answers on a task thread. Use `task_message` for directed agent-to-agent coordination. If you do not know `task_id`, use `task_note_working`. Use the dedicated tools (`task_claim_file`, `task_hand_off`, `task_accept_handoff`) for structured actions; `task_post` is for free-form shared thread state tagged with a `kind`.
 
 Use `kind: "note"` when an agent needs to write working note, save current state, remember progress, or log what I am doing. The note lands on both the task thread and the posting session's memory through `MemoryStore`, so it stays compressed, timeline-visible, and searchable later.
 
@@ -584,11 +584,11 @@ Use `failed_approach`, `blocked_path`, `conflict_warning`, or `reverted_solution
 }
 ```
 
-`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id }`, plus `{ hint: "For directed coordination, use task_message." }` when the content looks like a directed request to another agent.
+`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id, hint }`; the hint points unknown-`task_id` working-state writes to `task_note_working`, and also points directed agent requests to `task_message` when detected.
 
 ## `task_note_working`
 
-Save current working state to the active Colony task without manually resolving `task_id`. This is the Colony-native replacement for ad hoc working notepad writes: the note is still task/session scoped and persists through `MemoryStore`.
+Save current working state to the active Colony task. Use this to write working note, save current state, remember progress, log what I am doing, or as the notepad replacement when you do not know `task_id`. The note is still task/session scoped and persists through `MemoryStore`.
 
 ```json
 {
@@ -598,6 +598,32 @@ Save current working state to the active Colony task without manually resolving 
     "repo_root": "/abs/repo",
     "branch": "agent/codex/current-work",
     "content": "branch=...; task=...; blocker=none; next=run tests; evidence=..."
+  }
+}
+```
+
+Minimal working note:
+
+```json
+{
+  "name": "task_note_working",
+  "input": {
+    "session_id": "sess_abc",
+    "content": "branch=agent/codex/current-work; task=finish API slice; blocker=none; next=run typecheck; evidence=tests/api.test.ts"
+  }
+}
+```
+
+Filtered when one session participates in multiple active tasks:
+
+```json
+{
+  "name": "task_note_working",
+  "input": {
+    "session_id": "sess_abc",
+    "repo_root": "/abs/repo",
+    "branch": "agent/codex/current-work",
+    "content": "branch=agent/codex/current-work; task=finish API slice; blocker=none; next=push PR; evidence=pnpm test"
   }
 }
 ```

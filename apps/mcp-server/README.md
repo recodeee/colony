@@ -11,6 +11,7 @@ status details, and edge-case rules in the second sentence or later.
 | send message, note to agent, tell another agent | `task_message` |
 | what needs my attention, pending, unread, blocking | `attention_inbox` |
 | save current working state, active Colony task, no task id | `task_note_working` |
+| notepad replacement, remember progress, log what I am doing | `task_note_working` |
 | hud status, bridge status, compact coordination state | `bridge_status` |
 | write working note, save current state, coordination note, no task id | `task_note_working` |
 | task-scoped question, answer, decision, blocker, note | `task_post` |

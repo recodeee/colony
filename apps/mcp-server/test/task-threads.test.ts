@@ -336,7 +336,9 @@ describe('task threads — handoff lifecycle', () => {
       content: '@codex can you reply with the current blocker?',
     });
 
-    expect(hint).toBe('For directed coordination, use task_message.');
+    expect(hint).toBe(
+      'For directed coordination, use task_message. If you do not know task_id, use task_note_working.',
+    );
     const row = store.storage.getObservation(id);
     expect(row).toMatchObject({
       id,
@@ -346,7 +348,7 @@ describe('task threads — handoff lifecycle', () => {
     });
   });
 
-  it('task_post does not hint for ordinary shared notes about agents', async () => {
+  it('task_post hints to task_note_working for unknown task_id cases', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 
     const { hint } = await call<{ id: number; hint?: string }>('task_post', {
@@ -356,7 +358,7 @@ describe('task threads — handoff lifecycle', () => {
       content: 'agent-18 recorded shared verification evidence for the task thread',
     });
 
-    expect(hint).toBeUndefined();
+    expect(hint).toBe('If you do not know task_id, use task_note_working.');
   });
 
   it('task_note_working posts a note to the only active task for the session', async () => {

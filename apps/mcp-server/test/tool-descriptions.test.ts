@@ -32,9 +32,14 @@ describe('ToolSearch descriptions', () => {
 
   it('makes task_note_working discoverable as current working state', () => {
     const description = readToolDescription('../src/tools/task.ts', 'task_note_working');
+    const leading = description.slice(0, 170).toLowerCase();
 
     expect(description).toMatch(/^Save current working state to the active Colony task/);
-    expect(description).toContain('without a task_id');
+    expect(leading).toContain('write working note');
+    expect(leading).toContain('save current state');
+    expect(leading).toContain('remember progress');
+    expect(leading).toContain('log what i am doing');
+    expect(leading).toContain('notepad replacement');
     expect(description).toContain('repo_root/branch');
   });
 });

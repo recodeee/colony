@@ -110,7 +110,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
     [
       'Post shared task notes, decisions, blockers, questions, or answers.',
       'Use task_message for directed agent-to-agent coordination.',
-      'Use task_note_working for current state; negative warnings use failed_approach/blocked_path/etc.',
+      'If you do not know task_id, use task_note_working.',
+      'Negative warnings use failed_approach/blocked_path/etc.',
     ].join(' '),
     {
       task_id: z.number().int().positive(),
@@ -139,16 +140,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
       });
       return jsonReply({
         id,
-        ...(looksLikeDirectedCoordination(content)
-          ? { hint: 'For directed coordination, use task_message.' }
-          : {}),
+        hint: taskPostHint(content),
       });
     }),
   );
 
   server.tool(
     'task_note_working',
-    'Save current working state to the active Colony task without a task_id. Resolves by session_id plus optional repo_root/branch and returns compact candidates when ambiguous.',
+    'Save current working state to the active Colony task. write working note; save current state; remember progress; log what I am doing; notepad replacement. Resolves by session_id and repo_root/branch; returns compact candidates on ambiguity.',
     {
       session_id: z.string().min(1),
       content: z.string().min(1),
@@ -372,6 +371,12 @@ function looksLikeDirectedCoordination(content: string): boolean {
     /\b(can|could|would)\s+you\b/.test(normalized) ||
     /\?/.test(normalized);
   return mentionsAgent && asksForReply;
+}
+
+function taskPostHint(content: string): string {
+  const fallback = 'If you do not know task_id, use task_note_working.';
+  if (!looksLikeDirectedCoordination(content)) return fallback;
+  return `For directed coordination, use task_message. ${fallback}`;
 }
 
 function compactPreviousClaim(

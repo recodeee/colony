@@ -108,12 +108,17 @@ describe('MCP server', () => {
     expect(taskPostDescription).toContain(
       'Use task_message for directed agent-to-agent coordination',
     );
-    expect(taskPostDescription).toContain('Use task_note_working for current state');
+    expect(taskPostDescription).toContain('If you do not know task_id, use task_note_working');
     expect(taskPostDescription.length).toBeLessThanOrEqual(240);
     const taskNoteWorkingDescription = byName.get('task_note_working')?.description ?? '';
     expect(taskNoteWorkingDescription).toMatch(
       /^Save current working state to the active Colony task/,
     );
+    expect(taskNoteWorkingDescription).toContain('write working note');
+    expect(taskNoteWorkingDescription).toContain('save current state');
+    expect(taskNoteWorkingDescription).toContain('remember progress');
+    expect(taskNoteWorkingDescription).toContain('log what I am doing');
+    expect(taskNoteWorkingDescription).toContain('notepad replacement');
     expect(taskNoteWorkingDescription).toContain('repo_root/branch');
     expect(taskNoteWorkingDescription).toContain('compact candidates');
     expect(taskNoteWorkingDescription.length).toBeLessThanOrEqual(240);
