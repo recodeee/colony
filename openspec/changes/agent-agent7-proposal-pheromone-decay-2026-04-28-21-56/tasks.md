@@ -24,5 +24,12 @@
 ## 4. Completion
 
 - [x] Run focused tests and typechecks.
-- [ ] Commit, push, PR, merge.
-- [ ] Record final `MERGED` evidence and sandbox cleanup.
+- [x] Commit, push, PR, merge.
+- [x] Record final `MERGED` evidence and sandbox cleanup.
+
+Evidence:
+
+- Implementation PR: https://github.com/recodeee/colony/pull/163
+- Merge state: `MERGED`
+- Merge commit: `b3c85777f7f726240591d5e04c748a3f9840f0bd`
+- Sandbox cleanup: source worktree `colony__agent7__proposal-pheromone-decay-2026-04-28-21-56` pruned; local source branch removed.
