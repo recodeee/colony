@@ -128,6 +128,12 @@ describe('Colony CLI program', () => {
     const program = createProgram();
     const queen = program.commands.find((c) => c.name() === 'queen');
     expect(queen).toBeDefined();
+    expect(queen?.commands.map((c) => c.name()).sort()).toEqual([
+      'list',
+      'plan',
+      'status',
+      'sweep',
+    ]);
     const sweep = queen?.commands.find((c) => c.name() === 'sweep');
     expect(sweep).toBeDefined();
     expect(sweep?.options.find((o) => o.long === '--dry-run')).toBeDefined();

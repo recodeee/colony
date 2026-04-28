@@ -82,6 +82,9 @@ importers:
       '@colony/queen':
         specifier: workspace:*
         version: link:../../packages/queen
+      '@colony/spec':
+        specifier: workspace:*
+        version: link:../../packages/spec
       '@colony/storage':
         specifier: workspace:*
         version: link:../../packages/storage

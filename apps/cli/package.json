@@ -63,6 +63,7 @@
     "@colony/mcp-server": "workspace:*",
     "@colony/process": "workspace:*",
     "@colony/queen": "workspace:*",
+    "@colony/spec": "workspace:*",
     "@colony/storage": "workspace:*",
     "@colony/worker": "workspace:*",
     "tsup": "^8.3.5",
