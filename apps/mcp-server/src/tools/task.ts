@@ -1,9 +1,16 @@
+import { resolve } from 'node:path';
 import { TaskThread, listPlans } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
+import { detectMcpClientIdentity } from './heartbeat.js';
 
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
+const TASK_LIST_HINT =
+  'Use task_ready_for_agent to choose claimable work; task_list is for browsing.';
+const TASK_LIST_REPEAT_HINT =
+  'task_list is inventory. Use task_ready_for_agent to choose claimable work.';
+const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
 
 export function register(server: McpServer, ctx: ToolContext): void {
   const { store } = ctx;
@@ -15,10 +22,17 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_list',
     'Browse task threads; use task_ready_for_agent when choosing work to claim. Lists shared coordination lanes by repo_root, branch, participants, status, and recent activity.',
-    { limit: z.number().int().positive().max(200).optional() },
-    async ({ limit }) => {
+    {
+      limit: z.number().int().positive().max(200).optional(),
+      session_id: z.string().min(1).optional(),
+    },
+    async ({ limit, session_id }) => {
       const tasks = store.storage.listTasks(limit ?? 50);
-      return { content: [{ type: 'text', text: JSON.stringify(tasks) }] };
+      const callerSessionId = session_id ?? detectMcpClientIdentity().sessionId;
+      return jsonReply({
+        tasks,
+        hint: taskListHintForSession(store, callerSessionId),
+      });
     },
   );
 
@@ -70,8 +84,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_post',
     [
-      'Write a working note or save current state on a task thread.',
-      'Use for questions, answers, decisions, blockers, and general notes; negative warnings use failed_approach, blocked_path, conflict_warning, or reverted_solution.',
+      'Post a task-scoped question, answer, decision, blocker, or note.',
+      'Use task_note_working to save current state without a task_id; negative warnings use failed_approach, blocked_path, conflict_warning, or reverted_solution.',
     ].join(' '),
     {
       task_id: z.number().int().positive(),
@@ -104,7 +118,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_note_working',
-    'Save current working state to the active Colony task. Resolves the task from session_id plus optional repo_root/branch, posts kind=note, and returns compact candidates instead of guessing when ambiguous.',
+    'Write a working note without task_id as a notepad replacement for the active Colony task. Resolves by session_id plus optional repo_root/branch and returns compact candidates when ambiguous.',
     {
       session_id: z.string().min(1),
       content: z.string().min(1),
@@ -258,6 +272,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
   );
 }
 
+function jsonReply(value: unknown): { content: Array<{ type: 'text'; text: string }> } {
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+function taskListHintForSession(store: ToolContext['store'], sessionId: string): string {
+  const calls = store.storage.toolCallsSince(Date.now() - TASK_LIST_LOOKBACK_MS);
+  const sessionCalls = calls.filter((call) => call.session_id === sessionId);
+  const hasReadyCall = sessionCalls.some((call) => isTool(call.tool, 'task_ready_for_agent'));
+  const priorTaskListCalls = sessionCalls.filter((call) => isTool(call.tool, 'task_list')).length;
+  return !hasReadyCall && priorTaskListCalls >= 1 ? TASK_LIST_REPEAT_HINT : TASK_LIST_HINT;
+}
+
+function isTool(tool: string, name: string): boolean {
+  return tool === name || tool === `colony.${name}` || tool === `mcp__colony__${name}`;
+}
+
 interface ActiveTaskCandidate {
   task_id: number;
   title: string;
@@ -274,7 +304,9 @@ function activeTaskCandidates(
 ): ActiveTaskCandidate[] {
   const candidates: ActiveTaskCandidate[] = [];
   for (const task of store.storage.listTasks(2000)) {
-    if (opts.repo_root !== undefined && task.repo_root !== opts.repo_root) continue;
+    if (opts.repo_root !== undefined && resolve(task.repo_root) !== resolve(opts.repo_root)) {
+      continue;
+    }
     if (opts.branch !== undefined && task.branch !== opts.branch) continue;
     const participant = store.storage
       .listParticipants(task.id)

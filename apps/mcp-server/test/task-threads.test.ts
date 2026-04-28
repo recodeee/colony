@@ -371,6 +371,42 @@ describe('task threads — handoff lifecycle', () => {
     ).toBe(false);
   });
 
+  it('task_list includes a ready-queue hint and strengthens it after repeated inventory reads', async () => {
+    const { sessionA } = seedTwoSessionTask();
+
+    const first = await call<{ hint: string; tasks: unknown[] }>('task_list', {
+      session_id: sessionA,
+    });
+    expect(first.tasks).toHaveLength(1);
+    expect(first.hint).toBe(
+      'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
+    );
+
+    store.addObservation({
+      session_id: sessionA,
+      kind: 'tool_use',
+      content: 'task_list',
+      metadata: { tool: 'mcp__colony__task_list' },
+    });
+
+    const repeated = await call<{ hint: string }>('task_list', { session_id: sessionA });
+    expect(repeated.hint).toBe(
+      'task_list is inventory. Use task_ready_for_agent to choose claimable work.',
+    );
+
+    store.addObservation({
+      session_id: sessionA,
+      kind: 'tool_use',
+      content: 'task_ready_for_agent',
+      metadata: { tool: 'mcp__colony__task_ready_for_agent' },
+    });
+
+    const afterReady = await call<{ hint: string }>('task_list', { session_id: sessionA });
+    expect(afterReady.hint).toBe(
+      'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
+    );
+  });
+
   it('task_post stores negative warning kinds and search returns them compactly', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 

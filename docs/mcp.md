@@ -375,10 +375,10 @@ Browse task threads; use `task_ready_for_agent` when choosing work to claim. Eac
 Use `task_list` when you need to inspect existing task threads by repo or branch. Do not use it as the main work picker; call `task_ready_for_agent` when the question is "what should I work on next?"
 
 ```json
-{ "name": "task_list", "input": { "limit": 50 } }
+{ "name": "task_list", "input": { "limit": 50, "session_id": "sess_abc" } }
 ```
 
-Returns: `[ { id, title, repo_root, branch, status, created_by, created_at, updated_at } ]`.
+Returns: `{ tasks, hint }`. The hint always routes work selection to `task_ready_for_agent`; repeated `task_list` calls without `task_ready_for_agent` return the stronger inventory warning.
 
 ## `task_timeline`
 

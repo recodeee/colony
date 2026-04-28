@@ -158,6 +158,20 @@ describe('colony health payload', () => {
       ready_to_claim_per_claimed: 1,
       claimed_share_of_actionable: 1 / 2,
     });
+    expect(payload.adoption_thresholds.good).toContainEqual(
+      expect.objectContaining({
+        name: 'hivemind_context rising',
+        status: 'good',
+        value: 2,
+      }),
+    );
+    expect(payload.adoption_thresholds.bad).toContainEqual(
+      expect.objectContaining({
+        name: 'task_list > task_ready_for_agent',
+        status: 'bad',
+        value: 1,
+      }),
+    );
 
     const text = formatColonyHealthOutput(payload);
     expect(text).toContain('colony health');
@@ -172,6 +186,8 @@ describe('colony health payload', () => {
     expect(text).toContain('Signal health');
     expect(text).toContain('Proposal decay/promotions');
     expect(text).toContain('Ready-to-claim vs claimed');
+    expect(text).toContain('Adoption thresholds');
+    expect(text).toContain('task_list > task_ready_for_agent');
   });
 
   it('emits parseable JSON with the same top-level sections', () => {
@@ -203,6 +219,41 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('signal_health');
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
+    expect(json).toHaveProperty('adoption_thresholds');
+  });
+
+  it('flags notepad and missing inbox or ready queue adoption gaps', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'codex-alpha-session', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'codex-alpha-session', 'mcp__colony__task_list', NOW - 89_000),
+          call(3, 'codex-alpha-session', 'mcp__omx_memory__notepad_write_working', NOW - 88_000),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+      },
+    );
+
+    expect(payload.adoption_thresholds.bad).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'notepad_write_working > task_post/task_note_working',
+          status: 'bad',
+          value: 1,
+        }),
+        expect.objectContaining({ name: 'attention_inbox = 0', status: 'bad', value: 0 }),
+        expect.objectContaining({ name: 'task_ready_for_agent = 0', status: 'bad', value: 0 }),
+      ]),
+    );
   });
 
   it('reports claim-before-edit correlation as unavailable when edit metadata is incomplete', () => {
