@@ -476,7 +476,7 @@ Returns `{ status: 'cancelled' }` on success. Errors include `{ code, error }`.
 
 ## `task_message`
 
-Send a direct message to another agent on a task thread. Use for coordination chat that **doesn't** transfer file claims — for "hand off the work + files", use `task_hand_off`. A message is a `task_post` with kind `message`, explicit addressing, and a read/reply/expire/retract/claim lifecycle.
+Send a message to another agent. Use for directed coordination that **doesn't** transfer file claims — for "hand off the work + files", use `task_hand_off`. Use `task_post` for generic thread notes, blockers, questions, answers, and decisions. A message is a `task_post` with kind `message`, explicit addressing, and a read/reply/expire/retract/claim lifecycle.
 
 ```json
 {
@@ -497,9 +497,17 @@ Send a direct message to another agent on a task thread. Use for coordination ch
 
 `to_agent` ∈ `claude | codex | any` — `any` broadcasts to every participant but the sender. `to_session_id` narrows delivery to a specific live session. `urgency` ∈ `fyi | needs_reply | blocking` and controls preface prominence: `fyi` coalesces into a counter, `needs_reply` renders as a summary, `blocking` lands at the top of the preface and never coalesces. `reply_to` chains a reply; the parent message's status flips to `replied` atomically on the send. **Reply chains are 1-deep authoritative**: replies-to-replies are allowed, but only the immediate parent's status flips, never a transitively-referenced ancestor. `expires_in_minutes` (max 7 days) gives the message a TTL — past-TTL unread messages drop out of inbox queries and any later `task_message_mark_read` returns `MESSAGE_EXPIRED`; bodies remain in storage for audit and stay searchable via FTS. Replying to a still-unclaimed broadcast auto-claims it for the replier (see `task_message_claim`). Returns `{ message_observation_id, status: 'unread' }`.
 
+Directed-message workflow: `task_message` -> `attention_inbox` / `task_messages` -> `get_observations` -> `task_message_mark_read` -> reply.
+
+1. Sender calls `task_message` with `to_agent`, optional `to_session_id`, `urgency`, and optional `reply_to`.
+2. Recipient sees unread, `needs_reply`, and `blocking` items first in `attention_inbox`; use `task_messages` when you need the message-only list.
+3. Recipient hydrates message bodies with `get_observations(ids[])`; `task_messages` stays compact and does not return full bodies.
+4. Recipient calls `task_message_mark_read` after reading when no reply is needed.
+5. Recipient replies with `task_message(..., reply_to=<message id>, ...)`; replying to an unclaimed broadcast auto-claims it. Use `task_message_claim` only when taking a broadcast before you are ready to reply.
+
 ## `task_messages`
 
-List messages addressed to you across tasks you participate in (or scoped with `task_ids`). Compact shape — fetch full bodies via `get_observations`. Does **not** mark as read; call `task_message_mark_read` explicitly so an agent can peek at its inbox during planning without burning the "you have new mail" signal. Retracted messages and broadcasts already claimed by other agents are filtered out of every recipient's view.
+Read unread messages. Lists messages addressed to you across tasks you participate in (or scoped with `task_ids`). Compact shape — fetch full bodies via `get_observations`. Does **not** mark as read; call `task_message_mark_read` explicitly so an agent can peek at its inbox during planning without burning the "you have new mail" signal. Retracted messages and broadcasts already claimed by other agents are filtered out of every recipient's view.
 
 ```json
 {
@@ -518,7 +526,7 @@ Returns `[ { id, task_id, ts, from_session_id, from_agent, to_agent, to_session_
 
 ## `task_message_mark_read`
 
-Mark a message as read. Idempotent — re-marking a read or replied message is a no-op. Writes a sibling `message_read` observation so the original sender sees a read receipt in their `attention_inbox`. Returns the resulting `status`.
+Mark message read. Idempotent — re-marking a read or replied message is a no-op. Writes a sibling `message_read` observation so the original sender sees a read receipt in their `attention_inbox`. Returns the resulting `status`.
 
 ```json
 {
@@ -531,7 +539,7 @@ Errors include `{ code, error }` with stable codes: `NOT_MESSAGE`, `TASK_MISMATC
 
 ## `task_message_retract`
 
-Retract a message you sent. Sets the status to `retracted` and the body stops surfacing in any recipient's inbox; the body stays in storage (still searchable via FTS, still in the timeline) for audit. Cannot retract a message that has already been replied to — at that point the recipient has invested response work and silently rewriting the sender's intent would be deceptive.
+Retract sent message. Sets the status to `retracted` and the body stops surfacing in any recipient's inbox; the body stays in storage (still searchable via FTS, still in the timeline) for audit. Cannot retract a message that has already been replied to — at that point the recipient has invested response work and silently rewriting the sender's intent would be deceptive.
 
 ```json
 {
@@ -548,7 +556,7 @@ Errors: `NOT_MESSAGE`, `TASK_MISMATCH`, `NOT_SENDER` (only the original sender m
 
 ## `task_message_claim`
 
-Claim a `to_agent='any'` broadcast message. Once claimed, the broadcast drops out of every other recipient's inbox; only the claimer keeps seeing it. Use when you want to silently take ownership of a broadcast before responding — replying via `task_message` already auto-claims, so this tool is for the "I'll handle it but not yet ready to reply" case.
+Claim broadcast. Once claimed, the `to_agent='any'` broadcast drops out of every other recipient's inbox; only the claimer keeps seeing it. Use when you want to silently take ownership of a broadcast before responding — replying via `task_message` already auto-claims, so this tool is for the "I'll handle it but not yet ready to reply" case.
 
 ```json
 {
@@ -609,7 +617,7 @@ Errors include `{ "code": "SESSION_NOT_FOUND", "error": "..." }` when either `ta
 
 ## `attention_inbox`
 
-Compact post-`hivemind_context` attention check for pending handoffs, unread messages, blockers, stalled lanes, pending wakes, and recent other-session file claims. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
+Compact post-`hivemind_context` attention check for pending handoffs, unread messages, blockers, stalled lanes, pending wakes, and recent other-session file claims. This is the main surface where `task_message` items show up; use `task_messages` for a focused message-only inbox. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
 
 ```json
 {
