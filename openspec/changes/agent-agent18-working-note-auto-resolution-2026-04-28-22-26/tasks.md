@@ -31,8 +31,8 @@
 
 ## 5. Completion
 
-- [ ] Commit changes.
-- [ ] Push branch.
-- [ ] Open/update PR.
-- [ ] Merge PR and record final `MERGED` evidence.
-- [ ] Confirm sandbox worktree cleanup.
+- [x] Commit changes: `495f7f0` before PR merge.
+- [x] Push branch: `agent/agent18/working-note-auto-resolution-2026-04-28-22-26`.
+- [x] Open/update PR: https://github.com/recodeee/colony/pull/169.
+- [x] Merge PR and record final `MERGED` evidence: `gh pr view agent/agent18/working-note-auto-resolution-2026-04-28-22-26 --repo recodeee/colony --json number,url,state,headRefName,baseRefName,mergeCommit` returned `state=MERGED`, `mergeCommit=1d7b270d21b7c99ad4a8e718bbe0d7b7f0d709b7`.
+- [x] Confirm sandbox worktree cleanup: `git worktree list` no longer includes `colony__agent18__working-note-auto-resolution-2026-04-28-22-26`, and `git branch --list "agent/agent18/working-note-auto-resolution-2026-04-28-22-26"` returned no local branch.
