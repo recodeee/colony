@@ -10,6 +10,7 @@ import { PublishPlanError } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
+import { withPlanPublishGuidance } from './plan-output.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 interface QueenToolGoal extends Goal {
@@ -226,7 +227,7 @@ function publishPlan(args: {
   session_id: string;
   plan: NormalizedQueenPlan;
 }): PublishedQueenPlan {
-  return publishOrderedPlan({
+  const result = publishOrderedPlan({
     store: args.store,
     repo_root: args.repo_root,
     session_id: args.session_id,
@@ -234,6 +235,7 @@ function publishPlan(args: {
     auto_archive: args.plan.auto_archive,
     plan: args.plan,
   });
+  return withPlanPublishGuidance(result, args.plan.subtasks);
 }
 
 function normalizeDependsOn(dependsOn: Array<number | string>, subtasks: QueenSubtask[]): number[] {

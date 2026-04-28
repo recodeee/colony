@@ -13,6 +13,7 @@ import {
 import {
   type PlanWorkspaceTaskInput,
   PublishPlanError,
+  type PublishPlanSubtaskInput,
   type Spec,
   SpecRepository,
   SyncEngine,
@@ -25,6 +26,7 @@ import {
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
+import { withPlanPublishGuidance } from './plan-output.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 const SubtaskInputSchema = z.object({
@@ -37,6 +39,34 @@ const SubtaskInputSchema = z.object({
     .enum(['ui_work', 'api_work', 'test_work', 'infra_work', 'doc_work'])
     .optional(),
 });
+
+const WaveInputSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    title: z.string().min(1).optional(),
+    subtask_indexes: z.array(z.number().int().nonnegative()).min(1).optional(),
+    subtask_indices: z.array(z.number().int().nonnegative()).min(1).optional(),
+    titles: z.array(z.string().min(1)).min(1).optional(),
+    subtask_refs: z.array(z.string().min(1)).min(1).optional(),
+  })
+  .refine(
+    (wave) =>
+      wave.subtask_indexes !== undefined ||
+      wave.subtask_indices !== undefined ||
+      wave.titles !== undefined ||
+      wave.subtask_refs !== undefined,
+    'wave needs subtask_indexes, subtask_indices, titles, or subtask_refs',
+  );
+
+const OrderingHintsSchema = z
+  .object({
+    mode: z.enum(['wave', 'ordered_waves']).optional(),
+    waves: z.array(WaveInputSchema).min(1).optional(),
+  })
+  .optional();
+
+type SubtaskInput = z.infer<typeof SubtaskInputSchema>;
+type WaveInput = z.infer<typeof WaveInputSchema>;
 
 interface CodedError extends Error {
   __code?: string;
@@ -75,6 +105,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .min(2)
         .max(20)
         .describe('At least 2 sub-tasks — if it is one task, use task_thread directly.'),
+      waves: z
+        .array(WaveInputSchema)
+        .min(1)
+        .optional()
+        .describe(
+          'Optional ordered wave groups. Each wave references flat subtasks by subtask_indexes/subtask_indices, titles, or subtask_refs. Publishing reorders subtasks by wave and adds dependencies on the previous wave.',
+        ),
+      ordering_hints: OrderingHintsSchema.describe(
+        'Optional ordered-wave hints. Use { mode: "wave", waves: [...] } when wrapping wave input.',
+      ),
       auto_archive: z
         .boolean()
         .optional()
@@ -84,6 +124,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     wrapHandler('task_plan_publish', async (args) => {
       try {
+        const ordered = applyOrderedWaveHints(args.subtasks, {
+          topLevelWaves: args.waves,
+          orderingHints: args.ordering_hints,
+        });
         const result = publishPlan({
           store,
           repo_root: args.repo_root,
@@ -93,10 +137,21 @@ export function register(server: McpServer, ctx: ToolContext): void {
           title: args.title,
           problem: args.problem,
           acceptance_criteria: args.acceptance_criteria,
-          subtasks: args.subtasks,
+          subtasks: ordered.subtasks,
           auto_archive: args.auto_archive ?? false,
         });
-        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                withPlanPublishGuidance(result, ordered.subtasks, {
+                  wave_names: ordered.waveNames,
+                }),
+              ),
+            },
+          ],
+        };
       } catch (err) {
         if (err instanceof PublishPlanError) {
           return mcpErrorResponse(err.code, err.message);
@@ -391,6 +446,199 @@ export function register(server: McpServer, ctx: ToolContext): void {
       };
     }),
   );
+}
+
+function applyOrderedWaveHints(
+  subtasks: SubtaskInput[],
+  args: {
+    topLevelWaves: WaveInput[] | undefined;
+    orderingHints:
+      | {
+          mode?: 'wave' | 'ordered_waves' | undefined;
+          waves?: WaveInput[] | undefined;
+        }
+      | undefined;
+  },
+): { subtasks: PublishPlanSubtaskInput[]; waveNames?: string[] | undefined } {
+  const waves = args.topLevelWaves ?? args.orderingHints?.waves;
+  if (!waves || waves.length === 0) return { subtasks };
+
+  const waveIndexes = resolveWaveIndexes(waves, subtasks);
+  const assigned = new Set(waveIndexes.flatMap((wave) => wave.indexes));
+  const unassigned = subtasks.map((_, index) => index).filter((index) => !assigned.has(index));
+  const allWaves =
+    unassigned.length > 0
+      ? [...waveIndexes, { name: `Wave ${waveIndexes.length + 1}`, indexes: unassigned }]
+      : waveIndexes;
+  const orderedOriginalIndexes = allWaves.flatMap((wave) => wave.indexes);
+  const oldToNew = new Map(
+    orderedOriginalIndexes.map((oldIndex, newIndex) => [oldIndex, newIndex]),
+  );
+  const waveForOldIndex = new Map<number, number>();
+  allWaves.forEach((wave, waveIndex) => {
+    for (const oldIndex of wave.indexes) waveForOldIndex.set(oldIndex, waveIndex);
+  });
+
+  const orderedSubtasks: PublishPlanSubtaskInput[] = [];
+  let previousWaveIndexes: number[] = [];
+  for (let waveIndex = 0; waveIndex < allWaves.length; waveIndex++) {
+    const wave = allWaves[waveIndex];
+    if (!wave) continue;
+    const currentWaveIndexes: number[] = [];
+
+    for (const oldIndex of wave.indexes) {
+      const subtask = subtasks[oldIndex];
+      if (!subtask) continue;
+      const explicitDeps = (subtask.depends_on ?? []).map((dep) =>
+        remapDependency(dep, oldIndex, oldToNew, waveForOldIndex),
+      );
+      const newIndex = oldToNew.get(oldIndex);
+      if (newIndex === undefined) {
+        throw new PublishPlanError(
+          'PLAN_INVALID_WAVE_DEPENDENCY',
+          `wave ordering lost sub-task ${oldIndex}`,
+        );
+      }
+      orderedSubtasks.push({
+        ...subtask,
+        depends_on: uniqueSorted([...explicitDeps, ...previousWaveIndexes]),
+      });
+      currentWaveIndexes.push(newIndex);
+    }
+
+    previousWaveIndexes = currentWaveIndexes;
+  }
+
+  return {
+    subtasks: orderedSubtasks,
+    waveNames: allWaves.map((wave, index) => wave.name ?? `Wave ${index + 1}`),
+  };
+}
+
+function resolveWaveIndexes(
+  waves: WaveInput[],
+  subtasks: SubtaskInput[],
+): Array<{ name?: string | undefined; indexes: number[] }> {
+  const used = new Set<number>();
+  return waves.map((wave, waveIndex) => {
+    const indexes = uniqueInOrder(resolveWaveRefs(wave, subtasks));
+    if (indexes.length === 0) {
+      throw new PublishPlanError(
+        'PLAN_INVALID_WAVE_DEPENDENCY',
+        `wave ${waveIndex} does not reference any sub-tasks`,
+      );
+    }
+    for (const index of indexes) {
+      if (index < 0 || index >= subtasks.length) {
+        throw new PublishPlanError(
+          'PLAN_INVALID_WAVE_DEPENDENCY',
+          `wave ${waveIndex} references sub-task ${index}; index is outside the plan`,
+        );
+      }
+      if (used.has(index)) {
+        throw new PublishPlanError(
+          'PLAN_INVALID_WAVE_DEPENDENCY',
+          `sub-task ${index} appears in more than one wave`,
+        );
+      }
+      used.add(index);
+    }
+    return { name: wave.name ?? wave.title, indexes };
+  });
+}
+
+function resolveWaveRefs(wave: WaveInput, subtasks: SubtaskInput[]): number[] {
+  const indexes = wave.subtask_indexes ?? wave.subtask_indices ?? [];
+  const byTitle = (wave.titles ?? []).map((title) => subtaskIndexByTitle(title, subtasks));
+  const byRef = (wave.subtask_refs ?? []).flatMap((ref) => subtaskIndexesByRef(ref, subtasks));
+  return [...indexes, ...byTitle, ...byRef];
+}
+
+function subtaskIndexByTitle(title: string, subtasks: SubtaskInput[]): number {
+  const needle = title.trim().toLowerCase();
+  const index = subtasks.findIndex((subtask) => subtask.title.trim().toLowerCase() === needle);
+  if (index < 0) {
+    throw new PublishPlanError(
+      'PLAN_INVALID_WAVE_DEPENDENCY',
+      `wave references unknown sub-task title '${title}'`,
+    );
+  }
+  return index;
+}
+
+function subtaskIndexesByRef(ref: string, subtasks: SubtaskInput[]): number[] {
+  const trimmed = ref.trim();
+  const numeric = Number(trimmed);
+  if (Number.isInteger(numeric) && numeric >= 0) return [numeric];
+
+  const titleMatch = subtasks.findIndex(
+    (subtask) => subtask.title.trim().toLowerCase() === trimmed.toLowerCase(),
+  );
+  if (titleMatch >= 0) return [titleMatch];
+
+  const kind = trimmed
+    .toLowerCase()
+    .replace(/^kind:/, '')
+    .replace(/^capability:/, '');
+  const capability = capabilityFromRef(kind);
+  if (capability) {
+    return subtasks
+      .map((subtask, index) => (subtask.capability_hint === capability ? index : -1))
+      .filter((index) => index >= 0);
+  }
+
+  throw new PublishPlanError(
+    'PLAN_INVALID_WAVE_DEPENDENCY',
+    `wave references unknown sub-task ref '${ref}'`,
+  );
+}
+
+function capabilityFromRef(ref: string): PublishPlanSubtaskInput['capability_hint'] | null {
+  if (ref === 'api' || ref === 'api_work') return 'api_work';
+  if (ref === 'ui' || ref === 'web' || ref === 'ui_work') return 'ui_work';
+  if (ref === 'test' || ref === 'tests' || ref === 'test_work') return 'test_work';
+  if (ref === 'infra' || ref === 'infrastructure' || ref === 'infra_work') return 'infra_work';
+  if (ref === 'doc' || ref === 'docs' || ref === 'doc_work') return 'doc_work';
+  return null;
+}
+
+function remapDependency(
+  dependency: number,
+  oldIndex: number,
+  oldToNew: Map<number, number>,
+  waveForOldIndex: Map<number, number>,
+): number {
+  const newDependency = oldToNew.get(dependency);
+  const currentWave = waveForOldIndex.get(oldIndex);
+  const dependencyWave = waveForOldIndex.get(dependency);
+  if (newDependency === undefined || currentWave === undefined || dependencyWave === undefined) {
+    throw new PublishPlanError(
+      'PLAN_INVALID_WAVE_DEPENDENCY',
+      `sub-task ${oldIndex} depends on unknown sub-task ${dependency}`,
+    );
+  }
+  if (dependencyWave >= currentWave) {
+    throw new PublishPlanError(
+      'PLAN_INVALID_WAVE_DEPENDENCY',
+      `sub-task ${oldIndex} depends on ${dependency}; wave dependencies must point to earlier waves`,
+    );
+  }
+  return newDependency;
+}
+
+function uniqueSorted(values: number[]): number[] {
+  return [...new Set(values)].sort((left, right) => left - right);
+}
+
+function uniqueInOrder(values: number[]): number[] {
+  const seen = new Set<number>();
+  const result: number[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
 }
 
 interface PreparedSpecRowCompletionDelta {

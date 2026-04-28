@@ -19,6 +19,25 @@ interface PublishResult {
   spec_change_path: string;
   plan_workspace_path: string;
   subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
+  waves: Array<{
+    wave_index: number;
+    name: string;
+    subtask_indexes: number[];
+    subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
+  }>;
+  claim_instructions: Array<{
+    subtask_index: number;
+    title: string;
+    branch: string;
+    tool: string;
+    arguments: {
+      plan_slug: string;
+      subtask_index: number;
+      session_id: string;
+      agent: string;
+    };
+    ready_when: string;
+  }>;
 }
 
 interface PlanRollup {
@@ -322,6 +341,126 @@ describe('task_plan_publish', () => {
 
     expect(result.plan_slug).toBe('ordered-waves-ok');
     expect(result.subtasks).toHaveLength(4);
+  });
+
+  it('accepts explicit MCP wave hints and returns waves plus claim instructions', async () => {
+    const result = await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'mcp-wave-plan',
+        subtasks: [
+          {
+            title: 'Build widget page',
+            description: 'Render the widget list.',
+            file_scope: ['apps/frontend/src/pages/widgets.tsx'],
+            capability_hint: 'ui_work',
+          },
+          {
+            title: 'Build widget API',
+            description: 'Add GET /api/widgets.',
+            file_scope: ['apps/api/src/widgets.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Verify widget flow',
+            description: 'Cover the end-to-end widget flow.',
+            file_scope: ['apps/api/test/widgets.test.ts'],
+            capability_hint: 'test_work',
+          },
+        ],
+        ordering_hints: {
+          mode: 'wave',
+          waves: [
+            { name: 'Build surfaces', subtask_refs: ['kind:ui', 'kind:api'] },
+            { name: 'Verification', titles: ['Verify widget flow'] },
+          ],
+        },
+      }),
+    );
+
+    expect(result.plan_slug).toBe('mcp-wave-plan');
+    expect(result.subtasks.map((subtask) => subtask.title)).toEqual([
+      'Build widget page',
+      'Build widget API',
+      'Verify widget flow',
+    ]);
+    expect(
+      result.waves.map((wave) => ({ name: wave.name, subtask_indexes: wave.subtask_indexes })),
+    ).toEqual([
+      { name: 'Build surfaces', subtask_indexes: [0, 1] },
+      { name: 'Verification', subtask_indexes: [2] },
+    ]);
+    expect(result.claim_instructions[0]).toMatchObject({
+      subtask_index: 0,
+      tool: 'task_plan_claim_subtask',
+      arguments: {
+        plan_slug: 'mcp-wave-plan',
+        subtask_index: 0,
+        session_id: '<claiming-session-id>',
+        agent: '<agent-name>',
+      },
+      ready_when: 'now',
+    });
+    expect(result.claim_instructions[2]).toMatchObject({
+      subtask_index: 2,
+      ready_when: 'dependencies_completed',
+    });
+
+    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const plan = plans.find((candidate) => candidate.plan_slug === 'mcp-wave-plan');
+    expect(plan?.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [], [0, 1]]);
+    expect(plan?.next_available.map((subtask) => subtask.subtask_index)).toEqual([0, 1]);
+  });
+
+  it('reorders subtasks by top-level waves before publishing', async () => {
+    const result = await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'mcp-wave-reorder',
+        subtasks: [
+          {
+            title: 'Build widget API',
+            description: 'Add GET /api/widgets.',
+            file_scope: ['apps/api/src/widgets.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Build widget page',
+            description: 'Render the widget list.',
+            file_scope: ['apps/frontend/src/pages/widgets.tsx'],
+            capability_hint: 'ui_work',
+          },
+          {
+            title: 'Verify widget flow',
+            description: 'Cover the end-to-end widget flow.',
+            file_scope: ['apps/api/test/widgets.test.ts'],
+            capability_hint: 'test_work',
+          },
+        ],
+        waves: [
+          { name: 'UI first', subtask_indexes: [1] },
+          { name: 'API second', subtask_indexes: [0] },
+          { name: 'Verify', subtask_indexes: [2] },
+        ],
+      }),
+    );
+
+    expect(result.subtasks.map((subtask) => subtask.title)).toEqual([
+      'Build widget page',
+      'Build widget API',
+      'Verify widget flow',
+    ]);
+    expect(
+      result.waves.map((wave) => ({ name: wave.name, subtask_indexes: wave.subtask_indexes })),
+    ).toEqual([
+      { name: 'UI first', subtask_indexes: [0] },
+      { name: 'API second', subtask_indexes: [1] },
+      { name: 'Verify', subtask_indexes: [2] },
+    ]);
+
+    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const plan = plans.find((candidate) => candidate.plan_slug === 'mcp-wave-reorder');
+    expect(plan?.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [0], [1]]);
   });
 });
 

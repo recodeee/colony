@@ -33,6 +33,17 @@ interface QueenPublishResult {
   plan_slug: string;
   spec_task_id: number;
   subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
+  waves: Array<{ wave_index: number; name: string; subtask_indexes: number[] }>;
+  claim_instructions: Array<{
+    subtask_index: number;
+    tool: string;
+    arguments: {
+      plan_slug: string;
+      subtask_index: number;
+      session_id: string;
+      agent: string;
+    };
+  }>;
 }
 
 interface PlanRollup {
@@ -208,6 +219,17 @@ describe('queen_plan_goal', () => {
     expect(result.spec_task_id).toEqual(expect.any(Number));
     expect(result.subtasks).toHaveLength(2);
     expect(result.subtasks[0]?.branch).toBe('spec/build-queen-mcp-surface/sub-0');
+    expect(result.waves.map((wave) => wave.subtask_indexes)).toEqual([[0], [1]]);
+    expect(result.claim_instructions[0]).toMatchObject({
+      subtask_index: 0,
+      tool: 'task_plan_claim_subtask',
+      arguments: {
+        plan_slug: 'build-queen-mcp-surface',
+        subtask_index: 0,
+        session_id: '<claiming-session-id>',
+        agent: '<agent-name>',
+      },
+    });
 
     const changeText = readFileSync(
       join(repoRoot, 'openspec/changes', result.plan_slug, 'CHANGE.md'),
