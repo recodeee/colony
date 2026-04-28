@@ -350,53 +350,6 @@ Decline a pending handoff. Records a reason so the sender can reissue, possibly 
 
 Returns `{ status: 'cancelled' }` on success. Errors include `{ code, error }`.
 
-## `task_wake`
-
-Post a wake request on a task thread — a lightweight nudge surfaced to the target on their next turn. No claim transfer. Use when another session needs to attend to something but a full handoff is the wrong shape.
-
-```json
-{
-  "name": "task_wake",
-  "input": {
-    "task_id": 17,
-    "session_id": "sess_abc",
-    "agent": "claude",
-    "to_agent": "codex",
-    "reason": "New §V invariant added — please re-run your build",
-    "next_step": "spec_build_context again with task_id=T5",
-    "expires_in_minutes": 120
-  }
-}
-```
-
-Returns `{ wake_observation_id, status: 'pending' }`.
-
-## `task_ack_wake`
-
-Acknowledge a pending wake request. Records an ack on the task thread so the sender sees the response on their next turn.
-
-```json
-{
-  "name": "task_ack_wake",
-  "input": { "wake_observation_id": 512, "session_id": "sess_xyz" }
-}
-```
-
-Returns `{ status: 'acknowledged' }`. Errors include `{ code, error }`, for example `WAKE_EXPIRED`, `NOT_PARTICIPANT`, `NOT_TARGET_AGENT`, or `ALREADY_ACKNOWLEDGED`.
-
-## `task_cancel_wake`
-
-Cancel a pending wake. Either the sender (withdrawing) or the target (declining) may cancel.
-
-```json
-{
-  "name": "task_cancel_wake",
-  "input": { "wake_observation_id": 512, "session_id": "sess_xyz", "reason": "already done" }
-}
-```
-
-Returns `{ status: 'cancelled' }`. Errors include `{ code, error }`.
-
 ## `task_message`
 
 Send a direct message to another agent on a task thread. Use for coordination chat that **doesn't** transfer file claims — for "hand off the work + files", use `task_hand_off`. A message is a `task_post` with kind `message`, explicit addressing, and a read/reply/expire/retract/claim lifecycle.

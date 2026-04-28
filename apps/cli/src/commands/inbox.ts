@@ -119,7 +119,7 @@ export function registerInboxCommand(program: Command): void {
               );
               if (w.next_step) lines.push(`    next: ${w.next_step}`);
               lines.push(
-                `    ack: task_ack_wake(wake_observation_id=${w.id}, session_id="${session}")`,
+                `    respond: task_message(task_id=${w.task_id}, session_id="${session}", agent="${agent}", to_agent="any", to_session_id="${w.from_session_id}", urgency="fyi", content="...")`,
               );
             }
           }

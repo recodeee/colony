@@ -12,8 +12,6 @@ export const COORDINATION_COMMIT_TOOLS = new Set([
   'mcp__colony__task_relay',
   'mcp__colony__task_accept_relay',
   'mcp__colony__task_decline_relay',
-  'mcp__colony__task_wake',
-  'mcp__colony__task_ack_wake',
   'mcp__colony__task_propose',
   'mcp__colony__task_reinforce',
   'mcp__colony__task_plan_publish',

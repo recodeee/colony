@@ -337,11 +337,8 @@ export function buildTaskPreface(
     if (w.meta.next_step) {
       lines.push(`  next: ${w.meta.next_step}`);
     }
-    // Mirror the handoff ergonomics — inline the session_id so the ack
-    // call validates on first try instead of round-tripping through an
-    // "invalid arguments" error.
     lines.push(
-      `  ack with: task_ack_wake(wake_observation_id=${w.id}, session_id="${input.session_id}")`,
+      `  respond with: task_message(task_id=${thread.task_id}, session_id="${input.session_id}", agent="${agent}", to_agent="any", to_session_id="${w.meta.from_session_id}", urgency="fyi", content="...")`,
     );
   }
   return lines.join('\n');
