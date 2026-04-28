@@ -27,9 +27,13 @@ function fmtAgo(ts: number): string {
 
 /**
  * Paint one frame. Extracted so the setInterval loop stays one line
- * and so the renderer is easy to invoke from a future snapshot test.
+ * and so the renderer is easy to invoke from a snapshot test. Exported
+ * so the test in apps/cli/test/observe.test.ts can pin the dashboard
+ * shape against metadata field renames or safeJson regressions —
+ * the dashboard is the load-bearing diagnostic for proactive-claim
+ * behaviour and shouldn't fail silently.
  */
-function renderFrame(storage: Storage): string {
+export function renderFrame(storage: Storage): string {
   const lines: string[] = [];
   const now = new Date().toISOString().slice(11, 19);
   lines.push(`${kleur.bold('colony observe')}  ${kleur.dim(now)}`);
