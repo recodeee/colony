@@ -565,7 +565,7 @@ Returns: `[ { id, kind, session_id, ts } ]`.
 
 ## `task_post`
 
-Post a coordination message on a task thread. Use the dedicated tools (`task_claim_file`, `task_hand_off`, `task_accept_handoff`) for structured actions; `task_post` is for free-form notes tagged with a `kind`.
+Post shared notes, decisions, blockers, questions, and answers on a task thread. Use `task_message` for directed agent-to-agent coordination. Use the dedicated tools (`task_claim_file`, `task_hand_off`, `task_accept_handoff`) for structured actions; `task_post` is for free-form shared thread state tagged with a `kind`.
 
 Use `kind: "note"` when an agent needs to write working note, save current state, remember progress, or log what I am doing. The note lands on both the task thread and the posting session's memory through `MemoryStore`, so it stays compressed, timeline-visible, and searchable later.
 
@@ -584,7 +584,7 @@ Use `failed_approach`, `blocked_path`, `conflict_warning`, or `reverted_solution
 }
 ```
 
-`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id }`.
+`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id }`, plus `{ hint: "For directed coordination, use task_message." }` when the content looks like a directed request to another agent.
 
 ## `task_note_working`
 
@@ -607,7 +607,7 @@ Save current working state to the active Colony task without manually resolving 
 ## `task_post` lifecycle
 
 - Working-state shortcut: write working note, save current state, remember progress, or log what I am doing by posting kind:'note'.
-- Deprecation note: use task_message for non-broadcast agent-to-agent coordination; keep task_post for kind:'note'|'blocker'|'question'|'answer'|'decision' style threading.
+- Routing note: use task_message for directed agent-to-agent coordination; keep task_post for shared kind:'note'|'blocker'|'question'|'answer'|'decision' thread state.
 - Use specific tools for claim / hand_off / accept.
 - Fallback when task_relay is unavailable in your client tool surface: post a note or blocker containing reason, one_line, base_branch, fetch_files_at if known, touched files, and whether the named source branch/worktree is missing.
 - After that, use task_hand_off when another agent must resume the work.
@@ -862,6 +862,35 @@ Example workflow:
 4. Call `get_observations` only for the selected IDs that need full bodies.
 
 Either `repo_root` or `repo_roots` scopes the inbox. `task_ids` can narrow further. `file_heat` is computed at read time from observations and active claims with `fileHeatHalfLifeMinutes` decay, so stale activity fades without a cleanup job. Returns a structured payload with attention buckets; each entry carries the IDs to hydrate on demand.
+
+Unread `task_message` entries include compact action hints so recipients do not need to remember the lifecycle tools:
+
+```json
+{
+  "id": 401,
+  "task_id": 17,
+  "urgency": "needs_reply",
+  "reply_with_tool": "task_message",
+  "reply_with_args": {
+    "task_id": 17,
+    "session_id": "sess_abc",
+    "agent": "claude",
+    "to_agent": "any",
+    "to_session_id": "sess_xyz",
+    "reply_to": 401,
+    "urgency": "fyi",
+    "content": "..."
+  },
+  "mark_read_with_tool": "task_message_mark_read",
+  "mark_read_with_args": {
+    "message_observation_id": 401,
+    "session_id": "sess_abc"
+  },
+  "next_action": "Reply with task_message using reply_to, or mark read after reading if no reply is needed."
+}
+```
+
+`next_action` is present on `blocking` and `needs_reply` message entries; FYI messages still include the reply and mark-read tool hints.
 
 ## `task_propose`
 

@@ -326,6 +326,39 @@ describe('task threads — handoff lifecycle', () => {
     expect(hits.some((hit) => hit.id === id)).toBe(true);
   });
 
+  it('task_post hints when a post looks like directed agent coordination', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    const { id, hint } = await call<{ id: number; hint?: string }>('task_post', {
+      task_id,
+      session_id: sessionA,
+      kind: 'question',
+      content: '@codex can you reply with the current blocker?',
+    });
+
+    expect(hint).toBe('For directed coordination, use task_message.');
+    const row = store.storage.getObservation(id);
+    expect(row).toMatchObject({
+      id,
+      session_id: sessionA,
+      task_id,
+      kind: 'question',
+    });
+  });
+
+  it('task_post does not hint for ordinary shared notes about agents', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    const { hint } = await call<{ id: number; hint?: string }>('task_post', {
+      task_id,
+      session_id: sessionA,
+      kind: 'note',
+      content: 'agent-18 recorded shared verification evidence for the task thread',
+    });
+
+    expect(hint).toBeUndefined();
+  });
+
   it('task_note_working posts a note to the only active task for the session', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 

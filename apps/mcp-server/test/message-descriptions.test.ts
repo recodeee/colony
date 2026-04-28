@@ -23,6 +23,8 @@ describe('message tool descriptions', () => {
   it('points agents to the right inbox and hydration lifecycle', () => {
     expect(messageToolSource).toContain('fetch full bodies via get_observations');
     expect(attentionToolSource).toContain('main surface where task_message items show up');
+    expect(attentionToolSource).toContain('reply_with_tool=task_message');
+    expect(attentionToolSource).toContain('mark_read_with_tool=task_message_mark_read hints');
     expect(mcpDocsSource).toContain('## `task_message` lifecycle');
     expect(mcpDocsSource).toContain(
       "Minimum call: task_message(task_id, session_id, agent, content); it broadcasts to_agent='any' with urgency='fyi'. Use to_agent / to_session_id for direct coordination that doesn't transfer file claims; for 'hand off the work + files', use task_hand_off instead.",
@@ -34,5 +36,7 @@ describe('message tool descriptions', () => {
       'Directed-message workflow: `task_message` -> `attention_inbox` / `task_messages` -> `get_observations` -> `task_message_mark_read` -> reply.',
     );
     expect(mcpDocsSource).toContain('This is the main surface where `task_message` items show up');
+    expect(mcpDocsSource).toContain('"reply_with_tool": "task_message"');
+    expect(mcpDocsSource).toContain('"mark_read_with_tool": "task_message_mark_read"');
   });
 });

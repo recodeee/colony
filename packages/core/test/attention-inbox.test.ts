@@ -99,6 +99,62 @@ describe('buildAttentionInbox', () => {
     expect(inbox.summary.next_action).toMatch(/blocking task messages/i);
   });
 
+  it('adds compact reply and mark-read suggestions to unread message items', () => {
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-message-actions',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const needsReplyId = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'please choose the schema',
+      urgency: 'needs_reply',
+    });
+    const fyiId = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'context only',
+      urgency: 'fyi',
+    });
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+    });
+    const needsReply = inbox.unread_messages.find((m) => m.id === needsReplyId);
+    expect(needsReply).toMatchObject({
+      reply_with_tool: 'task_message',
+      reply_with_args: {
+        task_id: thread.task_id,
+        session_id: 'codex',
+        agent: 'codex',
+        to_agent: 'any',
+        to_session_id: 'claude',
+        reply_to: needsReplyId,
+        urgency: 'fyi',
+        content: '...',
+      },
+      mark_read_with_tool: 'task_message_mark_read',
+      mark_read_with_args: {
+        message_observation_id: needsReplyId,
+        session_id: 'codex',
+      },
+    });
+    expect(needsReply?.next_action).toMatch(/Reply with task_message/);
+
+    const fyi = inbox.unread_messages.find((m) => m.id === fyiId);
+    expect(fyi?.reply_with_tool).toBe('task_message');
+    expect(fyi?.mark_read_with_tool).toBe('task_message_mark_read');
+    expect(fyi).not.toHaveProperty('next_action');
+  });
+
   it('surfaces compact decaying file heat for participating tasks', () => {
     seed('claude', 'codex');
     const now = Date.parse('2026-04-28T12:00:00.000Z');

@@ -44,7 +44,34 @@ export interface InboxWake {
   ts: number;
 }
 
-export type InboxMessage = MessageSummary;
+export interface InboxMessageReplyArgs {
+  task_id: number;
+  session_id: string;
+  agent: string;
+  to_agent: 'any';
+  to_session_id: string;
+  reply_to: number;
+  urgency: 'fyi';
+  content: string;
+}
+
+export interface InboxMessageMarkReadArgs {
+  message_observation_id: number;
+  session_id: string;
+}
+
+export interface InboxMessage extends MessageSummary {
+  reply_with_tool: 'task_message';
+  reply_with_args: InboxMessageReplyArgs;
+  mark_read_with_tool: 'task_message_mark_read';
+  mark_read_with_args: InboxMessageMarkReadArgs;
+  /**
+   * Present for `blocking` and `needs_reply` messages so compact inbox
+   * renderers can show the expected action without hardcoding urgency
+   * semantics. FYI messages keep only tool affordances.
+   */
+  next_action?: string;
+}
 
 export interface InboxLane {
   repo_root: string;
@@ -227,7 +254,7 @@ export function buildAttentionInbox(
     task_ids: taskIds,
     unread_only: true,
     ...(opts.unread_message_limit !== undefined ? { limit: opts.unread_message_limit } : {}),
-  });
+  }).map((message) => withInboxMessageActions(message, opts));
 
   const recentWindow = opts.recent_claim_window_ms ?? DEFAULT_RECENT_CLAIM_WINDOW_MS;
   const recentLimit = opts.recent_claim_limit ?? DEFAULT_RECENT_CLAIM_LIMIT;
@@ -479,6 +506,44 @@ function compactWake(
     expires_at: meta.expires_at,
     ts,
   };
+}
+
+function withInboxMessageActions(
+  message: MessageSummary,
+  opts: Pick<AttentionInboxOptions, 'session_id' | 'agent'>,
+): InboxMessage {
+  const base = {
+    ...message,
+    reply_with_tool: 'task_message' as const,
+    reply_with_args: {
+      task_id: message.task_id,
+      session_id: opts.session_id,
+      agent: opts.agent,
+      to_agent: 'any' as const,
+      to_session_id: message.from_session_id,
+      reply_to: message.id,
+      urgency: 'fyi' as const,
+      content: '...',
+    },
+    mark_read_with_tool: 'task_message_mark_read' as const,
+    mark_read_with_args: {
+      message_observation_id: message.id,
+      session_id: opts.session_id,
+    },
+  };
+  const nextAction = messageNextAction(message);
+  if (nextAction === null) return base;
+  return { ...base, next_action: nextAction };
+}
+
+function messageNextAction(message: MessageSummary): string | null {
+  if (message.urgency === 'blocking') {
+    return 'Reply with task_message using reply_to before unrelated work, or mark read if no reply is needed.';
+  }
+  if (message.urgency === 'needs_reply') {
+    return 'Reply with task_message using reply_to, or mark read after reading if no reply is needed.';
+  }
+  return null;
 }
 
 function compactClaim(

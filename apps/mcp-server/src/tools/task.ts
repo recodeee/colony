@@ -104,8 +104,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_post',
     [
-      'Post a task-scoped question, answer, decision, blocker, or note.',
-      'Use task_note_working to save current state without a task_id; negative warnings use failed_approach, blocked_path, conflict_warning, or reverted_solution.',
+      'Post shared task notes, decisions, blockers, questions, or answers.',
+      'Use task_message for directed agent-to-agent coordination.',
+      'Use task_note_working for current state; negative warnings use failed_approach/blocked_path/etc.',
     ].join(' '),
     {
       task_id: z.number().int().positive(),
@@ -132,7 +133,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         content,
         ...(reply_to !== undefined ? { reply_to } : {}),
       });
-      return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
+      return jsonReply({
+        id,
+        ...(looksLikeDirectedCoordination(content)
+          ? { hint: 'For directed coordination, use task_message.' }
+          : {}),
+      });
     }),
   );
 
@@ -350,6 +356,18 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
 function jsonReply(value: unknown): { content: Array<{ type: 'text'; text: string }> } {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+function looksLikeDirectedCoordination(content: string): boolean {
+  const normalized = content.toLowerCase();
+  const mentionsAgent = /(^|[^a-z0-9_@])@?(claude|codex|agent[-_\s]?\d+)(?=$|[^a-z0-9_])/.test(
+    normalized,
+  );
+  const asksForReply =
+    /(^|[^a-z])(reply|respond|answer|ack|confirm)(?=$|[^a-z])/.test(normalized) ||
+    /\b(can|could|would)\s+you\b/.test(normalized) ||
+    /\?/.test(normalized);
+  return mentionsAgent && asksForReply;
 }
 
 function compactPreviousClaim(

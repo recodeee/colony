@@ -104,10 +104,11 @@ describe('MCP server', () => {
       'timeline',
     ]);
     const taskPostDescription = byName.get('task_post')?.description ?? '';
-    expect(taskPostDescription).toMatch(/^Post a task-scoped question/);
+    expect(taskPostDescription).toMatch(/^Post shared task notes/);
     expect(taskPostDescription).toContain(
-      'Use task_note_working to save current state without a task_id',
+      'Use task_message for directed agent-to-agent coordination',
     );
+    expect(taskPostDescription).toContain('Use task_note_working for current state');
     expect(taskPostDescription.length).toBeLessThanOrEqual(240);
     const taskNoteWorkingDescription = byName.get('task_note_working')?.description ?? '';
     expect(taskNoteWorkingDescription).toMatch(
