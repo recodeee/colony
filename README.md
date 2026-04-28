@@ -86,6 +86,32 @@ IDE installs register the server as `colony`, so tools appear as `mcp__colony__.
 
 Colony MCP follows progressive disclosure: tools return compact IDs, snippets, status rows, and routing hints first. Agents fetch full observation bodies only after they know which IDs matter.
 
+### Agent startup loop
+
+When an agent joins, resumes, asks "what needs me?", or needs the next task, call these first:
+
+1. `hivemind_context` to see active agents, owned branches, live lanes, and compact memory hits.
+2. `attention_inbox` to see what needs your attention: handoffs, messages, wakes, stalled lanes, and recent claim activity.
+3. `task_ready_for_agent` to choose available work matched to the current agent.
+
+Use `task_list` for browsing recent task threads. Use `task_ready_for_agent` for choosing what to work on next.
+
+Copy-paste startup:
+
+```json
+{ "name": "hivemind_context", "input": { "repo_root": "/abs/repo", "query": "current task or branch", "memory_limit": 3, "limit": 20 } }
+```
+
+```json
+{ "name": "attention_inbox", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo" } }
+```
+
+```json
+{ "name": "task_ready_for_agent", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo", "limit": 5 } }
+```
+
+If the ready item needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. Claim files with `task_claim_file` or `task_plan_claim_subtask` before editing.
+
 ### Memory and session recall
 
 | Tool | Use it for |
@@ -103,7 +129,7 @@ Colony MCP follows progressive disclosure: tools return compact IDs, snippets, s
 | `hivemind` | See active agents, branches, task previews, and live lanes. |
 | `hivemind_context` | Combine active lane ownership with compact relevant memory hits. |
 | `attention_inbox` | See pending handoffs, messages, wakes, stalled lanes, and recent claims. |
-| `task_list` | List recent task threads. |
+| `task_list` | Browse recent task threads by repo, branch, and status. |
 | `task_timeline` | Read compact task-thread activity. |
 | `task_updates_since` | Check what changed on a task while a session was away. |
 
