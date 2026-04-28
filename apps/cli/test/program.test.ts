@@ -8,6 +8,7 @@ describe('Colony CLI program', () => {
     const expected = [
       'doctor',
       'foraging',
+      'health',
       'hook',
       'inbox',
       'install',
@@ -45,6 +46,8 @@ describe('Colony CLI program', () => {
         uninstall [options]                 Remove IDE integration
         status                              Show colony wiring, data, and worker
                                             state
+        health [options]                    Show Colony adoption ratios from local DB
+                                            evidence
         config                              View or edit colony settings
         doctor                              Run health checks
         start                               Start the worker daemon (embeddings +

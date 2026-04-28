@@ -93,6 +93,19 @@ export interface SessionsEndedWithoutHandoffRow {
   had_pending_handoff: boolean;
 }
 
+export interface ToolCallRow {
+  id: number;
+  session_id: string;
+  tool: string;
+  ts: number;
+}
+
+export interface ClaimBeforeEditStats {
+  edit_tool_calls: number;
+  edits_with_file_path: number;
+  edits_claimed_before: number;
+}
+
 const DEFAULT_STRANDED_AFTER_MS = 10 * 60_000;
 const DEFAULT_CLAIM_WINDOW_MS = 5 * 60_000;
 const DEFAULT_IDLE_WINDOW_MS = 30 * 60_000;
@@ -114,10 +127,12 @@ export class Storage {
   private sessionsEndedWithoutHandoffStmt!: Database.Statement;
 
   constructor(dbPath: string, opts: StorageOptions = {}) {
-    mkdirSync(dirname(dbPath), { recursive: true });
+    if (!opts.readonly) mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath, opts.readonly ? { readonly: true } : {});
-    this.db.exec(SCHEMA_SQL);
-    if (!opts.readonly) {
+    if (opts.readonly) {
+      this.db.pragma('foreign_keys = ON');
+    } else {
+      this.db.exec(SCHEMA_SQL);
       this.applyTableMigrations();
       this.applyColumnMigrations();
       this.db.exec(POST_MIGRATION_SQL);
@@ -150,9 +165,14 @@ export class Storage {
   }
 
   private prepareTaskEmbeddingStatements(readonly: boolean): void {
-    this.getTaskEmbeddingStmt = this.db.prepare(
-      'SELECT task_id, model, dim, embedding, observation_count, computed_at FROM task_embeddings WHERE task_id = ?',
-    );
+    const hasTaskEmbeddings = this.tableExists('task_embeddings');
+    this.getTaskEmbeddingStmt = hasTaskEmbeddings
+      ? this.db.prepare(
+          'SELECT task_id, model, dim, embedding, observation_count, computed_at FROM task_embeddings WHERE task_id = ?',
+        )
+      : this.db.prepare(
+          'SELECT NULL AS task_id, NULL AS model, NULL AS dim, NULL AS embedding, NULL AS observation_count, NULL AS computed_at WHERE 0',
+        );
     this.countTaskObservationsStmt = this.db.prepare(
       'SELECT COUNT(*) AS n FROM observations WHERE task_id = ?',
     );
@@ -263,7 +283,7 @@ export class Storage {
        WHERE l.last_observation_ts <= ?
        ORDER BY l.last_observation_ts ASC, l.session_id ASC`,
     );
-    if (!readonly) {
+    if (!readonly && hasTaskEmbeddings) {
       this.upsertTaskEmbeddingStmt = this.db.prepare(
         `INSERT INTO task_embeddings(task_id, model, dim, embedding, observation_count, computed_at)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -275,6 +295,13 @@ export class Storage {
            computed_at = excluded.computed_at`,
       );
     }
+  }
+
+  private tableExists(name: string): boolean {
+    const row = this.db
+      .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
+      .get(name) as { found: number } | undefined;
+    return row !== undefined;
   }
 
   close(): void {
@@ -1331,6 +1358,70 @@ export class Storage {
          LIMIT ?`,
       )
       .all(since_ts, limit) as Array<{ tool: string; count: number }>;
+  }
+
+  /** Ordered tool calls for lightweight local health/adoption ratios. */
+  toolCallsSince(since_ts: number): ToolCallRow[] {
+    return this.db
+      .prepare(
+        `SELECT id,
+                session_id,
+                COALESCE(json_extract(metadata, '$.tool'), json_extract(metadata, '$.tool_name')) AS tool,
+                ts
+         FROM observations
+         WHERE ts > ?
+           AND kind = 'tool_use'
+           AND COALESCE(json_extract(metadata, '$.tool'), json_extract(metadata, '$.tool_name')) IS NOT NULL
+         ORDER BY ts ASC, id ASC`,
+      )
+      .all(since_ts) as ToolCallRow[];
+  }
+
+  /**
+   * Exact proactive-claim coverage for write tools when file_path metadata is
+   * present. Callers should treat partial metadata as unavailable rather than
+   * inferring from content.
+   */
+  claimBeforeEditStats(since_ts: number): ClaimBeforeEditStats {
+    const row = this.db
+      .prepare(
+        `WITH edit_tools(tool) AS (
+           SELECT value AS tool FROM json_each(?)
+         ),
+         edit_rows AS (
+           SELECT o.session_id,
+                  o.ts,
+                  json_extract(o.metadata, '$.file_path') AS file_path
+           FROM observations o
+           JOIN edit_tools et
+             ON et.tool = COALESCE(
+               json_extract(o.metadata, '$.tool'),
+               json_extract(o.metadata, '$.tool_name')
+             )
+           WHERE o.ts > ?
+             AND o.kind = 'tool_use'
+         )
+         SELECT COUNT(*) AS edit_tool_calls,
+                SUM(CASE WHEN file_path IS NOT NULL THEN 1 ELSE 0 END) AS edits_with_file_path,
+                SUM(CASE WHEN file_path IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM observations c
+                  WHERE c.kind = 'claim'
+                    AND c.session_id = edit_rows.session_id
+                    AND json_extract(c.metadata, '$.file_path') = edit_rows.file_path
+                    AND c.ts <= edit_rows.ts
+                ) THEN 1 ELSE 0 END) AS edits_claimed_before
+         FROM edit_rows`,
+      )
+      .get(FILE_EDIT_TOOLS_JSON, since_ts) as {
+      edit_tool_calls: number;
+      edits_with_file_path: number | null;
+      edits_claimed_before: number | null;
+    };
+    return {
+      edit_tool_calls: row.edit_tool_calls,
+      edits_with_file_path: row.edits_with_file_path ?? 0,
+      edits_claimed_before: row.edits_claimed_before ?? 0,
+    };
   }
 
   /** First task-participant row for a session, used to verify auto-join
