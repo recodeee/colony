@@ -115,6 +115,13 @@ describe('Colony CLI program', () => {
     expect(debrief?.options.find((o) => o.long === '--json')).toBeDefined();
   });
 
+  it('exposes health JSON output for dashboards and agents', () => {
+    const program = createProgram();
+    const health = program.commands.find((c) => c.name() === 'health');
+    expect(health).toBeDefined();
+    expect(health?.options.find((o) => o.long === '--json')).toBeDefined();
+  });
+
   it('advertises a semantic version', () => {
     const program = createProgram();
     expect(program.version()).toMatch(/^\d+\.\d+\.\d+$/);

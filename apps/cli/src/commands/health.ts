@@ -24,6 +24,11 @@ const HEALTH_TOOL_LIMIT = 5;
 const STALE_CLAIM_MINUTES = 4 * 60;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
 const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
+const TARGET_HIVEMIND_TO_ATTENTION = 0.5;
+const TARGET_TASK_LIST_TO_READY = 0.3;
+const TARGET_READY_TO_CLAIM = 0.3;
+const TARGET_CLAIM_BEFORE_EDIT = 0.5;
+const TARGET_COLONY_NOTE_SHARE = 0.7;
 
 const CONVERSIONS = [
   ['hivemind_context', 'attention_inbox'],
@@ -77,8 +82,11 @@ interface TaskSelectionPayload {
 interface TaskPostNotepadPayload {
   status: 'available' | 'unavailable';
   task_post_calls: number;
+  task_note_working_calls: number;
+  colony_note_calls: number;
   omx_notepad_write_calls: number;
   task_post_share: number | null;
+  colony_note_share: number | null;
 }
 
 interface SearchCallsPayload {
@@ -127,12 +135,21 @@ interface AdoptionSignal {
   name: string;
   status: 'good' | 'ok' | 'bad' | 'needs_attention';
   value: number | null;
+  target: number | null;
   hint: string;
 }
 
 interface AdoptionThresholdsPayload {
   good: AdoptionSignal[];
   bad: AdoptionSignal[];
+}
+
+interface ActionHint {
+  metric: string;
+  status: 'bad';
+  current: string;
+  target: string;
+  action: string;
 }
 
 export interface ColonyHealthPayload {
@@ -149,7 +166,10 @@ export interface ColonyHealthPayload {
   proposal_health: ProposalHealthPayload;
   ready_to_claim_vs_claimed: ReadyClaimPayload;
   adoption_thresholds: AdoptionThresholdsPayload;
+  action_hints: ActionHint[];
 }
+
+type ColonyHealthPayloadWithoutHints = Omit<ColonyHealthPayload, 'action_hints'>;
 
 export function buildColonyHealthPayload(
   storage: Pick<
@@ -200,7 +220,7 @@ export function buildColonyHealthPayload(
   const taskSelection = taskSelectionPayload(calls);
   const taskClaimFileCalls = countTool(calls, 'task_claim_file');
 
-  return {
+  const payload: ColonyHealthPayloadWithoutHints = {
     generated_at: new Date(now).toISOString(),
     window_hours: options.window_hours,
     colony_mcp_share: {
@@ -222,7 +242,7 @@ export function buildColonyHealthPayload(
       task_message_calls: taskMessageCalls,
       task_message_share: ratio(taskMessageCalls, taskPostCalls + taskMessageCalls),
     },
-    task_post_vs_omx_notepad: taskPostVsNotepadPayload(calls, taskPostCalls),
+    task_post_vs_omx_notepad: taskPostVsNotepadPayload(calls, taskPostCalls, taskNoteWorkingCalls),
     search_calls_per_session: searchCalls,
     task_claim_file_before_edits: claimBeforeEditPayload(claimBeforeEditStats, taskClaimFileCalls),
     signal_health: signalHealthPayload(storage, tasks, {
@@ -241,6 +261,11 @@ export function buildColonyHealthPayload(
       task_post_calls: taskPostCalls,
       task_note_working_calls: taskNoteWorkingCalls,
     }),
+  };
+
+  return {
+    ...payload,
+    action_hints: healthActionHints(payload),
   };
 }
 
@@ -321,10 +346,13 @@ export function formatColonyHealthOutput(
     `  message share: ${formatPercent(payload.task_post_vs_task_message.task_message_share)}`,
     '',
     kleur.bold('task_post vs OMX notepad'),
-    `  status:      ${payload.task_post_vs_omx_notepad.status}`,
-    `  task_post:   ${payload.task_post_vs_omx_notepad.task_post_calls}`,
-    `  omx writes:  ${payload.task_post_vs_omx_notepad.omx_notepad_write_calls}`,
-    `  task_post share: ${formatPercent(payload.task_post_vs_omx_notepad.task_post_share)}`,
+    `  status:              ${payload.task_post_vs_omx_notepad.status}`,
+    `  task_post:           ${payload.task_post_vs_omx_notepad.task_post_calls}`,
+    `  task_note_working:   ${payload.task_post_vs_omx_notepad.task_note_working_calls}`,
+    `  colony note calls:   ${payload.task_post_vs_omx_notepad.colony_note_calls}`,
+    `  omx writes:          ${payload.task_post_vs_omx_notepad.omx_notepad_write_calls}`,
+    `  task_post share:     ${formatPercent(payload.task_post_vs_omx_notepad.task_post_share)}`,
+    `  colony note share:   ${formatPercent(payload.task_post_vs_omx_notepad.colony_note_share)}`,
     '',
     kleur.bold('Search calls per session'),
     `  total: ${payload.search_calls_per_session.total_search_calls}`,
@@ -367,6 +395,17 @@ export function formatColonyHealthOutput(
     `  ready/claimed:       ${formatNumber(payload.ready_to_claim_vs_claimed.ready_to_claim_per_claimed)}`,
     `  claimed actionable:  ${formatPercent(payload.ready_to_claim_vs_claimed.claimed_share_of_actionable)}`,
   );
+
+  lines.push('', kleur.bold('Next fixes'));
+  if (payload.action_hints.length === 0) {
+    lines.push(kleur.green('  none: tracked thresholds meet targets'));
+  } else {
+    payload.action_hints.forEach((hint, index) => {
+      lines.push(
+        `  ${index + 1}. ${hint.metric}: ${hint.current} (target ${hint.target}) - ${hint.action}`,
+      );
+    });
+  }
 
   lines.push('', kleur.bold('Adoption thresholds'));
   for (const signal of payload.adoption_thresholds.good) {
@@ -472,16 +511,24 @@ function taskSelectionPayload(calls: ToolCallRow[]): TaskSelectionPayload {
 function taskPostVsNotepadPayload(
   calls: ToolCallRow[],
   taskPostCalls: number,
+  taskNoteWorkingCalls: number,
 ): TaskPostNotepadPayload {
+  const colonyNoteCalls = taskPostCalls + taskNoteWorkingCalls;
   const omxNotepadWriteCalls = calls.filter((call) => isOmxNotepadWrite(call.tool)).length;
   const hasOmxMetrics = calls.some((call) => isOmxMetricTool(call.tool));
   const status = hasOmxMetrics || omxNotepadWriteCalls > 0 ? 'available' : 'unavailable';
   return {
     status,
     task_post_calls: taskPostCalls,
+    task_note_working_calls: taskNoteWorkingCalls,
+    colony_note_calls: colonyNoteCalls,
     omx_notepad_write_calls: omxNotepadWriteCalls,
     task_post_share:
       status === 'available' ? ratio(taskPostCalls, taskPostCalls + omxNotepadWriteCalls) : null,
+    colony_note_share:
+      status === 'available'
+        ? ratio(colonyNoteCalls, colonyNoteCalls + omxNotepadWriteCalls)
+        : null,
   };
 }
 
@@ -636,6 +683,87 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   return lines;
 }
 
+function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint[] {
+  const hints: ActionHint[] = [];
+  const hivemindToAttention = payload.conversions.hivemind_context_to_attention_inbox;
+  if (isBelowTarget(hivemindToAttention.conversion_rate, TARGET_HIVEMIND_TO_ATTENTION)) {
+    hints.push({
+      metric: 'hivemind_context -> attention_inbox',
+      status: 'bad',
+      current: formatPercent(hivemindToAttention.conversion_rate),
+      target: `${formatPercent(TARGET_HIVEMIND_TO_ATTENTION)}+`,
+      action:
+        'After hivemind_context, call attention_inbox to clear handoffs, unread messages, and blockers.',
+    });
+  }
+
+  const taskListToReady = payload.conversions.task_list_to_task_ready_for_agent;
+  if (isBelowTarget(taskListToReady.conversion_rate, TARGET_TASK_LIST_TO_READY)) {
+    hints.push({
+      metric: 'task_list -> task_ready_for_agent',
+      status: 'bad',
+      current: formatPercent(taskListToReady.conversion_rate),
+      target: `${formatPercent(TARGET_TASK_LIST_TO_READY)}+`,
+      action:
+        'Keep task_list for browsing/debugging only; call task_ready_for_agent before selecting work.',
+    });
+  }
+
+  const readyToClaim = payload.conversions.task_ready_for_agent_to_task_plan_claim_subtask;
+  if (isBelowTarget(readyToClaim.conversion_rate, TARGET_READY_TO_CLAIM)) {
+    hints.push({
+      metric: 'task_ready_for_agent -> claim',
+      status: 'bad',
+      current: formatPercent(readyToClaim.conversion_rate),
+      target: `${formatPercent(TARGET_READY_TO_CLAIM)}+`,
+      action:
+        'When ready work fits, claim it with task_plan_claim_subtask, then claim touched files before implementation.',
+    });
+  }
+
+  if (
+    isBelowTarget(
+      payload.task_claim_file_before_edits.claim_before_edit_ratio,
+      TARGET_CLAIM_BEFORE_EDIT,
+    )
+  ) {
+    hints.push({
+      metric: 'claim-before-edit',
+      status: 'bad',
+      current: formatPercent(payload.task_claim_file_before_edits.claim_before_edit_ratio),
+      target: `${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+`,
+      action: 'Call task_claim_file for touched files before Edit or Write tool use.',
+    });
+  }
+
+  if (payload.signal_health.stale_claims > 0) {
+    hints.push({
+      metric: 'stale claims',
+      status: 'bad',
+      current: String(payload.signal_health.stale_claims),
+      target: '0',
+      action:
+        'Run colony coordination sweep/rescue, then release, hand off, or reclaim stale ownership.',
+    });
+  }
+
+  if (
+    payload.task_post_vs_omx_notepad.status === 'available' &&
+    isBelowTarget(payload.task_post_vs_omx_notepad.colony_note_share, TARGET_COLONY_NOTE_SHARE)
+  ) {
+    hints.push({
+      metric: 'task_post/task_note_working share',
+      status: 'bad',
+      current: formatPercent(payload.task_post_vs_omx_notepad.colony_note_share),
+      target: `${formatPercent(TARGET_COLONY_NOTE_SHARE)}+`,
+      action:
+        'Use task_note_working or task_post for working state; use OMX notepad only when Colony is unavailable.',
+    });
+  }
+
+  return hints;
+}
+
 function adoptionThresholds(
   calls: ToolCallRow[],
   metrics: {
@@ -655,6 +783,10 @@ function adoptionThresholds(
     'omx_notepad_write_working',
     'notepad_write_working',
   ]);
+  const colonyNoteShare = ratio(
+    colonyWorkingNoteCalls,
+    colonyWorkingNoteCalls + notepadWriteWorkingCalls,
+  );
 
   return {
     good: [
@@ -662,12 +794,14 @@ function adoptionThresholds(
         name: 'hivemind_context rising',
         status: hivemindContextCalls > 0 ? 'good' : 'needs_attention',
         value: hivemindContextCalls,
+        target: null,
         hint: 'Keep hivemind_context as the first coordination read.',
       },
       {
         name: 'task_claim_file rising',
         status: metrics.task_claim_file_calls > 0 ? 'good' : 'needs_attention',
         value: metrics.task_claim_file_calls,
+        target: null,
         hint: 'Claim files before edits so ownership is visible.',
       },
       {
@@ -677,6 +811,7 @@ function adoptionThresholds(
             ? 'good'
             : 'needs_attention',
         value: metrics.colony_mcp_share,
+        target: null,
         hint: 'Colony MCP calls should take a visible share of MCP traffic.',
       },
     ],
@@ -685,24 +820,29 @@ function adoptionThresholds(
         name: 'task_list > task_ready_for_agent',
         status: taskListCalls > taskReadyCalls ? 'bad' : 'ok',
         value: taskListCalls - taskReadyCalls,
+        target: TARGET_TASK_LIST_TO_READY,
         hint: 'Use task_ready_for_agent to choose claimable work; task_list is inventory.',
       },
       {
         name: 'notepad_write_working > task_post/task_note_working',
-        status: notepadWriteWorkingCalls > colonyWorkingNoteCalls ? 'bad' : 'ok',
+        status:
+          colonyNoteShare !== null && colonyNoteShare < TARGET_COLONY_NOTE_SHARE ? 'bad' : 'ok',
         value: notepadWriteWorkingCalls - colonyWorkingNoteCalls,
-        hint: 'Use task_note_working for task-scoped working state.',
+        target: TARGET_COLONY_NOTE_SHARE,
+        hint: 'Use task_note_working or task_post for task-scoped working state.',
       },
       {
         name: 'attention_inbox = 0',
         status: attentionInboxCalls === 0 ? 'bad' : 'ok',
         value: attentionInboxCalls,
+        target: TARGET_HIVEMIND_TO_ATTENTION,
         hint: 'Call attention_inbox after hivemind_context.',
       },
       {
         name: 'task_ready_for_agent = 0',
         status: taskReadyCalls === 0 ? 'bad' : 'ok',
         value: taskReadyCalls,
+        target: TARGET_TASK_LIST_TO_READY,
         hint: 'Call task_ready_for_agent before choosing work.',
       },
     ],
@@ -710,7 +850,8 @@ function adoptionThresholds(
 }
 
 function formatSignal(signal: AdoptionSignal): string {
-  return `  ${formatSignalStatus(signal.status)} ${signal.name}: ${formatSignalValue(signal.value)} - ${signal.hint}`;
+  const target = signal.target === null ? '' : ` target ${formatPercent(signal.target)}+;`;
+  return `  ${formatSignalStatus(signal.status)} ${signal.name}: ${formatSignalValue(signal.value)} -${target} ${signal.hint}`;
 }
 
 function formatSignalStatus(status: AdoptionSignal['status']): string {
@@ -772,6 +913,10 @@ function conversionKey(fromTool: string, toTool: string): ConversionName {
 
 function ratio(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
+}
+
+function isBelowTarget(value: number | null, target: number): boolean {
+  return value !== null && value < target;
 }
 
 function countRatio(numerator: number, denominator: number, value: number | null): string {

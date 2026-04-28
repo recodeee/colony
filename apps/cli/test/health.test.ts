@@ -125,8 +125,11 @@ describe('colony health payload', () => {
     expect(payload.task_post_vs_omx_notepad).toMatchObject({
       status: 'available',
       task_post_calls: 1,
+      task_note_working_calls: 0,
+      colony_note_calls: 1,
       omx_notepad_write_calls: 1,
       task_post_share: 1 / 2,
+      colony_note_share: 1 / 2,
     });
     expect(payload.search_calls_per_session).toMatchObject({
       total_search_calls: 3,
@@ -194,6 +197,7 @@ describe('colony health payload', () => {
     expect(text).toContain('Signal health');
     expect(text).toContain('Proposal decay/promotions');
     expect(text).toContain('Ready-to-claim vs claimed');
+    expect(text).toContain('Next fixes');
     expect(text).toContain('Adoption thresholds');
     expect(text).toContain('task_list > task_ready_for_agent');
     expect(text).not.toContain('\n  Good\n');
@@ -231,6 +235,7 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
     expect(json).toHaveProperty('adoption_thresholds');
+    expect(json).toHaveProperty('action_hints');
   });
 
   it('colors adoption threshold status labels by severity', () => {
@@ -289,6 +294,89 @@ describe('colony health payload', () => {
         expect.objectContaining({ name: 'attention_inbox = 0', status: 'bad', value: 0 }),
         expect.objectContaining({ name: 'task_ready_for_agent = 0', status: 'bad', value: 0 }),
       ]),
+    );
+  });
+
+  it('builds concrete next-fix actions with targets for bad health thresholds', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__task_list', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          call(4, 'session-a', 'mcp__omx_memory__notepad_write_working', NOW - 87_000),
+          call(5, 'session-b', 'mcp__colony__task_list', NOW - 86_000),
+          call(6, 'session-c', 'mcp__colony__task_list', NOW - 85_000),
+          call(7, 'session-d', 'mcp__colony__task_list', NOW - 84_000),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 2,
+          edits_with_file_path: 2,
+          edits_claimed_before: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.action_hints).toEqual([
+      expect.objectContaining({
+        metric: 'hivemind_context -> attention_inbox',
+        current: '0%',
+        target: '50%+',
+        action: expect.stringContaining('call attention_inbox'),
+      }),
+      expect.objectContaining({
+        metric: 'task_list -> task_ready_for_agent',
+        current: '25%',
+        target: '30%+',
+        action: expect.stringContaining('call task_ready_for_agent'),
+      }),
+      expect.objectContaining({
+        metric: 'task_ready_for_agent -> claim',
+        current: '0%',
+        target: '30%+',
+        action: expect.stringContaining('task_plan_claim_subtask'),
+      }),
+      expect.objectContaining({
+        metric: 'claim-before-edit',
+        current: '0%',
+        target: '50%+',
+        action: expect.stringContaining('task_claim_file'),
+      }),
+      expect.objectContaining({
+        metric: 'stale claims',
+        current: '1',
+        target: '0',
+        action: expect.stringContaining('coordination sweep/rescue'),
+      }),
+      expect.objectContaining({
+        metric: 'task_post/task_note_working share',
+        current: '0%',
+        target: '70%+',
+        action: expect.stringContaining('task_note_working or task_post'),
+      }),
+    ]);
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('Next fixes');
+    expect(text).toContain(
+      'hivemind_context -> attention_inbox: 0% (target 50%+) - After hivemind_context, call attention_inbox',
+    );
+    expect(text).toContain(
+      'task_list -> task_ready_for_agent: 25% (target 30%+) - Keep task_list for browsing/debugging only',
+    );
+    expect(text).toContain(
+      'task_ready_for_agent -> claim: 0% (target 30%+) - When ready work fits',
+    );
+    expect(text).toContain('claim-before-edit: 0% (target 50%+) - Call task_claim_file');
+    expect(text).toContain('stale claims: 1 (target 0) - Run colony coordination sweep/rescue');
+    expect(text).toContain(
+      'task_post/task_note_working share: 0% (target 70%+) - Use task_note_working or task_post',
     );
   });
 
