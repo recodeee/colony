@@ -29,4 +29,12 @@ describe('ToolSearch descriptions', () => {
     expect(description).toContain('use task_ready_for_agent when choosing work to claim');
     expect(description).not.toMatch(/^Find task threads/);
   });
+
+  it('makes task_note_working discoverable as current working state', () => {
+    const description = readToolDescription('../src/tools/task.ts', 'task_note_working');
+
+    expect(description).toMatch(/^Save current working state to the active Colony task/);
+    expect(description).toContain('without a task_id');
+    expect(description).toContain('repo_root/branch');
+  });
 });

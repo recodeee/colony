@@ -282,8 +282,13 @@ describe('task threads — handoff lifecycle', () => {
   it('task_note_working posts a note to the only active task for the session', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 
-    const { observation_id, task_id: resolvedTaskId } = await call<{
+    const {
+      observation_id,
+      id,
+      task_id: resolvedTaskId,
+    } = await call<{
       observation_id: number;
+      id: number;
       task_id: number;
     }>('task_note_working', {
       session_id: sessionA,
@@ -291,6 +296,7 @@ describe('task threads — handoff lifecycle', () => {
     });
 
     expect(resolvedTaskId).toBe(task_id);
+    expect(id).toBe(observation_id);
     const row = store.storage.getObservation(observation_id);
     expect(row).toMatchObject({
       id: observation_id,
@@ -369,6 +375,27 @@ describe('task threads — handoff lifecycle', () => {
     expect(
       store.storage.taskTimeline(other.task_id).some((row) => row.content.includes('guessed')),
     ).toBe(false);
+  });
+
+  it('task_note_working returns ACTIVE_TASK_NOT_FOUND when the session has no active task', async () => {
+    store.startSession({ id: 'orphan', ide: 'codex', cwd: '/repo' });
+
+    const err = await callError<{
+      code: string;
+      error: string;
+      candidates: unknown[];
+    }>('task_note_working', {
+      session_id: 'orphan',
+      repo_root: '/repo',
+      branch: 'agent/codex/missing-task',
+      content: 'working state: should not become a notepad row',
+    });
+
+    expect(err).toMatchObject({
+      code: 'ACTIVE_TASK_NOT_FOUND',
+      candidates: [],
+    });
+    expect(store.timeline('orphan', undefined, 10)).toHaveLength(0);
   });
 
   it('task_list includes a ready-queue hint and strengthens it after repeated inventory reads', async () => {

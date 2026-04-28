@@ -108,10 +108,19 @@ describe('MCP server', () => {
     );
     expect(taskPostDescription.length).toBeLessThanOrEqual(240);
     const taskNoteWorkingDescription = byName.get('task_note_working')?.description ?? '';
-    expect(taskNoteWorkingDescription).toMatch(/^Write a working note/);
+    expect(taskNoteWorkingDescription).toMatch(
+      /^Save current working state to the active Colony task/,
+    );
     expect(taskNoteWorkingDescription).toContain('repo_root/branch');
     expect(taskNoteWorkingDescription).toContain('compact candidates');
     expect(taskNoteWorkingDescription.length).toBeLessThanOrEqual(240);
+    expect(byName.get('task_note_working')?.inputSchema.required).toEqual([
+      'session_id',
+      'content',
+    ]);
+    expect(byName.get('task_note_working')?.inputSchema.properties).not.toHaveProperty(
+      'candidate_limit',
+    );
     expect(byName.get('task_message')?.inputSchema.required).toEqual([
       'task_id',
       'session_id',
