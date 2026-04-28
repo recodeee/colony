@@ -329,7 +329,7 @@ describe('coordination loop discovery', () => {
       },
       {
         name: 'task_post',
-        startsWith: /^Post shared task notes/,
+        startsWith: /^Post a task-scoped question/,
         leadingPhrases: ['question', 'decision', 'blocker'],
       },
     ];

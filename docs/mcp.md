@@ -581,6 +581,8 @@ Use `kind: "note"` when the caller already knows the `task_id` or needs a normal
 
 Use `failed_approach`, `blocked_path`, `conflict_warning`, or `reverted_solution` when another agent should not repeat a concrete bad path. Keep these warnings explicit and evidence-based: failed paths, blocked approaches, reverted solutions, flaky routes, or do-not-touch notes. They show up compactly in `search`, `hivemind_context`, and `task_ready_for_agent`, but they do not lower ready-work ranking.
 
+When a `note` or `decision` looks like future work, `task_post` returns a `recommendation` that points to `task_propose`. Use the proposal tool for weak candidates so foraging can reinforce, decay, and promote them instead of leaving them buried in a thread note.
+
 ```json
 {
   "name": "task_post",
@@ -594,7 +596,7 @@ Use `failed_approach`, `blocked_path`, `conflict_warning`, or `reverted_solution
 }
 ```
 
-`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id, hint }`; the hint points unknown-`task_id` working-state writes to `task_note_working`, and also says `For directed agent coordination, use task_message.` when a post names an agent and asks for action or reply.
+`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id, hint }`, plus `recommendation` for future-work notes/decisions. The hint points unknown-`task_id` working-state writes to `task_note_working`, and also says `For directed agent coordination, use task_message.` when a post names an agent and asks for action or reply.
 
 ## `task_note_working`
 
@@ -988,6 +990,22 @@ Propose a potential improvement scoped to `(repo_root, branch)`. The proposal be
 
 Returns `{ proposal_id, strength, promotion_threshold }`.
 
+Example weak candidate:
+
+```json
+{
+  "name": "task_propose",
+  "input": {
+    "repo_root": "/repo",
+    "branch": "main",
+    "summary": "Show promoted proposals in colony health",
+    "rationale": "Agents keep leaving follow-up notes, but health reports show task_propose stayed at 0.",
+    "touches_files": ["apps/cli/src/commands/health.ts", "apps/cli/test/health.test.ts"],
+    "session_id": "sess_forager"
+  }
+}
+```
+
 ## `task_reinforce`
 
 Reinforce a pending proposal. `kind='explicit'` means direct support; `'rediscovered'` means you arrived at the same idea independently and weighs more than explicit support; `'adjacent'` is weak evidence from editing a touched file. Scoring is deterministic and source-diverse: repeated same-session reinforcement is collapsed, different sessions from the same agent type add moderate strength, and a different agent type/session adds stronger evidence. Existing rows keep their stored base weight, and session agent type is read from existing session metadata/IDE fields with conservative fallbacks.
@@ -1001,6 +1019,15 @@ Reinforce a pending proposal. `kind='explicit'` means direct support; `'rediscov
 
 Returns `{ proposal_id, strength, promoted, task_id }`. `promoted` flips `true` when the reinforcement crosses the threshold; `task_id` becomes non-null at the same moment.
 
+Example rediscovered issue:
+
+```json
+{
+  "name": "task_reinforce",
+  "input": { "proposal_id": 42, "session_id": "sess_second_agent", "kind": "rediscovered" }
+}
+```
+
 ## `task_foraging_report`
 
 List pending and recently promoted proposals on a `(repo_root, branch)`. Pending proposals whose strength has evaporated below the noise floor are omitted.
@@ -1013,6 +1040,17 @@ List pending and recently promoted proposals on a `(repo_root, branch)`. Pending
 ```
 
 Returns `{ pending: [ { id, strength, summary, ... } ], promoted: [ { id, task_id, summary, ... } ] }`. Pending `reinforcement_count` counts unique reinforcing sessions, not duplicate rows.
+
+Example pending/promoted report:
+
+```json
+{
+  "name": "task_foraging_report",
+  "input": { "repo_root": "/repo", "branch": "main" }
+}
+```
+
+Use pending rows to decide whether to call `task_reinforce`; use promoted rows to find proposal-backed task threads that are ready to claim.
 
 ## `agent_upsert_profile`
 

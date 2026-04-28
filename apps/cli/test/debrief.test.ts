@@ -359,6 +359,34 @@ describe('debrief output', () => {
     );
   });
 
+  it('nudges proposal creation when task_post appears without task_propose', async () => {
+    kleur.enabled = false;
+    const storage = fakeStorage(activity({ commits: 0, reads: 0 }), {
+      toolDistribution: [
+        { tool: 'mcp__colony__task_post', count: 4 },
+        { tool: 'mcp__colony__task_foraging_report', count: 1 },
+      ],
+    });
+    mocks.withStorage.mockImplementation(
+      async (_settings: unknown, run: (storage: unknown) => unknown) => run(storage),
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerDebriefCommand(program);
+
+    await program.parseAsync(['node', 'test', 'debrief'], { from: 'node' });
+
+    const text = output.join('');
+    expect(text).toContain('Proposal nudge: task_post fired but task_propose did not.');
+    expect(text).toContain('future-work notes into task_propose');
+    expect(text).toContain('foraging can reinforce/promote them');
+  });
+
   it('renders queen activity counts and the queen invocation prompt', async () => {
     kleur.enabled = false;
     vi.useFakeTimers();

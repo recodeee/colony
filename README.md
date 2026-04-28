@@ -168,6 +168,12 @@ Negative warning kinds are `failed_approach`, `blocked_path`, `conflict_warning`
 | `examples_query` | Search indexed example code patterns. |
 | `examples_integrate_plan` | Produce a deterministic integration plan from an example into the target repo. |
 
+Examples:
+
+- Propose weak candidate: call `task_propose` when a note or decision says "future work", "follow-up", "deferred", or "not in this change"; include `summary`, `rationale`, and likely `touches_files`.
+- Reinforce rediscovered issue: call `task_reinforce` with `kind:"rediscovered"` when you independently hit the same bug or improvement another proposal describes.
+- Report pending/promoted proposals: call `task_foraging_report` before burying follow-ups in notes; pending rows can be reinforced, promoted rows have a backing task.
+
 ### Plans and queen
 
 | Tool | Use it for |

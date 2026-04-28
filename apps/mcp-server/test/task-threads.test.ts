@@ -382,6 +382,37 @@ describe('task threads — handoff lifecycle', () => {
     expect(hint).toBe('If you do not know task_id, use task_note_working.');
   });
 
+  it('task_post nudges future-work notes toward task_propose', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    const result = await call<{ id: number; recommendation?: string }>('task_post', {
+      task_id,
+      session_id: sessionA,
+      kind: 'decision',
+      content:
+        'Future work: add a health-card drilldown for pending proposal promotions after this patch.',
+    });
+
+    expect(result.id).toEqual(expect.any(Number));
+    expect(result.recommendation).toContain('task_propose');
+    expect(result.recommendation).toContain('foraging');
+    expect(result.recommendation).toContain('reinforce and promote');
+  });
+
+  it('task_post leaves ordinary notes quiet', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    const result = await call<{ id: number; recommendation?: string }>('task_post', {
+      task_id,
+      session_id: sessionA,
+      kind: 'note',
+      content: 'State saved: context checked and tests are running.',
+    });
+
+    expect(result.id).toEqual(expect.any(Number));
+    expect(result.recommendation).toBeUndefined();
+  });
+
   it('task_note_working posts a note to the only active task for the session', async () => {
     const repoRoot = join(dir, 'repo-working-note-success');
     const { task_id, sessionA } = seedTwoSessionTask(repoRoot);

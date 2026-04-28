@@ -250,6 +250,15 @@ function sectionToolDistribution(ctx: DebriefContext): string[] {
       `  Top ${rows.length} tools, ${total} invocations total. Cyan = MCP tool. Zero-call tools won't appear — grep code if you suspect a registered tool is unused.`,
     ),
   );
+  const taskPostCount = toolCount(rows, ['mcp__colony__task_post', 'task_post']);
+  const taskProposeCount = toolCount(rows, ['mcp__colony__task_propose', 'task_propose']);
+  if (taskPostCount > 0 && taskProposeCount === 0) {
+    lines.push(
+      kleur.yellow(
+        '  Proposal nudge: task_post fired but task_propose did not. Move future-work notes into task_propose so foraging can reinforce/promote them.',
+      ),
+    );
+  }
   lines.push(kleur.dim(`  ${MIRROR_ROW_NOTE}`));
   return lines;
 }
@@ -731,6 +740,10 @@ function formatPercentRatio(ratio: number | null): string {
 
 function formatCountRatio(numerator: number, denominator: number, ratio: number | null): string {
   return `${numerator} / ${denominator} (${formatPercentRatio(ratio)})`;
+}
+
+function toolCount(rows: Array<{ tool: string; count: number }>, names: string[]): number {
+  return rows.filter((row) => names.includes(row.tool)).reduce((sum, row) => sum + row.count, 0);
 }
 
 function formatCompletionRate(payload: QueenActivityPayload): string {

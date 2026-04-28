@@ -15,6 +15,18 @@ const TASK_LIST_COORDINATION_WARNING =
 const TASK_LIST_REPEAT_WARNING = 'Stop browsing. Call task_ready_for_agent before selecting work.';
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
 const OMX_POINTER_VALUE_LIMIT = 180;
+const TASK_POST_PROPOSAL_RECOMMENDATION =
+  'This looks like future work. Use task_propose(repo_root, branch, summary, rationale, touches_files, session_id) so foraging can reinforce and promote it.';
+const TASK_POST_FUTURE_WORK_PATTERNS = [
+  /\bfuture work\b/i,
+  /\bfollow-?up\b/i,
+  /\bdeferred\b/i,
+  /\bnot in this change\b/i,
+  /\blater\b/i,
+  /\btodo\b/i,
+  /\bshould (?:eventually|later|next|also)\b/i,
+  /\bneeds? (?:a |an |the )?(?:follow-?up|proposal|cleanup|refactor|investigation|test|docs?)\b/i,
+];
 const WorkingNotePointerSchema = z.object({
   branch: z.string().min(1).optional(),
   task: z.string().min(1).optional(),
@@ -108,10 +120,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_post',
     [
-      'Post shared task notes, decisions, blockers, questions, or answers.',
+      'Post a task-scoped question, answer, decision, blocker, note, or warning.',
       'Use task_message for directed agent-to-agent coordination.',
-      'Use task_note_working first for state/unknown task_id.',
-      'Negative warnings use failed_approach/blocked_path/etc.',
+      'Use task_note_working for unknown task_id.',
+      'Future-work notes return task_propose recommendation.',
     ].join(' '),
     {
       task_id: z.number().int().positive(),
@@ -138,9 +150,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
         content,
         ...(reply_to !== undefined ? { reply_to } : {}),
       });
+      const recommendation = proposalRecommendationForPost(kind, content);
       return jsonReply({
         id,
         hint: taskPostHint(content),
+        ...(recommendation ? { recommendation } : {}),
       });
     }),
   );
@@ -381,6 +395,13 @@ function taskPostHint(content: string): string {
   const fallback = 'If you do not know task_id, use task_note_working.';
   if (!looksLikeDirectedCoordination(content)) return fallback;
   return `For directed agent coordination, use task_message. ${fallback}`;
+}
+
+function proposalRecommendationForPost(kind: string, content: string): string | undefined {
+  if (kind !== 'note' && kind !== 'decision') return undefined;
+  return TASK_POST_FUTURE_WORK_PATTERNS.some((pattern) => pattern.test(content))
+    ? TASK_POST_PROPOSAL_RECOMMENDATION
+    : undefined;
 }
 
 function compactPreviousClaim(
