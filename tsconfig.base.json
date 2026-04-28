@@ -32,6 +32,7 @@
       "@colony/mcp-server": ["./apps/mcp-server/src/server.ts"],
       "@colony/process": ["./packages/process/src/index.ts"],
       "@colony/queen": ["./packages/queen/src/index.ts"],
+      "@colony/spec": ["./packages/spec/src/index.ts"],
       "@colony/worker": ["./apps/worker/src/server.ts"]
     }
   },

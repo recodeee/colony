@@ -22,6 +22,7 @@
     "@colony/foraging": "workspace:*",
     "@colony/hooks": "workspace:*",
     "@colony/process": "workspace:*",
+    "@colony/queen": "workspace:*",
     "@colony/spec": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.8"

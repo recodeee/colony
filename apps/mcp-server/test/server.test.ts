@@ -57,6 +57,7 @@ describe('MCP server', () => {
       'hivemind',
       'hivemind_context',
       'list_sessions',
+      'queen_plan_goal',
       'recall_session',
       'rescue_stranded_run',
       'rescue_stranded_scan',
@@ -119,6 +120,12 @@ describe('MCP server', () => {
     );
     expect(byName.get('task_message')?.description).toContain(
       'Send a message to other agents on this task. Defaults to broadcast/fyi — use task_post for thread-style notes/blockers/decisions.',
+    );
+    expect(byName.get('queen_plan_goal')?.description).toContain(
+      'Decompose a high-level goal into colony sub-tasks and publish them as a plan. Use this when you have a multi-step goal and want other agents to claim parts in parallel.',
+    );
+    expect(byName.get('queen_plan_goal')?.description).toContain(
+      'auto_archive=true, and sub-tasks can be claimed through the task_plan_claim_subtask MCP tool',
     );
     expect(byName.get('attention_inbox')?.description).toMatch(/^See what needs your attention/);
     expect(byName.get('task_ready_for_agent')?.description).toMatch(/^Find work to claim/);

@@ -133,6 +133,9 @@ importers:
       '@colony/process':
         specifier: workspace:*
         version: link:../../packages/process
+      '@colony/queen':
+        specifier: workspace:*
+        version: link:../../packages/queen
       '@colony/spec':
         specifier: workspace:*
         version: link:../../packages/spec
