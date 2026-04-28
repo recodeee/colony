@@ -137,6 +137,7 @@ export {
   type SuggestionPayload,
   type TaskStatus,
 } from './suggestion-payload.js';
+export { buildDiscrepancyReport, type DiscrepancyReport } from './discrepancy.js';
 export {
   ABANDONED_TASK_DAYS,
   MIN_CORPUS_SIZE,
