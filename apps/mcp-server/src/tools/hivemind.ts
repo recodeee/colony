@@ -1,5 +1,7 @@
 import {
   type AttentionInbox,
+  type Embedder,
+  type MemoryStore,
   type SearchResult,
   buildAttentionInbox,
   readHivemind,
@@ -12,11 +14,15 @@ import {
   type CompactNegativeWarning,
   buildContextQuery,
   buildHivemindContext,
+  buildHivemindLocalContext,
+  buildLocalContextQuery,
+  resolveLocalContextTask,
   searchNegativeWarnings,
   toHivemindOptions,
 } from './shared.js';
 
 const DEFAULT_CONTEXT_LANE_LIMIT = 8;
+const DEFAULT_LOCAL_CONTEXT_LANE_LIMIT = 3;
 const DEFAULT_CONTEXT_MEMORY_LIMIT = 3;
 const DEFAULT_CONTEXT_CLAIM_LIMIT = 12;
 const DEFAULT_CONTEXT_HOT_FILE_LIMIT = 8;
@@ -60,6 +66,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
       attention_id_limit: z.number().int().positive().max(100).optional(),
       session_id: z.string().min(1).optional(),
       agent: z.string().min(1).optional(),
+      mode: z.enum(['overview', 'local']).optional(),
+      task_id: z.number().int().positive().optional(),
+      files: z.array(z.string().min(1)).max(50).optional(),
     },
     async ({
       repo_root,
@@ -73,8 +82,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
       attention_id_limit,
       session_id,
       agent,
+      mode,
+      task_id,
+      files,
     }) => {
-      const laneLimit = limit ?? DEFAULT_CONTEXT_LANE_LIMIT;
+      const localMode = mode === 'local' || task_id !== undefined || (files?.length ?? 0) > 0;
+      const attentionIdentity = resolveAttentionIdentity(session_id, agent);
+      const laneLimit =
+        limit ?? (localMode ? DEFAULT_LOCAL_CONTEXT_LANE_LIMIT : DEFAULT_CONTEXT_LANE_LIMIT);
       const snapshot = readHivemind(
         toHivemindOptions({ repo_root, repo_roots, include_stale, limit: laneLimit }),
       );
@@ -82,30 +97,112 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const maxClaims = max_claims ?? DEFAULT_CONTEXT_CLAIM_LIMIT;
       const maxHotFiles = max_hot_files ?? DEFAULT_CONTEXT_HOT_FILE_LIMIT;
       const attentionLimit = attention_id_limit ?? DEFAULT_CONTEXT_ATTENTION_ID_LIMIT;
-      const contextQuery = buildContextQuery(query, snapshot.sessions);
+      const currentTask = localMode
+        ? resolveLocalContextTask(store, {
+            ...(repo_root !== undefined ? { repoRoot: repo_root } : {}),
+            sessionId: attentionIdentity.session_id,
+            ...(task_id !== undefined ? { taskId: task_id } : {}),
+            files: files ?? [],
+          })
+        : null;
+      const contextQuery = localMode
+        ? buildLocalContextQuery({
+            query,
+            currentTask,
+            files: files ?? [],
+            sessions: snapshot.sessions,
+          })
+        : buildContextQuery(query, snapshot.sessions);
       let memoryHits: SearchResult[] = [];
       let negativeWarnings: CompactNegativeWarning[] = [];
 
       if (contextQuery) {
         const e = (await resolveEmbedder()) ?? undefined;
-        memoryHits = await store.search(contextQuery, memoryLimit, e);
-        negativeWarnings = await searchNegativeWarnings(
-          store,
-          contextQuery,
-          Math.min(memoryLimit, 3),
-        );
+        memoryHits = localMode
+          ? await searchLocalMemoryHits(
+              store,
+              e,
+              [contextQuery, currentTask?.title, ...(files ?? [])],
+              memoryLimit,
+            )
+          : await store.search(contextQuery, memoryLimit, e);
+        negativeWarnings = localMode
+          ? await searchLocalNegativeWarnings(
+              store,
+              [contextQuery, currentTask?.title, ...(files ?? [])],
+              currentTask?.id,
+              Math.min(memoryLimit, 3),
+            )
+          : await searchNegativeWarnings(store, contextQuery, Math.min(memoryLimit, 3));
       }
 
-      const attentionIdentity = resolveAttentionIdentity(session_id, agent);
-      const attentionInbox = buildAttentionInbox(store, {
+      const attentionBaseOptions = {
         session_id: attentionIdentity.session_id,
         agent: attentionIdentity.agent,
         ...(repo_root !== undefined ? { repo_root } : {}),
         ...(repo_roots !== undefined ? { repo_roots } : {}),
         include_stalled_lanes: false,
+        unread_message_limit: attentionLimit,
         recent_claim_limit: maxClaims,
+      };
+      const scopedAttentionInbox = buildAttentionInbox(store, {
+        ...attentionBaseOptions,
+        ...(localMode && currentTask ? { task_ids: [currentTask.id] } : {}),
       });
+      const attentionInbox =
+        localMode && currentTask
+          ? preserveBlockingAttention(
+              scopedAttentionInbox,
+              buildAttentionInbox(store, attentionBaseOptions),
+              attentionLimit,
+            )
+          : scopedAttentionInbox;
       const attentionIds = attentionObservationIds(attentionInbox, attentionLimit);
+      const attentionInput = {
+        session_id: attentionIdentity.session_id,
+        agent: attentionIdentity.agent,
+        summary: attentionInbox.summary,
+        observation_ids: attentionIds.ids,
+        observation_ids_truncated: attentionIds.truncated,
+      };
+      const attentionCounts = {
+        lane_needs_attention_count: 0,
+        pending_handoff_count: attentionInput.summary.pending_handoff_count,
+        pending_wake_count: attentionInput.summary.pending_wake_count,
+        unread_message_count: attentionInput.summary.unread_message_count,
+        stalled_lane_count: attentionInput.summary.stalled_lane_count,
+        recent_other_claim_count: attentionInput.summary.recent_other_claim_count,
+        blocked: attentionInput.summary.blocked,
+      };
+      const attentionContext = {
+        session_id: attentionInput.session_id,
+        agent: attentionInput.agent,
+        unread_messages: attentionCounts.unread_message_count,
+        pending_handoffs: attentionCounts.pending_handoff_count,
+        pending_wakes: attentionCounts.pending_wake_count,
+        blocking: attentionCounts.blocked,
+        stale_claims: attentionCounts.recent_other_claim_count,
+        stalled_lanes: attentionCounts.stalled_lane_count,
+        counts: attentionCounts,
+        observation_ids: attentionInput.observation_ids,
+        observation_ids_truncated: attentionInput.observation_ids_truncated,
+        hydration: 'Call get_observations with observation_ids for bodies; context stays compact.',
+        hydrate_with: 'get_observations',
+        next_action: attentionInput.summary.next_action,
+      };
+      const localContext = localMode
+        ? buildHivemindLocalContext(store, {
+            sessionId: attentionIdentity.session_id,
+            ...(task_id !== undefined ? { requestedTaskId: task_id } : {}),
+            files: files ?? [],
+            currentTask,
+            memoryHits,
+            negativeWarnings,
+            attention: attentionContext,
+            maxClaims,
+            maxHotFiles,
+          })
+        : undefined;
 
       return {
         content: [
@@ -115,13 +212,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
               buildHivemindContext(snapshot, memoryHits, negativeWarnings, contextQuery, {
                 maxClaims,
                 maxHotFiles,
-                attention: {
-                  session_id: attentionIdentity.session_id,
-                  agent: attentionIdentity.agent,
-                  summary: attentionInbox.summary,
-                  observation_ids: attentionIds.ids,
-                  observation_ids_truncated: attentionIds.truncated,
-                },
+                attention: attentionInput,
+                ...(localContext !== undefined ? { localContext } : {}),
               }),
             ),
           },
@@ -160,4 +252,107 @@ function attentionObservationIds(
   ];
   const uniqueIds = [...new Set(orderedIds)];
   return { ids: uniqueIds.slice(0, limit), truncated: uniqueIds.length > limit };
+}
+
+function preserveBlockingAttention(
+  scoped: AttentionInbox,
+  broad: AttentionInbox,
+  limit: number,
+): AttentionInbox {
+  const localMessageIds = new Set(scoped.unread_messages.map((message) => message.id));
+  const byId = new Map(scoped.unread_messages.map((message) => [message.id, message]));
+  for (const message of broad.unread_messages) {
+    if (message.urgency === 'blocking') byId.set(message.id, message);
+  }
+  const unreadMessages = [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, limit);
+  const existingGroupIds = new Set(scoped.coalesced_messages.flatMap((group) => group.message_ids));
+  const extraBlockingGroups = unreadMessages
+    .filter((message) => message.urgency === 'blocking' && !existingGroupIds.has(message.id))
+    .map((message) => ({
+      task_id: message.task_id,
+      from_session_id: message.from_session_id,
+      from_agent: message.from_agent,
+      urgency: message.urgency,
+      count: 1,
+      message_ids: [message.id],
+      latest_id: message.id,
+      latest_ts: message.ts,
+      latest_preview: message.preview,
+    }));
+  const hasOutsideBlocker = unreadMessages.some(
+    (message) => message.urgency === 'blocking' && !localMessageIds.has(message.id),
+  );
+  const blocked = unreadMessages.some((message) => message.urgency === 'blocking');
+
+  return {
+    ...scoped,
+    summary: {
+      ...scoped.summary,
+      unread_message_count: unreadMessages.length,
+      blocked,
+      next_action: hasOutsideBlocker
+        ? 'Reply to blocking task messages before local edits.'
+        : scoped.summary.next_action,
+    },
+    unread_messages: unreadMessages,
+    coalesced_messages: [...scoped.coalesced_messages, ...extraBlockingGroups].sort(
+      (a, b) => b.latest_ts - a.latest_ts,
+    ),
+  };
+}
+
+async function searchLocalMemoryHits(
+  store: MemoryStore,
+  embedder: Embedder | undefined,
+  queries: Array<string | undefined>,
+  limit: number,
+): Promise<SearchResult[]> {
+  const byId = new Map<number, SearchResult>();
+  for (const query of compactQueries(queries)) {
+    const hits = await store.search(query, limit, embedder);
+    for (const hit of hits) {
+      const current = byId.get(hit.id);
+      if (
+        !current ||
+        hit.score > current.score ||
+        (hit.score === current.score && hit.ts > current.ts)
+      ) {
+        byId.set(hit.id, hit);
+      }
+      if (byId.size >= limit) break;
+    }
+    if (byId.size >= limit) break;
+  }
+  return [...byId.values()].sort((a, b) => b.score - a.score || b.ts - a.ts).slice(0, limit);
+}
+
+async function searchLocalNegativeWarnings(
+  store: MemoryStore,
+  queries: Array<string | undefined>,
+  taskId: number | undefined,
+  limit: number,
+): Promise<CompactNegativeWarning[]> {
+  const byId = new Map<number, CompactNegativeWarning>();
+  for (const query of compactQueries(queries)) {
+    const hits = await searchNegativeWarnings(store, query, limit);
+    for (const hit of hits) {
+      if (taskId !== undefined && hit.task_id !== null && hit.task_id !== taskId) continue;
+      const current = byId.get(hit.id);
+      if (!current || hit.ts > current.ts) byId.set(hit.id, hit);
+      if (byId.size >= limit) break;
+    }
+    if (byId.size >= limit) break;
+  }
+  return [...byId.values()].sort((a, b) => b.ts - a.ts).slice(0, limit);
+}
+
+function compactQueries(queries: Array<string | undefined>): string[] {
+  return [
+    ...new Set(
+      queries.flatMap((entry) => {
+        const trimmed = entry?.trim();
+        return trimmed ? [trimmed] : [];
+      }),
+    ),
+  ];
 }

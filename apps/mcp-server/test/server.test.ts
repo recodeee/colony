@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore, TaskThread } from '@colony/core';
+import { MemoryStore, PheromoneSystem, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -523,6 +523,158 @@ describe('MCP server', () => {
     );
     expect(text).not.toContain('blocking body should require hydration');
     expect(text).not.toContain('other repo blocker must stay out');
+  });
+
+  it('hivemind_context local mode returns nearby task, file, pheromone, memory, and attention signals', async () => {
+    const repoRoot = join(dir, 'repo-local-neighborhood');
+    const otherRoot = join(dir, 'repo-local-neighborhood-other');
+    store.startSession({ id: 'claude', ide: 'claude-code', cwd: repoRoot });
+    store.startSession({ id: 'codex', ide: 'codex', cwd: repoRoot });
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/codex/local-neighborhood',
+      session_id: 'codex',
+      title: 'Repair local parser context',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.claimFile({ session_id: 'claude', file_path: 'src/local.ts' });
+    thread.claimFile({ session_id: 'claude', file_path: 'src/unrelated.ts' });
+    const negativeId = thread.post({
+      session_id: 'claude',
+      kind: 'failed_approach',
+      content: 'Failed approach: src/local.ts loses metadata when the parser skips task scope.',
+    });
+    const messageId = thread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'local blocker body should require get_observations hydration',
+      urgency: 'blocking',
+    });
+    const sameRepoThread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/claude/same-repo-blocker',
+      session_id: 'claude',
+      title: 'Same repo blocking attention',
+    });
+    sameRepoThread.join('claude', 'claude');
+    sameRepoThread.join('codex', 'codex');
+    const sameRepoBlockerId = sameRepoThread.postMessage({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'codex',
+      content: 'same repo blocker body should require get_observations hydration too',
+      urgency: 'blocking',
+    });
+    new PheromoneSystem(store.storage).deposit({
+      task_id: thread.task_id,
+      file_path: 'src/local.ts',
+      session_id: 'claude',
+    });
+    store.addObservation({
+      session_id: 'codex',
+      kind: 'note',
+      task_id: thread.task_id,
+      content: 'Memory says src/local.ts owns local parser context and task scope metadata.',
+    });
+
+    const otherThread = TaskThread.open(store, {
+      repo_root: otherRoot,
+      branch: 'agent/claude/global-noise',
+      session_id: 'claude',
+      title: 'Global noise task',
+    });
+    otherThread.join('claude', 'claude');
+    otherThread.claimFile({ session_id: 'claude', file_path: 'src/local.ts' });
+    otherThread.post({
+      session_id: 'claude',
+      kind: 'failed_approach',
+      content: 'Failed approach: other repo local.ts warning must not appear here.',
+    });
+
+    const res = await client.callTool({
+      name: 'hivemind_context',
+      arguments: {
+        mode: 'local',
+        repo_root: repoRoot,
+        session_id: 'codex',
+        agent: 'codex',
+        task_id: thread.task_id,
+        files: ['src/local.ts'],
+        memory_limit: 2,
+      },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      summary: { lane_count: number; next_action: string };
+      local_context: {
+        current_task: { id: number; title: string } | null;
+        files: string[];
+        claims: Array<{ file_path: string; by_session_id: string }>;
+        pheromone_trails: Array<{
+          file_path: string;
+          by_session: Array<{ session_id: string; strength: number }>;
+        }>;
+        negative_pheromones: Array<{ id: number; kind: string; snippet: string }>;
+        memory_hits: Array<Record<string, unknown>>;
+        attention: {
+          counts: { unread_message_count: number; blocked: boolean };
+          observation_ids: number[];
+        };
+        ready_next_action: string;
+      };
+    };
+
+    expect(payload.summary.lane_count).toBeLessThanOrEqual(3);
+    expect(payload.local_context.current_task).toMatchObject({
+      id: thread.task_id,
+      title: 'Repair local parser context',
+    });
+    expect(payload.local_context.files).toEqual(['src/local.ts']);
+    expect(payload.local_context.claims).toEqual([
+      expect.objectContaining({ file_path: 'src/local.ts', by_session_id: 'claude' }),
+    ]);
+    expect(payload.local_context.pheromone_trails[0]).toMatchObject({
+      file_path: 'src/local.ts',
+      by_session: [expect.objectContaining({ session_id: 'claude' })],
+    });
+    expect(payload.local_context.negative_pheromones[0]).toMatchObject({
+      id: negativeId,
+      kind: 'failed_approach',
+    });
+    expect(payload.local_context.memory_hits[0]).toHaveProperty('id');
+    expect(payload.local_context.memory_hits[0]).not.toHaveProperty('content');
+    expect(payload.local_context.attention.counts).toMatchObject({
+      unread_message_count: 2,
+      blocked: true,
+    });
+    expect(payload.local_context.attention.observation_ids).toEqual(
+      expect.arrayContaining([messageId, sameRepoBlockerId]),
+    );
+    expect(payload.local_context.ready_next_action).toMatch(/blocking task messages/i);
+    expect(payload.summary.next_action).toBe(payload.local_context.ready_next_action);
+    expect(text).not.toContain('local blocker body should require get_observations hydration');
+    expect(text).not.toContain('same repo blocker body should require get_observations hydration');
+    expect(text).not.toContain('src/unrelated.ts');
+    expect(text).not.toContain('other repo local.ts warning must not appear here');
+
+    const implicitRes = await client.callTool({
+      name: 'hivemind_context',
+      arguments: {
+        mode: 'local',
+        repo_root: repoRoot,
+        session_id: 'codex',
+        agent: 'codex',
+        files: ['src/local.ts'],
+      },
+    });
+    const implicitText =
+      (implicitRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const implicit = JSON.parse(implicitText) as {
+      local_context: { current_task: { id: number } | null };
+    };
+    expect(implicit.local_context.current_task?.id).toBe(thread.task_id);
   });
 
   it('hivemind falls back to worktree AGENT.lock task previews', async () => {

@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type {
   AttentionInbox,
   HivemindOptions,
@@ -8,6 +9,7 @@ import type {
 } from '@colony/core';
 import {
   NEGATIVE_COORDINATION_KINDS,
+  PheromoneSystem,
   TASK_THREAD_ERROR_CODES,
   TaskThreadError,
   isNegativeCoordinationKind,
@@ -25,6 +27,7 @@ export interface HivemindContextBuildOptions {
   maxClaims?: number;
   maxHotFiles?: number;
   attention?: HivemindContextAttentionInput;
+  localContext?: HivemindLocalContext;
 }
 
 export interface HivemindContextAttentionInput {
@@ -74,8 +77,50 @@ export interface HivemindContext {
   lanes: HivemindContextLane[];
   ownership: HivemindContextOwnership;
   attention: HivemindContextAttention;
+  local_context: HivemindLocalContext | null;
   memory_hits: SearchResult[];
   negative_warnings: CompactNegativeWarning[];
+}
+
+export interface HivemindLocalTask {
+  id: number;
+  title: string;
+  repo_root: string;
+  branch: string;
+  status: string;
+  created_by: string;
+  updated_at: number;
+}
+
+export interface HivemindLocalClaim {
+  task_id: number;
+  file_path: string;
+  by_session_id: string;
+  claimed_at: number;
+  yours: boolean;
+}
+
+export interface HivemindLocalPheromoneTrail {
+  file_path: string;
+  total_strength: number;
+  by_session: Array<{ session_id: string; strength: number }>;
+}
+
+export interface HivemindLocalContext {
+  mode: 'local';
+  session_id: string;
+  requested_task_id: number | null;
+  files: string[];
+  current_task: HivemindLocalTask | null;
+  claims: HivemindLocalClaim[];
+  claims_truncated: boolean;
+  pheromone_trails: HivemindLocalPheromoneTrail[];
+  pheromone_trails_truncated: boolean;
+  negative_pheromones: CompactNegativeWarning[];
+  memory_hits: SearchResult[];
+  attention: HivemindContextAttention;
+  ready_next_action: string;
+  hydration: string;
 }
 
 export interface CompactNegativeWarning {
@@ -221,6 +266,7 @@ export function buildHivemindContext(
   const needsAttentionCount = lanes.filter((lane) => lane.needs_attention).length;
   const ownership = buildOwnership(lanes, options.maxClaims, options.maxHotFiles);
   const attention = buildAttention(needsAttentionCount, options.attention);
+  const localContext = options.localContext ?? null;
 
   return {
     generated_at: snapshot.generated_at,
@@ -234,7 +280,7 @@ export function buildHivemindContext(
       needs_attention_count: needsAttentionCount,
       claim_count: ownership.claim_count,
       hot_file_count: ownership.hot_files.length,
-      next_action: HIVEMIND_FUNNEL_NEXT_ACTION,
+      next_action: localContext?.ready_next_action ?? HIVEMIND_FUNNEL_NEXT_ACTION,
       suggested_tools: HIVEMIND_SUGGESTED_TOOLS,
       attention_counts: attention.counts,
       state_tool_replacements: STATE_TOOL_REPLACEMENTS,
@@ -244,8 +290,137 @@ export function buildHivemindContext(
     lanes,
     ownership,
     attention,
+    local_context: localContext,
     memory_hits: memoryHits,
     negative_warnings: negativeWarnings,
+  };
+}
+
+export function resolveLocalContextTask(
+  store: MemoryStore,
+  input: { repoRoot?: string; sessionId: string; taskId?: number; files?: string[] },
+): HivemindLocalTask | null {
+  if (input.taskId !== undefined) return compactLocalTask(store, input, input.taskId);
+
+  const fileScopedTask = findFileScopedLocalTask(store, input);
+  if (fileScopedTask) return fileScopedTask;
+
+  const taskId = store.storage.findActiveTaskForSession(input.sessionId);
+  if (taskId === undefined) return null;
+  return compactLocalTask(store, input, taskId);
+}
+
+function compactLocalTask(
+  store: MemoryStore,
+  input: { repoRoot?: string },
+  taskId: number,
+): HivemindLocalTask | null {
+  const task = store.storage.getTask(taskId);
+  if (!task) return null;
+  if (input.repoRoot && resolve(task.repo_root) !== resolve(input.repoRoot)) return null;
+  return {
+    id: task.id,
+    title: task.title,
+    repo_root: task.repo_root,
+    branch: task.branch,
+    status: task.status,
+    created_by: task.created_by,
+    updated_at: task.updated_at,
+  };
+}
+
+function findFileScopedLocalTask(
+  store: MemoryStore,
+  input: { repoRoot?: string; sessionId: string; files?: string[] },
+): HivemindLocalTask | null {
+  const files = normalizeFiles(input.files ?? []);
+  if (files.length === 0) return null;
+  const repoRoot = input.repoRoot ? resolve(input.repoRoot) : null;
+  const task = store.storage
+    .listTasks(200)
+    .filter((candidate) => {
+      if (repoRoot && resolve(candidate.repo_root) !== repoRoot) return false;
+      if (store.storage.getParticipantAgent(candidate.id, input.sessionId) === undefined) {
+        return false;
+      }
+      return files.some((file) => store.storage.getClaim(candidate.id, file) !== undefined);
+    })
+    .sort((a, b) => b.updated_at - a.updated_at)[0];
+  return task ? compactLocalTask(store, input, task.id) : null;
+}
+
+export function buildLocalContextQuery(input: {
+  query: string | undefined;
+  currentTask: HivemindLocalTask | null;
+  files: string[];
+  sessions: HivemindSession[];
+}): string {
+  if (input.query?.trim()) return input.query.trim();
+  const taskTokens = input.currentTask
+    ? [input.currentTask.title, input.currentTask.branch, ...input.files]
+    : [];
+  const sessionTokens = buildContextQuery(undefined, input.sessions);
+  return [...taskTokens, sessionTokens]
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, 800);
+}
+
+export function buildHivemindLocalContext(
+  store: MemoryStore,
+  input: {
+    sessionId: string;
+    requestedTaskId?: number;
+    files: string[];
+    currentTask: HivemindLocalTask | null;
+    memoryHits: SearchResult[];
+    negativeWarnings: CompactNegativeWarning[];
+    attention: HivemindContextAttention;
+    maxClaims?: number;
+    maxHotFiles?: number;
+  },
+): HivemindLocalContext {
+  const files = normalizeFiles(input.files);
+  const claims = input.currentTask
+    ? localClaims(store, {
+        taskId: input.currentTask.id,
+        sessionId: input.sessionId,
+        files,
+        limit: input.maxClaims ?? 12,
+      })
+    : { rows: [], truncated: false };
+  const trails = input.currentTask
+    ? localPheromoneTrails(store, {
+        taskId: input.currentTask.id,
+        files,
+        limit: input.maxHotFiles ?? 8,
+      })
+    : { rows: [], truncated: false };
+
+  return {
+    mode: 'local',
+    session_id: input.sessionId,
+    requested_task_id: input.requestedTaskId ?? null,
+    files,
+    current_task: input.currentTask,
+    claims: claims.rows,
+    claims_truncated: claims.truncated,
+    pheromone_trails: trails.rows,
+    pheromone_trails_truncated: trails.truncated,
+    negative_pheromones: input.negativeWarnings,
+    memory_hits: input.memoryHits,
+    attention: input.attention,
+    ready_next_action: localNextAction({
+      sessionId: input.sessionId,
+      currentTask: input.currentTask,
+      files,
+      claims: claims.rows,
+      pheromoneTrails: trails.rows,
+      negativeWarnings: input.negativeWarnings,
+      attention: input.attention,
+    }),
+    hydration: 'Use get_observations with memory, negative_pheromone, or attention IDs for bodies.',
   };
 }
 
@@ -282,6 +457,112 @@ export async function searchNegativeWarnings(
       ts: hit.ts,
       task_id: hit.task_id,
     }));
+}
+
+function normalizeFiles(files: string[]): string[] {
+  return [...new Set(files.map((file) => file.trim()).filter(Boolean))];
+}
+
+function localClaims(
+  store: MemoryStore,
+  input: { taskId: number; sessionId: string; files: string[]; limit: number },
+): { rows: HivemindLocalClaim[]; truncated: boolean } {
+  const claims =
+    input.files.length > 0
+      ? input.files.flatMap((filePath) => {
+          const claim = store.storage.getClaim(input.taskId, filePath);
+          return claim ? [claim] : [];
+        })
+      : store.storage.listClaims(input.taskId);
+  const sorted = claims.sort((a, b) => b.claimed_at - a.claimed_at);
+  return {
+    rows: sorted.slice(0, input.limit).map((claim) => ({
+      task_id: claim.task_id,
+      file_path: claim.file_path,
+      by_session_id: claim.session_id,
+      claimed_at: claim.claimed_at,
+      yours: claim.session_id === input.sessionId,
+    })),
+    truncated: sorted.length > input.limit,
+  };
+}
+
+function localPheromoneTrails(
+  store: MemoryStore,
+  input: { taskId: number; files: string[]; limit: number },
+): { rows: HivemindLocalPheromoneTrail[]; truncated: boolean } {
+  const pheromones = new PheromoneSystem(store.storage);
+  const trails =
+    input.files.length > 0
+      ? input.files.flatMap((filePath) => {
+          const sniffed = pheromones.sniff({ task_id: input.taskId, file_path: filePath });
+          if (sniffed.total < 0.1) return [];
+          return [
+            {
+              file_path: filePath,
+              total_strength: roundStrength(sniffed.total),
+              by_session: sniffed.bySession
+                .filter((entry) => entry.strength >= 0.1)
+                .sort((a, b) => b.strength - a.strength)
+                .map((entry) => ({
+                  session_id: entry.session_id,
+                  strength: roundStrength(entry.strength),
+                })),
+            },
+          ];
+        })
+      : pheromones.strongestTrails(input.taskId).map((trail) => ({
+          file_path: trail.file_path,
+          total_strength: roundStrength(trail.total_strength),
+          by_session: trail.bySession.map((entry) => ({
+            session_id: entry.session_id,
+            strength: roundStrength(entry.strength),
+          })),
+        }));
+  const sorted = trails.sort((a, b) => b.total_strength - a.total_strength);
+  return { rows: sorted.slice(0, input.limit), truncated: sorted.length > input.limit };
+}
+
+function roundStrength(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function localNextAction(input: {
+  sessionId: string;
+  currentTask: HivemindLocalTask | null;
+  files: string[];
+  claims: HivemindLocalClaim[];
+  pheromoneTrails: HivemindLocalPheromoneTrail[];
+  negativeWarnings: CompactNegativeWarning[];
+  attention: HivemindContextAttention;
+}): string {
+  if (
+    input.attention.counts.blocked ||
+    input.attention.counts.pending_handoff_count > 0 ||
+    input.attention.counts.pending_wake_count > 0
+  ) {
+    return input.attention.next_action;
+  }
+  const otherClaims = input.claims.filter((claim) => !claim.yours);
+  if (otherClaims.length > 0) {
+    return 'Coordinate before editing: another session claims one of these local files.';
+  }
+  if (input.negativeWarnings.length > 0) {
+    return 'Review negative pheromones before repeating a known failed path.';
+  }
+  const otherTrails = input.pheromoneTrails.filter((trail) =>
+    trail.by_session.some((entry) => entry.session_id !== input.sessionId),
+  );
+  if (otherTrails.length > 0) {
+    return 'Recent edit pheromones touch these files; coordinate if you will edit the same surface.';
+  }
+  if (!input.currentTask) {
+    return 'No current local task found; call task_ready_for_agent before claiming files.';
+  }
+  if (input.files.length > 0) {
+    return 'No local blockers found; claim these files before editing.';
+  }
+  return 'No local blockers found; continue the current task or call task_ready_for_agent for the next claim.';
 }
 
 function toContextLane(session: HivemindSession): HivemindContextLane {
