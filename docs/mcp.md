@@ -46,6 +46,11 @@ For choosing work to claim, the compact path is:
 
 Following the progressive-disclosure pattern saves ~10× tokens versus fetching full bodies upfront.
 
+The OMX-Colony bridge contract lives in `openspec/specs/omx-colony-bridge/spec.md`:
+OMX runs agents, Colony coordinates agents, OMX displays Colony state, and
+Colony consumes OMX telemetry. Use Colony first for coordination; use OMX state
+or notepad only when Colony is unavailable or missing the required surface.
+
 ## `search`
 
 Find observations matching a natural-language query.
