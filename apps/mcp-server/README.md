@@ -10,7 +10,8 @@ status details, and edge-case rules in the second sentence or later.
 | --- | --- |
 | send message, note to agent, tell another agent | `task_message` |
 | what needs my attention, pending, unread, blocking | `attention_inbox` |
-| write working note, save current state, coordination note | `task_post` |
+| write working note, save current state, coordination note, no task id | `task_note_working` |
+| task-scoped question, answer, decision, blocker, note | `task_post` |
 | failed path, blocked approach, do not repeat, reverted solution | `task_post` |
 | what should I work on, pick next task, available work | `task_ready_for_agent` |
 | give my work to, transfer, pass to another agent | `task_hand_off` |

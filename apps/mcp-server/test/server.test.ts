@@ -102,16 +102,13 @@ describe('MCP server', () => {
       'timeline',
     ]);
     const taskPostDescription = byName.get('task_post')?.description ?? '';
-    expect(taskPostDescription).toMatch(/^Write a working note/);
-    expect(taskPostDescription).toContain('save current state');
+    expect(taskPostDescription).toMatch(/^Post a task-scoped question/);
     expect(taskPostDescription).toContain(
-      'Use for questions, answers, decisions, blockers, and general notes',
+      'Use task_note_working to save current state without a task_id',
     );
     expect(taskPostDescription.length).toBeLessThanOrEqual(240);
     const taskNoteWorkingDescription = byName.get('task_note_working')?.description ?? '';
-    expect(taskNoteWorkingDescription).toMatch(
-      /^Save current working state to the active Colony task\./,
-    );
+    expect(taskNoteWorkingDescription).toMatch(/^Write a working note/);
     expect(taskNoteWorkingDescription).toContain('repo_root/branch');
     expect(taskNoteWorkingDescription).toContain('compact candidates');
     expect(taskNoteWorkingDescription.length).toBeLessThanOrEqual(240);
@@ -299,14 +296,22 @@ describe('MCP server', () => {
     });
     const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
     const payload = JSON.parse(text) as {
-      summary: { lane_count: number; memory_hit_count: number; next_action: string };
+      summary: {
+        lane_count: number;
+        memory_hit_count: number;
+        next_action: string;
+        suggested_tools: string[];
+      };
       lanes: Array<Record<string, unknown>>;
       memory_hits: Array<Record<string, unknown>>;
     };
 
     expect(payload.summary.lane_count).toBe(1);
     expect(payload.summary.memory_hit_count).toBeGreaterThan(0);
-    expect(payload.summary.next_action).toMatch(/fetch only/);
+    expect(payload.summary.next_action).toBe(
+      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+    );
+    expect(payload.summary.suggested_tools).toEqual(['attention_inbox', 'task_ready_for_agent']);
     expect(payload.lanes[0]).toMatchObject({
       branch: 'agent/codex/context-task',
       owner: 'codex/codex',
@@ -489,6 +494,9 @@ describe('MCP server', () => {
     const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
     const payload = JSON.parse(text) as {
       attention: {
+        unread_messages: number;
+        pending_handoffs: number;
+        blocking: boolean;
         counts: {
           pending_handoff_count: number;
           unread_message_count: number;
@@ -496,16 +504,23 @@ describe('MCP server', () => {
         };
         observation_ids: number[];
         hydration: string;
+        hydrate_with: string;
       };
       summary: { next_action: string };
     };
 
+    expect(payload.attention.pending_handoffs).toBe(1);
+    expect(payload.attention.unread_messages).toBe(1);
+    expect(payload.attention.blocking).toBe(true);
     expect(payload.attention.counts.pending_handoff_count).toBe(1);
     expect(payload.attention.counts.unread_message_count).toBe(1);
     expect(payload.attention.counts.blocked).toBe(true);
     expect(payload.attention.observation_ids).toEqual([messageId, handoffId]);
-    expect(payload.attention.hydration).toContain('get_observations');
-    expect(payload.summary.next_action).toMatch(/blocking task messages/i);
+    expect(payload.attention.hydration).toContain('Hydrate with attention_inbox');
+    expect(payload.attention.hydrate_with).toBe('attention_inbox');
+    expect(payload.summary.next_action).toBe(
+      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+    );
     expect(text).not.toContain('blocking body should require hydration');
     expect(text).not.toContain('other repo blocker must stay out');
   });
@@ -653,7 +668,9 @@ describe('MCP server', () => {
 
     expect(payload.summary.lane_count).toBe(1);
     expect(payload.summary.needs_attention_count).toBe(1);
-    expect(payload.summary.next_action).toMatch(/needs_attention/);
+    expect(payload.summary.next_action).toBe(
+      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+    );
     expect(payload.counts.stalled).toBe(1);
     expect(payload.lanes[0]).toMatchObject({
       branch: 'agent/codex/create-public-terms-page-2026-04-27-12-13',

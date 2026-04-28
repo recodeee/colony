@@ -49,6 +49,7 @@ function claim(session_id: string, file_path: string, ts: number): void {
 describe('tool classification', () => {
   it('classifies coordination and edit tools from the central taxonomy', () => {
     expect(classifyTool('mcp__colony__task_hand_off')).toBe('commit');
+    expect(classifyTool('mcp__colony__task_note_working')).toBe('commit');
     expect(classifyTool('mcp__colony__hivemind_context')).toBe('read');
     expect(classifyTool('Edit')).toBe('edit');
     expect(classifyTool('made_up')).toBe('other');

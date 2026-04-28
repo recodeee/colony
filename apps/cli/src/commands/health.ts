@@ -114,6 +114,18 @@ interface ReadyClaimPayload {
   claimed_share_of_actionable: number | null;
 }
 
+interface AdoptionSignal {
+  name: string;
+  status: 'good' | 'ok' | 'bad' | 'needs_attention';
+  value: number | null;
+  hint: string;
+}
+
+interface AdoptionThresholdsPayload {
+  good: AdoptionSignal[];
+  bad: AdoptionSignal[];
+}
+
 export interface ColonyHealthPayload {
   generated_at: string;
   window_hours: number;
@@ -127,6 +139,7 @@ export interface ColonyHealthPayload {
   signal_health: SignalHealthPayload;
   proposal_health: ProposalHealthPayload;
   ready_to_claim_vs_claimed: ReadyClaimPayload;
+  adoption_thresholds: AdoptionThresholdsPayload;
 }
 
 export function buildColonyHealthPayload(
@@ -154,10 +167,12 @@ export function buildColonyHealthPayload(
     conversion(calls, from, to),
   ]);
   const taskPostCalls = countTool(calls, 'task_post');
+  const taskNoteWorkingCalls = countTool(calls, 'task_note_working');
   const taskMessageCalls = countTool(calls, 'task_message');
   const searchCalls = searchCallsPerSession(calls);
   const claimBeforeEditStats = storage.claimBeforeEditStats(options.since);
   const taskSelection = taskSelectionPayload(calls);
+  const taskClaimFileCalls = countTool(calls, 'task_claim_file');
 
   return {
     generated_at: new Date(now).toISOString(),
@@ -178,10 +193,7 @@ export function buildColonyHealthPayload(
     },
     task_post_vs_omx_notepad: taskPostVsNotepadPayload(calls, taskPostCalls),
     search_calls_per_session: searchCalls,
-    task_claim_file_before_edits: claimBeforeEditPayload(
-      claimBeforeEditStats,
-      countTool(calls, 'task_claim_file'),
-    ),
+    task_claim_file_before_edits: claimBeforeEditPayload(claimBeforeEditStats, taskClaimFileCalls),
     signal_health: signalHealthPayload(storage, tasks, {
       since: options.since,
       now,
@@ -192,6 +204,12 @@ export function buildColonyHealthPayload(
       now,
     }),
     ready_to_claim_vs_claimed: readyClaimPayload(storage, tasks),
+    adoption_thresholds: adoptionThresholds(calls, {
+      colony_mcp_share: ratio(colonyMcpToolCalls, mcpToolCalls),
+      task_claim_file_calls: taskClaimFileCalls,
+      task_post_calls: taskPostCalls,
+      task_note_working_calls: taskNoteWorkingCalls,
+    }),
   };
 }
 
@@ -289,6 +307,16 @@ export function formatColonyHealthOutput(
     `  ready/claimed:       ${formatNumber(payload.ready_to_claim_vs_claimed.ready_to_claim_per_claimed)}`,
     `  claimed actionable:  ${formatPercent(payload.ready_to_claim_vs_claimed.claimed_share_of_actionable)}`,
   );
+
+  lines.push('', kleur.bold('Adoption thresholds'));
+  lines.push(kleur.dim('  Good'));
+  for (const signal of payload.adoption_thresholds.good) {
+    lines.push(formatSignal(signal));
+  }
+  lines.push(kleur.dim('  Bad'));
+  for (const signal of payload.adoption_thresholds.bad) {
+    lines.push(formatSignal(signal));
+  }
 
   return lines.join('\n');
 }
@@ -543,8 +571,94 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   return lines;
 }
 
+function adoptionThresholds(
+  calls: ToolCallRow[],
+  metrics: {
+    colony_mcp_share: number | null;
+    task_claim_file_calls: number;
+    task_post_calls: number;
+    task_note_working_calls: number;
+  },
+): AdoptionThresholdsPayload {
+  const hivemindContextCalls = countTool(calls, 'hivemind_context');
+  const taskListCalls = countTool(calls, 'task_list');
+  const taskReadyCalls = countTool(calls, 'task_ready_for_agent');
+  const attentionInboxCalls = countTool(calls, 'attention_inbox');
+  const colonyWorkingNoteCalls = metrics.task_post_calls + metrics.task_note_working_calls;
+  const notepadWriteWorkingCalls = countAnyTool(calls, [
+    'mcp__omx_memory__notepad_write_working',
+    'omx_notepad_write_working',
+    'notepad_write_working',
+  ]);
+
+  return {
+    good: [
+      {
+        name: 'hivemind_context rising',
+        status: hivemindContextCalls > 0 ? 'good' : 'needs_attention',
+        value: hivemindContextCalls,
+        hint: 'Keep hivemind_context as the first coordination read.',
+      },
+      {
+        name: 'task_claim_file rising',
+        status: metrics.task_claim_file_calls > 0 ? 'good' : 'needs_attention',
+        value: metrics.task_claim_file_calls,
+        hint: 'Claim files before edits so ownership is visible.',
+      },
+      {
+        name: 'MCP share rising',
+        status:
+          metrics.colony_mcp_share !== null && metrics.colony_mcp_share > 0
+            ? 'good'
+            : 'needs_attention',
+        value: metrics.colony_mcp_share,
+        hint: 'Colony MCP calls should take a visible share of MCP traffic.',
+      },
+    ],
+    bad: [
+      {
+        name: 'task_list > task_ready_for_agent',
+        status: taskListCalls > taskReadyCalls ? 'bad' : 'ok',
+        value: taskListCalls - taskReadyCalls,
+        hint: 'Use task_ready_for_agent to choose claimable work; task_list is inventory.',
+      },
+      {
+        name: 'notepad_write_working > task_post/task_note_working',
+        status: notepadWriteWorkingCalls > colonyWorkingNoteCalls ? 'bad' : 'ok',
+        value: notepadWriteWorkingCalls - colonyWorkingNoteCalls,
+        hint: 'Use task_note_working for task-scoped working state.',
+      },
+      {
+        name: 'attention_inbox = 0',
+        status: attentionInboxCalls === 0 ? 'bad' : 'ok',
+        value: attentionInboxCalls,
+        hint: 'Call attention_inbox after hivemind_context.',
+      },
+      {
+        name: 'task_ready_for_agent = 0',
+        status: taskReadyCalls === 0 ? 'bad' : 'ok',
+        value: taskReadyCalls,
+        hint: 'Call task_ready_for_agent before choosing work.',
+      },
+    ],
+  };
+}
+
+function formatSignal(signal: AdoptionSignal): string {
+  return `  ${signal.status.padEnd(15)} ${signal.name}: ${formatSignalValue(signal.value)} - ${signal.hint}`;
+}
+
+function formatSignalValue(value: number | null): string {
+  return value === null ? 'n/a' : String(value);
+}
+
 function countTool(calls: ToolCallRow[], toolName: string): number {
   return calls.filter((call) => isColonyTool(call.tool, toolName)).length;
+}
+
+function countAnyTool(calls: ToolCallRow[], tools: string[]): number {
+  const names = new Set(tools);
+  return calls.filter((call) => names.has(call.tool)).length;
 }
 
 function isMcpTool(tool: string): boolean {

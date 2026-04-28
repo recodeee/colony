@@ -65,6 +65,9 @@ export interface HivemindContext {
     claim_count: number;
     hot_file_count: number;
     next_action: string;
+    suggested_tools: string[];
+    attention_counts: HivemindContextAttentionCounts;
+    state_tool_replacements: Record<string, string[]>;
   };
   counts: HivemindSnapshot['counts'];
   query: string;
@@ -110,20 +113,40 @@ export interface HivemindContextOwnership {
 export interface HivemindContextAttention {
   session_id: string | null;
   agent: string | null;
-  counts: {
-    lane_needs_attention_count: number;
-    pending_handoff_count: number;
-    pending_wake_count: number;
-    unread_message_count: number;
-    stalled_lane_count: number;
-    recent_other_claim_count: number;
-    blocked: boolean;
-  };
+  unread_messages: number;
+  pending_handoffs: number;
+  pending_wakes: number;
+  blocking: boolean;
+  stale_claims: number;
+  stalled_lanes: number;
+  counts: HivemindContextAttentionCounts;
   observation_ids: number[];
   observation_ids_truncated: boolean;
   hydration: string;
+  hydrate_with: string;
   next_action: string;
 }
+
+export interface HivemindContextAttentionCounts {
+  lane_needs_attention_count: number;
+  pending_handoff_count: number;
+  pending_wake_count: number;
+  unread_message_count: number;
+  stalled_lane_count: number;
+  recent_other_claim_count: number;
+  blocked: boolean;
+}
+
+const HIVEMIND_FUNNEL_NEXT_ACTION =
+  'Call attention_inbox, then task_ready_for_agent before choosing work.';
+const HIVEMIND_SUGGESTED_TOOLS = ['attention_inbox', 'task_ready_for_agent'];
+const STATE_TOOL_REPLACEMENTS = {
+  state_get_status: ['hivemind_context', 'attention_inbox'],
+  state_list_active: ['hivemind_context'],
+  state_write: ['task_note_working', 'task_post'],
+  state_read: ['task_timeline', 'get_observations'],
+  state_clear: ['task_message_mark_read', 'attention_inbox'],
+};
 
 export function toHivemindOptions(input: HivemindToolOptions): HivemindOptions {
   const options: HivemindOptions = {};
@@ -211,7 +234,10 @@ export function buildHivemindContext(
       needs_attention_count: needsAttentionCount,
       claim_count: ownership.claim_count,
       hot_file_count: ownership.hot_files.length,
-      next_action: nextAction(lanes, memoryHits, negativeWarnings, attention),
+      next_action: HIVEMIND_FUNNEL_NEXT_ACTION,
+      suggested_tools: HIVEMIND_SUGGESTED_TOOLS,
+      attention_counts: attention.counts,
+      state_tool_replacements: STATE_TOOL_REPLACEMENTS,
     },
     counts: snapshot.counts,
     query,
@@ -347,52 +373,31 @@ function buildAttention(
   laneNeedsAttentionCount: number,
   input: HivemindContextAttentionInput | undefined,
 ): HivemindContextAttention {
+  const counts: HivemindContextAttentionCounts = {
+    lane_needs_attention_count: laneNeedsAttentionCount,
+    pending_handoff_count: input?.summary.pending_handoff_count ?? 0,
+    pending_wake_count: input?.summary.pending_wake_count ?? 0,
+    unread_message_count: input?.summary.unread_message_count ?? 0,
+    stalled_lane_count: Math.max(input?.summary.stalled_lane_count ?? 0, laneNeedsAttentionCount),
+    recent_other_claim_count: input?.summary.recent_other_claim_count ?? 0,
+    blocked: input?.summary.blocked ?? false,
+  };
+
   return {
     session_id: input?.session_id ?? null,
     agent: input?.agent ?? null,
-    counts: {
-      lane_needs_attention_count: laneNeedsAttentionCount,
-      pending_handoff_count: input?.summary.pending_handoff_count ?? 0,
-      pending_wake_count: input?.summary.pending_wake_count ?? 0,
-      unread_message_count: input?.summary.unread_message_count ?? 0,
-      stalled_lane_count: Math.max(input?.summary.stalled_lane_count ?? 0, laneNeedsAttentionCount),
-      recent_other_claim_count: input?.summary.recent_other_claim_count ?? 0,
-      blocked: input?.summary.blocked ?? false,
-    },
+    unread_messages: counts.unread_message_count,
+    pending_handoffs: counts.pending_handoff_count,
+    pending_wakes: counts.pending_wake_count,
+    blocking: counts.blocked,
+    stale_claims: counts.recent_other_claim_count,
+    stalled_lanes: counts.stalled_lane_count,
+    counts,
     observation_ids: input?.observation_ids ?? [],
     observation_ids_truncated: input?.observation_ids_truncated ?? false,
-    hydration: 'Call get_observations with observation_ids for bodies; context stays compact.',
+    hydration:
+      'Hydrate with attention_inbox; call get_observations with observation_ids only for bodies.',
+    hydrate_with: 'attention_inbox',
     next_action: input?.summary.next_action ?? '',
   };
-}
-
-function nextAction(
-  lanes: HivemindContextLane[],
-  memoryHits: SearchResult[],
-  negativeWarnings: CompactNegativeWarning[],
-  attention: HivemindContextAttention,
-): string {
-  if (
-    attention.counts.blocked ||
-    attention.counts.pending_handoff_count > 0 ||
-    attention.counts.pending_wake_count > 0
-  ) {
-    return attention.next_action;
-  }
-  if (lanes.some((lane) => lane.needs_attention)) {
-    return 'Inspect lanes with needs_attention before taking over or editing nearby files.';
-  }
-  if (negativeWarnings.length > 0) {
-    return 'Review compact negative warnings before repeating a known failed path; then use lane ownership.';
-  }
-  if (lanes.length > 0 && memoryHits.length > 0) {
-    return 'Use lane ownership first, then fetch only the specific memory IDs needed.';
-  }
-  if (lanes.length > 0) {
-    return 'Use lane ownership before editing; no matching memory hit was needed.';
-  }
-  if (memoryHits.length > 0) {
-    return 'No live lanes found; fetch only the memory IDs needed.';
-  }
-  return 'No live lanes or matching memory found.';
 }

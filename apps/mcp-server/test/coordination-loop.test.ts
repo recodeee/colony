@@ -25,7 +25,21 @@ interface PublishResult {
 }
 
 interface HivemindContextResult {
-  summary: { lane_count: number; memory_hit_count: number; negative_warning_count: number };
+  summary: {
+    lane_count: number;
+    memory_hit_count: number;
+    negative_warning_count: number;
+    next_action: string;
+    suggested_tools: string[];
+    attention_counts: { unread_message_count: number; blocked: boolean };
+    state_tool_replacements: Record<string, string[]>;
+  };
+  attention: {
+    unread_messages: number;
+    pending_handoffs: number;
+    blocking: boolean;
+    hydrate_with: string;
+  };
   lanes: Array<{ branch: string; task: string; owner: string }>;
   memory_hits: Array<{ id: number; snippet: string }>;
   negative_warnings: Array<{ id: number; kind: string; snippet: string }>;
@@ -168,9 +182,14 @@ describe('coordination loop discovery', () => {
         leadingPhrases: ['prior memory', 'decisions', 'errors', 'notes'],
       },
       {
-        name: 'task_post',
+        name: 'task_note_working',
         startsWith: /^Write a working note/,
-        leadingPhrases: ['working note', 'save current state', 'blockers'],
+        leadingPhrases: ['working note', 'task_id', 'notepad'],
+      },
+      {
+        name: 'task_post',
+        startsWith: /^Post a task-scoped question/,
+        leadingPhrases: ['question', 'decision', 'blocker'],
       },
     ];
 
@@ -197,7 +216,8 @@ describe('coordination loop discovery', () => {
       ['active ownership', 'hivemind_context'],
       ['claim file', 'task_claim_file'],
       ['search prior memory', 'search'],
-      ['write working note', 'task_post'],
+      ['write working note', 'task_note_working'],
+      ['task-scoped question', 'task_post'],
     ];
 
     for (const [phrase, tool] of documentedMappings) {
@@ -230,6 +250,20 @@ describe('coordination loop discovery', () => {
     expect(context.summary.lane_count).toBe(1);
     expect(context.summary.memory_hit_count).toBeGreaterThan(0);
     expect(context.summary.negative_warning_count).toBe(1);
+    expect(context.summary.next_action).toBe(
+      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+    );
+    expect(context.summary.suggested_tools).toEqual(['attention_inbox', 'task_ready_for_agent']);
+    expect(context.summary.state_tool_replacements.state_write).toEqual([
+      'task_note_working',
+      'task_post',
+    ]);
+    expect(context.attention).toMatchObject({
+      unread_messages: 0,
+      pending_handoffs: 0,
+      blocking: false,
+      hydrate_with: 'attention_inbox',
+    });
     expect(context.lanes[0]?.branch).toBe('agent/other/active-loop');
     expect(context.memory_hits[0]?.snippet).toMatch(/coordination|loop/i);
     expect(context.negative_warnings[0]).toMatchObject({

@@ -18,6 +18,7 @@ export const COORDINATION_COMMIT_TOOLS = new Set([
   'mcp__colony__task_plan_claim_subtask',
   'mcp__colony__task_plan_complete_subtask',
   'mcp__colony__task_post',
+  'mcp__colony__task_note_working',
   'mcp__colony__task_link',
   'mcp__colony__task_unlink',
   'mcp__colony__agent_upsert_profile',
