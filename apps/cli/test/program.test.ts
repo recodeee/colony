@@ -19,6 +19,7 @@ describe('Colony CLI program', () => {
       'start',
       'status',
       'stop',
+      'suggest',
       'viewer',
     ].sort();
     for (const name of expected) {
@@ -34,44 +35,49 @@ describe('Colony CLI program', () => {
       Cross-agent persistent memory with compressed storage.
 
       Options:
-        -V, --version              output the version number
-        -h, --help                 display help for command
+        -V, --version                       output the version number
+        -h, --help                          display help for command
 
       Commands:
-        install [options]          Register hooks + MCP server for an IDE
-        uninstall [options]        Remove IDE integration
-        status                     Show colony wiring, data, and worker state
-        config                     View or edit colony settings
-        doctor                     Run health checks
-        start                      Start the worker daemon (embeddings + viewer)
-        stop                       Stop the worker daemon
-        restart                    Restart the worker daemon
-        viewer                     Open the memory viewer in your browser
-                                   (auto-starts worker)
-        worker                     Manage local worker daemon
-        mcp                        Run the MCP stdio server (typically invoked by the
-                                   IDE)
-        search [options] <query>   Query memory from the terminal
-        compress [options] <file>  Compress a file in place (.original backup
-                                   created)
-        expand <file>              Expand abbreviations in a file
-        export <out>               Export memory to JSONL
-        import <in>                Import memory from JSONL
-        hook                       Internal: hook handler entrypoints
-        reindex                    Rebuild FTS index
-        backfill                   Heal historical rows that predate newer inference
-                                   logic.
-        note [options] <text...>   Record a timestamped scratch note into the memory
-                                   timeline
-        observe [options]          Live dashboard of collaboration state. Run in a
-                                   spare terminal during a session.
-        debrief [options]          End-of-day collaboration post-mortem: 6 structured
-                                   sections over DB evidence.
-        inbox [options]            Compact list of attention items for a session:
-                                   pending handoffs, wakes, stalled lanes, recent
-                                   claims
-        foraging                   Index and query <repo_root>/examples food sources
-        help [command]             display help for command
+        install [options]                   Register hooks + MCP server for an IDE
+        uninstall [options]                 Remove IDE integration
+        status                              Show colony wiring, data, and worker
+                                            state
+        config                              View or edit colony settings
+        doctor                              Run health checks
+        start                               Start the worker daemon (embeddings +
+                                            viewer)
+        stop                                Stop the worker daemon
+        restart                             Restart the worker daemon
+        viewer                              Open the memory viewer in your browser
+                                            (auto-starts worker)
+        worker                              Manage local worker daemon
+        mcp                                 Run the MCP stdio server (typically
+                                            invoked by the IDE)
+        search [options] <query>            Query memory from the terminal
+        suggest [options] <description...>  Suggest an approach from similar past
+                                            task history
+        compress [options] <file>           Compress a file in place (.original
+                                            backup created)
+        expand <file>                       Expand abbreviations in a file
+        export <out>                        Export memory to JSONL
+        import <in>                         Import memory from JSONL
+        hook                                Internal: hook handler entrypoints
+        reindex                             Rebuild FTS index
+        backfill                            Heal historical rows that predate newer
+                                            inference logic.
+        note [options] <text...>            Record a timestamped scratch note into
+                                            the memory timeline
+        observe [options]                   Live dashboard of collaboration state.
+                                            Run in a spare terminal during a session.
+        debrief [options]                   End-of-day collaboration post-mortem: 6
+                                            structured sections over DB evidence.
+        inbox [options]                     Compact list of attention items for a
+                                            session: pending handoffs, wakes, stalled
+                                            lanes, recent claims
+        foraging                            Index and query <repo_root>/examples food
+                                            sources
+        help [command]                      display help for command
       "
     `);
   });

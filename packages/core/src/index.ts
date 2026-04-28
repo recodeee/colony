@@ -105,3 +105,23 @@ export {
   type SimilarTaskResult,
   type SimilarTaskStatus,
 } from './similarity-search.js';
+export {
+  buildSuggestionPayload,
+  insufficientSuggestionPayload,
+  type FirstFileLikelyClaimed,
+  type PatternToWatch,
+  type PatternToWatchKind,
+  type ResolutionHints,
+  type SimilarTask,
+  type SuggestionPayload,
+  type TaskStatus,
+} from './suggestion-payload.js';
+export {
+  ABANDONED_TASK_DAYS,
+  MIN_CORPUS_SIZE,
+  MIN_SIMILAR_TASKS_FOR_SUGGESTION,
+  PREFACE_FILE_CONFIDENCE_THRESHOLD,
+  PREFACE_INCLUSION_THRESHOLD,
+  SIMILARITY_FLOOR,
+  SUGGESTION_THRESHOLDS,
+} from './suggestion-thresholds.js';

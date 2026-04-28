@@ -90,6 +90,7 @@ describe('MCP server', () => {
       'task_propose',
       'task_reinforce',
       'task_relay',
+      'task_suggest_approach',
       'task_timeline',
       'task_unlink',
       'task_updates_since',

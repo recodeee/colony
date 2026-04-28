@@ -19,6 +19,7 @@ import { registerObserveCommand } from './commands/observe.js';
 import { registerReindexCommand } from './commands/reindex.js';
 import { registerSearchCommand } from './commands/search.js';
 import { registerStatusCommand } from './commands/status.js';
+import { registerSuggestCommand } from './commands/suggest.js';
 import { registerUninstallCommand } from './commands/uninstall.js';
 import { registerWorkerCommand } from './commands/worker.js';
 
@@ -39,6 +40,7 @@ export function createProgram(): Command {
   registerWorkerCommand(program);
   registerMcpCommand(program);
   registerSearchCommand(program);
+  registerSuggestCommand(program);
   registerCompressCommands(program);
   registerExportCommand(program);
   registerHookCommand(program);
