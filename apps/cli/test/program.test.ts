@@ -6,6 +6,7 @@ describe('Colony CLI program', () => {
     const program = createProgram();
     const names = program.commands.map((c) => c.name()).sort();
     const expected = [
+      'coordination',
       'doctor',
       'foraging',
       'health',
@@ -65,6 +66,7 @@ describe('Colony CLI program', () => {
         compress [options] <file>           Compress a file in place (.original
                                             backup created)
         expand <file>                       Expand abbreviations in a file
+        coordination                        Inspect biological coordination signals
         export <out>                        Export memory to JSONL
         import <in>                         Import memory from JSONL
         hook                                Internal: hook handler entrypoints

@@ -2,6 +2,7 @@ import { loadSettings } from '@colony/config';
 import type { ClaimCoverageStats, ObservationRow, Storage, TaskRow } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
+import { type BridgeAdoptionMetrics, buildBridgeAdoptionMetrics } from '../bridge-adoption.js';
 import { withStorage } from '../util/store.js';
 
 /**
@@ -31,6 +32,10 @@ interface CoordinationActivityResult {
 
 interface CoordinationActivityStorage {
   coordinationActivity(since: number): CoordinationActivityResult;
+}
+
+interface BridgeAdoptionStorage {
+  toolCallsSince(since_ts: number): ReturnType<Storage['toolCallsSince']>;
 }
 
 type ClaimCoverageVerdict =
@@ -355,6 +360,53 @@ export function sectionQueenActivity(ctx: DebriefContext): string[] {
   return lines;
 }
 
+/**
+ * Section 11 - bridge adoption.
+ *
+ * These are bridge-specific ratios over local tool telemetry. Unlike the
+ * generic commit/read ratio, this section asks whether agents move through the
+ * Colony startup loop and replace OMX coordination fallbacks with Colony tools.
+ */
+export function sectionBridgeAdoption(ctx: DebriefContext): string[] {
+  const lines = ['', kleur.bold('11. Bridge adoption')];
+  const payload = bridgeAdoptionPayload(ctx);
+  const hiveToInbox = payload.conversions.hivemind_context_to_attention_inbox;
+  const inboxToReady = payload.conversions.attention_inbox_to_task_ready_for_agent;
+  const taskList = payload.task_list_without_task_ready_for_agent;
+  const notes = payload.working_notes;
+  const statusReads = payload.status_reads;
+
+  lines.push(
+    `  hivemind_context -> attention_inbox: ${formatCountRatio(
+      hiveToInbox.converted_sessions,
+      hiveToInbox.from_sessions,
+      hiveToInbox.conversion_rate,
+    )} sessions (${hiveToInbox.from_calls} -> ${hiveToInbox.to_calls} calls)`,
+  );
+  lines.push(
+    `  attention_inbox -> task_ready_for_agent: ${formatCountRatio(
+      inboxToReady.converted_sessions,
+      inboxToReady.from_sessions,
+      inboxToReady.conversion_rate,
+    )} sessions (${inboxToReady.from_calls} -> ${inboxToReady.to_calls} calls)`,
+  );
+  lines.push(
+    `  task_list without task_ready_for_agent: ${taskList.task_list_calls_without_task_ready_for_agent} / ${taskList.task_list_calls} calls across ${taskList.sessions_with_task_list_without_task_ready_for_agent} sessions`,
+  );
+  lines.push(
+    `  working notes: status=${notes.status}; omx_notepad_write_working=${notes.omx_notepad_write_working_calls}; colony task notes=${notes.colony_working_note_calls} (task_post=${notes.task_post_calls}, task_note_working=${notes.task_note_working_calls}); colony share=${formatPercentRatio(notes.colony_share)}`,
+  );
+  lines.push(
+    `  status reads: status=${statusReads.status}; omx_state_get_status=${statusReads.omx_state_get_status_calls}; bridge_status=${statusReads.bridge_status_calls}; hivemind_context=${statusReads.hivemind_context_calls}; colony share=${formatPercentRatio(statusReads.colony_share)}`,
+  );
+  if (notes.status === 'unavailable' || statusReads.status === 'unavailable') {
+    lines.push(
+      kleur.dim('  OMX fallback metrics unavailable when no local OMX tool telemetry exists.'),
+    );
+  }
+  return lines;
+}
+
 function claimCoveragePayload(ctx: DebriefContext): ClaimCoveragePayload {
   const stats = ctx.storage.claimCoverageStats(ctx.since);
   const explicitRatio = stats.edit_count > 0 ? stats.explicit_claim_count / stats.edit_count : null;
@@ -603,6 +655,7 @@ function debriefJson(ctx: DebriefContext): Record<string, unknown> {
     coordination_ratio: coordinationRatioPayload(ctx),
     bash_coordination_volume: bashCoordinationVolume,
     queen_activity: queenActivityPayload(ctx),
+    bridge_adoption: bridgeAdoptionPayload(ctx),
     timeline: ctx.storage.mixedTimeline(ctx.since, ctx.taskId),
   };
 }
@@ -636,6 +689,7 @@ export function registerDebriefCommand(program: Command): void {
           sectionTimeline(ctx),
           sectionBashCoordinationVolume(ctx),
           sectionQueenActivity(ctx),
+          sectionBridgeAdoption(ctx),
         ];
         for (const s of sections) process.stdout.write(`${s.join('\n')}\n`);
 
@@ -660,6 +714,10 @@ function formatRatio(ratio: number | null): string {
 
 function formatPercentRatio(ratio: number | null): string {
   return ratio === null ? 'n/a' : `${Math.round(ratio * 100)}%`;
+}
+
+function formatCountRatio(numerator: number, denominator: number, ratio: number | null): string {
+  return `${numerator} / ${denominator} (${formatPercentRatio(ratio)})`;
 }
 
 function formatCompletionRate(payload: QueenActivityPayload): string {
@@ -720,4 +778,10 @@ function shortSession(sessionId: string): string {
   const id = parts[1] ?? sessionId;
   const short = id.length > 6 ? `${id.slice(0, 6)}...` : id;
   return agent ? `${agent}@${short}` : short;
+}
+
+function bridgeAdoptionPayload(ctx: DebriefContext): BridgeAdoptionMetrics {
+  return buildBridgeAdoptionMetrics(
+    (ctx.storage as Storage & BridgeAdoptionStorage).toolCallsSince(ctx.since),
+  );
 }

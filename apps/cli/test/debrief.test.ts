@@ -42,6 +42,13 @@ interface TestBashCoordinationVolume {
   top_files_by_file_op: Array<{ file_path: string; count: number }>;
 }
 
+interface TestToolCall {
+  id: number;
+  session_id: string;
+  tool: string;
+  ts: number;
+}
+
 interface TestTask {
   id: number;
   title: string;
@@ -257,6 +264,59 @@ describe('debrief --json', () => {
     });
     expect(json.queen_activity.queen_subtask_completion_rate).toBeCloseTo(2 / 3);
   });
+
+  it('emits bridge adoption metrics for OMX to Colony coordination movement', async () => {
+    const storage = fakeStorage(activity({ commits: 0, reads: 0 }), {
+      toolCalls: [
+        toolCall(1, 'codex-a', 'mcp__colony__hivemind_context', 1_000),
+        toolCall(2, 'codex-a', 'mcp__colony__attention_inbox', 2_000),
+        toolCall(3, 'codex-a', 'mcp__colony__task_ready_for_agent', 3_000),
+        toolCall(4, 'codex-a', 'mcp__colony__task_note_working', 4_000),
+        toolCall(5, 'codex-a', 'mcp__colony__bridge_status', 5_000),
+        toolCall(6, 'codex-a', 'mcp__omx_memory__notepad_write_working', 6_000),
+        toolCall(7, 'codex-a', 'mcp__omx_state__state_get_status', 7_000),
+        toolCall(8, 'codex-b', 'mcp__colony__task_list', 8_000),
+      ],
+    });
+    mocks.withStorage.mockImplementation(
+      async (_settings: unknown, run: (storage: unknown) => unknown) => run(storage),
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerDebriefCommand(program);
+
+    await program.parseAsync(['node', 'test', 'debrief', '--json'], { from: 'node' });
+
+    const json = JSON.parse(output.join(''));
+    expect(json.bridge_adoption).toMatchObject({
+      task_list_without_task_ready_for_agent: {
+        task_list_calls: 1,
+        task_ready_for_agent_calls: 1,
+        task_list_calls_without_task_ready_for_agent: 1,
+      },
+      working_notes: {
+        status: 'available',
+        omx_notepad_write_working_calls: 1,
+        colony_working_note_calls: 1,
+        task_note_working_calls: 1,
+      },
+      status_reads: {
+        status: 'available',
+        omx_state_get_status_calls: 1,
+        bridge_status_calls: 1,
+        hivemind_context_calls: 1,
+      },
+    });
+    expect(json.bridge_adoption.conversions.hivemind_context_to_attention_inbox).toMatchObject({
+      from_sessions: 1,
+      converted_sessions: 1,
+    });
+  });
 });
 
 describe('debrief output', () => {
@@ -356,6 +416,7 @@ function fakeStorage(
     claimCoverage?: TestClaimCoverage;
     observations?: TestObservation[];
     tasks?: TestTask[];
+    toolCalls?: TestToolCall[];
     toolDistribution?: Array<{ tool: string; count: number }>;
   } = {},
 ): never {
@@ -379,6 +440,7 @@ function fakeStorage(
         metadata: null,
       })),
     ),
+    toolCallsSince: vi.fn(() => opts.toolCalls ?? []),
     participantJoinFor: vi.fn(() => undefined),
     claimCoverageStats: vi.fn(() => claimCoverage),
     editVsClaimStats: vi.fn(() => ({
@@ -417,6 +479,10 @@ function fakeStorage(
     ),
     mixedTimeline: vi.fn(() => []),
   } as never;
+}
+
+function toolCall(id: number, sessionId: string, tool: string, ts: number): TestToolCall {
+  return { id, session_id: sessionId, tool, ts };
 }
 
 function queenActivitySeed(now: number): { tasks: TestTask[]; observations: TestObservation[] } {
