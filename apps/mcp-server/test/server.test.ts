@@ -118,9 +118,15 @@ describe('MCP server', () => {
     expect(byName.get('task_hand_off')?.description).toContain(
       'Fallback when task_relay is unavailable',
     );
-    expect(byName.get('task_message')?.description).toContain(
-      'Send a message to other agents on this task. Defaults to broadcast/fyi — use task_post for thread-style notes/blockers/decisions.',
+    expect(byName.get('task_message')?.description).toMatch(/^Send a message to another agent\./);
+    expect(byName.get('task_message')?.description).toContain('instead of generic task_post notes');
+    expect(byName.get('task_messages')?.description).toMatch(/^Read unread messages\./);
+    expect(byName.get('task_messages')?.description).toContain(
+      'fetch full bodies via get_observations',
     );
+    expect(byName.get('task_message_mark_read')?.description).toMatch(/^Mark message read\./);
+    expect(byName.get('task_message_claim')?.description).toMatch(/^Claim broadcast\./);
+    expect(byName.get('task_message_retract')?.description).toMatch(/^Retract sent message\./);
     expect(byName.get('queen_plan_goal')?.description).toContain(
       'Decompose a high-level goal into colony sub-tasks and publish them as a plan. Use this when you have a multi-step goal and want other agents to claim parts in parallel.',
     );
@@ -134,6 +140,7 @@ describe('MCP server', () => {
     expect(attentionDescription.slice(0, 80)).toContain('pending handoffs');
     expect(attentionDescription.slice(0, 80)).toContain('unread messages');
     expect(attentionDescription.slice(0, 80)).toContain('blockers');
+    expect(attentionDescription).toContain('main surface where task_message items show up');
     const readyDescription = byName.get('task_ready_for_agent')?.description ?? '';
     expect(readyDescription).toMatch(
       /^Find the next task to claim for this agent\. Use this when deciding what to work on\./,
