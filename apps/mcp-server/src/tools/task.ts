@@ -13,6 +13,7 @@ const TASK_LIST_HINT =
 const TASK_LIST_REPEAT_HINT =
   'task_list is inventory. Use task_ready_for_agent to choose claimable work.';
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
+const OMX_POINTER_VALUE_LIMIT = 180;
 const WorkingNotePointerSchema = z.object({
   branch: z.string().min(1).optional(),
   task: z.string().min(1).optional(),
@@ -439,7 +440,13 @@ function formatOmxNotepadPointer(opts: {
 
 function pointerValue(value: string | number | undefined, fallback: string): string {
   const raw = value === undefined || String(value).trim() === '' ? fallback : String(value);
-  return raw.replace(/[\r\n;]+/g, ' ').trim();
+  const compact = raw
+    .replace(/[\r\n;]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return compact.length > OMX_POINTER_VALUE_LIMIT
+    ? `${compact.slice(0, OMX_POINTER_VALUE_LIMIT - 3).trimEnd()}...`
+    : compact;
 }
 
 function compactPlanTimelineMetadata(

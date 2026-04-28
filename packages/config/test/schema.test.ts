@@ -17,6 +17,11 @@ describe('SettingsSchema', () => {
     expect(() => SettingsSchema.parse({ compression: { intensity: 'xxx' } })).toThrow();
   });
 
+  it('allows enabling the OMX notepad pointer bridge', () => {
+    const parsed = SettingsSchema.parse({ bridge: { writeOmxNotepadPointer: true } });
+    expect(parsed.bridge.writeOmxNotepadPointer).toBe(true);
+  });
+
   it('defaults match exported defaultSettings', () => {
     expect(defaultSettings.workerPort).toBe(37777);
     expect(defaultSettings.embedding.provider).toBe('local');

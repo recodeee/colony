@@ -329,6 +329,7 @@ describe('task threads — handoff lifecycle', () => {
     defaultSettings.bridge.writeOmxNotepadPointer = true;
     try {
       const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
+      const longEvidence = `${'very long log line '.repeat(30)}SECRET_TAIL_SHOULD_NOT_APPEAR`;
 
       const { observation_id, omx_notepad_pointer } = await call<{
         observation_id: number;
@@ -343,7 +344,7 @@ describe('task threads — handoff lifecycle', () => {
           task: 'bridge working notes',
           blocker: 'none',
           next: 'run focused tests',
-          evidence: 'apps/mcp-server/test/task-threads.test.ts',
+          evidence: longEvidence,
         },
       });
 
@@ -354,6 +355,9 @@ describe('task threads — handoff lifecycle', () => {
       expect(note).toContain('task=bridge working notes');
       expect(note).toContain(`colony_observation_id=${observation_id}`);
       expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_POINTER');
+      expect(note).not.toContain('SECRET_TAIL_SHOULD_NOT_APPEAR');
+      const evidence = note.match(/evidence=([^;]+)/)?.[1] ?? '';
+      expect(evidence.length).toBeLessThanOrEqual(180);
     } finally {
       defaultSettings.bridge.writeOmxNotepadPointer = original;
     }
