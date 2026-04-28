@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   type CapabilityHint,
+  QueenOrderingHintError,
   type QueenPlan,
   type QueenWaveSubtask,
   orderedPlanFromWaves,
@@ -214,6 +215,47 @@ describe('planGoal', () => {
     ]);
     expect(plan.subtasks[0]?.depends_on).toEqual([]);
     expect(plan.subtasks[1]?.depends_on).toEqual([]);
+  });
+
+  it('maps wave ordering hints into deterministic dependencies', () => {
+    const plan = planGoal({
+      title: 'Stage app work',
+      affected_files: [
+        'apps/api/src/stage.ts',
+        'apps/web/src/stage/StagePanel.tsx',
+        'apps/api/test/stage.test.ts',
+      ],
+      ordering_hint: 'wave',
+      waves: [
+        { name: 'UI first', titles: ['Implement web scope'] },
+        { name: 'API second', subtask_refs: ['kind:api'] },
+      ],
+      finalizer: 'Add targeted tests',
+    });
+
+    expectValidPlan(plan);
+    expect(plan.subtasks.map((subtask) => subtask.title)).toEqual([
+      'Implement web scope',
+      'Implement API scope',
+      'Add targeted tests',
+    ]);
+    expect(plan.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [0], [0, 1]]);
+  });
+
+  it('rejects same-wave hints that would run overlapping file scopes concurrently', () => {
+    expect(() =>
+      planGoal({
+        title: 'Document ordered plans',
+        affected_files: ['docs/README.md'],
+        ordering_hint: 'wave',
+        waves: [
+          {
+            name: 'docs together',
+            titles: ['Prepare README change', 'Update README documentation'],
+          },
+        ],
+      }),
+    ).toThrow(QueenOrderingHintError);
   });
 
   it('makes the second hinted wave depend on the first wave by default', () => {

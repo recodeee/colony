@@ -17,7 +17,7 @@ interface QueenPlanPreview {
   slug: string;
   title: string;
   auto_archive: true;
-  subtasks: Array<{ title: string; file_scope: string[] }>;
+  subtasks: Array<{ title: string; file_scope: string[]; depends_on: number[] }>;
 }
 
 interface QueenPublishResult {
@@ -35,11 +35,16 @@ async function call<T>(name: string, args: Record<string, unknown>): Promise<T> 
 async function callError(
   name: string,
   args: Record<string, unknown>,
-): Promise<{ code: string; error: string; fields: string[] }> {
+): Promise<{ code: string; error: string; fields: string[]; validation_errors?: string[] }> {
   const res = await client.callTool({ name, arguments: args });
   expect(res.isError).toBe(true);
   const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
-  return JSON.parse(text) as { code: string; error: string; fields: string[] };
+  return JSON.parse(text) as {
+    code: string;
+    error: string;
+    fields: string[];
+    validation_errors?: string[];
+  };
 }
 
 function queenArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -130,6 +135,64 @@ describe('queen_plan_goal', () => {
     const publishedPlan = listed.find((plan) => plan.plan_slug === result.plan_slug);
     expect(publishedPlan?.subtasks).toHaveLength(2);
     expect(publishedPlan?.next_available).toHaveLength(1);
+  });
+
+  it('accepts wave ordering hints and publishes task-plan-compatible dependencies', async () => {
+    const result = await call<QueenPublishResult>(
+      'queen_plan_goal',
+      queenArgs({
+        affected_files: [
+          'apps/api/src/queen-order.ts',
+          'apps/web/src/queen/OrderPanel.tsx',
+          'apps/api/test/queen-order.test.ts',
+        ],
+        ordering_hint: 'wave',
+        waves: [
+          { name: 'UI first', titles: ['Implement web scope'] },
+          { name: 'API second', subtask_refs: ['kind:api'] },
+        ],
+        finalizer: 'Add targeted tests',
+      }),
+    );
+
+    const listed = await call<
+      Array<{
+        plan_slug: string;
+        next_available: Array<{ title: string }>;
+        subtasks: Array<{ title: string; depends_on: number[] }>;
+      }>
+    >('task_plan_list', { repo_root: repoRoot });
+    const publishedPlan = listed.find((plan) => plan.plan_slug === result.plan_slug);
+
+    expect(publishedPlan?.subtasks.map((subtask) => subtask.title)).toEqual([
+      'Implement web scope',
+      'Implement API scope',
+      'Add targeted tests',
+    ]);
+    expect(publishedPlan?.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [0], [0, 1]]);
+    expect(publishedPlan?.next_available.map((subtask) => subtask.title)).toEqual([
+      'Implement web scope',
+    ]);
+  });
+
+  it('reports ordering validation errors instead of publishing unsafe overlap hints', async () => {
+    const err = await callError(
+      'queen_plan_goal',
+      queenArgs({
+        affected_files: ['docs/README.md'],
+        ordering_hint: 'wave',
+        waves: [
+          {
+            name: 'docs together',
+            titles: ['Prepare README change', 'Update README documentation'],
+          },
+        ],
+      }),
+    );
+
+    expect(err.code).toBe('QUEEN_INVALID_GOAL');
+    expect(err.fields).toEqual(expect.arrayContaining(['waves']));
+    expect(err.validation_errors?.[0]).toContain('overlapping sub-tasks');
   });
 
   it('returns QUEEN_INVALID_GOAL with invalid fields when queen validation fails', async () => {

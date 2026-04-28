@@ -7,19 +7,29 @@ export interface Goal {
   acceptance_criteria?: string[];
   repo_root?: string;
   affected_files?: string[];
+  ordering_hint?: 'wave';
   waves?: WaveHint[];
+  finalizer?: string;
 }
 
 export interface PlanGoalOptions {
   affected_files?: string[];
+  ordering_hint?: 'wave';
   waves?: WaveHint[];
+  finalizer?: string;
 }
 
 export interface WaveHint {
-  files?: string[];
-  affected_files?: string[];
-  depends_on?: number[];
+  name?: string | undefined;
+  files?: string[] | undefined;
+  affected_files?: string[] | undefined;
+  depends_on?: number[] | undefined;
+  subtask_refs?: string[] | undefined;
+  titles?: string[] | undefined;
+  rationale?: string | undefined;
 }
+
+export type OrderingWaveHint = WaveHint;
 
 export interface QueenSubtask {
   title: string;
@@ -98,13 +108,32 @@ interface WaveDraft {
   depends_on?: number[];
 }
 
+interface OrderedGroups {
+  groups: DraftGroup[];
+  order?: Map<DraftGroup, number> | undefined;
+  finalizer?: DraftGroup | undefined;
+}
+
+export class QueenOrderingHintError extends Error {
+  readonly fields: string[];
+  readonly validation_errors: string[];
+
+  constructor(validationErrors: string[]) {
+    super(`invalid queen ordering hints: ${validationErrors.join('; ')}`);
+    this.name = 'QueenOrderingHintError';
+    this.fields = ['ordering_hint', 'waves'];
+    this.validation_errors = validationErrors;
+  }
+}
+
 const MIN_SUBTASKS = 2;
 const MAX_SUBTASKS = 7;
 const COMBINING_MARKS = /\p{M}+/gu;
 
 export function planGoal(goal: Goal, options: PlanGoalOptions = {}): QueenPlan {
   const slug = slugFromTitle(goal.title);
-  const waves = normalizeWaves(options.waves ?? goal.waves ?? []);
+  const inputWaves = options.waves ?? goal.waves ?? [];
+  const waves = normalizeWaves(inputWaves);
   const affectedFiles = normalizeFiles(
     options.affected_files ??
       goal.affected_files ??
@@ -112,8 +141,20 @@ export function planGoal(goal: Goal, options: PlanGoalOptions = {}): QueenPlan {
       inferAffectedFiles(goal, slug),
   );
   const groups = groupFiles(goal, affectedFiles);
-  const subtasks =
-    waves.length > 0 ? wireWaveDependencies(goal, affectedFiles, waves) : wireDependencies(groups);
+  const orderingHint = options.ordering_hint ?? goal.ordering_hint;
+  const finalizer = options.finalizer ?? goal.finalizer;
+  const orderingGoal: Goal = {
+    ...goal,
+    waves: inputWaves,
+    ...(orderingHint !== undefined ? { ordering_hint: orderingHint } : {}),
+    ...(finalizer !== undefined ? { finalizer } : {}),
+  };
+  const subtasks = hasReferenceOrderingHints(orderingGoal)
+    ? wireDependencies(orderGroups(groups, orderingGoal))
+    : waves.length > 0
+      ? wireWaveDependencies(goal, affectedFiles, waves)
+      : wireDependencies({ groups });
+  assertDependencyOrder(subtasks);
 
   return {
     slug,
@@ -283,7 +324,8 @@ function draftGroupsForFiles(
   return groups;
 }
 
-function wireDependencies(groups: DraftGroup[]): QueenSubtask[] {
+function wireDependencies(ordering: OrderedGroups): QueenSubtask[] {
+  const { groups } = ordering;
   const storageIndex = groups.findIndex((group) => group.kind === 'storage');
   const subtasks: QueenSubtask[] = [];
 
@@ -308,6 +350,8 @@ function wireDependencies(groups: DraftGroup[]): QueenSubtask[] {
     if (index > 0 && overlapsPreviousGroup(group, groups.slice(0, index))) {
       deps.add(index - 1);
     }
+
+    addOrderingDependencies(deps, ordering, group, groups, index);
 
     subtasks.push({
       title: group.title,
@@ -516,6 +560,203 @@ function filesFromWaves(waves: NormalizedWaveHint[]): string[] | undefined {
   return files.length > 0 ? files : undefined;
 }
 
+function hasReferenceOrderingHints(goal: Goal): boolean {
+  return (
+    goal.ordering_hint === 'wave' ||
+    goal.finalizer !== undefined ||
+    (goal.waves ?? []).some(
+      (wave) => (wave.titles?.length ?? 0) > 0 || (wave.subtask_refs?.length ?? 0) > 0,
+    )
+  );
+}
+
+function orderGroups(groups: DraftGroup[], goal: Goal): OrderedGroups {
+  const hasHints =
+    goal.ordering_hint !== undefined ||
+    (goal.waves !== undefined && goal.waves.length > 0) ||
+    goal.finalizer !== undefined;
+  if (!hasHints) return { groups };
+
+  const errors: string[] = [];
+  if (goal.ordering_hint !== undefined && goal.ordering_hint !== 'wave') {
+    errors.push(`unsupported ordering_hint ${goal.ordering_hint}`);
+  }
+
+  const waves = goal.waves ?? [];
+  const claimed = new Map<DraftGroup, number>();
+  const ordered: DraftGroup[] = [];
+
+  waves.forEach((wave, waveIndex) => {
+    const fileRefs = [...(wave.files ?? []), ...(wave.affected_files ?? [])].map(
+      (file) => `file:${file}`,
+    );
+    const refs = [...(wave.titles ?? []), ...(wave.subtask_refs ?? []), ...fileRefs]
+      .map((ref) => ref.trim())
+      .filter((ref) => ref.length > 0);
+    if (refs.length === 0) {
+      errors.push(`wave ${wave.name ?? waveIndex} must include titles or subtask_refs`);
+      return;
+    }
+
+    const waveGroups = uniqueGroups(refs.flatMap((ref) => resolveGroupRef(groups, ref)));
+    for (const ref of refs) {
+      if (resolveGroupRef(groups, ref).length === 0) {
+        errors.push(`wave ${wave.name ?? waveIndex} references unknown sub-task ${ref}`);
+      }
+    }
+    for (const group of waveGroups) {
+      const previous = claimed.get(group);
+      if (previous !== undefined && previous !== waveIndex) {
+        errors.push(
+          `sub-task ${group.title} appears in both wave ${previous} and wave ${waveIndex}`,
+        );
+        continue;
+      }
+      claimed.set(group, waveIndex);
+      ordered.push(group);
+    }
+    errors.push(...sameWaveOverlapErrors(waveGroups, wave.name ?? String(waveIndex)));
+  });
+
+  const finalizer = goal.finalizer ? resolveFinalizer(groups, goal.finalizer, errors) : undefined;
+  if (finalizer && claimed.has(finalizer)) {
+    errors.push(`finalizer ${goal.finalizer} must not also appear in a wave`);
+  }
+
+  const unmentionedWave = waves.length;
+  for (const group of groups) {
+    if (claimed.has(group) || group === finalizer) continue;
+    claimed.set(group, unmentionedWave);
+    ordered.push(group);
+  }
+
+  if (finalizer) {
+    claimed.set(finalizer, unmentionedWave + 1);
+    ordered.push(finalizer);
+  }
+
+  if (errors.length > 0) throw new QueenOrderingHintError([...new Set(errors)]);
+  return { groups: ordered, order: claimed, finalizer };
+}
+
+function addOrderingDependencies(
+  deps: Set<number>,
+  ordering: OrderedGroups,
+  group: DraftGroup,
+  groups: DraftGroup[],
+  index: number,
+): void {
+  const order = ordering.order;
+  if (!order) return;
+
+  const groupWave = order.get(group);
+  if (groupWave === undefined) return;
+  for (let i = 0; i < index; i++) {
+    const candidate = groups[i];
+    if (!candidate) continue;
+    const candidateWave = order.get(candidate);
+    if (candidateWave !== undefined && candidateWave < groupWave) deps.add(i);
+  }
+
+  if (ordering.finalizer === group) {
+    for (let i = 0; i < index; i++) deps.add(i);
+  }
+}
+
+function resolveGroupRef(groups: DraftGroup[], ref: string): DraftGroup[] {
+  const trimmed = ref.trim();
+  const separator = trimmed.indexOf(':');
+  if (separator > 0) {
+    const prefix = normalizeRef(trimmed.slice(0, separator));
+    const value = trimmed.slice(separator + 1);
+    if (prefix === 'title' || prefix === 'task') return matchByTitle(groups, value);
+    if (prefix === 'kind') return matchByKind(groups, value);
+    if (prefix === 'capability' || prefix === 'capability_hint') {
+      return matchByCapability(groups, value);
+    }
+    if (prefix === 'file' || prefix === 'path') return matchByFile(groups, value);
+  }
+
+  return uniqueGroups([
+    ...matchByTitle(groups, trimmed),
+    ...matchByKind(groups, trimmed),
+    ...matchByCapability(groups, trimmed),
+    ...matchByFile(groups, trimmed),
+  ]);
+}
+
+function resolveFinalizer(
+  groups: DraftGroup[],
+  title: string,
+  errors: string[],
+): DraftGroup | undefined {
+  const matches = matchByTitle(groups, title);
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    errors.push(`finalizer references unknown sub-task ${title}`);
+    return undefined;
+  }
+  errors.push(`finalizer ${title} matches multiple sub-tasks`);
+  return undefined;
+}
+
+function matchByTitle(groups: DraftGroup[], title: string): DraftGroup[] {
+  const normalized = normalizeRef(title);
+  return groups.filter((group) => normalizeRef(group.title) === normalized);
+}
+
+function matchByKind(groups: DraftGroup[], kind: string): DraftGroup[] {
+  const normalized = normalizeRef(kind);
+  return groups.filter((group) => normalizeRef(group.kind) === normalized);
+}
+
+function matchByCapability(groups: DraftGroup[], capability: string): DraftGroup[] {
+  const normalized = normalizeRef(capability);
+  return groups.filter((group) => normalizeRef(capabilityHintForFiles(group.files)) === normalized);
+}
+
+function matchByFile(groups: DraftGroup[], file: string): DraftGroup[] {
+  const normalized = normalizeFiles([file])[0];
+  if (!normalized) return [];
+  return groups.filter((group) => group.files.includes(normalized));
+}
+
+function uniqueGroups(groups: DraftGroup[]): DraftGroup[] {
+  return [...new Set(groups)];
+}
+
+function sameWaveOverlapErrors(groups: DraftGroup[], waveName: string): string[] {
+  const errors: string[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    for (let j = i + 1; j < groups.length; j++) {
+      const a = groups[i];
+      const b = groups[j];
+      if (!a || !b) continue;
+      const shared = a.files.filter((file) => b.files.includes(file));
+      if (shared.length > 0) {
+        errors.push(
+          `wave ${waveName} puts overlapping sub-tasks ${a.title} and ${b.title} together: ${shared.join(', ')}`,
+        );
+      }
+    }
+  }
+  return errors;
+}
+
+function assertDependencyOrder(subtasks: QueenSubtask[]): void {
+  const errors: string[] = [];
+  for (let i = 0; i < subtasks.length; i++) {
+    for (const dep of subtasks[i]?.depends_on ?? []) {
+      if (dep >= i) {
+        errors.push(
+          `sub-task ${i} depends on ${dep}; ordering hints would place required work later`,
+        );
+      }
+    }
+  }
+  if (errors.length > 0) throw new QueenOrderingHintError(errors);
+}
+
 function ensureMinimumGroups(groups: DraftGroup[], goal: Goal, affectedFiles: string[]): void {
   if (groups.length >= MIN_SUBTASKS) return;
 
@@ -581,6 +822,10 @@ function normalizeFiles(files: string[]): string[] {
 
 function uniqueSorted(values: number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
+}
+
+function normalizeRef(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function isTestFile(file: string): boolean {

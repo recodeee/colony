@@ -51,6 +51,18 @@ const ToolInputSchema = {
   acceptance_criteria: z.array(z.string()),
   repo_root: z.string(),
   affected_files: z.array(z.string()).optional(),
+  ordering_hint: z.literal('wave').optional(),
+  waves: z
+    .array(
+      z.object({
+        name: z.string().optional(),
+        subtask_refs: z.array(z.string()).optional(),
+        titles: z.array(z.string()).optional(),
+        rationale: z.string().optional(),
+      }),
+    )
+    .optional(),
+  finalizer: z.string().optional(),
   session_id: z.string().min(1),
   dry_run: z.boolean().optional(),
 };
@@ -61,6 +73,16 @@ type QueenToolInput = {
   acceptance_criteria: string[];
   repo_root: string;
   affected_files?: string[] | undefined;
+  ordering_hint?: 'wave' | undefined;
+  waves?:
+    | Array<{
+        name?: string | undefined;
+        subtask_refs?: string[] | undefined;
+        titles?: string[] | undefined;
+        rationale?: string | undefined;
+      }>
+    | undefined;
+  finalizer?: string | undefined;
   session_id: string;
   dry_run?: boolean | undefined;
 };
@@ -105,6 +127,9 @@ function planGoalForTool(args: QueenToolInput): NormalizedQueenPlan {
     acceptance_criteria: args.acceptance_criteria,
     repo_root: args.repo_root,
     ...(args.affected_files !== undefined ? { affected_files: args.affected_files } : {}),
+    ...(args.ordering_hint !== undefined ? { ordering_hint: args.ordering_hint } : {}),
+    ...(args.waves !== undefined ? { waves: args.waves } : {}),
+    ...(args.finalizer !== undefined ? { finalizer: args.finalizer } : {}),
   };
   const plan = planGoal(goal);
   return normalizePlan(plan, args);
@@ -365,6 +390,7 @@ function invalidGoalResponse(err: unknown): {
 } | null {
   const fields = invalidGoalFields(err);
   if (fields.length === 0) return null;
+  const validationErrors = orderingValidationErrors(err);
   return {
     content: [
       {
@@ -373,11 +399,21 @@ function invalidGoalResponse(err: unknown): {
           code: 'QUEEN_INVALID_GOAL',
           error: err instanceof Error ? err.message : 'invalid queen goal',
           fields,
+          ...(validationErrors.length > 0 ? { validation_errors: validationErrors } : {}),
         }),
       },
     ],
     isError: true,
   };
+}
+
+function orderingValidationErrors(err: unknown): string[] {
+  if (typeof err !== 'object' || err === null) return [];
+  const record = err as Record<string, unknown>;
+  const errors = record.validation_errors ?? record.validationErrors;
+  return Array.isArray(errors)
+    ? errors.filter((entry): entry is string => typeof entry === 'string')
+    : [];
 }
 
 function invalidGoalFields(err: unknown): string[] {

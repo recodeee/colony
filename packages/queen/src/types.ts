@@ -1,6 +1,7 @@
 export type {
   CapabilityHint,
   Goal,
+  OrderingWaveHint,
   PlanGoalOptions,
   QueenExecutionStrategy,
   QueenOrderedPlan,
