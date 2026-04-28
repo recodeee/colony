@@ -136,6 +136,25 @@ interface ReadyClaimPayload {
   claimed_share_of_actionable: number | null;
 }
 
+interface QueenWavePlanSummary {
+  plan_slug: string;
+  current_wave: string | null;
+  ready_subtasks: number;
+  claimed_subtasks: number;
+  blocked_subtasks: number;
+  stale_claims_blocking_downstream: number;
+}
+
+interface QueenWaveHealthPayload {
+  active_plans: number;
+  current_wave: string | null;
+  ready_subtasks: number;
+  claimed_subtasks: number;
+  blocked_subtasks: number;
+  stale_claims_blocking_downstream: number;
+  plans: QueenWavePlanSummary[];
+}
+
 interface AdoptionSignal {
   name: string;
   status: 'good' | 'ok' | 'bad' | 'needs_attention';
@@ -170,6 +189,7 @@ export interface ColonyHealthPayload {
   signal_health: SignalHealthPayload;
   proposal_health: ProposalHealthPayload;
   ready_to_claim_vs_claimed: ReadyClaimPayload;
+  queen_wave_health: QueenWaveHealthPayload;
   adoption_thresholds: AdoptionThresholdsPayload;
   action_hints: ActionHint[];
 }
@@ -261,6 +281,10 @@ export function buildColonyHealthPayload(
       now,
     }),
     ready_to_claim_vs_claimed: readyClaimPayload(storage, tasks),
+    queen_wave_health: queenWaveHealthPayload(storage, tasks, {
+      now,
+      stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+    }),
     adoption_thresholds: adoptionThresholds(calls, {
       colony_mcp_share: ratio(colonyMcpToolCalls, mcpToolCalls),
       task_claim_file_calls: taskClaimFileCalls,
@@ -402,7 +426,25 @@ export function formatColonyHealthOutput(
     `  claimed:             ${payload.ready_to_claim_vs_claimed.claimed}`,
     `  ready/claimed:       ${formatNumber(payload.ready_to_claim_vs_claimed.ready_to_claim_per_claimed)}`,
     `  claimed actionable:  ${formatPercent(payload.ready_to_claim_vs_claimed.claimed_share_of_actionable)}`,
+    '',
+    kleur.bold('Queen wave plans'),
+    `  active plans:                       ${payload.queen_wave_health.active_plans}`,
+    `  current wave:                       ${payload.queen_wave_health.current_wave ?? 'n/a'}`,
+    `  ready subtasks:                     ${payload.queen_wave_health.ready_subtasks}`,
+    `  claimed subtasks:                   ${payload.queen_wave_health.claimed_subtasks}`,
+    `  blocked subtasks:                   ${payload.queen_wave_health.blocked_subtasks}`,
+    `  stale claims blocking downstream:   ${payload.queen_wave_health.stale_claims_blocking_downstream}`,
   );
+
+  if (payload.queen_wave_health.plans.length === 0) {
+    lines.push(kleur.dim('  plans: none active'));
+  } else {
+    for (const plan of payload.queen_wave_health.plans.slice(0, HEALTH_TOOL_LIMIT)) {
+      lines.push(
+        `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}`,
+      );
+    }
+  }
 
   lines.push('', kleur.bold('Next fixes'));
   if (payload.action_hints.length === 0) {
@@ -767,6 +809,16 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
+  if (payload.queen_wave_health.stale_claims_blocking_downstream > 0) {
+    hints.push({
+      metric: 'stale claims blocking downstream',
+      status: 'bad',
+      current: String(payload.queen_wave_health.stale_claims_blocking_downstream),
+      target: '0',
+      action: 'Run colony queen sweep/rescue so later waves can become claimable.',
+    });
+  }
+
   if (
     payload.task_post_vs_omx_notepad.status === 'available' &&
     isBelowTarget(payload.task_post_vs_omx_notepad.colony_note_share, TARGET_COLONY_NOTE_SHARE)
@@ -1004,6 +1056,9 @@ interface PlanSubtaskHealth {
   index: number;
   status: 'available' | 'claimed' | 'completed' | 'blocked';
   depends_on: number[];
+  claimed_at: number | null;
+  wave_index: number;
+  wave_name: string;
 }
 
 function readPlanSubtasks(
@@ -1020,25 +1075,32 @@ function readPlanSubtasks(
     const initial = rows.find((row) => row.kind === 'plan-subtask');
     if (!initial) continue;
     const initialMeta = parseJsonObject(initial.metadata);
+    const lifecycle = readSubtaskLifecycle(rows, initialMeta, initial.ts);
     subtasks.push({
       plan_slug: planSlug,
       index,
-      status: readSubtaskStatus(rows, initialMeta),
+      status: lifecycle.status,
       depends_on: readNumberArray(initialMeta.depends_on),
+      claimed_at: lifecycle.claimed_at,
+      wave_index: 0,
+      wave_name: 'Wave 1',
     });
   }
-  return subtasks;
+  return annotatePlanSubtaskWaves(subtasks);
 }
 
-function readSubtaskStatus(
+function readSubtaskLifecycle(
   rows: ObservationRow[],
   initialMeta: Record<string, unknown>,
-): PlanSubtaskHealth['status'] {
+  initialTs: number,
+): Pick<PlanSubtaskHealth, 'status' | 'claimed_at'> {
   const claimRows = rows.filter((row) => row.kind === 'plan-subtask-claim');
   for (const precedence of ['completed', 'blocked', 'claimed'] as const) {
-    if (claimRows.some((row) => parseJsonObject(row.metadata).status === precedence)) {
-      return precedence;
-    }
+    const match = claimRows
+      .filter((row) => parseJsonObject(row.metadata).status === precedence)
+      .sort((a, b) => b.ts - a.ts)[0];
+    if (match)
+      return { status: precedence, claimed_at: precedence === 'claimed' ? match.ts : null };
   }
   const initialStatus = initialMeta.status;
   if (
@@ -1047,9 +1109,140 @@ function readSubtaskStatus(
     initialStatus === 'completed' ||
     initialStatus === 'blocked'
   ) {
-    return initialStatus;
+    return {
+      status: initialStatus,
+      claimed_at: initialStatus === 'claimed' ? initialTs : null,
+    };
   }
-  return 'available';
+  return { status: 'available', claimed_at: null };
+}
+
+function queenWaveHealthPayload(
+  storage: Pick<Storage, 'taskTimeline'>,
+  tasks: TaskRow[],
+  options: { now: number; stale_claim_minutes: number },
+): QueenWaveHealthPayload {
+  const plans: QueenWavePlanSummary[] = [];
+
+  for (const [planSlug, subtasks] of groupPlanSubtasks(readPlanSubtasks(storage, tasks))) {
+    const incomplete = subtasks.filter((subtask) => subtask.status !== 'completed');
+    if (incomplete.length === 0) continue;
+
+    const currentWaveIndex = Math.min(...incomplete.map((subtask) => subtask.wave_index));
+    const currentWave =
+      subtasks.find((subtask) => subtask.wave_index === currentWaveIndex)?.wave_name ?? null;
+
+    plans.push({
+      plan_slug: planSlug,
+      current_wave: currentWave,
+      ready_subtasks: subtasks.filter((subtask) => isReadyPlanSubtask(subtask, subtasks)).length,
+      claimed_subtasks: subtasks.filter((subtask) => subtask.status === 'claimed').length,
+      blocked_subtasks: subtasks.filter((subtask) => isBlockedPlanSubtask(subtask, subtasks))
+        .length,
+      stale_claims_blocking_downstream: subtasks.filter(
+        (subtask) => isStalePlanClaim(subtask, options) && blocksDownstream(subtask, subtasks),
+      ).length,
+    });
+  }
+
+  const currentWaves = new Set(plans.map((plan) => plan.current_wave).filter(Boolean));
+  return {
+    active_plans: plans.length,
+    current_wave:
+      plans.length === 0
+        ? null
+        : currentWaves.size === 1
+          ? (plans[0]?.current_wave ?? null)
+          : 'multiple',
+    ready_subtasks: plans.reduce((sum, plan) => sum + plan.ready_subtasks, 0),
+    claimed_subtasks: plans.reduce((sum, plan) => sum + plan.claimed_subtasks, 0),
+    blocked_subtasks: plans.reduce((sum, plan) => sum + plan.blocked_subtasks, 0),
+    stale_claims_blocking_downstream: plans.reduce(
+      (sum, plan) => sum + plan.stale_claims_blocking_downstream,
+      0,
+    ),
+    plans: plans.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug)),
+  };
+}
+
+function groupPlanSubtasks(subtasks: PlanSubtaskHealth[]): Map<string, PlanSubtaskHealth[]> {
+  const byPlan = new Map<string, PlanSubtaskHealth[]>();
+  for (const subtask of subtasks) {
+    const bucket = byPlan.get(subtask.plan_slug) ?? [];
+    bucket.push(subtask);
+    byPlan.set(subtask.plan_slug, bucket);
+  }
+  return byPlan;
+}
+
+function annotatePlanSubtaskWaves(subtasks: PlanSubtaskHealth[]): PlanSubtaskHealth[] {
+  const annotated: PlanSubtaskHealth[] = [];
+  for (const siblings of groupPlanSubtasks(subtasks).values()) {
+    const byIndex = new Map(siblings.map((subtask) => [subtask.index, subtask]));
+    const waveByIndex = new Map<number, number>();
+    const resolveWave = (subtask: PlanSubtaskHealth, visiting = new Set<number>()): number => {
+      const cached = waveByIndex.get(subtask.index);
+      if (cached !== undefined) return cached;
+      if (visiting.has(subtask.index)) return 0;
+      visiting.add(subtask.index);
+      const wave =
+        subtask.depends_on.length === 0
+          ? 0
+          : Math.max(
+              ...subtask.depends_on.map((depIndex) => {
+                const dep = byIndex.get(depIndex);
+                return dep ? resolveWave(dep, visiting) + 1 : 1;
+              }),
+            );
+      visiting.delete(subtask.index);
+      waveByIndex.set(subtask.index, wave);
+      return wave;
+    };
+
+    for (const subtask of siblings) {
+      const waveIndex = resolveWave(subtask);
+      annotated.push({
+        ...subtask,
+        wave_index: waveIndex,
+        wave_name: `Wave ${waveIndex + 1}`,
+      });
+    }
+  }
+  return annotated;
+}
+
+function isReadyPlanSubtask(subtask: PlanSubtaskHealth, siblings: PlanSubtaskHealth[]): boolean {
+  return subtask.status === 'available' && arePlanSubtaskDepsMet(subtask, siblings);
+}
+
+function isBlockedPlanSubtask(subtask: PlanSubtaskHealth, siblings: PlanSubtaskHealth[]): boolean {
+  return (
+    subtask.status === 'blocked' ||
+    (subtask.status === 'available' && !arePlanSubtaskDepsMet(subtask, siblings))
+  );
+}
+
+function arePlanSubtaskDepsMet(subtask: PlanSubtaskHealth, siblings: PlanSubtaskHealth[]): boolean {
+  return subtask.depends_on.every((depIndex) =>
+    siblings.some((candidate) => candidate.index === depIndex && candidate.status === 'completed'),
+  );
+}
+
+function isStalePlanClaim(
+  subtask: PlanSubtaskHealth,
+  options: { now: number; stale_claim_minutes: number },
+): boolean {
+  return (
+    subtask.status === 'claimed' &&
+    subtask.claimed_at !== null &&
+    options.now - subtask.claimed_at > options.stale_claim_minutes * 60_000
+  );
+}
+
+function blocksDownstream(subtask: PlanSubtaskHealth, siblings: PlanSubtaskHealth[]): boolean {
+  return siblings.some(
+    (candidate) => candidate.status !== 'completed' && candidate.depends_on.includes(subtask.index),
+  );
 }
 
 function readNumberArray(value: unknown): number[] {

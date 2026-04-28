@@ -173,6 +173,23 @@ describe('colony health payload', () => {
       ready_to_claim_per_claimed: 1,
       claimed_share_of_actionable: 1 / 2,
     });
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 1,
+      current_wave: 'Wave 1',
+      ready_subtasks: 1,
+      claimed_subtasks: 1,
+      blocked_subtasks: 1,
+      stale_claims_blocking_downstream: 0,
+      plans: [
+        expect.objectContaining({
+          plan_slug: 'plan',
+          current_wave: 'Wave 1',
+          ready_subtasks: 1,
+          claimed_subtasks: 1,
+          blocked_subtasks: 1,
+        }),
+      ],
+    });
     expect(payload.adoption_thresholds.good).toContainEqual(
       expect.objectContaining({
         name: 'hivemind_context rising',
@@ -201,6 +218,10 @@ describe('colony health payload', () => {
     expect(text).toContain('Signal health');
     expect(text).toContain('Proposal decay/promotions');
     expect(text).toContain('Ready-to-claim vs claimed');
+    expect(text).toContain('Queen wave plans');
+    expect(text).toContain('active plans:                       1');
+    expect(text).toContain('current wave:                       Wave 1');
+    expect(text).toContain('stale claims blocking downstream:   0');
     expect(text).toContain('Next fixes');
     expect(text).toContain('Adoption thresholds');
     expect(text).toContain('task_list > task_ready_for_agent');
@@ -238,8 +259,103 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('signal_health');
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
+    expect(json).toHaveProperty('queen_wave_health');
     expect(json).toHaveProperty('adoption_thresholds');
     expect(json).toHaveProperty('action_hints');
+  });
+
+  it('reports stale claimed subtasks that block later Queen waves', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [],
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+        tasks: [
+          { id: 10, repo_root: '/r', branch: 'spec/waves/sub-0' },
+          { id: 11, repo_root: '/r', branch: 'spec/waves/sub-1' },
+          { id: 12, repo_root: '/r', branch: 'spec/waves/sub-2' },
+          { id: 13, repo_root: '/r', branch: 'spec/done/sub-0' },
+        ],
+        observationsByTask: {
+          10: [
+            observation(10, 'plan-subtask-claim', NOW - 3 * 3_600_000, {
+              status: 'claimed',
+              session_id: 'stale-session',
+            }),
+            observation(11, 'plan-subtask', NOW - 4 * 3_600_000, {
+              status: 'available',
+              depends_on: [],
+            }),
+          ],
+          11: [
+            observation(12, 'plan-subtask', NOW - 3_000, {
+              status: 'available',
+              depends_on: [0],
+            }),
+          ],
+          12: [
+            observation(13, 'plan-subtask', NOW - 3_000, {
+              status: 'available',
+              depends_on: [0],
+            }),
+          ],
+          13: [
+            observation(14, 'plan-subtask-claim', NOW - 2_000, {
+              status: 'completed',
+            }),
+            observation(15, 'plan-subtask', NOW - 3_000, {
+              status: 'available',
+              depends_on: [],
+            }),
+          ],
+        },
+        claimsByTask: {},
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 1,
+      current_wave: 'Wave 1',
+      ready_subtasks: 0,
+      claimed_subtasks: 1,
+      blocked_subtasks: 2,
+      stale_claims_blocking_downstream: 1,
+      plans: [
+        {
+          plan_slug: 'waves',
+          current_wave: 'Wave 1',
+          ready_subtasks: 0,
+          claimed_subtasks: 1,
+          blocked_subtasks: 2,
+          stale_claims_blocking_downstream: 1,
+        },
+      ],
+    });
+    expect(payload.action_hints).toContainEqual(
+      expect.objectContaining({
+        metric: 'stale claims blocking downstream',
+        current: '1',
+        target: '0',
+      }),
+    );
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('stale claims blocking downstream:   1');
+    expect(text).toContain(
+      'waves: current Wave 1; ready 0, claimed 1, blocked 2, stale blockers 1',
+    );
   });
 
   it('colors adoption threshold status labels by severity', () => {
