@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore, TaskThread } from '@colony/core';
+import { type DiscrepancyReport, MemoryStore, TaskThread } from '@colony/core';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/server.js';
@@ -10,6 +10,26 @@ import { buildApp } from '../src/server.js';
 let dir: string;
 let store: MemoryStore;
 let app: Hono;
+
+interface TestDiscrepancyMetric {
+  count: number;
+  rate: number;
+  denominator: number;
+  examples: [];
+  truncated: false;
+}
+
+type TestDiscrepancyReport = DiscrepancyReport & {
+  edits_without_claims: TestDiscrepancyMetric;
+  sessions_ended_without_handoff: TestDiscrepancyMetric;
+  blockers_without_messages: TestDiscrepancyMetric;
+  proposals_without_reinforcement: TestDiscrepancyMetric;
+};
+
+const discrepancyReportMockState = {
+  buildDiscrepancyReport: vi.fn(),
+  reportByStore: new WeakMap<object, unknown>(),
+};
 
 function seed(): { sessionId: string; a: number; b: number } {
   store.startSession({ id: 's1', ide: 'claude-code', cwd: '/tmp' });
@@ -121,10 +141,104 @@ function seedStrandedSession(): { sessionId: string; lastError: string } {
   return { sessionId, lastError };
 }
 
+function seedCoordinationEdits(counts: { unclaimed: number; claimed: number }): void {
+  store.startSession({ id: 'coord-session', ide: 'codex', cwd: '/repo' });
+  const task = store.storage.findOrCreateTask({
+    title: 'coordination-task',
+    repo_root: '/repo',
+    branch: 'agent/codex/coordination-task',
+    created_by: 'coord-session',
+  });
+  for (let i = 0; i < counts.unclaimed; i++) {
+    store.addObservation({
+      session_id: 'coord-session',
+      kind: 'tool_use',
+      content: `Edit src/orphan-${i}.ts`,
+      task_id: task.id,
+      metadata: { tool: 'Edit', file_path: `src/orphan-${i}.ts` },
+    });
+  }
+  for (let i = 0; i < counts.claimed; i++) {
+    const filePath = `src/claimed-${i}.ts`;
+    store.addObservation({
+      session_id: 'coord-session',
+      kind: 'claim',
+      content: `Claim ${filePath}`,
+      task_id: task.id,
+      metadata: { file_path: filePath },
+    });
+    store.addObservation({
+      session_id: 'coord-session',
+      kind: 'tool_use',
+      content: `Edit ${filePath}`,
+      task_id: task.id,
+      metadata: { tool: 'Edit', file_path: filePath },
+    });
+  }
+}
+
+function setDiscrepancyReport(report: TestDiscrepancyReport): void {
+  discrepancyReportMockState.reportByStore.set(store, report);
+}
+
+function buildMockDiscrepancyReport(
+  sourceStore: MemoryStore,
+  options: { since: number },
+): TestDiscrepancyReport {
+  const override = discrepancyReportMockState.reportByStore.get(sourceStore);
+  if (override) return override as TestDiscrepancyReport;
+
+  const totalEdits = sourceStore.storage
+    .listSessions(1000)
+    .flatMap((session) => sourceStore.timeline(session.id, undefined, 1000))
+    .filter(
+      (obs) =>
+        obs.kind === 'tool_use' &&
+        obs.ts > options.since &&
+        typeof obs.metadata?.file_path === 'string',
+    ).length;
+  const editsWithoutClaims = sourceStore.storage.recentEditsWithoutClaims(
+    options.since,
+    1000,
+  ).length;
+  return {
+    window: { since: options.since, until: Date.now() },
+    insufficient_data_reason: totalEdits === 0 ? 'not enough coordination data' : null,
+    edits_without_claims: metric(editsWithoutClaims, totalEdits),
+    sessions_ended_without_handoff: metric(3, 7),
+    blockers_without_messages: metric(5, 8),
+    proposals_without_reinforcement: metric(7, 12),
+  };
+}
+
+function metric(count: number, denominator: number): TestDiscrepancyMetric {
+  return {
+    count,
+    denominator,
+    rate: denominator > 0 ? count / denominator : 0,
+    examples: [],
+    truncated: false,
+  };
+}
+
+function coordinationRow(body: string, label: string): string {
+  const labelAt = body.indexOf(label);
+  expect(labelAt).toBeGreaterThanOrEqual(0);
+  const rowStart = body.lastIndexOf('<div class="coordination-row"', labelAt);
+  const nextRow = body.indexOf('<div class="coordination-row"', labelAt);
+  const panelEnd = body.indexOf('</div>\n    </div>', labelAt);
+  const rowEnd = nextRow === -1 ? panelEnd : nextRow;
+  return body.slice(rowStart, rowEnd);
+}
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'colony-worker-'));
   store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
-  app = buildApp(store);
+  discrepancyReportMockState.reportByStore = new WeakMap<object, unknown>();
+  discrepancyReportMockState.buildDiscrepancyReport.mockImplementation(buildMockDiscrepancyReport);
+  app = buildApp(store, undefined, {
+    discrepancyReportBuilder: discrepancyReportMockState.buildDiscrepancyReport,
+  });
 });
 
 afterEach(() => {
@@ -205,6 +319,23 @@ describe('worker HTTP', () => {
       source: 'file-lock',
       locked_file_count: 1,
     });
+  });
+
+  it('GET /api/colony/discrepancy returns the structured report', async () => {
+    seedCoordinationEdits({ unclaimed: 1, claimed: 1 });
+
+    const res = await app.request('/api/colony/discrepancy?since=0');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as TestDiscrepancyReport;
+
+    expect(discrepancyReportMockState.buildDiscrepancyReport).toHaveBeenCalledWith(store, {
+      since: 0,
+    });
+    expect(body.insufficient_data_reason).toBeNull();
+    expect(body.edits_without_claims.count).toBe(1);
+    expect(body.sessions_ended_without_handoff.count).toBe(3);
+    expect(body.blockers_without_messages.count).toBe(5);
+    expect(body.proposals_without_reinforcement.count).toBe(7);
   });
 
   it('GET /api/sessions/:id/observations returns expanded text', async () => {
@@ -355,6 +486,72 @@ describe('worker HTTP', () => {
     expect(body).toContain('edits without proactive claims (last 5m)');
     expect(body).toContain('<span class="count">1</span>');
     expect(body).toContain('src/orphan.ts');
+  });
+
+  it('GET / renders a Coordination behavior panel between diagnostic and heat-map', async () => {
+    seedCoordinationEdits({ unclaimed: 1, claimed: 1 });
+
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+
+    expect(body).toContain('Coordination behavior');
+    expect(body.indexOf('Diagnostic')).toBeLessThan(body.indexOf('Coordination behavior'));
+    expect(body.indexOf('Coordination behavior')).toBeLessThan(
+      body.indexOf('Recent claims heat-map'),
+    );
+  });
+
+  it('GET / renders the edits-without-claims rate from seeded data', async () => {
+    seedCoordinationEdits({ unclaimed: 24, claimed: 18 });
+
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const row = coordinationRow(body, 'Edits without claims');
+
+    expect(row).toContain('57% (24 of 42)');
+    expect(row).toContain('style="--rate: 57%;"');
+  });
+
+  it('GET / collapses the Coordination behavior panel when data is insufficient', async () => {
+    setDiscrepancyReport({
+      window: { since: Date.now() - 24 * 60 * 60_000, until: Date.now() },
+      insufficient_data_reason: 'not enough coordination data',
+      edits_without_claims: metric(0, 0),
+      sessions_ended_without_handoff: metric(0, 0),
+      blockers_without_messages: metric(0, 0),
+      proposals_without_reinforcement: metric(0, 0),
+    });
+
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const panelStart = body.indexOf('Coordination behavior');
+    const panel = body.slice(panelStart, body.indexOf('Recent claims heat-map'));
+
+    expect(panel).toContain('No coordination behavior report: not enough coordination data.');
+    expect(panel).not.toContain('coordination-row');
+  });
+
+  it('GET / maps Coordination behavior bar colors to rate thresholds', async () => {
+    setDiscrepancyReport({
+      window: { since: Date.now() - 24 * 60 * 60_000, until: Date.now() },
+      insufficient_data_reason: null,
+      edits_without_claims: metric(51, 100),
+      sessions_ended_without_handoff: metric(1, 2),
+      blockers_without_messages: metric(19, 100),
+      proposals_without_reinforcement: metric(1, 5),
+    });
+
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+
+    expect(coordinationRow(body, 'Edits without claims')).toContain('data-rate-level="red"');
+    expect(coordinationRow(body, 'Sessions w/o handoff')).toContain('data-rate-level="yellow"');
+    expect(coordinationRow(body, 'Blockers without messages')).toContain('data-rate-level="green"');
+    expect(coordinationRow(body, 'Proposals abandoned')).toContain('data-rate-level="yellow"');
   });
 
   it('GET / renders the recent claims heat-map with file paths', async () => {

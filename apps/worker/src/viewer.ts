@@ -1,8 +1,18 @@
-import { type HivemindSession, type HivemindSnapshot, inferIdeFromSessionId } from '@colony/core';
+import {
+  type DiscrepancyReport,
+  type HivemindSession,
+  type HivemindSnapshot,
+  type MemoryStore,
+  buildDiscrepancyReport,
+  inferIdeFromSessionId,
+} from '@colony/core';
 import type { SessionRow, Storage, TaskClaimRow, TaskRow } from '@colony/storage';
 
 const RECENT_EDIT_WINDOW_MS = 5 * 60_000;
 const RECENT_CLAIM_WINDOW_MS = 60 * 60_000;
+const COORDINATION_BEHAVIOR_WINDOW_MS = 24 * 60 * 60_000;
+
+type BuildDiscrepancyReport = (store: MemoryStore, options: { since: number }) => DiscrepancyReport;
 
 const style = `
   body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; background: #0b0d10; color: #e6e6e6; }
@@ -37,6 +47,13 @@ const style = `
   .heat-map { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .claim-tile { min-height: 58px; border: 1px solid #31405a; border-radius: 6px; padding: 8px; overflow: hidden; }
   .claim-tile code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; padding: 0; }
+  .coordination-behavior { display: grid; gap: 8px; }
+  .coordination-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(120px, 160px) minmax(92px, auto); gap: 10px; align-items: center; }
+  .coordination-bar { position: relative; height: 10px; overflow: hidden; border-radius: 999px; background: #263041; }
+  .coordination-bar::before { content: ""; display: block; width: var(--rate); height: 100%; background: var(--coord-color); }
+  .coordination-row[data-rate-level="red"] { --coord-color: #ef4444; }
+  .coordination-row[data-rate-level="yellow"] { --coord-color: #e7b85b; }
+  .coordination-row[data-rate-level="green"] { --coord-color: #8bd5a6; }
   .attention-item { border-top: 1px solid #222; padding-top: 8px; margin-top: 8px; }
   .attention-item:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
   .stranded-section { margin-bottom: 18px; }
@@ -120,12 +137,13 @@ export interface StrandedSessionSummary {
 export function renderIndex(
   sessions: SessionRow[],
   snapshot: HivemindSnapshot | undefined,
-  storage: Storage,
+  store: MemoryStore,
   strandedSessions: StrandedSessionSummary[] = [],
+  reportBuilder: BuildDiscrepancyReport = buildDiscrepancyReport,
 ): string {
   const stranded = renderStrandedSessions(strandedSessions);
   const dashboard = snapshot ? renderHivemindDashboard(snapshot) : '';
-  const colonyState = renderColonyState(storage);
+  const colonyState = renderColonyState(store, reportBuilder);
   if (sessions.length === 0) {
     return layout(
       'agents-hivemind',
@@ -200,7 +218,8 @@ ${raw(strandedRescueScript())}
     </script>`;
 }
 
-function renderColonyState(storage: Storage): string {
+function renderColonyState(store: MemoryStore, reportBuilder: BuildDiscrepancyReport): string {
+  const storage = store.storage;
   const tasks = storage.listTasks(200).filter((task) => task.status === 'open');
   return html`
     <section>
@@ -208,6 +227,7 @@ function renderColonyState(storage: Storage): string {
       <div class="viewer-grid">
         <div class="viewer-main">
           ${raw(renderDiagnostic(storage))}
+          ${raw(renderCoordinationBehavior(store, reportBuilder))}
           ${raw(renderRecentClaimsHeatMap(storage, tasks))}
           ${raw(renderToolUsageHistogram())}
         </div>
@@ -232,6 +252,173 @@ function renderDiagnostic(storage: Storage): string {
       <p><span class="count">${unclaimed.length}</span><span class="meta">edits without proactive claims (last 5m)</span></p>
       ${raw(rows)}
     </div>`;
+}
+
+const COORDINATION_BEHAVIOR_ROWS = [
+  {
+    key: 'edits_without_claims',
+    aliases: ['editsWithoutClaims', 'edits-without-claims'],
+    label: 'Edits without claims',
+  },
+  {
+    key: 'sessions_without_handoff',
+    aliases: [
+      'sessions_ended_without_handoff',
+      'sessionsWithoutHandoff',
+      'sessions_without_handoffs',
+      'sessions-without-handoff',
+    ],
+    label: 'Sessions w/o handoff',
+  },
+  {
+    key: 'blockers_without_messages',
+    aliases: ['blockersWithoutMessages', 'blockers_without_message', 'blockers-without-messages'],
+    label: 'Blockers without messages',
+  },
+  {
+    key: 'proposals_abandoned',
+    aliases: [
+      'proposals_without_reinforcement',
+      'proposalsAbandoned',
+      'abandoned_proposals',
+      'proposals-abandoned',
+    ],
+    label: 'Proposals abandoned',
+  },
+];
+
+interface CoordinationBehaviorReport {
+  insufficient_data_reason?: string | null;
+  discrepancies?: unknown;
+  metrics?: unknown;
+  rows?: unknown;
+  [key: string]: unknown;
+}
+
+interface CoordinationBehaviorMetric {
+  key?: string;
+  label?: string;
+  rate?: number;
+  ratio?: number;
+  numerator?: number;
+  denominator?: number;
+  count?: number;
+  total?: number;
+  value?: number;
+}
+
+function renderCoordinationBehavior(
+  store: MemoryStore,
+  reportBuilder: BuildDiscrepancyReport,
+): string {
+  const report = reportBuilder(store, {
+    since: Date.now() - COORDINATION_BEHAVIOR_WINDOW_MS,
+  });
+  if (report.insufficient_data_reason) {
+    return html`
+      <div class="card">
+        <p class="meta"><strong>Coordination behavior (last 24h)</strong>: No coordination behavior report: ${report.insufficient_data_reason}.</p>
+      </div>`;
+  }
+
+  return html`
+    <div class="card">
+      <h2>Coordination behavior <span class="meta">(last 24h)</span></h2>
+      <div class="coordination-behavior">
+        ${raw(
+          COORDINATION_BEHAVIOR_ROWS.map((row) =>
+            renderCoordinationBehaviorRow(
+              row.label,
+              readMetric(report as unknown as CoordinationBehaviorReport, row.key, row.aliases),
+            ),
+          ).join(''),
+        )}
+      </div>
+    </div>`;
+}
+
+function renderCoordinationBehaviorRow(label: string, metric: CoordinationBehaviorMetric): string {
+  const numerator = readMetricNumber(metric, ['numerator', 'count', 'value']);
+  const denominator = readMetricNumber(metric, ['denominator', 'total']);
+  const rate = normalizeRate(metric, numerator, denominator);
+  const displayDenominator = denominator > 0 ? denominator : inferDenominator(numerator, rate);
+  const pct = Math.round(rate * 100);
+  const level = rateLevel(rate);
+  return html`
+    <div class="coordination-row" data-rate-level="${level}">
+      <div>${label}</div>
+      <div class="coordination-bar" style="--rate: ${pct}%;" aria-label="${label} ${pct}%"></div>
+      <div class="meta">${pct}% (${numerator} of ${displayDenominator})</div>
+    </div>`;
+}
+
+function readMetric(
+  report: CoordinationBehaviorReport,
+  key: string,
+  aliases: string[],
+): CoordinationBehaviorMetric {
+  const keys = [key, ...aliases];
+  for (const source of [report.discrepancies, report.metrics, report.rows]) {
+    const found = readMetricFromSource(source, keys);
+    if (found) return found;
+  }
+  const direct = readMetricFromSource(report, keys);
+  return direct ?? {};
+}
+
+function readMetricFromSource(
+  source: unknown,
+  keys: string[],
+): CoordinationBehaviorMetric | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  if (Array.isArray(source)) {
+    const row = source.find((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const value = item as Record<string, unknown>;
+      return keys.some((key) => value.key === key || value.id === key || value.name === key);
+    });
+    return row && typeof row === 'object' ? (row as CoordinationBehaviorMetric) : undefined;
+  }
+  const record = source as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (value && typeof value === 'object') return value as CoordinationBehaviorMetric;
+  }
+  return undefined;
+}
+
+function readMetricNumber(metric: CoordinationBehaviorMetric, names: string[]): number {
+  for (const name of names) {
+    const value = metric[name as keyof CoordinationBehaviorMetric];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+function normalizeRate(
+  metric: CoordinationBehaviorMetric,
+  numerator: number,
+  denominator: number,
+): number {
+  const explicit = metric.rate ?? metric.ratio;
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) return clampRate(explicit);
+  if (denominator <= 0) return 0;
+  return clampRate(numerator / denominator);
+}
+
+function clampRate(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function inferDenominator(numerator: number, rate: number): number {
+  if (rate <= 0) return 0;
+  return Math.round(numerator / rate);
+}
+
+function rateLevel(rate: number): 'red' | 'yellow' | 'green' {
+  if (rate > 0.5) return 'red';
+  if (rate >= 0.2) return 'yellow';
+  return 'green';
 }
 
 function renderRecentClaimsHeatMap(storage: Storage, tasks: TaskRow[]): string {

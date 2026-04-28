@@ -3,7 +3,14 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expand } from '@colony/compress';
 import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
-import { type HivemindOptions, MemoryStore, listPlans, readHivemind } from '@colony/core';
+import {
+  type DiscrepancyReport,
+  type HivemindOptions,
+  MemoryStore,
+  buildDiscrepancyReport,
+  listPlans,
+  readHivemind,
+} from '@colony/core';
 import { createEmbedder } from '@colony/embedding';
 import { isMainEntry, notify, removePidFile, writePidFile } from '@colony/process';
 import { serve } from '@hono/node-server';
@@ -13,9 +20,11 @@ import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loo
 import { type StrandedSessionSummary, renderIndex, renderSession } from './viewer.js';
 
 const HIVEMIND_CACHE_TTL_MS = 500;
+type BuildDiscrepancyReport = (store: MemoryStore, options: { since: number }) => DiscrepancyReport;
 
 export interface WorkerAppOptions {
   hivemindRepoRoots?: string[];
+  discrepancyReportBuilder?: BuildDiscrepancyReport;
 }
 
 export function buildApp(
@@ -25,6 +34,7 @@ export function buildApp(
 ): Hono {
   const app = new Hono();
   const readCachedHivemind = createHivemindReader(options);
+  const reportBuilder = options.discrepancyReportBuilder ?? buildDiscrepancyReport;
 
   app.use('*', async (_c, next) => {
     loop?.touch();
@@ -44,6 +54,12 @@ export function buildApp(
   });
 
   app.get('/api/hivemind', (c) => c.json(readCachedHivemind()));
+
+  app.get('/api/colony/discrepancy', (c) => {
+    const since = Number(c.req.query('since') ?? Date.now() - 24 * 60 * 60_000);
+    const report = reportBuilder(store, { since });
+    return c.json(report);
+  });
 
   app.get('/api/colony/tasks', (c) => {
     const repoRoot = c.req.query('repo_root');
@@ -185,8 +201,9 @@ export function buildApp(
       renderIndex(
         store.storage.listSessions(50),
         readCachedHivemind(),
-        store.storage,
+        store,
         readStrandedSessionsForPlansPage(store),
+        reportBuilder,
       ),
     ),
   );
