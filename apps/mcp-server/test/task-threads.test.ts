@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -37,11 +37,15 @@ async function callError<
  * because these tests target the MCP surface + storage contract, not hook
  * integration.
  */
-function seedTwoSessionTask(): { task_id: number; sessionA: string; sessionB: string } {
-  store.startSession({ id: 'A', ide: 'claude-code', cwd: '/repo' });
-  store.startSession({ id: 'B', ide: 'codex', cwd: '/repo' });
+function seedTwoSessionTask(repoRoot = '/repo'): {
+  task_id: number;
+  sessionA: string;
+  sessionB: string;
+} {
+  store.startSession({ id: 'A', ide: 'claude-code', cwd: repoRoot });
+  store.startSession({ id: 'B', ide: 'codex', cwd: repoRoot });
   const thread = TaskThread.open(store, {
-    repo_root: '/repo',
+    repo_root: repoRoot,
     branch: 'feat/handoff',
     session_id: 'A',
   });
@@ -284,19 +288,18 @@ describe('task threads — handoff lifecycle', () => {
 
     const {
       observation_id,
-      id,
       task_id: resolvedTaskId,
+      omx_notepad_pointer,
     } = await call<{
       observation_id: number;
-      id: number;
       task_id: number;
+      omx_notepad_pointer: { status: string; reason: string };
     }>('task_note_working', {
       session_id: sessionA,
       content: 'working state: tests are green, unique-working-note-token before push',
     });
 
     expect(resolvedTaskId).toBe(task_id);
-    expect(id).toBe(observation_id);
     const row = store.storage.getObservation(observation_id);
     expect(row).toMatchObject({
       id: observation_id,
@@ -314,6 +317,46 @@ describe('task threads — handoff lifecycle', () => {
 
     const hits = await store.search('unique-working-note-token', 10);
     expect(hits.some((hit) => hit.id === observation_id)).toBe(true);
+    expect(omx_notepad_pointer).toMatchObject({
+      status: 'skipped',
+      reason: 'bridge.writeOmxNotepadPointer=false',
+    });
+  });
+
+  it('task_note_working writes a tiny OMX pointer when configured', async () => {
+    const repoRoot = join(dir, 'repo-pointer');
+    const original = defaultSettings.bridge.writeOmxNotepadPointer;
+    defaultSettings.bridge.writeOmxNotepadPointer = true;
+    try {
+      const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
+
+      const { observation_id, omx_notepad_pointer } = await call<{
+        observation_id: number;
+        omx_notepad_pointer: { status: string; path: string };
+      }>('task_note_working', {
+        session_id: sessionA,
+        repo_root: repoRoot,
+        branch: 'feat/handoff',
+        content: 'working state: SHOULD_NOT_APPEAR_IN_OMX_POINTER',
+        pointer: {
+          branch: 'agent/codex/working-note-bridge',
+          task: 'bridge working notes',
+          blocker: 'none',
+          next: 'run focused tests',
+          evidence: 'apps/mcp-server/test/task-threads.test.ts',
+        },
+      });
+
+      expect(store.storage.getObservation(observation_id)?.task_id).toBe(task_id);
+      expect(omx_notepad_pointer.status).toBe('written');
+      const note = readFileSync(join(repoRoot, '.omx', 'notepad.md'), 'utf8');
+      expect(note).toContain('branch=agent/codex/working-note-bridge');
+      expect(note).toContain('task=bridge working notes');
+      expect(note).toContain(`colony_observation_id=${observation_id}`);
+      expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_POINTER');
+    } finally {
+      defaultSettings.bridge.writeOmxNotepadPointer = original;
+    }
   });
 
   it('task_note_working resolves by repo_root and branch when the session has multiple tasks', async () => {
@@ -340,9 +383,10 @@ describe('task threads — handoff lifecycle', () => {
   });
 
   it('task_note_working returns compact candidates when active task resolution is ambiguous', async () => {
-    const { task_id, sessionA } = seedTwoSessionTask();
+    const repoRoot = join(dir, 'repo-ambiguous');
+    const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
     const other = TaskThread.open(store, {
-      repo_root: '/repo',
+      repo_root: repoRoot,
       branch: 'feat/other',
       session_id: sessionA,
     });
@@ -354,17 +398,25 @@ describe('task threads — handoff lifecycle', () => {
       candidates: Array<{ task_id: number; repo_root: string; branch: string; agent: string }>;
     }>('task_note_working', {
       session_id: sessionA,
-      repo_root: '/repo',
+      repo_root: repoRoot,
       content: 'working state: should not be guessed',
+      allow_omx_notepad_fallback: true,
+      pointer: {
+        branch: 'agent/codex/ambiguous',
+        task: 'ambiguous working note',
+        blocker: 'needs task selection',
+        next: 'choose task_id',
+        evidence: 'none',
+      },
     });
 
     expect(err.code).toBe('AMBIGUOUS_ACTIVE_TASK');
     expect(err.candidates).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ task_id, repo_root: '/repo', branch: 'feat/handoff' }),
+        expect.objectContaining({ task_id, repo_root: repoRoot, branch: 'feat/handoff' }),
         expect.objectContaining({
           task_id: other.task_id,
-          repo_root: '/repo',
+          repo_root: repoRoot,
           branch: 'feat/other',
         }),
       ]),
@@ -375,27 +427,43 @@ describe('task threads — handoff lifecycle', () => {
     expect(
       store.storage.taskTimeline(other.task_id).some((row) => row.content.includes('guessed')),
     ).toBe(false);
+    expect(existsSync(join(repoRoot, '.omx', 'notepad.md'))).toBe(false);
   });
 
-  it('task_note_working returns ACTIVE_TASK_NOT_FOUND when the session has no active task', async () => {
-    store.startSession({ id: 'orphan', ide: 'codex', cwd: '/repo' });
+  it('task_note_working can fall back to a tiny OMX pointer when no active task matches', async () => {
+    const repoRoot = join(dir, 'repo-no-active-task');
 
-    const err = await callError<{
-      code: string;
-      error: string;
-      candidates: unknown[];
+    const result = await call<{
+      status: string;
+      observation_id: null;
+      task_id: null;
+      omx_notepad_pointer: { status: string; path: string };
     }>('task_note_working', {
-      session_id: 'orphan',
-      repo_root: '/repo',
-      branch: 'agent/codex/missing-task',
-      content: 'working state: should not become a notepad row',
+      session_id: 'missing-session',
+      repo_root: repoRoot,
+      branch: 'agent/codex/no-active-task',
+      content: 'working state: SHOULD_NOT_APPEAR_IN_OMX_FALLBACK',
+      allow_omx_notepad_fallback: true,
+      pointer: {
+        branch: 'agent/codex/no-active-task',
+        task: 'no active Colony task',
+        blocker: 'ACTIVE_TASK_NOT_FOUND',
+        next: 'open or join a Colony task',
+        evidence: 'task_note_working',
+      },
     });
 
-    expect(err).toMatchObject({
-      code: 'ACTIVE_TASK_NOT_FOUND',
-      candidates: [],
+    expect(result).toMatchObject({
+      status: 'omx_notepad_fallback',
+      observation_id: null,
+      task_id: null,
+      omx_notepad_pointer: { status: 'written' },
     });
-    expect(store.timeline('orphan', undefined, 10)).toHaveLength(0);
+    const note = readFileSync(join(repoRoot, '.omx', 'notepad.md'), 'utf8');
+    expect(note).toContain('branch=agent/codex/no-active-task');
+    expect(note).toContain('blocker=ACTIVE_TASK_NOT_FOUND');
+    expect(note).toContain('colony_observation_id=unavailable');
+    expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_FALLBACK');
   });
 
   it('task_list includes a ready-queue hint and strengthens it after repeated inventory reads', async () => {
@@ -406,7 +474,7 @@ describe('task threads — handoff lifecycle', () => {
     });
     expect(first.tasks).toHaveLength(1);
     expect(first.hint).toBe(
-      'Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.',
+      'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
     );
 
     store.addObservation({
@@ -430,7 +498,7 @@ describe('task threads — handoff lifecycle', () => {
 
     const afterReady = await call<{ hint: string }>('task_list', { session_id: sessionA });
     expect(afterReady.hint).toBe(
-      'Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.',
+      'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
     );
   });
 

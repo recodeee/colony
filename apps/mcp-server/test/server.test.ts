@@ -50,6 +50,7 @@ describe('MCP server', () => {
       'agent_get_profile',
       'agent_upsert_profile',
       'attention_inbox',
+      'bridge_status',
       'examples_integrate_plan',
       'examples_list',
       'examples_query',
@@ -118,8 +119,12 @@ describe('MCP server', () => {
       'session_id',
       'content',
     ]);
-    expect(byName.get('task_note_working')?.inputSchema.properties).not.toHaveProperty(
+    expect(byName.get('task_note_working')?.inputSchema.properties).toHaveProperty(
       'candidate_limit',
+    );
+    expect(byName.get('task_note_working')?.inputSchema.properties).toHaveProperty('pointer');
+    expect(byName.get('task_note_working')?.inputSchema.properties).toHaveProperty(
+      'allow_omx_notepad_fallback',
     );
     expect(byName.get('task_message')?.inputSchema.required).toEqual([
       'task_id',
@@ -163,6 +168,10 @@ describe('MCP server', () => {
       'file_heat_half_life_minutes',
     );
     expect(attentionDescription).toContain('main surface where task_message items show up');
+    const bridgeDescription = byName.get('bridge_status')?.description ?? '';
+    expect(bridgeDescription).toMatch(/^Show compact bridge status/);
+    expect(bridgeDescription).toContain('OMX HUD/status');
+    expect(bridgeDescription).toContain('without observation bodies');
     const readyDescription = byName.get('task_ready_for_agent')?.description ?? '';
     expect(readyDescription).toMatch(
       /^Find the next task to claim for this agent\. Use this when deciding what to work on\./,

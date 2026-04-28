@@ -70,6 +70,55 @@ notepad only when Colony is unavailable or missing the required surface.
 - **AND** the fallback record should stay compact enough to migrate back into
   Colony when the surface is restored
 
+### Requirement: Colony Exposes an OMX HUD Status Shape
+
+Colony SHALL expose one compact bridge status payload for OMX HUD and status
+overlays so OMX does not parse multiple independent Colony tools.
+
+#### Scenario: OMX renders coordination state
+
+- **WHEN** OMX needs a HUD-sized coordination card for a session
+- **THEN** OMX calls the Colony MCP `bridge_status` tool
+- **AND** the response uses schema `colony.omx_hud_status.v1`
+- **AND** the response includes these top-level fields:
+
+```json
+{
+  "schema": "colony.omx_hud_status.v1",
+  "generated_at": "2026-04-28T21:30:00.000Z",
+  "runtime_source": "omx",
+  "branch": "agent/codex/example",
+  "task": "Example task",
+  "blocker": null,
+  "next": "No immediate Colony action.",
+  "evidence": {
+    "task_id": 17,
+    "latest_working_note_id": 42,
+    "attention_observation_ids": [],
+    "attention_observation_ids_truncated": false,
+    "hydrate_with": "get_observations"
+  },
+  "attention": {
+    "unread_count": 0,
+    "blocking_count": 0,
+    "blocking": false,
+    "pending_handoff_count": 0,
+    "pending_wake_count": 0,
+    "stalled_lane_count": 0
+  },
+  "ready_work_count": 0,
+  "ready_work_preview": [],
+  "claimed_files": [],
+  "latest_working_note": null
+}
+```
+
+#### Scenario: HUD keeps bodies out of the hot path
+
+- **WHEN** `bridge_status` returns blocker or evidence references
+- **THEN** it returns compact counts, IDs, and the latest task note preview
+- **AND** full observation bodies stay behind `get_observations`.
+
 ## Anti-Rules
 
 - OMX MUST NOT duplicate Colony task selection or ready-work ranking.

@@ -135,6 +135,19 @@ export const SettingsSchema = z
       .describe(
         'Background notifications. The worker uses this to surface conditions you would otherwise only see by reading stderr or running `colony status`.',
       ),
+    bridge: z
+      .object({
+        writeOmxNotepadPointer: z
+          .boolean()
+          .default(false)
+          .describe(
+            'If true, successful Colony working-note writes append a tiny pointer to <repo>/.omx/notepad.md for transition-era OMX resume flows.',
+          ),
+      })
+      .default({ writeOmxNotepadPointer: false })
+      .describe(
+        'Transition bridge settings between Colony-native coordination and legacy OMX state.',
+      ),
     foraging: z
       .object({
         enabled: z

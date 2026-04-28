@@ -7,6 +7,7 @@ import { isMainEntry } from '@colony/process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as attention from './tools/attention.js';
+import * as bridge from './tools/bridge.js';
 import type { ToolContext } from './tools/context.js';
 import * as foraging from './tools/foraging.js';
 import * as handoff from './tools/handoff.js';
@@ -82,6 +83,7 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   proposal.register(server, ctx);
   profile.register(server, ctx);
   attention.register(server, ctx);
+  bridge.register(server, ctx);
   message.register(server, ctx);
   relay.register(server, ctx);
   plan.register(server, ctx);

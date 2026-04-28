@@ -275,6 +275,93 @@ Inputs:
 
 Use this for takeover, review, or resume flows where the agent needs current ownership and a small memory index before deciding which full observations to fetch. The summary intentionally pushes the startup loop toward `attention_inbox`, then `task_ready_for_agent`; `hivemind_context` returns compact IDs and counts, not full observation bodies.
 
+## `bridge_status`
+
+Return compact coordination state for OMX HUD/status displays without fetching full observation bodies.
+This composes the same hivemind, attention, and ready-work logic as the richer tools.
+
+```json
+{
+  "name": "bridge_status",
+  "input": {
+    "session_id": "sess_abc",
+    "agent": "codex",
+    "repo_root": "/home/deadpool/Documents/recodee",
+    "branch": "agent/codex/live-task",
+    "query": "current task"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "schema": "colony.omx_hud_status.v1",
+  "generated_at": "2026-04-28T21:30:00.000Z",
+  "runtime_source": "omx",
+  "branch": "agent/codex/live-task",
+  "task": "Ship bridge status",
+  "blocker": null,
+  "next": "Continue agent/codex/live-task.",
+  "evidence": {
+    "task_id": 17,
+    "latest_working_note_id": 43,
+    "attention_observation_ids": [],
+    "attention_observation_ids_truncated": false,
+    "hydrate_with": "get_observations"
+  },
+  "attention": {
+    "unread_count": 0,
+    "blocking_count": 0,
+    "blocking": false,
+    "pending_handoff_count": 0,
+    "pending_wake_count": 0,
+    "stalled_lane_count": 0
+  },
+  "ready_work_count": 1,
+  "ready_work_preview": [
+    {
+      "title": "Implement bridge status tool",
+      "plan_slug": "bridge-ready-plan",
+      "subtask_index": 0,
+      "reason": "ready_high_score",
+      "fit_score": 0.8,
+      "capability_hint": "api_work",
+      "file_count": 2,
+      "file_scope_preview": ["apps/mcp-server/src/tools/bridge.ts"]
+    }
+  ],
+  "claimed_files": [
+    {
+      "task_id": 17,
+      "file_path": "apps/mcp-server/src/tools/bridge.ts",
+      "by_session_id": "sess_abc",
+      "claimed_at": 1710000000000,
+      "yours": true
+    }
+  ],
+  "latest_working_note": {
+    "id": 43,
+    "task_id": 17,
+    "session_id": "sess_abc",
+    "ts": 1710000001000,
+    "content": "branch=agent/codex/live-task; task=bridge status; blocker=none; next=run tests; evidence=bridge_status"
+  }
+}
+```
+
+Inputs:
+
+- `session_id`, `agent`, and `repo_root`: required identity and workspace scope.
+- `branch`: optional current branch hint used to pick the active lane.
+- `query`: optional compact context query. No memory hits or full observation bodies are returned.
+
+The payload is intentionally HUD-sized. Hydrate `evidence.attention_observation_ids`
+with `get_observations` only after the user expands the card or needs the full
+body. Use `hivemind_context`, `attention_inbox`, or `task_ready_for_agent`
+directly when the agent needs progressive-disclosure IDs or richer details.
+
 ### Normal edit workflow
 
 Call `hivemind_context` before editing:

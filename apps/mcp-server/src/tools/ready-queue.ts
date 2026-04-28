@@ -30,9 +30,9 @@ const CAPABILITY_HINT_TEXT: Record<string, string> = {
   doc_work: 'doc',
 };
 
-type ReadyReason = 'continue_current_task' | 'urgent_override' | 'ready_high_score';
+export type ReadyReason = 'continue_current_task' | 'urgent_override' | 'ready_high_score';
 
-interface ReadySubtask {
+export interface ReadySubtask {
   plan_slug: string;
   subtask_index: number;
   wave_index: number;
@@ -44,6 +44,15 @@ interface ReadySubtask {
   fit_score: number;
   reason: ReadyReason;
   reasoning: string;
+}
+
+export interface ReadySubtaskWithWarnings extends ReadySubtask {
+  negative_warnings: CompactNegativeWarning[];
+}
+
+export interface ReadyForAgentResult {
+  ready: ReadySubtaskWithWarnings[];
+  total_available: number;
 }
 
 interface RankedSubtask extends ReadySubtask {
@@ -72,83 +81,97 @@ export function register(server: McpServer, ctx: ToolContext): void {
       limit: z.number().int().positive().max(20).optional(),
     },
     wrapHandler('task_ready_for_agent', async ({ session_id, agent, repo_root, limit }) => {
-      const plans = listPlans(store, {
-        ...(repo_root !== undefined ? { repo_root } : {}),
-        limit: 2000,
-      });
-      const profile = loadProfile(store.storage, agent);
-      const tasksById = new Map(
-        store.storage
-          .listTasks(2000)
-          .map((t) => [t.id, { created_at: t.created_at, created_by: t.created_by }]),
+      return jsonReply(
+        await buildReadyForAgent(store, {
+          session_id,
+          agent,
+          ...(repo_root !== undefined ? { repo_root } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+        }),
       );
-      const available = plans.flatMap((plan) =>
-        plan.next_available.map((subtask) =>
-          rankSubtask(store, {
-            plan_slug: plan.plan_slug,
-            subtask,
-            session_id,
-            profile,
-            parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
-            created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
-            reason: 'ready_high_score',
-            current_claim: false,
-          }),
-        ),
-      );
-      const currentClaims = plans.flatMap((plan) =>
-        plan.subtasks
-          .filter(
-            (subtask) =>
-              subtask.status === 'claimed' && subtask.claimed_by_session_id === session_id,
-          )
-          .map((subtask) =>
-            rankSubtask(store, {
-              plan_slug: plan.plan_slug,
-              subtask,
-              session_id,
-              profile,
-              parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
-              created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
-              reason: 'continue_current_task',
-              current_claim: true,
-            }),
-          ),
-      );
-      const urgentTaskIds = blockingMessageTaskIds(store, {
-        session_id,
-        agent,
-        task_ids: [...new Set([...available, ...currentClaims].map((task) => task.task_id))],
-      });
-      const ranked = rankForSelection(
-        available.map((task) =>
-          urgentTaskIds.has(task.task_id) ? { ...task, reason: 'urgent_override' } : task,
-        ),
-        currentClaims,
-      );
-
-      const selected = ranked.slice(0, limit ?? DEFAULT_LIMIT);
-      const ready = await Promise.all(
-        selected.map(
-          async ({
-            created_at: _createdAt,
-            task_id: _taskId,
-            claim_ts: _claimTs,
-            current_claim: _currentClaim,
-            ...entry
-          }) => ({
-            ...entry,
-            negative_warnings: await readyNegativeWarnings(store, entry),
-          }),
-        ),
-      );
-
-      return jsonReply({
-        ready,
-        total_available: available.length,
-      });
     }),
   );
+}
+
+export async function buildReadyForAgent(
+  store: MemoryStore,
+  args: { session_id: string; agent: string; repo_root?: string; limit?: number },
+): Promise<ReadyForAgentResult> {
+  const plans = listPlans(store, {
+    ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
+    limit: 2000,
+  });
+  const profile = loadProfile(store.storage, args.agent);
+  const tasksById = new Map(
+    store.storage
+      .listTasks(2000)
+      .map((t) => [t.id, { created_at: t.created_at, created_by: t.created_by }]),
+  );
+  const available = plans.flatMap((plan) =>
+    plan.next_available.map((subtask) =>
+      rankSubtask(store, {
+        plan_slug: plan.plan_slug,
+        subtask,
+        session_id: args.session_id,
+        profile,
+        parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
+        created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
+        reason: 'ready_high_score',
+        current_claim: false,
+      }),
+    ),
+  );
+  const currentClaims = plans.flatMap((plan) =>
+    plan.subtasks
+      .filter(
+        (subtask) =>
+          subtask.status === 'claimed' && subtask.claimed_by_session_id === args.session_id,
+      )
+      .map((subtask) =>
+        rankSubtask(store, {
+          plan_slug: plan.plan_slug,
+          subtask,
+          session_id: args.session_id,
+          profile,
+          parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
+          created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
+          reason: 'continue_current_task',
+          current_claim: true,
+        }),
+      ),
+  );
+  const urgentTaskIds = blockingMessageTaskIds(store, {
+    session_id: args.session_id,
+    agent: args.agent,
+    task_ids: [...new Set([...available, ...currentClaims].map((task) => task.task_id))],
+  });
+  const ranked = rankForSelection(
+    available.map((task) =>
+      urgentTaskIds.has(task.task_id) ? { ...task, reason: 'urgent_override' } : task,
+    ),
+    currentClaims,
+  );
+
+  const selected = ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
+  const ready = await Promise.all(
+    selected.map(
+      async ({
+        created_at: _createdAt,
+        task_id: _taskId,
+        claim_ts: _claimTs,
+        current_claim: _currentClaim,
+        ...entry
+      }) => ({
+        ...entry,
+        negative_warnings: await readyNegativeWarnings(store, entry),
+      }),
+    ),
+  );
+
+  return {
+    ready,
+    total_available: available.length,
+  };
 }
 
 async function readyNegativeWarnings(

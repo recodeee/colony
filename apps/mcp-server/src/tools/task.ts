@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { TaskThread, listPlans } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -8,10 +9,25 @@ import { mcpErrorResponse } from './shared.js';
 
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const TASK_LIST_HINT =
-  'Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.';
+  'Use task_ready_for_agent to choose claimable work; task_list is for browsing.';
 const TASK_LIST_REPEAT_HINT =
   'task_list is inventory. Use task_ready_for_agent to choose claimable work.';
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
+const WorkingNotePointerSchema = z.object({
+  branch: z.string().min(1).optional(),
+  task: z.string().min(1).optional(),
+  blocker: z.string().min(1).optional(),
+  next: z.string().min(1).optional(),
+  evidence: z.string().min(1).optional(),
+});
+
+type WorkingNotePointerInput = z.infer<typeof WorkingNotePointerSchema>;
+
+interface OmxNotepadPointerResult {
+  status: 'skipped' | 'written' | 'unavailable';
+  path?: string;
+  reason?: string;
+}
 
 export function register(server: McpServer, ctx: ToolContext): void {
   const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
@@ -126,62 +142,116 @@ export function register(server: McpServer, ctx: ToolContext): void {
       content: z.string().min(1),
       repo_root: z.string().min(1).optional(),
       branch: z.string().min(1).optional(),
+      candidate_limit: z.number().int().positive().max(50).optional(),
+      pointer: WorkingNotePointerSchema.optional(),
+      allow_omx_notepad_fallback: z.boolean().optional(),
     },
-    wrapHandler('task_note_working', async ({ session_id, content, repo_root, branch }) => {
-      const candidates = activeTaskCandidates(store, {
+    wrapHandler(
+      'task_note_working',
+      async ({
         session_id,
-        ...(repo_root !== undefined ? { repo_root } : {}),
-        ...(branch !== undefined ? { branch } : {}),
-      });
-      const visibleCandidates = candidates.slice(0, 10);
+        content,
+        repo_root,
+        branch,
+        candidate_limit,
+        pointer,
+        allow_omx_notepad_fallback,
+      }) => {
+        const candidates = activeTaskCandidates(store, {
+          session_id,
+          ...(repo_root !== undefined ? { repo_root } : {}),
+          ...(branch !== undefined ? { branch } : {}),
+        });
+        const visibleCandidates = candidates.slice(0, candidate_limit ?? 10);
 
-      if (candidates.length !== 1) {
-        const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+        if (candidates.length !== 1) {
+          const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+          if (code === 'ACTIVE_TASK_NOT_FOUND' && allow_omx_notepad_fallback === true) {
+            const omxPointer = writeOmxNotepadPointer({
+              repo_root,
+              branch,
+              pointer,
+              colony_observation_id: null,
+              candidate: null,
+            });
+            if (omxPointer.status === 'written') {
+              return jsonReply({
+                status: 'omx_notepad_fallback',
+                observation_id: null,
+                id: null,
+                task_id: null,
+                omx_notepad_pointer: omxPointer,
+              });
+            }
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  code,
+                  error:
+                    candidates.length === 0
+                      ? 'no active Colony task matched session/repo/branch'
+                      : 'multiple active Colony tasks matched session/repo/branch',
+                  candidates: visibleCandidates,
+                  ...(code === 'ACTIVE_TASK_NOT_FOUND' && allow_omx_notepad_fallback === true
+                    ? {
+                        omx_notepad_pointer: {
+                          status: 'unavailable',
+                          reason: 'repo_root is required for OMX notepad fallback',
+                        },
+                      }
+                    : {}),
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const candidate = candidates[0];
+        if (!candidate) throw new Error('working note task resolution lost its only candidate');
+        const thread = new TaskThread(store, candidate.task_id);
+        const observation_id = thread.post({
+          session_id,
+          kind: 'note',
+          content,
+          metadata: {
+            working_note: true,
+            resolved_by: 'task_note_working',
+            ...(repo_root !== undefined ? { requested_repo_root: repo_root } : {}),
+            ...(branch !== undefined ? { requested_branch: branch } : {}),
+          },
+        });
+        const omxPointer = ctx.settings.bridge.writeOmxNotepadPointer
+          ? writeOmxNotepadPointer({
+              repo_root: repo_root ?? candidate.repo_root,
+              branch: branch ?? candidate.branch,
+              pointer,
+              colony_observation_id: observation_id,
+              candidate,
+            })
+          : {
+              status: 'skipped',
+              reason: 'bridge.writeOmxNotepadPointer=false',
+            };
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify({
-                code,
-                error:
-                  candidates.length === 0
-                    ? 'no active Colony task matched session/repo/branch'
-                    : 'multiple active Colony tasks matched session/repo/branch',
-                candidates: visibleCandidates,
+                observation_id,
+                id: observation_id,
+                task_id: candidate.task_id,
+                omx_notepad_pointer: omxPointer,
               }),
             },
           ],
-          isError: true,
         };
-      }
-
-      const candidate = candidates[0];
-      if (!candidate) throw new Error('working note task resolution lost its only candidate');
-      const thread = new TaskThread(store, candidate.task_id);
-      const observation_id = thread.post({
-        session_id,
-        kind: 'note',
-        content,
-        metadata: {
-          working_note: true,
-          resolved_by: 'task_note_working',
-          ...(repo_root !== undefined ? { requested_repo_root: repo_root } : {}),
-          ...(branch !== undefined ? { requested_branch: branch } : {}),
-        },
-      });
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              observation_id,
-              id: observation_id,
-              task_id: candidate.task_id,
-            }),
-          },
-        ],
-      };
-    }),
+      },
+    ),
   );
 
   server.tool(
@@ -319,6 +389,57 @@ function activeTaskCandidates(
     });
   }
   return candidates.sort((a, b) => b.updated_at - a.updated_at);
+}
+
+function writeOmxNotepadPointer(opts: {
+  repo_root?: string | undefined;
+  branch?: string | undefined;
+  pointer?: WorkingNotePointerInput | undefined;
+  colony_observation_id: number | null;
+  candidate: ActiveTaskCandidate | null;
+}): OmxNotepadPointerResult {
+  const repoRoot = opts.repo_root ?? opts.candidate?.repo_root;
+  if (!repoRoot) {
+    return { status: 'unavailable', reason: 'repo_root is required' };
+  }
+
+  try {
+    const omxDir = join(resolve(repoRoot), '.omx');
+    mkdirSync(omxDir, { recursive: true });
+    const path = join(omxDir, 'notepad.md');
+    appendFileSync(path, `${formatOmxNotepadPointer(opts)}\n`, 'utf8');
+    return { status: 'written', path };
+  } catch (err) {
+    return {
+      status: 'unavailable',
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function formatOmxNotepadPointer(opts: {
+  branch?: string | undefined;
+  pointer?: WorkingNotePointerInput | undefined;
+  colony_observation_id: number | null;
+  candidate: ActiveTaskCandidate | null;
+}): string {
+  const p = opts.pointer;
+  const observationId = opts.colony_observation_id ?? 'unavailable';
+  return [
+    ['branch', pointerValue(p?.branch ?? opts.branch ?? opts.candidate?.branch, 'unknown')],
+    ['task', pointerValue(p?.task ?? opts.candidate?.title, 'unknown')],
+    ['blocker', pointerValue(p?.blocker, 'none')],
+    ['next', pointerValue(p?.next, 'unknown')],
+    ['evidence', pointerValue(p?.evidence, 'unavailable')],
+    ['colony_observation_id', pointerValue(observationId, 'unavailable')],
+  ]
+    .map(([key, value]) => `${key}=${value}`)
+    .join('; ');
+}
+
+function pointerValue(value: string | number | undefined, fallback: string): string {
+  const raw = value === undefined || String(value).trim() === '' ? fallback : String(value);
+  return raw.replace(/[\r\n;]+/g, ' ').trim();
 }
 
 function compactPlanTimelineMetadata(

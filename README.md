@@ -139,7 +139,7 @@ If the ready item needs implementation context, call `search` with the task titl
 | Tool | Use it for |
 | --- | --- |
 | `task_post` | Add a question, answer, decision, blocker, note, or explicit negative warning to a task; use `kind:"note"` to write working state. |
-| `task_note_working` | Save current working state to the active Colony task without manually resolving `task_id`. |
+| `task_note_working` | Save current working state to the active Colony task without manually resolving `task_id`; optionally emits only a tiny OMX notepad pointer during transition. |
 | `task_message` | Send a directed or broadcast message to another agent. |
 | `task_messages` | Read compact message previews; expired rows only surface for audit-style listing. |
 | `task_message_mark_read` | Acknowledge a message and emit a read receipt; expired rows return `MESSAGE_EXPIRED`. |
