@@ -19,7 +19,7 @@
 
 ## 3. Cleanup
 
-- [ ] Commit, push, PR, merge, and sandbox cleanup.
-- PR URL: pending.
-- Merge state: pending.
-- Sandbox cleanup: pending.
+- [x] Commit, push, PR, merge, and sandbox cleanup.
+- PR URL: https://github.com/recodeee/colony/pull/211.
+- Merge state: `MERGED` at `2026-04-28T22:25:46Z`; `gh pr view agent/agent-12/colony-bridge-status-cli-json-locked-2026-04-29-00-03 --repo recodeee/colony --json number,url,state,mergeCommit,headRefName,baseRefName,mergedAt` returned merge commit `4cda716568d8b75f27d1984f9686f3cc1c419787`.
+- Sandbox cleanup: source worktree `colony__agent-12__colony-bridge-status-cli-json-locked-2026-04-29-00-03` is absent from `git worktree list` after guarded finish cleanup.
