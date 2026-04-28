@@ -1,6 +1,8 @@
 import type { ReinforcementKind } from '@colony/storage';
 import type { MemoryStore } from './memory-store.js';
 import { synthesizePlanFromProposal } from './plan.js';
+import type { SignalMetadata } from './signal-metadata.js';
+import { signalMetadataFromProposal } from './signal-metadata.js';
 import { TaskThread } from './task-thread.js';
 
 export interface PendingProposal {
@@ -12,6 +14,7 @@ export interface PendingProposal {
   proposed_at: number;
   strength: number;
   reinforcement_count: number;
+  signal_metadata: SignalMetadata;
 }
 
 export interface PromotedProposal {
@@ -205,6 +208,10 @@ export class ProposalSystem {
         proposed_at: p.proposed_at,
         strength,
         reinforcement_count: reinforcements.length,
+        signal_metadata: signalMetadataFromProposal(p, {
+          reinforcements,
+          half_life_minutes: ProposalSystem.HALF_LIFE_MS / 60_000,
+        }),
       });
     }
 

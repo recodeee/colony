@@ -90,6 +90,24 @@ export {
   type PromotedProposal,
 } from './proposal-system.js';
 export {
+  DEFAULT_SIGNAL_STRENGTH,
+  PROPOSAL_SIGNAL_HALF_LIFE_MINUTES,
+  compactSignalMetadata,
+  currentSignalStrength,
+  isSignalExpired,
+  normalizeSignalMetadata,
+  signalMetadataFromObservation,
+  signalMetadataFromProposal,
+  withSignalMetadata,
+  type ProposalSignalOptions,
+  type SignalKind,
+  type SignalMetadata,
+  type SignalMetadataDefaults,
+  type SignalObservationLike,
+  type SignalProposalLike,
+  type SignalReinforcementLike,
+} from './signal-metadata.js';
+export {
   DEFAULT_CAPABILITIES,
   loadProfile,
   rankCandidates,
