@@ -6,6 +6,7 @@ import { createEmbedder } from '@colony/embedding';
 import { isMainEntry } from '@colony/process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import * as attention from './tools/attention.js';
 import type { ToolContext } from './tools/context.js';
 import * as foraging from './tools/foraging.js';
 import * as handoff from './tools/handoff.js';
@@ -24,7 +25,6 @@ import * as search from './tools/search.js';
 import * as spec from './tools/spec.js';
 import * as suggest from './tools/suggest.js';
 import * as task from './tools/task.js';
-import * as wake from './tools/wake.js';
 
 /**
  * MCP stdio server exposing progressive-disclosure tools:
@@ -78,7 +78,7 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   handoff.register(server, ctx);
   proposal.register(server, ctx);
   profile.register(server, ctx);
-  wake.register(server, ctx);
+  attention.register(server, ctx);
   message.register(server, ctx);
   relay.register(server, ctx);
   plan.register(server, ctx);

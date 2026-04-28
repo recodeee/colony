@@ -111,6 +111,9 @@ describe('MCP server', () => {
       'agent',
       'content',
     ]);
+    expect(byName.has('task_wake')).toBe(false);
+    expect(byName.has('task_ack_wake')).toBe(false);
+    expect(byName.has('task_cancel_wake')).toBe(false);
     expect(byName.get('task_hand_off')?.description).toContain(
       'Fallback when task_relay is unavailable',
     );
