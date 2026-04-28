@@ -155,7 +155,7 @@ function buildTaskUpdatesPreface(store: MemoryStore, session_id: string, sinceTs
     }
     if (o.kind === 'wake_request') {
       lines.push(
-        `    -> ack with: task_ack_wake(wake_observation_id=${o.id}, session_id="${session_id}")`,
+        `    -> respond with: task_message(task_id=${task_id}, session_id="${session_id}", agent="<your agent>", content="...") or task_post`,
       );
     }
   }

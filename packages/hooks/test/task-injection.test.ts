@@ -87,7 +87,7 @@ describe('SessionStart task preface injection', () => {
     expect(preface).toContain('task_decline_handoff');
   });
 
-  it('surfaces a pending wake request with a ready-to-copy ack call', () => {
+  it('surfaces a pending wake request with a ready-to-copy response call', () => {
     store.startSession({ id: 'A', ide: 'claude-code', cwd: repo });
     const thread = TaskThread.open(store, {
       repo_root: repo,
@@ -113,7 +113,8 @@ describe('SessionStart task preface injection', () => {
     expect(preface).toContain('PENDING WAKE');
     expect(preface).toContain('stuck on migration shape');
     expect(preface).toContain('packages/storage/src/schema.ts');
-    expect(preface).toContain('task_ack_wake');
+    expect(preface).toContain('task_message');
+    expect(preface).not.toContain('task_ack_wake');
     expect(preface).toContain('session_id="B"');
   });
 
