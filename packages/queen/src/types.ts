@@ -13,3 +13,9 @@ export type {
   QueenSubtask as SubtaskDraft,
   QueenWaveSubtask,
 } from './decompose.js';
+export type {
+  OrderedPlanToTaskPlanInput,
+  PublishOrderedPlanInput,
+  QueenPublishablePlan,
+  TaskPlanPublishInput,
+} from './ordered-plan.js';

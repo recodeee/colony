@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@colony/core": "workspace:*",
+    "@colony/spec": "workspace:*",
     "@colony/storage": "workspace:*",
     "zod": "^3.23.8"
   },

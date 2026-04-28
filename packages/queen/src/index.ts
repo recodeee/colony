@@ -19,6 +19,15 @@ export {
 } from './decompose.js';
 
 export {
+  orderedPlanToTaskPlanInput,
+  publishOrderedPlan,
+  type OrderedPlanToTaskPlanInput,
+  type PublishOrderedPlanInput,
+  type QueenPublishablePlan,
+  type TaskPlanPublishInput,
+} from './ordered-plan.js';
+
+export {
   DEFAULT_STALLED_MINUTES,
   DEFAULT_UNCLAIMED_MINUTES,
   sweepQueenPlans,

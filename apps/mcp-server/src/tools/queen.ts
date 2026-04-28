@@ -1,12 +1,14 @@
-import { TaskThread } from '@colony/core';
-import type { MemoryStore } from '@colony/core';
-import { type Goal, type QueenPlan, type QueenSubtask, planGoal } from '@colony/queen';
-import { SpecRepository } from '@colony/spec';
+import {
+  type CapabilityHint,
+  type Goal,
+  type QueenPlan,
+  type QueenSubtask,
+  planGoal,
+  publishOrderedPlan,
+} from '@colony/queen';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
-
-type CapabilityHint = 'ui_work' | 'api_work' | 'test_work' | 'infra_work' | 'doc_work';
 
 interface QueenToolGoal extends Goal {
   affected_files?: string[];
@@ -17,7 +19,7 @@ interface NormalizedSubtask {
   description: string;
   file_scope: string[];
   depends_on: number[];
-  capability_hint: CapabilityHint | null;
+  capability_hint: CapabilityHint;
 }
 
 interface NormalizedQueenPlan {
@@ -213,131 +215,19 @@ function fallbackSubtasks(args: QueenToolInput): NormalizedSubtask[] {
 }
 
 function publishPlan(args: {
-  store: MemoryStore;
+  store: ToolContext['store'];
   repo_root: string;
   session_id: string;
   plan: NormalizedQueenPlan;
 }): PublishedQueenPlan {
-  validateDependencies(args.plan.subtasks);
-  const overlap = detectScopeOverlap(args.plan.subtasks);
-  if (overlap) {
-    throw new Error(
-      `queen plan has overlapping independent sub-tasks ${overlap.a} and ${overlap.b}: ${overlap.shared.join(', ')}`,
-    );
-  }
-
-  const repo = new SpecRepository({ repoRoot: args.repo_root, store: args.store });
-  const opened = repo.openChange({
-    slug: args.plan.slug,
+  return publishOrderedPlan({
+    store: args.store,
+    repo_root: args.repo_root,
     session_id: args.session_id,
     agent: 'queen',
-    proposal: renderProposal(args.plan),
+    auto_archive: true,
+    plan: args.plan,
   });
-
-  args.store.addObservation({
-    session_id: args.session_id,
-    task_id: opened.task_id,
-    kind: 'plan-config',
-    content: `queen plan ${args.plan.slug} config: auto_archive=true`,
-    metadata: {
-      plan_slug: args.plan.slug,
-      auto_archive: true,
-      source: 'queen',
-    },
-  });
-
-  const subtasks = args.plan.subtasks.map((subtask, index) => {
-    const branch = `spec/${args.plan.slug}/sub-${index}`;
-    const thread = TaskThread.open(args.store, {
-      repo_root: args.repo_root,
-      branch,
-      session_id: args.session_id,
-    });
-    args.store.addObservation({
-      session_id: args.session_id,
-      task_id: thread.task_id,
-      kind: 'plan-subtask',
-      content: `${subtask.title}\n\n${subtask.description}`,
-      metadata: {
-        parent_plan_slug: args.plan.slug,
-        parent_plan_title: args.plan.title,
-        parent_spec_task_id: opened.task_id,
-        subtask_index: index,
-        file_scope: subtask.file_scope,
-        depends_on: subtask.depends_on,
-        spec_row_id: null,
-        capability_hint: subtask.capability_hint,
-        status: 'available',
-        created_by: 'queen',
-      },
-    });
-    return {
-      subtask_index: index,
-      branch,
-      task_id: thread.task_id,
-      title: subtask.title,
-    };
-  });
-
-  return {
-    plan_slug: args.plan.slug,
-    spec_task_id: opened.task_id,
-    subtasks,
-  };
-}
-
-function validateDependencies(subtasks: NormalizedSubtask[]): void {
-  for (let i = 0; i < subtasks.length; i++) {
-    for (const dep of subtasks[i]?.depends_on ?? []) {
-      if (dep >= i) {
-        throw new Error(
-          `queen sub-task ${i} depends on ${dep}; dependencies must point to earlier indices`,
-        );
-      }
-    }
-  }
-}
-
-function detectScopeOverlap(
-  subtasks: NormalizedSubtask[],
-): { a: number; b: number; shared: string[] } | null {
-  for (let i = 0; i < subtasks.length; i++) {
-    for (let j = i + 1; j < subtasks.length; j++) {
-      const a = subtasks[i];
-      const b = subtasks[j];
-      if (!a || !b) continue;
-      if (isDependentChain(subtasks, i, j) || isDependentChain(subtasks, j, i)) continue;
-      const shared = a.file_scope.filter((file) => b.file_scope.includes(file));
-      if (shared.length > 0) return { a: i, b: j, shared };
-    }
-  }
-  return null;
-}
-
-function isDependentChain(subtasks: NormalizedSubtask[], from: number, to: number): boolean {
-  const visited = new Set<number>();
-  const stack = [from];
-  while (stack.length > 0) {
-    const cur = stack.pop();
-    if (cur === undefined || visited.has(cur)) continue;
-    visited.add(cur);
-    const deps = subtasks[cur]?.depends_on ?? [];
-    if (deps.includes(to)) return true;
-    stack.push(...deps);
-  }
-  return false;
-}
-
-function renderProposal(plan: NormalizedQueenPlan): string {
-  const criteria = plan.acceptance_criteria.map((criterion) => `- ${criterion}`).join('\n');
-  const subtasks = plan.subtasks
-    .map((subtask, index) => {
-      const deps =
-        subtask.depends_on.length > 0 ? ` (depends on: ${subtask.depends_on.join(', ')})` : '';
-      return `### Sub-task ${index}: ${subtask.title}${deps}\n\n${subtask.description}\n\nFile scope: ${subtask.file_scope.join(', ')}`;
-    })
-    .join('\n\n');
-  return `# ${plan.title}\n\n## Problem\n\n${plan.problem}\n\n## Acceptance criteria\n\n${criteria}\n\n## Sub-tasks\n\n${subtasks}\n`;
 }
 
 function normalizeDependsOn(dependsOn: Array<number | string>, subtasks: QueenSubtask[]): number[] {
@@ -353,7 +243,7 @@ function normalizeDependsOn(dependsOn: Array<number | string>, subtasks: QueenSu
     .filter((dep): dep is number => dep !== null);
 }
 
-function normalizeCapabilityHint(hint: string): CapabilityHint | null {
+function normalizeCapabilityHint(hint: string): CapabilityHint {
   if (
     hint === 'ui_work' ||
     hint === 'api_work' ||
@@ -363,7 +253,7 @@ function normalizeCapabilityHint(hint: string): CapabilityHint | null {
   ) {
     return hint;
   }
-  return null;
+  return 'infra_work';
 }
 
 function inferCapabilityHint(file: string): CapabilityHint {

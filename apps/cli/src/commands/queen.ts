@@ -1,24 +1,17 @@
+import { resolve } from 'node:path';
 import { loadSettings } from '@colony/config';
-import {
-  type MemoryStore,
-  type PlanInfo,
-  type SubtaskInfo,
-  TaskThread,
-  listPlans,
-} from '@colony/core';
+import { type MemoryStore, type PlanInfo, type SubtaskInfo, listPlans } from '@colony/core';
 import {
   DEFAULT_STALLED_MINUTES,
   DEFAULT_UNCLAIMED_MINUTES,
   type QueenAttentionItem,
   type QueenPlan,
-  type QueenSubtask,
   planGoal,
+  publishOrderedPlan,
   sweepQueenPlans,
 } from '@colony/queen';
-import { SpecRepository } from '@colony/spec';
 import type { Command } from 'commander';
 import kleur from 'kleur';
-import { resolve } from 'node:path';
 import { withStore } from '../util/store.js';
 
 const QUEEN_AGENT = 'queen';
@@ -237,108 +230,14 @@ function publishQueenPlan(
   spec_change_path: string;
   subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
 } {
-  assertValidSubtasks(plan.subtasks);
-  const repo = new SpecRepository({ repoRoot, store });
-  const opened = repo.openChange({
-    slug: plan.slug,
+  return publishOrderedPlan({
+    store,
+    plan,
+    repo_root: repoRoot,
     session_id: QUEEN_SESSION_ID,
     agent: QUEEN_AGENT,
-    proposal: renderProposal(plan),
+    auto_archive: false,
   });
-
-  store.addObservation({
-    session_id: QUEEN_SESSION_ID,
-    task_id: opened.task_id,
-    kind: 'plan-config',
-    content: `plan ${plan.slug} config: auto_archive=false`,
-    metadata: {
-      plan_slug: plan.slug,
-      auto_archive: false,
-    },
-  });
-
-  const subtasks = plan.subtasks.map((subtask, index) => {
-    const branch = `spec/${plan.slug}/sub-${index}`;
-    const thread = TaskThread.open(store, {
-      repo_root: repoRoot,
-      branch,
-      session_id: QUEEN_SESSION_ID,
-    });
-    store.addObservation({
-      session_id: QUEEN_SESSION_ID,
-      task_id: thread.task_id,
-      kind: 'plan-subtask',
-      content: `${subtask.title}\n\n${subtask.description}`,
-      metadata: {
-        parent_plan_slug: plan.slug,
-        parent_plan_title: plan.title,
-        parent_spec_task_id: opened.task_id,
-        subtask_index: index,
-        file_scope: subtask.file_scope,
-        depends_on: subtask.depends_on,
-        capability_hint: subtask.capability_hint,
-        status: 'available',
-      },
-    });
-    return {
-      subtask_index: index,
-      branch,
-      task_id: thread.task_id,
-      title: subtask.title,
-    };
-  });
-
-  return { spec_change_path: opened.path, subtasks };
-}
-
-function assertValidSubtasks(subtasks: QueenSubtask[]): void {
-  if (subtasks.length < 2) throw new Error('queen plan needs at least two sub-tasks');
-  for (let i = 0; i < subtasks.length; i++) {
-    for (const dep of subtasks[i]?.depends_on ?? []) {
-      if (dep >= i) {
-        throw new Error(
-          `PLAN_INVALID_DEPENDENCY: sub-task ${i} depends on ${dep}; dependencies must point to earlier indices`,
-        );
-      }
-    }
-  }
-
-  const overlap = detectScopeOverlap(subtasks);
-  if (overlap) {
-    throw new Error(
-      `PLAN_SCOPE_OVERLAP: sub-tasks ${overlap.a} and ${overlap.b} share files [${overlap.shared.join(', ')}] without a depends_on edge between them`,
-    );
-  }
-}
-
-function detectScopeOverlap(
-  subtasks: QueenSubtask[],
-): { a: number; b: number; shared: string[] } | null {
-  for (let i = 0; i < subtasks.length; i++) {
-    for (let j = i + 1; j < subtasks.length; j++) {
-      const a = subtasks[i];
-      const b = subtasks[j];
-      if (!a || !b) continue;
-      if (isDependentChain(subtasks, i, j) || isDependentChain(subtasks, j, i)) continue;
-      const shared = a.file_scope.filter((file) => b.file_scope.includes(file));
-      if (shared.length > 0) return { a: i, b: j, shared };
-    }
-  }
-  return null;
-}
-
-function isDependentChain(subtasks: QueenSubtask[], from: number, to: number): boolean {
-  const visited = new Set<number>();
-  const stack = [from];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (current === undefined || visited.has(current)) continue;
-    visited.add(current);
-    const deps = subtasks[current]?.depends_on ?? [];
-    if (deps.includes(to)) return true;
-    stack.push(...deps);
-  }
-  return false;
 }
 
 function queenPlans(store: MemoryStore, repoRoot: string): PlanInfo[] {
@@ -418,37 +317,6 @@ function renderSubtaskStatus(task: SubtaskInfo): void {
         : '-'
     }\n`,
   );
-}
-
-function renderProposal(plan: QueenPlan): string {
-  const criteria = plan.acceptance_criteria.map((criterion) => `- ${criterion}`).join('\n');
-  const subtasks = plan.subtasks
-    .map((subtask, index) => {
-      const deps = subtask.depends_on.length
-        ? ` (depends on: ${subtask.depends_on.join(', ')})`
-        : '';
-      return `### Sub-task ${index}: ${subtask.title}${deps}
-
-${subtask.description}
-
-File scope: ${subtask.file_scope.join(', ')}`;
-    })
-    .join('\n\n');
-
-  return `# ${plan.title}
-
-## Problem
-
-${plan.problem}
-
-## Acceptance criteria
-
-${criteria}
-
-## Sub-tasks
-
-${subtasks}
-`;
 }
 
 function formatFiles(files: string[]): string {

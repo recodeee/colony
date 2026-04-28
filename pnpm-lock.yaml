@@ -359,6 +359,9 @@ importers:
       '@colony/core':
         specifier: workspace:*
         version: link:../core
+      '@colony/spec':
+        specifier: workspace:*
+        version: link:../spec
       '@colony/storage':
         specifier: workspace:*
         version: link:../storage
