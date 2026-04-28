@@ -6,8 +6,11 @@ export {
   classifyTool,
 } from './tool-classes.js';
 export type {
+  BashCoordinationVolume,
+  ClaimCoverageStats,
   CoordinationActivity,
   EditsWithoutClaimsRow,
+  KindCount,
   SessionsEndedWithoutHandoffRow,
 } from './storage.js';
 export type { ToolClass } from './tool-classes.js';

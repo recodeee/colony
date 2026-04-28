@@ -15,13 +15,31 @@ vi.mock('../src/util/store.js', () => ({
   withStorage: mocks.withStorage,
 }));
 
-import { registerDebriefCommand, sectionCoordinationRatio } from '../src/commands/debrief.js';
+import {
+  registerDebriefCommand,
+  sectionClaimCoverage,
+  sectionCoordinationRatio,
+} from '../src/commands/debrief.js';
 
 interface TestCoordinationActivity {
   commits: number;
   reads: number;
   commits_by_session: Map<string, number>;
   reads_by_session: Map<string, number>;
+}
+
+interface TestClaimCoverage {
+  edit_count: number;
+  explicit_claim_count: number;
+  auto_claim_count: number;
+  explicit_claim_kinds: Array<{ kind: string; count: number }>;
+  auto_claim_kinds: Array<{ kind: string; count: number }>;
+}
+
+interface TestBashCoordinationVolume {
+  git_op_count: number;
+  file_op_count: number;
+  top_files_by_file_op: Array<{ file_path: string; count: number }>;
 }
 
 beforeEach(() => {
@@ -93,6 +111,26 @@ describe('sectionCoordinationRatio', () => {
   });
 });
 
+describe('sectionClaimCoverage', () => {
+  it('renders the safety-net verdict when auto-claim carries edits without explicit claims', () => {
+    kleur.enabled = false;
+
+    const output = sectionClaimCoverage({
+      storage: fakeStorage(activity({ commits: 0, reads: 0 }), {
+        claimCoverage: autoClaimOnlyCoverage(),
+      }),
+      since: 1_000,
+    }).join('\n');
+
+    expect(output).toContain('3. Claim coverage (proactive vs auto)');
+    expect(output).toContain('Explicit claim kinds:  claim=0');
+    expect(output).toContain('Auto-claim kinds:      auto-claim=100');
+    expect(output).toContain('Explicit claim/edit:   0%');
+    expect(output).toContain('Auto-claim/edit:       100%');
+    expect(output).toContain('safety net carrying load — expected');
+  });
+});
+
 describe('debrief --json', () => {
   it('emits a coordination_ratio key with the structured payload', async () => {
     const storage = fakeStorage(activity({ commits: 10, reads: 30 }));
@@ -118,6 +156,50 @@ describe('debrief --json', () => {
       ratio: 10 / 30,
       verdict: 'healthy',
     });
+  });
+
+  it('emits claim coverage and bash coordination payloads', async () => {
+    const bashCoordinationVolume = {
+      git_op_count: 4,
+      file_op_count: 7,
+      top_files_by_file_op: [
+        { file_path: 'apps/cli/src/commands/debrief.ts', count: 5 },
+        { file_path: 'packages/storage/src/storage.ts', count: 2 },
+      ],
+    };
+    const storage = fakeStorage(activity({ commits: 0, reads: 0 }), {
+      claimCoverage: autoClaimOnlyCoverage(),
+      bashCoordinationVolume,
+    });
+    mocks.withStorage.mockImplementation(
+      async (_settings: unknown, run: (storage: unknown) => unknown) => run(storage),
+    );
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerDebriefCommand(program);
+
+    await program.parseAsync(['node', 'test', 'debrief', '--json'], { from: 'node' });
+
+    const json = JSON.parse(output.join(''));
+    expect(json.claim_coverage).toMatchObject({
+      edit_count: 100,
+      explicit_claim_count: 0,
+      auto_claim_count: 100,
+      explicit_claim_to_edit_ratio: 0,
+      auto_claim_to_edit_ratio: 1,
+      verdict: 'safety net carrying load — expected',
+    });
+    expect(json.proactive_claims).toMatchObject({
+      edit_count: 100,
+      claim_count: 0,
+      ratio: 0,
+    });
+    expect(json.bash_coordination_volume).toEqual(bashCoordinationVolume);
   });
 });
 
@@ -156,8 +238,13 @@ function renderSection(coordinationActivity: TestCoordinationActivity): string {
 
 function fakeStorage(
   coordinationActivity: TestCoordinationActivity,
-  opts: { toolDistribution?: Array<{ tool: string; count: number }> } = {},
+  opts: {
+    bashCoordinationVolume?: TestBashCoordinationVolume;
+    claimCoverage?: TestClaimCoverage;
+    toolDistribution?: Array<{ tool: string; count: number }>;
+  } = {},
 ): never {
+  const claimCoverage = opts.claimCoverage ?? emptyClaimCoverage();
   return {
     coordinationActivity: vi.fn(() => coordinationActivity),
     listSessions: vi.fn(() =>
@@ -177,7 +264,11 @@ function fakeStorage(
       })),
     ),
     participantJoinFor: vi.fn(() => undefined),
-    editVsClaimStats: vi.fn(() => ({ edit_count: 0, claim_count: 0 })),
+    claimCoverageStats: vi.fn(() => claimCoverage),
+    editVsClaimStats: vi.fn(() => ({
+      edit_count: claimCoverage.edit_count,
+      claim_count: claimCoverage.explicit_claim_count,
+    })),
     handoffStatusDistribution: vi.fn(() => ({
       accepted: 0,
       cancelled: 0,
@@ -187,8 +278,36 @@ function fakeStorage(
     handoffAcceptLatencies: vi.fn(() => []),
     toolUsageBySession: vi.fn(() => []),
     toolInvocationDistribution: vi.fn(() => opts.toolDistribution ?? []),
+    bashCoordinationVolume: vi.fn(
+      () =>
+        opts.bashCoordinationVolume ?? {
+          git_op_count: 0,
+          file_op_count: 0,
+          top_files_by_file_op: [],
+        },
+    ),
     mixedTimeline: vi.fn(() => []),
   } as never;
+}
+
+function emptyClaimCoverage(): TestClaimCoverage {
+  return {
+    edit_count: 0,
+    explicit_claim_count: 0,
+    auto_claim_count: 0,
+    explicit_claim_kinds: [{ kind: 'claim', count: 0 }],
+    auto_claim_kinds: [{ kind: 'auto-claim', count: 0 }],
+  };
+}
+
+function autoClaimOnlyCoverage(): TestClaimCoverage {
+  return {
+    edit_count: 100,
+    explicit_claim_count: 0,
+    auto_claim_count: 100,
+    explicit_claim_kinds: [{ kind: 'claim', count: 0 }],
+    auto_claim_kinds: [{ kind: 'auto-claim', count: 100 }],
+  };
 }
 
 function activity(args: {

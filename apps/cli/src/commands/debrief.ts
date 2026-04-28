@@ -1,5 +1,5 @@
 import { loadSettings } from '@colony/config';
-import type { Storage } from '@colony/storage';
+import type { ClaimCoverageStats, Storage } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { withStorage } from '../util/store.js';
@@ -30,6 +30,19 @@ interface CoordinationActivityResult {
 
 interface CoordinationActivityStorage {
   coordinationActivity(since: number): CoordinationActivityResult;
+}
+
+type ClaimCoverageVerdict =
+  | 'safety net carrying load — expected'
+  | 'hook integration broken — investigate'
+  | 'explicit claiming present — auto-claim supporting'
+  | 'mixed claim coverage — monitor'
+  | null;
+
+interface ClaimCoveragePayload extends ClaimCoverageStats {
+  explicit_claim_to_edit_ratio: number | null;
+  auto_claim_to_edit_ratio: number | null;
+  verdict: ClaimCoverageVerdict;
 }
 
 interface CoordinationRatioPayload {
@@ -128,26 +141,26 @@ function sectionAutoJoin(ctx: DebriefContext): string[] {
 }
 
 /**
- * Section 3 — did agents claim proactively?
+ * Section 3 — claim coverage (proactive vs auto).
  *
- * The critical diagnostic. Compares edit-observations (tool_use with a
- * file_path in metadata) against explicit `claim`-kind observations. If
- * claims << edits, proactive claiming is failing → auto-claim's safety
- * net is doing the work, which argues for keeping it even if flaky.
+ * Splits explicit `claim` observations from automatic `auto-claim`
+ * observations so the debrief reports the current safety model honestly.
  */
-function sectionProactiveClaims(ctx: DebriefContext): string[] {
-  const lines = ['', kleur.bold('3. Did agents claim proactively?')];
-  const stats = ctx.storage.editVsClaimStats(ctx.since);
-  lines.push(`  Edits observed:  ${stats.edit_count}`);
-  lines.push(`  Claims recorded: ${stats.claim_count}`);
-  const ratio = stats.edit_count > 0 ? Math.round((stats.claim_count / stats.edit_count) * 100) : 0;
-  const verdict =
-    ratio >= 70
-      ? kleur.green('proactive claiming works — auto-claim is a safety net, not the main path')
-      : ratio >= 20
-        ? kleur.yellow('partial claiming — consider sharpening the preface wording')
-        : kleur.red('proactive claiming failing — auto-claim is carrying the load');
-  lines.push(`  Claim/edit ratio: ${ratio}%  →  ${verdict}`);
+export function sectionClaimCoverage(ctx: DebriefContext): string[] {
+  const lines = ['', kleur.bold('3. Claim coverage (proactive vs auto)')];
+  const payload = claimCoveragePayload(ctx);
+  lines.push(`  Edits observed:        ${payload.edit_count}`);
+  lines.push(
+    `  Explicit claim kinds:  ${formatKindCounts(payload.explicit_claim_kinds)}  ${kleur.dim(`(${payload.explicit_claim_count} total)`)}`,
+  );
+  lines.push(
+    `  Auto-claim kinds:      ${formatKindCounts(payload.auto_claim_kinds)}  ${kleur.dim(`(${payload.auto_claim_count} total)`)}`,
+  );
+  lines.push(
+    `  Explicit claim/edit:   ${formatPercentRatio(payload.explicit_claim_to_edit_ratio)}`,
+  );
+  lines.push(`  Auto-claim/edit:       ${formatPercentRatio(payload.auto_claim_to_edit_ratio)}`);
+  lines.push(`  Verdict:               ${colorClaimCoverageVerdict(payload.verdict)}`);
   return lines;
 }
 
@@ -279,6 +292,52 @@ function sectionTimeline(ctx: DebriefContext): string[] {
   return lines;
 }
 
+/**
+ * Section 9 — bash coordination volume.
+ *
+ * Bash parser observations are separate from normal tool_use counts: git-op
+ * shows branch/rebase/merge/reset coordination; file-op shows shell-level
+ * file movement/deletion that can bypass editor-tool intuition.
+ */
+function sectionBashCoordinationVolume(ctx: DebriefContext): string[] {
+  const lines = ['', kleur.bold('9. Bash coordination volume')];
+  const volume = ctx.storage.bashCoordinationVolume(ctx.since);
+  lines.push(`  git-op count:  ${volume.git_op_count}`);
+  lines.push(`  file-op count: ${volume.file_op_count}`);
+  lines.push('  Top files by file-op:');
+  if (volume.top_files_by_file_op.length === 0) {
+    lines.push(kleur.dim('    none'));
+  } else {
+    for (const row of volume.top_files_by_file_op) {
+      lines.push(`    ${row.file_path}  ${row.count}`);
+    }
+  }
+  return lines;
+}
+
+function claimCoveragePayload(ctx: DebriefContext): ClaimCoveragePayload {
+  const stats = ctx.storage.claimCoverageStats(ctx.since);
+  const explicitRatio = stats.edit_count > 0 ? stats.explicit_claim_count / stats.edit_count : null;
+  const autoRatio = stats.edit_count > 0 ? stats.auto_claim_count / stats.edit_count : null;
+  return {
+    ...stats,
+    explicit_claim_to_edit_ratio: explicitRatio,
+    auto_claim_to_edit_ratio: autoRatio,
+    verdict: claimCoverageVerdict(explicitRatio, autoRatio),
+  };
+}
+
+function claimCoverageVerdict(
+  explicitRatio: number | null,
+  autoRatio: number | null,
+): ClaimCoverageVerdict {
+  if (explicitRatio === null || autoRatio === null) return null;
+  if (autoRatio > 0.95 && explicitRatio < 0.05) return 'safety net carrying load — expected';
+  if (autoRatio < 0.5) return 'hook integration broken — investigate';
+  if (explicitRatio >= 0.2) return 'explicit claiming present — auto-claim supporting';
+  return 'mixed claim coverage — monitor';
+}
+
 function coordinationRatioPayload(ctx: DebriefContext): CoordinationRatioPayload {
   const activity = (ctx.storage as Storage & CoordinationActivityStorage).coordinationActivity(
     ctx.since,
@@ -334,10 +393,11 @@ function debriefJson(ctx: DebriefContext): Record<string, unknown> {
     },
     { joined: 0, missed_sessions: [] as string[] },
   );
-  const claimStats = ctx.storage.editVsClaimStats(ctx.since);
+  const claimCoverage = claimCoveragePayload(ctx);
   const handoffs = ctx.storage.handoffStatusDistribution(ctx.since);
   const latencies = ctx.storage.handoffAcceptLatencies(ctx.since).sort((a, b) => a - b);
   const toolDistribution = ctx.storage.toolInvocationDistribution(ctx.since, 20);
+  const bashCoordinationVolume = ctx.storage.bashCoordinationVolume(ctx.since);
   return {
     tool_usage: ctx.storage.toolUsageBySession(ctx.since),
     auto_join: {
@@ -346,9 +406,11 @@ function debriefJson(ctx: DebriefContext): Record<string, unknown> {
       missed: autoJoin.missed_sessions.length,
       missed_sessions: autoJoin.missed_sessions,
     },
+    claim_coverage: claimCoverage,
     proactive_claims: {
-      ...claimStats,
-      ratio: claimStats.edit_count > 0 ? claimStats.claim_count / claimStats.edit_count : null,
+      edit_count: claimCoverage.edit_count,
+      claim_count: claimCoverage.explicit_claim_count,
+      ratio: claimCoverage.explicit_claim_to_edit_ratio,
     },
     handoffs: {
       ...handoffs,
@@ -358,6 +420,7 @@ function debriefJson(ctx: DebriefContext): Record<string, unknown> {
     },
     tool_distribution: toolDistribution,
     coordination_ratio: coordinationRatioPayload(ctx),
+    bash_coordination_volume: bashCoordinationVolume,
     timeline: ctx.storage.mixedTimeline(ctx.since, ctx.taskId),
   };
 }
@@ -384,11 +447,12 @@ export function registerDebriefCommand(program: Command): void {
         const sections = [
           sectionToolUsage(ctx),
           sectionAutoJoin(ctx),
-          sectionProactiveClaims(ctx),
+          sectionClaimCoverage(ctx),
           sectionHandoffs(ctx),
           sectionToolDistribution(ctx),
           sectionCoordinationRatio(ctx),
           sectionTimeline(ctx),
+          sectionBashCoordinationVolume(ctx),
         ];
         for (const s of sections) process.stdout.write(`${s.join('\n')}\n`);
 
@@ -406,6 +470,24 @@ export function registerDebriefCommand(program: Command): void {
 
 function formatRatio(ratio: number | null): string {
   return ratio === null ? 'n/a' : ratio.toFixed(2);
+}
+
+function formatPercentRatio(ratio: number | null): string {
+  return ratio === null ? 'n/a' : `${Math.round(ratio * 100)}%`;
+}
+
+function formatKindCounts(rows: ClaimCoverageStats['explicit_claim_kinds']): string {
+  return rows.map((row) => `${row.kind}=${row.count}`).join(', ');
+}
+
+function colorClaimCoverageVerdict(verdict: ClaimCoverageVerdict): string {
+  if (verdict === 'safety net carrying load — expected') return kleur.green(verdict);
+  if (verdict === 'hook integration broken — investigate') return kleur.red(verdict);
+  if (verdict === 'explicit claiming present — auto-claim supporting') {
+    return kleur.green(verdict);
+  }
+  if (verdict === 'mixed claim coverage — monitor') return kleur.yellow(verdict);
+  return kleur.dim('n/a');
 }
 
 function colorRatioVerdict(verdict: CoordinationRatioPayload['verdict']): string {
