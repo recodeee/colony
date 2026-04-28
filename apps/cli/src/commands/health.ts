@@ -1,19 +1,39 @@
 import { loadSettings } from '@colony/config';
-import type { ClaimBeforeEditStats, Storage, ToolCallRow } from '@colony/storage';
+import {
+  ProposalSystem,
+  currentSignalStrength,
+  isSignalExpired,
+  signalMetadataFromObservation,
+  signalMetadataFromProposal,
+} from '@colony/core';
+import type {
+  ClaimBeforeEditStats,
+  ObservationRow,
+  ProposalRow,
+  ReinforcementRow,
+  Storage,
+  TaskRow,
+  ToolCallRow,
+} from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 
 const DEFAULT_HOURS = 24;
 const HEALTH_TOOL_LIMIT = 5;
+const STALE_CLAIM_MINUTES = 4 * 60;
+const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
+const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 
 const CONVERSIONS = [
   ['hivemind_context', 'attention_inbox'],
+  ['attention_inbox', 'task_ready_for_agent'],
   ['task_list', 'task_ready_for_agent'],
   ['task_ready_for_agent', 'task_plan_claim_subtask'],
 ] as const;
 
 type ConversionName =
   | 'hivemind_context_to_attention_inbox'
+  | 'attention_inbox_to_task_ready_for_agent'
   | 'task_list_to_task_ready_for_agent'
   | 'task_ready_for_agent_to_task_plan_claim_subtask';
 
@@ -41,6 +61,20 @@ interface TaskPostMessagePayload {
   task_message_share: number | null;
 }
 
+interface TaskSelectionPayload {
+  task_list_calls: number;
+  task_ready_for_agent_calls: number;
+  task_ready_share: number | null;
+  task_ready_per_task_list: number | null;
+}
+
+interface TaskPostNotepadPayload {
+  status: 'available' | 'unavailable';
+  task_post_calls: number;
+  omx_notepad_write_calls: number;
+  task_post_share: number | null;
+}
+
 interface SearchCallsPayload {
   total_search_calls: number;
   active_sessions: number;
@@ -55,21 +89,63 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   claim_before_edit_ratio: number | null;
 }
 
+interface SignalHealthPayload {
+  active_claims: number;
+  stale_claims: number;
+  stale_claim_minutes: number;
+  expired_handoffs: number;
+  expired_messages: number;
+}
+
+interface ProposalHealthPayload {
+  proposals_seen: number;
+  pending: number;
+  promoted: number;
+  evaporated: number;
+  pending_below_noise_floor: number;
+  promotion_rate: number | null;
+}
+
+interface ReadyClaimPayload {
+  plan_subtasks: number;
+  ready_to_claim: number;
+  claimed: number;
+  ready_to_claim_per_claimed: number | null;
+  claimed_share_of_actionable: number | null;
+}
+
 export interface ColonyHealthPayload {
   generated_at: string;
   window_hours: number;
   colony_mcp_share: SharePayload;
   conversions: Record<ConversionName, ConversionPayload>;
+  task_list_vs_task_ready_for_agent: TaskSelectionPayload;
   task_post_vs_task_message: TaskPostMessagePayload;
+  task_post_vs_omx_notepad: TaskPostNotepadPayload;
   search_calls_per_session: SearchCallsPayload;
   task_claim_file_before_edits: ClaimBeforeEditPayload;
+  signal_health: SignalHealthPayload;
+  proposal_health: ProposalHealthPayload;
+  ready_to_claim_vs_claimed: ReadyClaimPayload;
 }
 
 export function buildColonyHealthPayload(
-  storage: Pick<Storage, 'toolCallsSince' | 'claimBeforeEditStats'>,
+  storage: Pick<
+    Storage,
+    | 'toolCallsSince'
+    | 'claimBeforeEditStats'
+    | 'listTasks'
+    | 'listClaims'
+    | 'taskTimeline'
+    | 'taskObservationsByKind'
+    | 'listProposalsForBranch'
+    | 'listReinforcements'
+  >,
   options: { since: number; window_hours: number; now?: number },
 ): ColonyHealthPayload {
+  const now = options.now ?? Date.now();
   const calls = storage.toolCallsSince(options.since);
+  const tasks = storage.listTasks(2000);
   const totalToolCalls = calls.length;
   const mcpToolCalls = calls.filter((call) => isMcpTool(call.tool)).length;
   const colonyMcpToolCalls = calls.filter((call) => isColonyMcpTool(call.tool)).length;
@@ -81,9 +157,10 @@ export function buildColonyHealthPayload(
   const taskMessageCalls = countTool(calls, 'task_message');
   const searchCalls = searchCallsPerSession(calls);
   const claimBeforeEditStats = storage.claimBeforeEditStats(options.since);
+  const taskSelection = taskSelectionPayload(calls);
 
   return {
-    generated_at: new Date(options.now ?? Date.now()).toISOString(),
+    generated_at: new Date(now).toISOString(),
     window_hours: options.window_hours,
     colony_mcp_share: {
       total_tool_calls: totalToolCalls,
@@ -93,16 +170,28 @@ export function buildColonyHealthPayload(
       share_of_mcp_tool_calls: ratio(colonyMcpToolCalls, mcpToolCalls),
     },
     conversions: Object.fromEntries(conversionEntries) as Record<ConversionName, ConversionPayload>,
+    task_list_vs_task_ready_for_agent: taskSelection,
     task_post_vs_task_message: {
       task_post_calls: taskPostCalls,
       task_message_calls: taskMessageCalls,
       task_message_share: ratio(taskMessageCalls, taskPostCalls + taskMessageCalls),
     },
+    task_post_vs_omx_notepad: taskPostVsNotepadPayload(calls, taskPostCalls),
     search_calls_per_session: searchCalls,
     task_claim_file_before_edits: claimBeforeEditPayload(
       claimBeforeEditStats,
       countTool(calls, 'task_claim_file'),
     ),
+    signal_health: signalHealthPayload(storage, tasks, {
+      since: options.since,
+      now,
+      stale_claim_minutes: STALE_CLAIM_MINUTES,
+    }),
+    proposal_health: proposalHealthPayload(storage, tasks, {
+      since: options.since,
+      now,
+    }),
+    ready_to_claim_vs_claimed: readyClaimPayload(storage, tasks),
   };
 }
 
@@ -143,10 +232,21 @@ export function formatColonyHealthOutput(
 
   lines.push(
     '',
+    kleur.bold('task_list vs task_ready_for_agent'),
+    `  task_list:            ${payload.task_list_vs_task_ready_for_agent.task_list_calls}`,
+    `  task_ready_for_agent: ${payload.task_list_vs_task_ready_for_agent.task_ready_for_agent_calls}`,
+    `  ready share:          ${formatPercent(payload.task_list_vs_task_ready_for_agent.task_ready_share)}`,
+    '',
     kleur.bold('task_post vs task_message'),
     `  task_post:    ${payload.task_post_vs_task_message.task_post_calls}`,
     `  task_message: ${payload.task_post_vs_task_message.task_message_calls}`,
     `  message share: ${formatPercent(payload.task_post_vs_task_message.task_message_share)}`,
+    '',
+    kleur.bold('task_post vs OMX notepad'),
+    `  status:      ${payload.task_post_vs_omx_notepad.status}`,
+    `  task_post:   ${payload.task_post_vs_omx_notepad.task_post_calls}`,
+    `  omx writes:  ${payload.task_post_vs_omx_notepad.omx_notepad_write_calls}`,
+    `  task_post share: ${formatPercent(payload.task_post_vs_omx_notepad.task_post_share)}`,
     '',
     kleur.bold('Search calls per session'),
     `  total: ${payload.search_calls_per_session.total_search_calls}`,
@@ -165,6 +265,30 @@ export function formatColonyHealthOutput(
 
   lines.push('', kleur.bold('task_claim_file before edits'));
   lines.push(...formatClaimBeforeEdit(payload.task_claim_file_before_edits));
+
+  lines.push(
+    '',
+    kleur.bold('Signal health'),
+    `  active claims:    ${payload.signal_health.active_claims}`,
+    `  stale claims:     ${payload.signal_health.stale_claims} (>${payload.signal_health.stale_claim_minutes}m)`,
+    `  expired handoffs: ${payload.signal_health.expired_handoffs}`,
+    `  expired messages: ${payload.signal_health.expired_messages}`,
+    '',
+    kleur.bold('Proposal decay/promotions'),
+    `  proposals seen:      ${payload.proposal_health.proposals_seen}`,
+    `  pending:             ${payload.proposal_health.pending}`,
+    `  promoted:            ${payload.proposal_health.promoted}`,
+    `  evaporated:          ${payload.proposal_health.evaporated}`,
+    `  below noise floor:   ${payload.proposal_health.pending_below_noise_floor}`,
+    `  promotion rate:      ${formatPercent(payload.proposal_health.promotion_rate)}`,
+    '',
+    kleur.bold('Ready-to-claim vs claimed'),
+    `  plan subtasks:       ${payload.ready_to_claim_vs_claimed.plan_subtasks}`,
+    `  ready to claim:      ${payload.ready_to_claim_vs_claimed.ready_to_claim}`,
+    `  claimed:             ${payload.ready_to_claim_vs_claimed.claimed}`,
+    `  ready/claimed:       ${formatNumber(payload.ready_to_claim_vs_claimed.ready_to_claim_per_claimed)}`,
+    `  claimed actionable:  ${formatPercent(payload.ready_to_claim_vs_claimed.claimed_share_of_actionable)}`,
+  );
 
   return lines.join('\n');
 }
@@ -248,6 +372,33 @@ function searchCallsPerSession(calls: ToolCallRow[]): SearchCallsPayload {
   };
 }
 
+function taskSelectionPayload(calls: ToolCallRow[]): TaskSelectionPayload {
+  const taskListCalls = countTool(calls, 'task_list');
+  const taskReadyCalls = countTool(calls, 'task_ready_for_agent');
+  return {
+    task_list_calls: taskListCalls,
+    task_ready_for_agent_calls: taskReadyCalls,
+    task_ready_share: ratio(taskReadyCalls, taskListCalls + taskReadyCalls),
+    task_ready_per_task_list: ratio(taskReadyCalls, taskListCalls),
+  };
+}
+
+function taskPostVsNotepadPayload(
+  calls: ToolCallRow[],
+  taskPostCalls: number,
+): TaskPostNotepadPayload {
+  const omxNotepadWriteCalls = calls.filter((call) => isOmxNotepadWrite(call.tool)).length;
+  const hasOmxMetrics = calls.some((call) => isOmxMetricTool(call.tool));
+  const status = hasOmxMetrics || omxNotepadWriteCalls > 0 ? 'available' : 'unavailable';
+  return {
+    status,
+    task_post_calls: taskPostCalls,
+    omx_notepad_write_calls: omxNotepadWriteCalls,
+    task_post_share:
+      status === 'available' ? ratio(taskPostCalls, taskPostCalls + omxNotepadWriteCalls) : null,
+  };
+}
+
 function claimBeforeEditPayload(
   stats: ClaimBeforeEditStats,
   taskClaimFileCalls: number,
@@ -266,6 +417,108 @@ function claimBeforeEditPayload(
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_before_edit_ratio:
       status === 'available' ? ratio(stats.edits_claimed_before, stats.edits_with_file_path) : null,
+  };
+}
+
+function signalHealthPayload(
+  storage: Pick<Storage, 'listClaims' | 'taskObservationsByKind'>,
+  tasks: TaskRow[],
+  options: { since: number; now: number; stale_claim_minutes: number },
+): SignalHealthPayload {
+  const staleBefore = options.now - options.stale_claim_minutes * 60_000;
+  const claims = tasks.flatMap((task) => storage.listClaims(task.id));
+  const staleClaims = claims.filter((claim) => claim.claimed_at < staleBefore).length;
+  let expiredHandoffs = 0;
+  let expiredMessages = 0;
+
+  for (const task of tasks) {
+    expiredHandoffs += storage
+      .taskObservationsByKind(task.id, 'handoff', 1000)
+      .filter((row) => row.ts > options.since)
+      .filter((row) => isExpiredLifecycleRow(row, options.now, 'handoff')).length;
+    expiredMessages += storage
+      .taskObservationsByKind(task.id, 'message', 1000)
+      .filter((row) => row.ts > options.since)
+      .filter((row) => isExpiredLifecycleRow(row, options.now, 'message')).length;
+  }
+
+  return {
+    active_claims: claims.length,
+    stale_claims: staleClaims,
+    stale_claim_minutes: options.stale_claim_minutes,
+    expired_handoffs: expiredHandoffs,
+    expired_messages: expiredMessages,
+  };
+}
+
+function proposalHealthPayload(
+  storage: Pick<Storage, 'listProposalsForBranch' | 'listReinforcements'>,
+  tasks: TaskRow[],
+  options: { since: number; now: number },
+): ProposalHealthPayload {
+  const proposals = knownBranchProposals(storage, tasks).filter(
+    (proposal) =>
+      proposal.status === 'pending' ||
+      proposal.proposed_at > options.since ||
+      (proposal.promoted_at !== null && proposal.promoted_at > options.since),
+  );
+  let pending = 0;
+  let promoted = 0;
+  let evaporated = 0;
+  let pendingBelowNoiseFloor = 0;
+
+  for (const proposal of proposals) {
+    if (proposal.status === 'active') promoted++;
+    if (proposal.status === 'evaporated') evaporated++;
+    if (proposal.status !== 'pending') continue;
+    pending++;
+    const reinforcements = storage.listReinforcements(proposal.id);
+    const strength = currentProposalStrength(proposal, reinforcements, options.now);
+    if (strength < ProposalSystem.NOISE_FLOOR) pendingBelowNoiseFloor++;
+  }
+
+  return {
+    proposals_seen: proposals.length,
+    pending,
+    promoted,
+    evaporated,
+    pending_below_noise_floor: pendingBelowNoiseFloor,
+    promotion_rate: ratio(promoted, pending + promoted + evaporated),
+  };
+}
+
+function readyClaimPayload(
+  storage: Pick<Storage, 'taskTimeline'>,
+  tasks: TaskRow[],
+): ReadyClaimPayload {
+  const subtasks = readPlanSubtasks(storage, tasks);
+  const byPlan = new Map<string, PlanSubtaskHealth[]>();
+  for (const subtask of subtasks) {
+    const bucket = byPlan.get(subtask.plan_slug) ?? [];
+    bucket.push(subtask);
+    byPlan.set(subtask.plan_slug, bucket);
+  }
+
+  let readyToClaim = 0;
+  let claimed = 0;
+  for (const subtask of subtasks) {
+    if (subtask.status === 'claimed') claimed++;
+    if (subtask.status !== 'available') continue;
+    const siblings = byPlan.get(subtask.plan_slug) ?? [];
+    const depsMet = subtask.depends_on.every((depIndex) =>
+      siblings.some(
+        (candidate) => candidate.index === depIndex && candidate.status === 'completed',
+      ),
+    );
+    if (depsMet) readyToClaim++;
+  }
+
+  return {
+    plan_subtasks: subtasks.length,
+    ready_to_claim: readyToClaim,
+    claimed,
+    ready_to_claim_per_claimed: ratio(readyToClaim, claimed),
+    claimed_share_of_actionable: ratio(claimed, readyToClaim + claimed),
   };
 }
 
@@ -306,6 +559,14 @@ function isColonyTool(tool: string, toolName: string): boolean {
   return tool === toolName || tool === `colony.${toolName}` || tool === `mcp__colony__${toolName}`;
 }
 
+function isOmxMetricTool(tool: string): boolean {
+  return tool.includes('omx') || tool.includes('notepad');
+}
+
+function isOmxNotepadWrite(tool: string): boolean {
+  return /(^|[_:.])notepad_write(_|$)/.test(tool) || /omx.*notepad.*write/i.test(tool);
+}
+
 function conversionKey(fromTool: string, toTool: string): ConversionName {
   return `${fromTool}_to_${toTool}` as ConversionName;
 }
@@ -324,6 +585,125 @@ function formatPercent(value: number | null): string {
 
 function formatNumber(value: number | null): string {
   return value === null ? 'n/a' : value.toFixed(2);
+}
+
+function knownBranchProposals(
+  storage: Pick<Storage, 'listProposalsForBranch'>,
+  tasks: TaskRow[],
+): ProposalRow[] {
+  const pairs = new Map<string, { repo_root: string; branch: string }>();
+  for (const task of tasks) {
+    pairs.set(`${task.repo_root}\0${task.branch}`, {
+      repo_root: task.repo_root,
+      branch: task.branch,
+    });
+  }
+  const proposals = new Map<number, ProposalRow>();
+  for (const pair of pairs.values()) {
+    for (const proposal of storage.listProposalsForBranch(pair.repo_root, pair.branch)) {
+      proposals.set(proposal.id, proposal);
+    }
+  }
+  return [...proposals.values()];
+}
+
+function currentProposalStrength(
+  proposal: ProposalRow,
+  reinforcements: ReinforcementRow[],
+  now: number,
+): number {
+  const signal = signalMetadataFromProposal(proposal, {
+    reinforcements,
+    half_life_minutes: 60,
+  });
+  return currentSignalStrength(signal, now);
+}
+
+function isExpiredLifecycleRow(
+  row: ObservationRow,
+  now: number,
+  kind: 'handoff' | 'message',
+): boolean {
+  const metadata = parseJsonObject(row.metadata);
+  const status = metadata.status;
+  if (status === 'expired') return true;
+  const signal = signalMetadataFromObservation(row, {
+    signal_kind: kind,
+    expires_at: kind === 'handoff' ? row.ts + DEFAULT_HANDOFF_TTL_MS : null,
+  });
+  if (!signal || !isSignalExpired(signal, now)) return false;
+  return kind === 'handoff' ? status === 'pending' : status === 'unread';
+}
+
+interface PlanSubtaskHealth {
+  plan_slug: string;
+  index: number;
+  status: 'available' | 'claimed' | 'completed' | 'blocked';
+  depends_on: number[];
+}
+
+function readPlanSubtasks(
+  storage: Pick<Storage, 'taskTimeline'>,
+  tasks: TaskRow[],
+): PlanSubtaskHealth[] {
+  const subtasks: PlanSubtaskHealth[] = [];
+  for (const task of tasks) {
+    const branchMatch = task.branch.match(PLAN_SUBTASK_BRANCH_RE);
+    const planSlug = branchMatch?.[1];
+    const index = branchMatch?.[2] ? Number(branchMatch[2]) : Number.NaN;
+    if (!planSlug || !Number.isFinite(index)) continue;
+    const rows = storage.taskTimeline(task.id, 500);
+    const initial = rows.find((row) => row.kind === 'plan-subtask');
+    if (!initial) continue;
+    const initialMeta = parseJsonObject(initial.metadata);
+    subtasks.push({
+      plan_slug: planSlug,
+      index,
+      status: readSubtaskStatus(rows, initialMeta),
+      depends_on: readNumberArray(initialMeta.depends_on),
+    });
+  }
+  return subtasks;
+}
+
+function readSubtaskStatus(
+  rows: ObservationRow[],
+  initialMeta: Record<string, unknown>,
+): PlanSubtaskHealth['status'] {
+  const claimRows = rows.filter((row) => row.kind === 'plan-subtask-claim');
+  for (const precedence of ['completed', 'blocked', 'claimed'] as const) {
+    if (claimRows.some((row) => parseJsonObject(row.metadata).status === precedence)) {
+      return precedence;
+    }
+  }
+  const initialStatus = initialMeta.status;
+  if (
+    initialStatus === 'available' ||
+    initialStatus === 'claimed' ||
+    initialStatus === 'completed' ||
+    initialStatus === 'blocked'
+  ) {
+    return initialStatus;
+  }
+  return 'available';
+}
+
+function readNumberArray(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === 'number')
+    : [];
+}
+
+function parseJsonObject(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function parseHours(raw: string): number {
