@@ -102,7 +102,7 @@ export class BackpropGate {
     // signature. If one exists, reinforce (rediscovered). If not, propose.
     const existing = this.findExistingProposal(input.signature.hash);
     if (existing) {
-      const { strength, promoted } = this.proposals.reinforce({
+      this.proposals.reinforce({
         proposal_id: existing,
         session_id: input.session_id,
         kind: 'rediscovered',
@@ -154,7 +154,10 @@ export class BackpropGate {
   //
   // Called by /co:build before executing a task, so the agent sees
   // "this pattern previously failed when..." as preamble.
-  async lookahead(taskSignature: string, limit = 3): Promise<Array<{ id: number; snippet: string }>> {
+  async lookahead(
+    taskSignature: string,
+    limit = 3,
+  ): Promise<Array<{ id: number; snippet: string }>> {
     const hits = await this.opts.store.search(taskSignature, limit);
     return hits
       .filter((h) => h.snippet.includes('BUG:') || /signature_hash/.test(h.snippet))

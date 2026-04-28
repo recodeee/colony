@@ -1,8 +1,8 @@
-import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { MemoryStore, TaskThread } from '@colony/core';
-import { SPEC_BRANCH_PREFIX, SPEC_OBSERVATION_KINDS } from './constants.js';
+import { type MemoryStore, TaskThread } from '@colony/core';
 import { type Change, parseChange, serializeChange } from './change.js';
+import { SPEC_BRANCH_PREFIX, SPEC_OBSERVATION_KINDS } from './constants.js';
 import { type Spec, parseSpec, serializeSpec } from './grammar.js';
 import { computeBaseRootHash } from './hash.js';
 
@@ -177,7 +177,6 @@ export class SpecRepository {
   private changePath(slug: string): string {
     return join(this.repoRoot, LAYOUT.changesDir, slug, 'CHANGE.md');
   }
-
 }
 
 function todayIso(): string {

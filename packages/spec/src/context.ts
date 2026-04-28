@@ -24,7 +24,7 @@ export interface ResolvedContext {
 // with `§`, like `§sync`, `§migration`) are section pointers and are
 // rendered as section references.
 export function resolveTaskContext(spec: Spec, taskId: string): ResolvedContext | null {
-  const tasks = spec.sections['T']?.rows ?? [];
+  const tasks = spec.sections.T?.rows ?? [];
   const task = tasks.find((r) => r.id === taskId);
   if (!task) return null;
 
@@ -65,7 +65,7 @@ export function resolveTaskContext(spec: Spec, taskId: string): ResolvedContext 
   const always = spec.alwaysInvariants;
   const rendered = renderContext(spec, task, [...closure], always);
   return {
-    goal: spec.sections['G'].body,
+    goal: spec.sections.G.body,
     task,
     cited_ids: [...closure],
     always_invariants: always,
@@ -81,17 +81,12 @@ function findRow(spec: Spec, id: string): SpecRow | undefined {
   return undefined;
 }
 
-function renderContext(
-  spec: Spec,
-  task: SpecRow,
-  cited: string[],
-  always: string[],
-): string {
+function renderContext(spec: Spec, task: SpecRow, cited: string[], always: string[]): string {
   const parts: string[] = [];
   parts.push(`# task · ${task.id}`);
   parts.push('');
   parts.push('## §G  goal');
-  parts.push(spec.sections['G'].body.trim());
+  parts.push(spec.sections.G.body.trim());
   parts.push('');
   parts.push('## this task');
   parts.push(task.cells.join(' | '));
@@ -110,9 +105,7 @@ function renderContext(
   }
 
   if (always.length > 0) {
-    const alwaysRows = always
-      .map((id) => findRow(spec, id))
-      .filter((r): r is SpecRow => !!r);
+    const alwaysRows = always.map((id) => findRow(spec, id)).filter((r): r is SpecRow => !!r);
     parts.push('## §V always-on');
     for (const row of alwaysRows) {
       parts.push(`- ${row.cells.join(' | ')}`);

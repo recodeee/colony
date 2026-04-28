@@ -1,5 +1,97 @@
 # @colony/config
 
+## 0.6.0
+
+### Minor Changes
+
+- 90bc096: Add the foraging indexer and a storage-aware `scanExamples` wrapper.
+
+  `indexFoodSource(food, store, opts)` converts a discovered `FoodSource`
+  into 1–N `foraged-pattern` observations (manifest, README,
+  entrypoints, filetree), scrubs env-assignment secrets through
+  `redact`, and persists via `MemoryStore` so compression and the
+  `<private>` tag stripper both run on the write path.
+
+  `scanExamples({ repo_root, store, session_id, limits?, extra_secret_env_names? })`
+  walks `<repo_root>/examples/*`, compares each discovered source's
+  `content_hash` against `storage.getExample(...)`, and only re-indexes
+  when the hash has shifted. Before re-indexing it calls the new
+  `Storage.deleteForagedObservations(repo_root, example_name)` so the
+  observation set never duplicates across scans.
+
+  Two helpers on `Storage` to let the indexer (and the forthcoming MCP
+  tool) work without opening the DB themselves:
+
+  - `deleteForagedObservations(repo_root, example_name): number`
+  - `listForagedObservations(repo_root, example_name): ObservationRow[]`
+
+  New `settings.foraging` block (defaults: enabled, `maxDepth: 2`,
+  `maxFileBytes: 200_000`, `maxFilesPerSource: 50`,
+  `scanOnSessionStart: true`, `extraSecretEnvNames: []`). `colony config
+show` and `settingsDocs()` pick it up automatically.
+
+  No MCP tools, CLI commands, or hook wiring yet — those arrive in the
+  next PR.
+
+- b158138: Smoothness pack: macOS idle-sleep prevention, desktop notifier slot, and
+  cross-task links.
+
+  `@colony/process`:
+
+  - New `notify({ level, title, body }, { provider, minLevel, log })` helper.
+    `provider: 'desktop'` fans out to `osascript` on darwin / `notify-send` on
+    linux; `'none'` is a no-op. Fire-and-forget: never awaits the spawned
+    helper, never throws, never blocks a hot path. Spawn failures are reported
+    via the optional `log` callback rather than crashing the caller.
+  - Re-exports `NotifyLevel`, `NotifyMessage`, `NotifyOptions`, plus a
+    `buildNotifyArgv` helper for testing.
+
+  `@colony/config`:
+
+  - New `notify` settings group: `provider: 'desktop' | 'none'` (default
+    `'none'` so a fresh install is silent) and `minLevel: 'info' | 'warn' |
+'error'` (default `'warn'`). Picked up automatically by `colony config
+show` and `settingsDocs()`.
+
+  `@colony/storage`:
+
+  - Schema bumps to v8. New `task_links` table stores cross-task edges as one
+    row per unordered pair (`low_id < high_id` enforced via CHECK), with
+    `created_by`, `created_at`, and an optional `note`.
+  - `Storage.linkTasks(p)` is idempotent — re-linking a pair preserves the
+    original metadata. `Storage.unlinkTasks(a, b)` returns whether a row was
+    removed. `Storage.linkedTasks(task_id)` returns the _other_ side of each
+    edge with link metadata, regardless of which side originally linked.
+  - Self-links (`task_id_a === task_id_b`) are rejected as a caller bug.
+  - New types: `TaskLinkRow`, `NewTaskLink`, `LinkedTask`.
+
+  `@colony/core`:
+
+  - `TaskThread.linkedTasks()`, `TaskThread.link(other_task_id, created_by,
+note?)`, `TaskThread.unlink(other_task_id)` — symmetric helpers around
+    the storage primitives.
+
+  `@colony/worker`:
+
+  - New `apps/worker/src/caffeinate.ts` holds a `caffeinate -i -w <pid>`
+    assertion on darwin while the embed loop is running, so a laptop lid-close
+    or system idle doesn't suspend long-running embedding backfills. No-op on
+    non-darwin and on missing binary; never started when the embedder failed
+    to load (the worker is then just a viewer + state file writer).
+  - Worker now emits a desktop notification via `@colony/process` when the
+    embedder fails to load, so users see a real signal instead of a stderr
+    line they may never read. Honours `settings.notify`.
+
+  `@colony/mcp-server`:
+
+  - New tools: `task_link(task_id, other_task_id, session_id, note?)`,
+    `task_unlink(task_id, other_task_id)`, `task_links(task_id)`. Symmetric:
+    callers don't need to think about ordering, and re-linking the same pair
+    is idempotent.
+
+  Inspired by patterns in agent-orchestrator (caffeinate, plugin-style
+  notifier slot) and hive (worktree connections / cross-task linking).
+
 ## 0.5.0
 
 ### Minor Changes

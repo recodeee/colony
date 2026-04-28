@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseSpec, serializeSpec } from '../src/grammar.js';
-import { resolveTaskContext } from '../src/context.js';
-import { SyncEngine } from '../src/sync.js';
 import type { Change } from '../src/change.js';
+import { resolveTaskContext } from '../src/context.js';
+import { parseSpec, serializeSpec } from '../src/grammar.js';
+import { SyncEngine } from '../src/sync.js';
 
 const SAMPLE_SPEC = `# SPEC
 
@@ -61,17 +61,17 @@ describe('cite-scoped context loading', () => {
     const spec = parseSpec(SAMPLE_SPEC);
     const ctx = resolveTaskContext(spec, 'T5');
     expect(ctx).not.toBeNull();
-    expect(ctx!.cited_ids.sort()).toEqual(['V1', 'V2']);
-    expect(ctx!.always_invariants.sort()).toEqual(['V8.always', 'V9.always']);
+    if (!ctx) throw new Error('expected context for T5');
+    expect(ctx.cited_ids.sort()).toEqual(['V1', 'V2']);
+    expect(ctx.always_invariants.sort()).toEqual(['V8.always', 'V9.always']);
     // The rendered string must NOT contain invariants that weren't cited.
     // In our sample that's the "bugs" section — V has no uncited rows,
     // but T has T1 and T8 which should not appear in T5's context.
-    expect(ctx!.rendered).not.toContain('T1|');
-    expect(ctx!.rendered).not.toContain('T8|');
+    expect(ctx.rendered).not.toContain('T1|');
+    expect(ctx.rendered).not.toContain('T8|');
   });
 
   it('follows cites transitively up to depth 2', () => {
-    const spec = parseSpec(SAMPLE_SPEC);
     // V2 cites V1; asking for T5 (cites V1, V2) should still show both.
     // More importantly, asking for a task that cites only V2 should
     // pull in V1 via transitive closure.
@@ -79,7 +79,8 @@ describe('cite-scoped context loading', () => {
       SAMPLE_SPEC.replace('T5|.|rewrite spec skill|V1,V2', 'T5|.|rewrite spec skill|V2'),
     );
     const ctx = resolveTaskContext(specWithChain, 'T5');
-    expect(ctx!.cited_ids.sort()).toEqual(['V1', 'V2']);
+    if (!ctx) throw new Error('expected context for T5');
+    expect(ctx.cited_ids.sort()).toEqual(['V1', 'V2']);
   });
 
   it('returns null for unknown task ids', () => {

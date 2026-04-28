@@ -1,5 +1,188 @@
 # @colony/storage
 
+## 0.6.0
+
+### Minor Changes
+
+- 90bc096: Add the foraging indexer and a storage-aware `scanExamples` wrapper.
+
+  `indexFoodSource(food, store, opts)` converts a discovered `FoodSource`
+  into 1–N `foraged-pattern` observations (manifest, README,
+  entrypoints, filetree), scrubs env-assignment secrets through
+  `redact`, and persists via `MemoryStore` so compression and the
+  `<private>` tag stripper both run on the write path.
+
+  `scanExamples({ repo_root, store, session_id, limits?, extra_secret_env_names? })`
+  walks `<repo_root>/examples/*`, compares each discovered source's
+  `content_hash` against `storage.getExample(...)`, and only re-indexes
+  when the hash has shifted. Before re-indexing it calls the new
+  `Storage.deleteForagedObservations(repo_root, example_name)` so the
+  observation set never duplicates across scans.
+
+  Two helpers on `Storage` to let the indexer (and the forthcoming MCP
+  tool) work without opening the DB themselves:
+
+  - `deleteForagedObservations(repo_root, example_name): number`
+  - `listForagedObservations(repo_root, example_name): ObservationRow[]`
+
+  New `settings.foraging` block (defaults: enabled, `maxDepth: 2`,
+  `maxFileBytes: 200_000`, `maxFilesPerSource: 50`,
+  `scanOnSessionStart: true`, `extraSecretEnvNames: []`). `colony config
+show` and `settingsDocs()` pick it up automatically.
+
+  No MCP tools, CLI commands, or hook wiring yet — those arrive in the
+  next PR.
+
+- af5d371: Expose foraged food sources to MCP clients through three new tools and
+  wire `MemoryStore.search` with an optional kind/metadata filter so
+  scoped queries don't pollute the main search.
+
+  New MCP tools (registered alongside spec in `apps/mcp-server`):
+
+  - `examples_list({ repo_root })` — compact list of indexed example
+    names, manifest kinds, and cached observation counts.
+  - `examples_query({ query, example_name?, limit? })` — BM25 hits
+    scoped to `kind = 'foraged-pattern'` and optionally to a specific
+    example. Returns compact snippets — fetch full bodies via
+    `get_observations`.
+  - `examples_integrate_plan({ repo_root, example_name, target_hint? })`
+    — deterministic plan: npm dependency delta between the example and
+    the target `package.json`, files to copy (derived from indexed
+    entrypoints), `config_steps` (npm scripts), and an
+    `uncertainty_notes` list for everything the planner couldn't
+    resolve. No LLM in the loop.
+
+  `@colony/foraging` adds `buildIntegrationPlan(storage, opts)`. The
+  function reads manifests fresh from disk to avoid round-tripping
+  structured JSON through the compressor.
+
+  `@colony/core` extends `MemoryStore.search(query, limit?, embedder?, filter?)`
+  with `{ kind?: string; metadata?: Record<string, string> }`. When a
+  filter is set the method skips vector ranking — the embedding index has
+  no kind column, so mixing vector hits would require a second pass to
+  drop them. `@colony/storage`'s `searchFts(query, limit, filter?)`
+  applies the filter in SQL via `json_extract` so the LIMIT still bounds
+  the scan.
+
+- b158138: Smoothness pack: macOS idle-sleep prevention, desktop notifier slot, and
+  cross-task links.
+
+  `@colony/process`:
+
+  - New `notify({ level, title, body }, { provider, minLevel, log })` helper.
+    `provider: 'desktop'` fans out to `osascript` on darwin / `notify-send` on
+    linux; `'none'` is a no-op. Fire-and-forget: never awaits the spawned
+    helper, never throws, never blocks a hot path. Spawn failures are reported
+    via the optional `log` callback rather than crashing the caller.
+  - Re-exports `NotifyLevel`, `NotifyMessage`, `NotifyOptions`, plus a
+    `buildNotifyArgv` helper for testing.
+
+  `@colony/config`:
+
+  - New `notify` settings group: `provider: 'desktop' | 'none'` (default
+    `'none'` so a fresh install is silent) and `minLevel: 'info' | 'warn' |
+'error'` (default `'warn'`). Picked up automatically by `colony config
+show` and `settingsDocs()`.
+
+  `@colony/storage`:
+
+  - Schema bumps to v8. New `task_links` table stores cross-task edges as one
+    row per unordered pair (`low_id < high_id` enforced via CHECK), with
+    `created_by`, `created_at`, and an optional `note`.
+  - `Storage.linkTasks(p)` is idempotent — re-linking a pair preserves the
+    original metadata. `Storage.unlinkTasks(a, b)` returns whether a row was
+    removed. `Storage.linkedTasks(task_id)` returns the _other_ side of each
+    edge with link metadata, regardless of which side originally linked.
+  - Self-links (`task_id_a === task_id_b`) are rejected as a caller bug.
+  - New types: `TaskLinkRow`, `NewTaskLink`, `LinkedTask`.
+
+  `@colony/core`:
+
+  - `TaskThread.linkedTasks()`, `TaskThread.link(other_task_id, created_by,
+note?)`, `TaskThread.unlink(other_task_id)` — symmetric helpers around
+    the storage primitives.
+
+  `@colony/worker`:
+
+  - New `apps/worker/src/caffeinate.ts` holds a `caffeinate -i -w <pid>`
+    assertion on darwin while the embed loop is running, so a laptop lid-close
+    or system idle doesn't suspend long-running embedding backfills. No-op on
+    non-darwin and on missing binary; never started when the embedder failed
+    to load (the worker is then just a viewer + state file writer).
+  - Worker now emits a desktop notification via `@colony/process` when the
+    embedder fails to load, so users see a real signal instead of a stderr
+    line they may never read. Honours `settings.notify`.
+
+  `@colony/mcp-server`:
+
+  - New tools: `task_link(task_id, other_task_id, session_id, note?)`,
+    `task_unlink(task_id, other_task_id)`, `task_links(task_id)`. Symmetric:
+    callers don't need to think about ordering, and re-linking the same pair
+    is idempotent.
+
+  Inspired by patterns in agent-orchestrator (caffeinate, plugin-style
+  notifier slot) and hive (worktree connections / cross-task linking).
+
+- beaf0f4: Add an `examples` table and `upsertExample` / `getExample` / `listExamples` /
+  `deleteExample` methods to support the forthcoming `@colony/foraging`
+  package. Each row caches the content hash and observation count for a
+  `<repo_root>/examples/<name>` food source so repeat scans on
+  `SessionStart` can skip unchanged directories without touching the
+  observation table. Schema version bumped 6 → 7.
+- 2f371d4: Add `Storage.rebuildFts()` so the CLI `reindex` command no longer
+  reaches through the type system to poke `better-sqlite3`. Behavior is
+  unchanged — `reindex` still runs the FTS5 `'rebuild'` statement — but
+  the public API is now typed and callers do not cast through `unknown`.
+- 2aec9a9: Add task-level embeddings — a per-task vector representing the task's
+  "meaning" in the same embedding space the observations live in. This is
+  the foundation sub-system for the predictive-suggestions layer
+  (`task_suggest_approach`) and includes the core similarity scan used by
+  later surface tools.
+
+  `@colony/storage`:
+
+  - New `task_embeddings` table (schema version 10). One row per task with
+    `(task_id, model, dim, embedding, observation_count, computed_at)`.
+    `observation_count` is the cache invalidation key — recomputation
+    triggers when the actual count drifts more than 20% from the cached
+    value.
+  - New methods: `upsertTaskEmbedding(p)`, `getTaskEmbedding(task_id)`,
+    `countTaskObservations(task_id)`, `hasEmbedding(observation_id, model?)`.
+    All four are used by the core embedding-compute path; none are
+    exposed to MCP yet.
+  - `getTaskEmbedding`, `upsertTaskEmbedding`, and
+    `countTaskObservations` use cached prepared statements for the
+    similarity scan hot path.
+
+  `@colony/core`:
+
+  - New module `task-embeddings.ts` exporting `computeTaskEmbedding(store,
+task_id, embedder)` and `getOrComputeTaskEmbedding(store, task_id,
+embedder)`. The compute function is a kind-weighted centroid of the
+    task's observation embeddings — handoffs and decisions count 2×, claims
+    and messages 1×, tool-use 0.25× — normalized to unit length so cosine
+    similarity reduces to a dot product.
+  - Returns null when fewer than `MIN_EMBEDDED_OBSERVATIONS` (5) embeddings
+    exist for the task. The honesty discipline: sparse data must produce
+    honest no-results rather than invented vectors.
+  - Cache invalidation triggers on observation-count drift > 20% OR model
+    mismatch. `KIND_WEIGHTS`, `MIN_EMBEDDED_OBSERVATIONS`, and
+    `CACHE_DRIFT_TOLERANCE` are all exported so the suggestion layer can
+    reference them as the load-bearing constants they are.
+  - New `findSimilarTasks(store, embedder, query_embedding, options)` scans
+    up to 10,000 tasks, computes or reuses task embeddings, filters by repo,
+    exclusions, and minimum cosine similarity, then returns top-N task
+    summaries sorted by similarity.
+
+### Patch Changes
+
+- Remove stale `task_ack_wake` from coordination tool classification now that wake MCP tools are retired; pending wake observations remain visible while write/read ratios route agents to `task_message` / `task_post`.
+- 5c9fa69: Add a `colony backfill ide` command that heals session rows whose stored `ide` is `'unknown'` by re-running the shared `inferIdeFromSessionId` helper against the row's session id. This is intended as a one-shot clean-up for databases populated before the hook-side inference learned to handle hyphen-delimited (`codex-...`) and Guardex-branch (`agent/<name>/...`) session ids. The underlying `Storage.backfillUnknownIde(mapper)` is idempotent, returns `{ scanned, updated }`, and skips any row the mapper cannot classify so it never invents an owner.
+- 77b4e06: Add `Storage.toolInvocationDistribution(since_ts, limit?)` and surface it as Section 5 of `colony debrief` (the timeline becomes Section 6). Each `tool_use` observation already carries the tool name in `metadata.tool`, so this is a pure read-side aggregation — no new write path or worker state file. The output lists every tool that fired in the window with call count and percent share, sorted descending; `mcp__*` tools are tinted cyan so MCP-vs-builtin signal stands out at a glance. The point is empirical: if `mcp__colony__task_post` fires once and `mcp__colony__task_propose` fires zero times in a week, that's a real signal about which mechanism is doing the work.
+- Updated dependencies [90bc096]
+- Updated dependencies [b158138]
+  - @colony/config@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

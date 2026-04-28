@@ -1,5 +1,13 @@
 # @colony/embedding
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [90bc096]
+- Updated dependencies [b158138]
+  - @colony/config@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

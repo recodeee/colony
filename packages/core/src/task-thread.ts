@@ -1553,9 +1553,7 @@ function renderRelayContent(m: RelayMetadata): string {
   const target = m.to_session_id ?? m.to_agent;
   const lines = [`RELAY from ${m.from_agent} (${m.reason}) -> ${target}`, m.one_line];
   if (m.resumable_state.last_files_edited.length) {
-    const paths = Array.from(
-      new Set(m.resumable_state.last_files_edited.map((e) => e.file_path)),
-    );
+    const paths = Array.from(new Set(m.resumable_state.last_files_edited.map((e) => e.file_path)));
     lines.push(`Recently edited: ${paths.join(', ')}`);
   }
   if (m.resumable_state.recent_decisions.length) {

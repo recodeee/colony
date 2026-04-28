@@ -42,9 +42,7 @@ describe('backfill ide composition', () => {
     seedUnknown('codex-colony-usage-limit-takeover-verify-2026-04-24-20-48');
     seedUnknown('some-random-id');
 
-    const { scanned, updated } = storage.backfillUnknownIde((id) =>
-      inferIdeFromSessionId(id),
-    );
+    const { scanned, updated } = storage.backfillUnknownIde((id) => inferIdeFromSessionId(id));
 
     expect(scanned).toBe(5);
     expect(updated).toBe(4);

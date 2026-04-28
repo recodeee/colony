@@ -23,12 +23,13 @@ WORK="$REPO/.e2e"
 PACK="$WORK/pack"
 PREFIX="$WORK/prefix"
 HOME_DIR="$WORK/home"
+NPM_CACHE="$WORK/npm-cache"
 
 cleanup() {
-  rm -rf "$PREFIX" "$HOME_DIR" "$PACK"
+  rm -rf "$PREFIX" "$HOME_DIR" "$PACK" "$NPM_CACHE"
 }
 cleanup
-mkdir -p "$PACK" "$PREFIX" "$HOME_DIR"
+mkdir -p "$PACK" "$PREFIX" "$HOME_DIR" "$NPM_CACHE"
 
 cd "$REPO"
 
@@ -36,6 +37,7 @@ cd "$REPO"
 # during hook runs so the e2e stays deterministic — the test drives the
 # worker explicitly in the checks below.
 export COLONY_NO_AUTOSTART=1
+export npm_config_cache="$NPM_CACHE"
 
 echo "==> 1. build everything"
 pnpm build >/dev/null
@@ -58,6 +60,7 @@ test -x "$BIN" || { echo "bin shim missing"; exit 1; }
 
 # All subsequent commands run in an isolated $HOME so we never touch the real ~/.colony
 export HOME="$HOME_DIR"
+export COLONY_HOME="$HOME_DIR/.colony"
 
 echo "==> 6. version (must match apps/cli/package.json#version)"
 EXPECTED_VERSION=$(node -e "console.log(require('$REPO/apps/cli/package.json').version)")
@@ -103,7 +106,10 @@ echo "==> 13c. config show works and includes descriptions"
 "$BIN" config show | grep -q "embedding.provider" || { echo "config show missing embedding.provider"; exit 1; }
 "$BIN" config path | grep -q "settings.json" || { echo "config path broken"; exit 1; }
 
-echo "==> 14. MCP server launches without crashing on init"
+echo "==> 14. coordination smoke verifies hook-derived task observations"
+COLONY_BIN="$BIN" COLONY_E2E_HOME="$HOME_DIR" COLONY_COORDINATION_WORK="$WORK/coordination" bash "$REPO/scripts/e2e-coordination.sh"
+
+echo "==> 15. MCP server launches without crashing on init"
 HOME="$HOME_DIR" "$BIN" mcp </dev/null >/dev/null 2>&1 &
 mcp_pid=$!
 sleep 0.4
@@ -120,7 +126,7 @@ fi
 kill $mcp_pid 2>/dev/null || true
 wait $mcp_pid 2>/dev/null || true
 
-echo "==> 15. uninstall cleans up settings"
+echo "==> 16. uninstall cleans up settings"
 "$BIN" uninstall --ide claude-code
 grep -q "colony" "$HOME/.claude/settings.json" && { echo "uninstall left colony entry"; exit 1; }
 

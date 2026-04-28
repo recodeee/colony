@@ -17,9 +17,7 @@ const COLONY_SNAPSHOT_TTL_MS = 5_000;
 const COLONY_FETCH_TIMEOUT_MS = 800;
 
 function colonyDataDir() {
-  return process.env.COLONY_HOME
-    || process.env.CAVEMEM_HOME
-    || path.join(os.homedir(), '.colony');
+  return process.env.COLONY_HOME || process.env.CAVEMEM_HOME || path.join(os.homedir(), '.colony');
 }
 
 function readColonyPort() {
@@ -1717,11 +1715,14 @@ class ActiveAgentsProvider {
       if (colonyTasks.length > 0) {
         const colonyItems = colonyTasks.map((task) => {
           const participantLabel =
-            (task.participants || []).map((p) => p.agent).filter(Boolean).join(', ')
-            || 'no participants';
-          const pendingLabel = task.pending_handoff_count > 0
-            ? formatCountLabel(task.pending_handoff_count, 'pending handoff')
-            : 'quiet';
+            (task.participants || [])
+              .map((p) => p.agent)
+              .filter(Boolean)
+              .join(', ') || 'no participants';
+          const pendingLabel =
+            task.pending_handoff_count > 0
+              ? formatCountLabel(task.pending_handoff_count, 'pending handoff')
+              : 'quiet';
           const label = `#${task.id} · ${compactColonyBranchLabel(task.branch)}`;
           const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
           item.description = `${participantLabel} · ${pendingLabel}`;
@@ -1732,7 +1733,9 @@ class ActiveAgentsProvider {
             task.pending_handoff_count > 0
               ? formatCountLabel(task.pending_handoff_count, 'pending handoff')
               : '',
-          ].filter(Boolean).join('\n');
+          ]
+            .filter(Boolean)
+            .join('\n');
           item.iconPath = new vscode.ThemeIcon(
             task.pending_handoff_count > 0 ? 'warning' : 'comment-discussion',
           );
@@ -1764,10 +1767,11 @@ class ActiveAgentsProvider {
       return [new InfoItem('No active Guardex agents', 'Open or start a sandbox session.')];
     }
 
-    return repoEntries.map((entry) =>
-      new RepoItem(entry.repoRoot, entry.sessions, entry.changes, {
-        colonyTasks: entry.colonyTasks,
-      }),
+    return repoEntries.map(
+      (entry) =>
+        new RepoItem(entry.repoRoot, entry.sessions, entry.changes, {
+          colonyTasks: entry.colonyTasks,
+        }),
     );
   }
 

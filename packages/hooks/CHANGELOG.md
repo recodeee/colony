@@ -1,5 +1,84 @@
 # @colony/hooks
 
+## 0.6.0
+
+### Minor Changes
+
+- f8f1bcc: Finish the foraging loop: users get a `colony foraging` command group
+  and SessionStart auto-scans in the background.
+
+  CLI (`@imdeadpool/colony-cli`):
+
+  - `colony foraging scan [--cwd <path>]` — synchronous scan of
+    `<cwd>/examples` that re-indexes changed food sources and leaves
+    unchanged ones alone. Respects every field in `settings.foraging.*`.
+  - `colony foraging list [--cwd <path>]` — prints the cached example
+    rows (name, manifest kind, observation count, last-scanned date).
+  - `colony foraging clear [--example <name>] [--cwd <path>]` — drops
+    example rows and their foraged-pattern observations.
+
+  Hooks (`@colony/hooks`):
+
+  - `sessionStart` now detach-spawns `colony foraging scan --cwd <cwd>`
+    via `@colony/process#spawnNodeScript` when `settings.foraging.enabled`
+    and `scanOnSessionStart` are both true. The hook never waits on it —
+    the synchronous preface only surfaces state from previous scans,
+    keeping the 150 ms p95 budget intact.
+  - New `buildForagingPreface(store, input)` injects a compact
+    "## Examples indexed (foraging)" block when cached examples exist
+    for the current cwd: lists up to 5 example names with an overflow
+    count, and points agents at `examples_query` /
+    `examples_integrate_plan`.
+
+  Closes the foraging roadmap: agents can now discover, query, and plan
+  integrations against `<repo_root>/examples` without a manual step.
+
+- Make edit hooks claim files automatically after successful write tools so the hook layer records observed ownership even when agents forget to claim manually.
+- 754949f: Add wake-request primitive and attention inbox for idle/stalled cross-agent nudges.
+
+  - `task_wake` / `task_ack_wake` / `task_cancel_wake` MCP tools post lightweight nudges on a task thread — no claim transfer, no baton pass. Targets see the request on their next SessionStart or UserPromptSubmit turn with a copy-paste-ready ack call.
+  - `attention_inbox` MCP tool + `colony inbox` CLI command aggregate pending handoffs, pending wakes, stalled lanes from the hivemind snapshot, and recent other-session file claims into one compact view. Bodies are not expanded; fetch via `get_observations`.
+  - Hook injection extended: `buildTaskPreface` surfaces pending wake requests alongside pending handoffs; `buildTaskUpdatesPreface` inlines an ack call for wake requests that arrive between turns.
+
+  Deferred follow-ups (not in this change): safe session takeover, claim TTL renewal, session Stop checkpoint, and any terminal-control wake mechanism.
+
+### Patch Changes
+
+- Remove stale `task_ack_wake` guidance from hook prefaces now that wake MCP tools are retired; pending wake observations remain visible, but agents are routed to `task_message` / `task_post`.
+- 1b076d8: Remind Claude Code to read existing files before edit tools so Update/Edit/MultiEdit calls do not stop with "File must be read first".
+- 185a9d9: Extract shared `isMainEntry`, pidfile helpers, `isAlive`, and the
+  `spawn(process.execPath, …)` wrapper into a new `@colony/process`
+  package. These utilities had divergent copies in four places
+  (`apps/cli/src/commands/lifecycle.ts`, `apps/cli/src/commands/worker.ts`,
+  `apps/mcp-server/src/server.ts`, `apps/worker/src/server.ts`, and
+  `packages/hooks/src/auto-spawn.ts`). The regex that decides whether
+  Node should be invoked via `execPath` — the Windows EFTYPE guard —
+  and the realpath-normalized bin-shim check both now live exactly once.
+
+  No behavior change. Internal helper refactor only.
+
+- c027e5d: Infer the IDE owner for sessions whose id is hyphen-delimited (e.g. `codex-colony-usage-limit-takeover-verify-...`). Previously `MemoryStore.ensureSession` hardcoded `ide = 'unknown'` and the hook-side inferrer only matched the `codex@...` / `claude@...` form, so every on-demand-materialised row landed as `unknown` in the viewer. The worker's session index now also shows an owner chip and re-infers legacy `unknown` rows at render time (italic + `?` suffix to signal the value is derived, not authoritative), and Hivemind lane cards tag the owner directly.
+- Mirror built-in TaskCreate and TaskUpdate calls into Colony task observations so task activity is visible without changing agent tool habits.
+- Record Bash git and file operations as coordination observations so checkout, branch, merge, rm, mv, cp, and redirect side effects show up in debrief and timeline evidence.
+- Reveal Bash coordination writes from PostToolUse by keeping git/file operation observations separate from redirect auto-claims.
+- Updated dependencies [e9e5587]
+- Updated dependencies [90bc096]
+- Updated dependencies [af5d371]
+- Updated dependencies [ed5a0b0]
+- Updated dependencies [c027e5d]
+- Updated dependencies [cfb6338]
+- Updated dependencies [7e5a430]
+- Updated dependencies [e6c03f2]
+- Updated dependencies [9e559a4]
+- Updated dependencies [b158138]
+- Updated dependencies [2aec9a9]
+- Updated dependencies [49f7736]
+- Updated dependencies [1fbc24e]
+- Updated dependencies [754949f]
+  - @colony/core@0.6.0
+  - @colony/config@0.6.0
+  - @colony/process@0.6.0
+
 ## 0.5.0
 
 ### Patch Changes

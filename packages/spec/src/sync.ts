@@ -66,11 +66,7 @@ export class SyncEngine {
     return lines.join('\n');
   }
 
-  private detectConflict(
-    currentRoot: Spec,
-    baseRoot: Spec,
-    delta: DeltaRow,
-  ): MergeConflict | null {
+  private detectConflict(currentRoot: Spec, baseRoot: Spec, delta: DeltaRow): MergeConflict | null {
     const sectionLetter = sectionOf(delta.target);
     if (!sectionLetter || !['V', 'I', 'T', 'B'].includes(sectionLetter)) {
       // G/C sections are prose-only; delta rows against them are nonsensical.
@@ -166,7 +162,7 @@ function serializeRow(row: { cells: string[] }): string {
 // Scan §T for rows that cite the given §V id. Used to detect the
 // "delta removes cited row" conflict.
 function citesReferencing(spec: Spec, target: string): string[] {
-  const tasks = spec.sections['T']?.rows ?? [];
+  const tasks = spec.sections.T?.rows ?? [];
   const result: string[] = [];
   for (const row of tasks) {
     // Conventionally, the cites column is the last one. It's comma-

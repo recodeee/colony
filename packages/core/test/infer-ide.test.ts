@@ -11,9 +11,9 @@ describe('inferIdeFromSessionId', () => {
     // Regression: codex writes session ids like this when a task thread
     // is the session key. Previously split('@') kept the whole string and
     // the prefix never matched, so every row landed as 'unknown'.
-    expect(
-      inferIdeFromSessionId('codex-colony-usage-limit-takeover-verify-2026-04-24-20-48'),
-    ).toBe('codex');
+    expect(inferIdeFromSessionId('codex-colony-usage-limit-takeover-verify-2026-04-24-20-48')).toBe(
+      'codex',
+    );
     expect(inferIdeFromSessionId('claude-code-refactor-sidebar')).toBe('claude-code');
   });
 
@@ -27,11 +27,13 @@ describe('inferIdeFromSessionId', () => {
     // session id. The leading segment is literally `agent`, so without
     // this special-case the row was classified as unknown.
     expect(
-      inferIdeFromSessionId('agent/codex/make-openspec-lighter-with-colony-spec-m-2026-04-24-21-32'),
+      inferIdeFromSessionId(
+        'agent/codex/make-openspec-lighter-with-colony-spec-m-2026-04-24-21-32',
+      ),
     ).toBe('codex');
-    expect(
-      inferIdeFromSessionId('agent/claude/fix-unknown-ide-owner-infer-2026-04-24-21-21'),
-    ).toBe('claude-code');
+    expect(inferIdeFromSessionId('agent/claude/fix-unknown-ide-owner-infer-2026-04-24-21-21')).toBe(
+      'claude-code',
+    );
   });
 
   it('returns undefined for unknown prefixes and empty input', () => {

@@ -1,6 +1,6 @@
 {
   "name": "@imdeadpool/colony-cli",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
   "description": "Local-first memory and coordination for Claude Code, Gemini CLI, OpenCode, Codex, and Cursor.",
   "keywords": [

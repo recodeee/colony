@@ -35,7 +35,7 @@ export function parseChange(text: string, slug: string): Change {
 
   return {
     slug,
-    baseRootHash: frontmatter['base_root_hash'] ?? '',
+    baseRootHash: frontmatter.base_root_hash ?? '',
     proposal: extractSection(body, 'P'),
     deltaRows: parseDeltaRows(extractSection(body, 'S')),
     tasks: parseTableRows(extractSection(body, 'T')),

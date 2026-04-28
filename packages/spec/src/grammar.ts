@@ -35,17 +35,16 @@ export interface Spec {
   alwaysInvariants: string[];
 }
 
-const SECTION_HEADER = /^##\s+§([GCIVTB])\b.*$/m;
-
 export function parseSpec(text: string): Spec {
   const sections: Record<string, SpecSection> = {};
   const headerMatches: Array<{ name: SpecSectionName; start: number; end: number }> = [];
 
   const re = /^##\s+§([GCIVTB])\b.*$/gm;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
+  let match: RegExpExecArray | null = re.exec(text);
+  while (match !== null) {
     const name = match[1] as SpecSectionName;
     headerMatches.push({ name, start: match.index, end: match.index + match[0].length });
+    match = re.exec(text);
   }
 
   for (let i = 0; i < headerMatches.length; i++) {
@@ -70,7 +69,7 @@ export function parseSpec(text: string): Spec {
     }
   }
 
-  const alwaysInvariants = (sections['V'].rows ?? [])
+  const alwaysInvariants = (sections.V.rows ?? [])
     .filter((row) => row.id.endsWith('.always'))
     .map((row) => row.id);
 
@@ -111,7 +110,10 @@ export function compressSpec(spec: Spec, intensity: 'lite' | 'full' | 'ultra' = 
   const next: Record<SpecSectionName, SpecSection> = { ...spec.sections };
   for (const name of SPEC_SECTIONS) {
     if (!isTableSection(name)) {
-      next[name] = { ...spec.sections[name], body: compress(spec.sections[name].body, { intensity }) };
+      next[name] = {
+        ...spec.sections[name],
+        body: compress(spec.sections[name].body, { intensity }),
+      };
     }
   }
   return { ...spec, sections: next };

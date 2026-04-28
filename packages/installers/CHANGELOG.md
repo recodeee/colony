@@ -1,5 +1,14 @@
 # @colony/installers
 
+## 0.6.0
+
+### Patch Changes
+
+- c0e3405: Preserve existing Claude Code hooks while normalizing Colony hooks to absolute Node commands.
+- Updated dependencies [90bc096]
+- Updated dependencies [b158138]
+  - @colony/config@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

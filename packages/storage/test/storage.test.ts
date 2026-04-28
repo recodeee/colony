@@ -277,10 +277,34 @@ describe('Storage', () => {
   });
 
   it('backfillUnknownIde only rewrites rows the mapper can classify', () => {
-    storage.createSession({ id: 'codex-foo', ide: 'unknown', cwd: null, started_at: 1, metadata: null });
-    storage.createSession({ id: 'agent/codex/bar', ide: 'unknown', cwd: null, started_at: 2, metadata: null });
-    storage.createSession({ id: 'mystery-slug', ide: 'unknown', cwd: null, started_at: 3, metadata: null });
-    storage.createSession({ id: 'known-session', ide: 'claude-code', cwd: null, started_at: 4, metadata: null });
+    storage.createSession({
+      id: 'codex-foo',
+      ide: 'unknown',
+      cwd: null,
+      started_at: 1,
+      metadata: null,
+    });
+    storage.createSession({
+      id: 'agent/codex/bar',
+      ide: 'unknown',
+      cwd: null,
+      started_at: 2,
+      metadata: null,
+    });
+    storage.createSession({
+      id: 'mystery-slug',
+      ide: 'unknown',
+      cwd: null,
+      started_at: 3,
+      metadata: null,
+    });
+    storage.createSession({
+      id: 'known-session',
+      ide: 'claude-code',
+      cwd: null,
+      started_at: 4,
+      metadata: null,
+    });
 
     const mapper = (id: string): string | undefined => {
       if (id.startsWith('codex-')) return 'codex';
