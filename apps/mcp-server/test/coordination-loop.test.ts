@@ -317,8 +317,8 @@ describe('coordination loop discovery', () => {
       },
       {
         name: 'task_note_working',
-        startsWith: /^Write a working note/,
-        leadingPhrases: ['working note', 'task_id', 'notepad'],
+        startsWith: /^Save current working state/,
+        leadingPhrases: ['current working state', 'active colony task', 'task_id'],
       },
       {
         name: 'task_post',
@@ -350,7 +350,7 @@ describe('coordination loop discovery', () => {
       ['active ownership', 'hivemind_context'],
       ['claim file', 'task_claim_file'],
       ['search prior memory', 'search'],
-      ['write working note', 'task_note_working'],
+      ['save current working state', 'task_note_working'],
       ['task-scoped question', 'task_post'],
     ];
 
