@@ -3,6 +3,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
 
+const RELAY_FALLBACK_POST_RULE = [
+  'Fallback when task_relay is unavailable in your client tool surface: post a note or blocker containing reason, one_line, base_branch, fetch_files_at if known, touched files, and whether the named source branch/worktree is missing.',
+  'After that, use task_hand_off when another agent must resume the work.',
+].join(' ');
+
 export function register(server: McpServer, ctx: ToolContext): void {
   const { store } = ctx;
 
@@ -65,7 +70,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_post',
-    'Post a coordination message on a task thread. Use specific tools for claim / hand_off / accept.',
+    [
+      'Post a coordination message on a task thread. Use specific tools for claim / hand_off / accept.',
+      RELAY_FALLBACK_POST_RULE,
+    ].join(' '),
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1),

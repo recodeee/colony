@@ -45,6 +45,7 @@ afterEach(async () => {
 describe('MCP server', () => {
   it('lists the colony tools', async () => {
     const { tools } = await client.listTools();
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
     expect(tools.map((t) => t.name).sort()).toEqual([
       'agent_get_profile',
       'agent_upsert_profile',
@@ -101,6 +102,12 @@ describe('MCP server', () => {
       'task_wake',
       'timeline',
     ]);
+    expect(byName.get('task_post')?.description).toContain(
+      'Fallback when task_relay is unavailable',
+    );
+    expect(byName.get('task_hand_off')?.description).toContain(
+      'Fallback when task_relay is unavailable',
+    );
   });
 
   it('hivemind returns compact active-session task state', async () => {

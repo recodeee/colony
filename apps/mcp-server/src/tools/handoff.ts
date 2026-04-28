@@ -4,12 +4,21 @@ import { z } from 'zod';
 import type { ToolContext } from './context.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
+const RELAY_FALLBACK_RULE = [
+  'Fallback when task_relay is unavailable in your client tool surface: use task_post first to record reason, one_line, base_branch, fetch_files_at if known, touched files, and any missing source branch/worktree.',
+  'Then call task_hand_off with a compact summary and concrete next_steps so another agent can resume from base_branch instead of assuming the named source lane exists.',
+  'Use released_files when you cannot transfer ownership; use transferred_files only when the receiver should inherit those claims on accept.',
+].join(' ');
+
 export function register(server: McpServer, ctx: ToolContext): void {
   const { store } = ctx;
 
   server.tool(
     'task_hand_off',
-    'Hand off work to another agent on this task. Atomically releases/transfers file claims.',
+    [
+      'Hand off work to another agent on this task. Atomically releases/transfers file claims.',
+      RELAY_FALLBACK_RULE,
+    ].join(' '),
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1).describe('your session_id (the sender)'),

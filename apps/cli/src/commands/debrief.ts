@@ -47,7 +47,12 @@ interface CoordinationRatioPayload {
   }>;
 }
 
-const COMMIT_RATIO_COMMIT_EXAMPLES = ['task_hand_off', 'task_claim_file', 'task_message'];
+const COMMIT_RATIO_COMMIT_EXAMPLES = [
+  'task_relay',
+  'task_hand_off',
+  'task_claim_file',
+  'task_message',
+];
 const COMMIT_RATIO_READ_EXAMPLES = ['hivemind_context', 'task_list', 'attention_inbox'];
 
 /**

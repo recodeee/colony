@@ -48,7 +48,9 @@ describe('sectionCoordinationRatio', () => {
   it('renders a green healthy verdict when commits/read ratio is above the healthy threshold', () => {
     const output = renderSection(activity({ commits: 10, reads: 30 }));
 
-    expect(output).toContain('Commits:     10 (task_hand_off, task_claim_file, task_message, ...)');
+    expect(output).toContain(
+      'Commits:     10 (task_relay, task_hand_off, task_claim_file, task_message, ...)',
+    );
     expect(output).toContain('Reads:       30 (hivemind_context, task_list, attention_inbox, ...)');
     expect(output).toContain('Ratio:       0.33');
     expect(output).toContain(kleur.green('healthy'));
