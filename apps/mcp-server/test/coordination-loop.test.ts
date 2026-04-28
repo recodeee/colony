@@ -31,6 +31,7 @@ interface HivemindContextResult {
     negative_warning_count: number;
     next_action: string;
     suggested_tools: string[];
+    must_check_attention: boolean;
     attention_hint: string;
     ready_work_hint: string;
     unread_message_count: number;
@@ -329,7 +330,7 @@ describe('coordination loop discovery', () => {
       },
       {
         name: 'task_post',
-        startsWith: /^Post a task-scoped question/,
+        startsWith: /^Post shared task notes/,
         leadingPhrases: ['question', 'decision', 'blocker'],
       },
     ];
@@ -393,9 +394,10 @@ describe('coordination loop discovery', () => {
     expect(context.summary.memory_hit_count).toBeGreaterThan(0);
     expect(context.summary.negative_warning_count).toBe(1);
     expect(context.summary.next_action).toBe(
-      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
     );
     expect(context.summary.suggested_tools).toEqual(['attention_inbox', 'task_ready_for_agent']);
+    expect(context.summary.must_check_attention).toBe(true);
     expect(context.summary.attention_hint).toContain('attention_inbox');
     expect(context.summary.ready_work_hint).toContain('task_ready_for_agent');
     expect(context.summary.ready_work_hint).toContain('task_list only for browsing/debugging');

@@ -45,7 +45,7 @@ When the selected task needs implementation context, call `search` with the task
 
 For multi-agent runtime awareness, call `hivemind_context` first when you need ownership plus likely memory hits, or `hivemind` when you only need the runtime map. Both return compact active worktrees, branches, agents, and task previews from `.omx` proxy-runtime state without fetching observation bodies.
 
-After `hivemind_context`, call `attention_inbox` to check what needs you now: live pending handoffs, unread messages, blockers, stalled lanes, fresh claims, stale-claim cleanup signals, and decaying hot files. Review its compact IDs first; fetch full bodies with `get_observations` only after you pick the IDs worth reading.
+After every `hivemind_context`, call `attention_inbox` before choosing work. `hivemind_context.summary.next_action` is intentionally explicit: `Do not choose work yet. Call attention_inbox, then task_ready_for_agent.` `attention_inbox` checks what needs you now: live pending handoffs, unread messages, blockers, stalled lanes, fresh claims, stale-claim cleanup signals, and decaying hot files. Review its compact IDs first; fetch full bodies with `get_observations` only after you pick the IDs worth reading.
 
 Do not choose work before attention_inbox.
 
@@ -228,8 +228,9 @@ Returns:
     "memory_hit_count": 3,
     "negative_warning_count": 1,
     "needs_attention_count": 0,
-    "next_action": "Call attention_inbox, then task_ready_for_agent before choosing work.",
+    "next_action": "Do not choose work yet. Call attention_inbox, then task_ready_for_agent.",
     "suggested_tools": ["attention_inbox", "task_ready_for_agent"],
+    "must_check_attention": true,
     "attention_hint": "Call attention_inbox to review pending handoffs, unread messages, blockers, and stalled lanes before claiming work.",
     "ready_work_hint": "Then call task_ready_for_agent to choose claimable work. Use task_list only for browsing/debugging.",
     "unread_message_count": 0,

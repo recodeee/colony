@@ -61,7 +61,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'hivemind_context',
-    'Before editing, inspect ownership, then claim touched files on the active task. Active ownership, relevant memory, negative warnings, nearby claims, hot files, attention counts, and observation IDs stay compact.',
+    'Before editing, inspect ownership, then call attention_inbox before choosing work. Active ownership, relevant memory, negative warnings, nearby claims, hot files, compact attention counts, and observation IDs stay compact.',
     {
       repo_root: z.string().min(1).optional(),
       repo_roots: z.array(z.string().min(1)).max(20).optional(),

@@ -87,6 +87,7 @@ export interface HivemindContext {
     hot_file_count: number;
     next_action: string;
     suggested_tools: string[];
+    must_check_attention: boolean;
     attention_hint: string;
     ready_work_hint: string;
     unread_message_count: number;
@@ -217,7 +218,7 @@ export interface HivemindContextAttentionCounts {
 }
 
 const HIVEMIND_FUNNEL_NEXT_ACTION =
-  'Call attention_inbox, then task_ready_for_agent before choosing work.';
+  'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.';
 const HIVEMIND_SUGGESTED_TOOLS = ['attention_inbox', 'task_ready_for_agent'];
 const HIVEMIND_ATTENTION_HINT =
   'Call attention_inbox to review pending handoffs, unread messages, blockers, and stalled lanes before claiming work.';
@@ -329,6 +330,7 @@ export function buildHivemindContext(
       suggested_tools: [
         ...new Set([...HIVEMIND_SUGGESTED_TOOLS, ...adoptionNudges.map((nudge) => nudge.tool)]),
       ],
+      must_check_attention: true,
       attention_hint: HIVEMIND_ATTENTION_HINT,
       ready_work_hint: HIVEMIND_READY_WORK_HINT,
       unread_message_count: attention.counts.unread_message_count,

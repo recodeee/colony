@@ -219,7 +219,7 @@ describe('MCP server', () => {
     expect(claimDescription).toContain('file ownership');
     expect(claimDescription).toContain('never block writes');
     expect(hivemindDescription).toContain(
-      'Before editing, inspect ownership, then claim touched files on the active task.',
+      'Before editing, inspect ownership, then call attention_inbox before choosing work.',
     );
     expect(docs).toContain(
       'Before editing, inspect ownership, then claim touched files on the active task.',
@@ -334,6 +334,7 @@ describe('MCP server', () => {
         memory_hit_count: number;
         next_action: string;
         suggested_tools: string[];
+        must_check_attention: boolean;
         attention_hint: string;
         ready_work_hint: string;
         unread_message_count: number;
@@ -348,9 +349,10 @@ describe('MCP server', () => {
     expect(payload.summary.lane_count).toBe(1);
     expect(payload.summary.memory_hit_count).toBeGreaterThan(0);
     expect(payload.summary.next_action).toBe(
-      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
     );
     expect(payload.summary.suggested_tools).toEqual(['attention_inbox', 'task_ready_for_agent']);
+    expect(payload.summary.must_check_attention).toBe(true);
     expect(payload.summary.attention_hint).toContain('attention_inbox');
     expect(payload.summary.ready_work_hint).toContain('task_ready_for_agent');
     expect(payload.summary.ready_work_hint).toContain('task_list only for browsing/debugging');
@@ -637,6 +639,7 @@ describe('MCP server', () => {
       };
       summary: {
         next_action: string;
+        must_check_attention: boolean;
         unread_message_count: number;
         pending_handoff_count: number;
         blocking: boolean;
@@ -653,8 +656,9 @@ describe('MCP server', () => {
     expect(payload.attention.hydration).toContain('Hydrate with attention_inbox');
     expect(payload.attention.hydrate_with).toBe('attention_inbox');
     expect(payload.summary.next_action).toBe(
-      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
     );
+    expect(payload.summary.must_check_attention).toBe(true);
     expect(payload.summary.pending_handoff_count).toBe(1);
     expect(payload.summary.unread_message_count).toBe(1);
     expect(payload.summary.blocking).toBe(true);
@@ -744,7 +748,7 @@ describe('MCP server', () => {
     });
     const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
     const payload = JSON.parse(text) as {
-      summary: { lane_count: number; next_action: string };
+      summary: { lane_count: number; next_action: string; must_check_attention: boolean };
       local_context: {
         current_task: { id: number; title: string } | null;
         files: string[];
@@ -790,7 +794,10 @@ describe('MCP server', () => {
       expect.arrayContaining([messageId, sameRepoBlockerId]),
     );
     expect(payload.local_context.ready_next_action).toMatch(/blocking task messages/i);
-    expect(payload.summary.next_action).toBe(payload.local_context.ready_next_action);
+    expect(payload.summary.next_action).toBe(
+      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+    );
+    expect(payload.summary.must_check_attention).toBe(true);
     expect(text).not.toContain('local blocker body should require get_observations hydration');
     expect(text).not.toContain('same repo blocker body should require get_observations hydration');
     expect(text).not.toContain('src/unrelated.ts');
@@ -1004,7 +1011,12 @@ describe('MCP server', () => {
     });
     const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
     const payload = JSON.parse(text) as {
-      summary: { lane_count: number; needs_attention_count: number; next_action: string };
+      summary: {
+        lane_count: number;
+        needs_attention_count: number;
+        next_action: string;
+        must_check_attention: boolean;
+      };
       counts: Record<string, number>;
       lanes: Array<Record<string, unknown>>;
     };
@@ -1012,8 +1024,9 @@ describe('MCP server', () => {
     expect(payload.summary.lane_count).toBe(1);
     expect(payload.summary.needs_attention_count).toBe(1);
     expect(payload.summary.next_action).toBe(
-      'Call attention_inbox, then task_ready_for_agent before choosing work.',
+      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
     );
+    expect(payload.summary.must_check_attention).toBe(true);
     expect(payload.counts.stalled).toBe(1);
     expect(payload.lanes[0]).toMatchObject({
       branch: 'agent/codex/create-public-terms-page-2026-04-27-12-13',
