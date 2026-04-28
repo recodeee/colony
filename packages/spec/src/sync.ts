@@ -178,10 +178,9 @@ function citesReferencing(spec: Spec, target: string): string[] {
 function cloneSpec(spec: Spec): Spec {
   const sections = {} as Spec['sections'];
   for (const [k, v] of Object.entries(spec.sections)) {
-    (sections as Record<string, SpecSection>)[k] = {
-      ...v,
-      rows: v.rows ? v.rows.map((r) => ({ ...r, cells: [...r.cells] })) : undefined,
-    };
+    const section: SpecSection = { name: v.name, body: v.body };
+    if (v.rows) section.rows = v.rows.map((r) => ({ ...r, cells: [...r.cells] }));
+    (sections as Record<string, SpecSection>)[k] = section;
   }
   return { ...spec, sections, alwaysInvariants: [...spec.alwaysInvariants] };
 }

@@ -25,13 +25,13 @@ const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n/;
 export function parseChange(text: string, slug: string): Change {
   const fm = FRONTMATTER_RE.exec(text);
   const frontmatter: Record<string, string> = {};
-  if (fm) {
+  if (fm?.[1]) {
     for (const line of fm[1].split('\n')) {
       const m = /^([a-z_]+):\s*(.+)$/.exec(line.trim());
-      if (m) frontmatter[m[1]] = m[2];
+      if (m?.[1] && m[2]) frontmatter[m[1]] = m[2];
     }
   }
-  const body = fm ? text.slice(fm[0].length) : text;
+  const body = fm?.[0] ? text.slice(fm[0].length) : text;
 
   return {
     slug,
@@ -74,7 +74,7 @@ export function serializeChange(change: Change): string {
 function extractSection(text: string, name: string): string {
   const re = new RegExp(`^##\\s+§${name}\\b[^\\n]*\\n([\\s\\S]*?)(?=^##\\s+§|\\z)`, 'm');
   const match = re.exec(text);
-  return match ? match[1].trim() : '';
+  return match?.[1]?.trim() ?? '';
 }
 
 function parseDeltaRows(body: string): DeltaRow[] {

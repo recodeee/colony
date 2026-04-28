@@ -204,14 +204,14 @@ function extractErrorClass(error: string): string {
   // "TypeError: foo is not a function" -> "TypeError"
   // "AssertionError [ERR_ASSERTION]: ..." -> "AssertionError"
   const m = /^([A-Z][A-Za-z0-9_]*(?:Error|Exception))/.exec(error.trim());
-  return m ? m[1] : 'Error';
+  return m?.[1] ?? 'Error';
 }
 
 function extractTopFrames(stack: string, n: number): string[] {
   const frames: string[] = [];
   for (const line of stack.split('\n')) {
     const m = /\bat\s+([^\s(]+)\s*\(?([^:)]+):\d+:\d+\)?/.exec(line);
-    if (m) {
+    if (m?.[1] && m[2]) {
       // function-name @ file (stripping line numbers so same code in
       // different commits hashes the same).
       frames.push(`${m[1]}@${basename(m[2])}`);

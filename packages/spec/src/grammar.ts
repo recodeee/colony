@@ -69,7 +69,7 @@ export function parseSpec(text: string): Spec {
     }
   }
 
-  const alwaysInvariants = (sections.V.rows ?? [])
+  const alwaysInvariants = (sections.V?.rows ?? [])
     .filter((row) => row.id.endsWith('.always'))
     .map((row) => row.id);
 
