@@ -213,7 +213,21 @@ Returns:
     "memory_hit_count": 3,
     "negative_warning_count": 1,
     "needs_attention_count": 0,
-    "next_action": "Review compact negative warnings before repeating a known failed path; then use lane ownership."
+    "next_action": "Call attention_inbox, then task_ready_for_agent before choosing work.",
+    "suggested_tools": ["attention_inbox", "task_ready_for_agent"],
+    "attention_hint": "Call attention_inbox to review pending handoffs, unread messages, blockers, and stalled lanes before claiming work.",
+    "ready_work_hint": "Then call task_ready_for_agent to choose claimable work. Use task_list only for browsing/debugging.",
+    "unread_message_count": 0,
+    "pending_handoff_count": 0,
+    "blocking": false,
+    "ready_work_count": 0
+  },
+  "attention": {
+    "unread_messages": 0,
+    "pending_handoffs": 0,
+    "blocking": false,
+    "observation_ids": [],
+    "hydrate_with": "get_observations"
   },
   "lanes": [
     {
@@ -254,7 +268,7 @@ Inputs:
 - `query`: optional memory query. If omitted, the server derives one from active task text.
 - `memory_limit`: compact memory hits to return, capped at 10 and defaulting to 3.
 
-Use this for takeover, review, or resume flows where the agent needs current ownership and a small memory index before deciding which full observations to fetch.
+Use this for takeover, review, or resume flows where the agent needs current ownership and a small memory index before deciding which full observations to fetch. The summary intentionally pushes the startup loop toward `attention_inbox`, then `task_ready_for_agent`; `hivemind_context` returns compact IDs and counts, not full observation bodies.
 
 ### Normal edit workflow
 
