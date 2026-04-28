@@ -14,6 +14,7 @@ describe('Colony CLI program', () => {
       'mcp',
       'note',
       'observe',
+      'queen',
       'reindex',
       'search',
       'start',
@@ -77,6 +78,8 @@ describe('Colony CLI program', () => {
                                             lanes, recent claims
         foraging                            Index and query <repo_root>/examples food
                                             sources
+        queen                               Queen coordination helpers for published
+                                            plan lanes
         help [command]                      display help for command
       "
     `);
@@ -119,5 +122,15 @@ describe('Colony CLI program', () => {
     expect(scan?.options.find((o) => o.long === '--cwd')).toBeDefined();
     const clear = foraging?.commands.find((c) => c.name() === 'clear');
     expect(clear?.options.find((o) => o.long === '--example')).toBeDefined();
+  });
+
+  it('exposes queen sweep with dry-run and auto-message controls', () => {
+    const program = createProgram();
+    const queen = program.commands.find((c) => c.name() === 'queen');
+    expect(queen).toBeDefined();
+    const sweep = queen?.commands.find((c) => c.name() === 'sweep');
+    expect(sweep).toBeDefined();
+    expect(sweep?.options.find((o) => o.long === '--dry-run')).toBeDefined();
+    expect(sweep?.options.find((o) => o.long === '--auto-message')).toBeDefined();
   });
 });
