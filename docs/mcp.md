@@ -2,11 +2,13 @@
 
 colony exposes MCP tools over a stdio server. IDE installers register that server as `colony`, so agent tool calls appear under the `colony` namespace. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
 
-For memory lookup, the recommended workflow is a three-layer pattern:
+For memory lookup, the recommended workflow is **search first, hydrate later**:
 
-1. `search` (or `list_sessions` → `timeline`) to get a compact index.
-2. Review IDs.
-3. `get_observations` with the filtered set.
+1. Before implementation, call `search` with query-rich terms from the task: feature name, package name, file path, task slug, or exact error message.
+2. Review the compact IDs and snippets. Do not fetch full bodies for every hit.
+3. Call `get_observations` only with the filtered IDs you actually need.
+
+Use `list_sessions` -> `timeline` when you need to navigate a known session instead of searching memory globally.
 
 ## Agent startup loop
 
@@ -55,7 +57,34 @@ Find observations matching a natural-language query.
 }
 ```
 
-Returns: `[ { id, session_id, snippet, score, ts } ]`
+Good planning queries include:
+
+- Feature name: `queen plan publication`
+- Package name: `@colony/mcp-server`
+- File path: `apps/mcp-server/src/tools/search.ts`
+- Task slug: `agent-agent5-mcp-search-first-docs`
+- Error message: `cannot open '.git/FETCH_HEAD': Read-only file system`
+
+Then hydrate only selected hits:
+
+```json
+{
+  "name": "search",
+  "input": {
+    "query": "@colony/mcp-server apps/mcp-server/src/tools/search.ts search description",
+    "limit": 5
+  }
+}
+```
+
+```json
+{
+  "name": "get_observations",
+  "input": { "ids": [6337, 8946], "expand": true }
+}
+```
+
+Returns: `[ { id, session_id, snippet, score, ts } ]` - compact hits only, never full observation bodies. Use `get_observations` for the few IDs worth reading.
 
 Scoring is hybrid: keyword (FTS5 BM25) blended with vector similarity via `settings.search.alpha`. Missing fields fall back gracefully.
 

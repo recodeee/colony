@@ -7,7 +7,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'search',
-    'Search memory for prior decisions, errors, or notes. Returns compact hits, observation IDs, and relevance snippets; fetch bodies with get_observations.',
+    'Search prior memory for decisions, errors, notes, files, and implementation context. Query by feature name, package name, file path, task slug, or exact error message before implementation. Returns compact hits, observation IDs, and relevance snippets only; fetch full bodies with get_observations.',
     { query: z.string().min(1), limit: z.number().int().positive().max(50).optional() },
     async ({ query, limit }) => {
       const e = (await resolveEmbedder()) ?? undefined;
