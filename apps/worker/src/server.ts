@@ -18,9 +18,15 @@ import { Hono } from 'hono';
 import { type CaffeinateHandle, startCaffeinate } from './caffeinate.js';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
 import { type RescueLoopHandle, startRescueLoop } from './rescue-loop.js';
-import { type StrandedSessionSummary, renderIndex, renderSession } from './viewer.js';
+import {
+  type StrandedSessionSummary,
+  buildClaimCoverageSnapshot,
+  renderIndex,
+  renderSession,
+} from './viewer.js';
 
 const HIVEMIND_CACHE_TTL_MS = 500;
+const CLAIM_COVERAGE_WINDOW_MS = 60 * 60_000;
 type BuildDiscrepancyReport = (store: MemoryStore, options: { since: number }) => DiscrepancyReport;
 
 export interface WorkerAppOptions {
@@ -61,6 +67,11 @@ export function buildApp(
     const since = Number(c.req.query('since') ?? Date.now() - 24 * 60 * 60_000);
     const report = reportBuilder(store, { since });
     return c.json(report);
+  });
+
+  app.get('/api/colony/claim-coverage', (c) => {
+    const since = parseSinceQuery(c.req.query('since'), Date.now() - CLAIM_COVERAGE_WINDOW_MS);
+    return c.json(buildClaimCoverageSnapshot(store, since));
   });
 
   app.get('/api/colony/stranded', (c) => {
@@ -248,6 +259,14 @@ export function buildApp(
   });
 
   return app;
+}
+
+function parseSinceQuery(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && numeric >= 0) return numeric;
+  const parsedDate = Date.parse(raw);
+  return Number.isFinite(parsedDate) ? parsedDate : fallback;
 }
 
 type StrandedStorageReader = {

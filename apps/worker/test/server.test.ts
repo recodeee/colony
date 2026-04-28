@@ -177,6 +177,86 @@ function seedCoordinationEdits(counts: { unclaimed: number; claimed: number }): 
   }
 }
 
+function seedClaimCoverage(counts: {
+  edits: number;
+  autoClaims: number;
+  explicitClaims?: number;
+  conflicts?: number;
+}): void {
+  store.startSession({ id: 'coverage-session', ide: 'codex', cwd: '/repo' });
+  const task = store.storage.findOrCreateTask({
+    title: 'claim-coverage-task',
+    repo_root: '/repo',
+    branch: 'agent/codex/claim-coverage-task',
+    created_by: 'coverage-session',
+  });
+  for (let i = 0; i < counts.edits; i++) {
+    const filePath = `src/coverage-${i}.ts`;
+    store.addObservation({
+      session_id: 'coverage-session',
+      kind: 'tool_use',
+      content: `Edit ${filePath}`,
+      task_id: task.id,
+      metadata: { tool: 'Edit', file_path: filePath },
+    });
+  }
+  for (let i = 0; i < counts.autoClaims; i++) {
+    const filePath = `src/coverage-${i}.ts`;
+    store.addObservation({
+      session_id: 'coverage-session',
+      kind: 'auto-claim',
+      content: `coverage-session auto-claimed ${filePath}`,
+      task_id: task.id,
+      metadata: { source: 'post-tool-use', tool: 'Edit', file_path: filePath },
+    });
+  }
+  for (let i = 0; i < (counts.explicitClaims ?? 0); i++) {
+    const filePath = `src/explicit-${i}.ts`;
+    store.addObservation({
+      session_id: 'coverage-session',
+      kind: 'claim',
+      content: `claim ${filePath}`,
+      task_id: task.id,
+      metadata: { kind: 'claim', file_path: filePath },
+    });
+  }
+  for (let i = 0; i < (counts.conflicts ?? 0); i++) {
+    const filePath = `src/conflict-${i}.ts`;
+    store.addObservation({
+      session_id: 'coverage-session',
+      kind: 'claim-conflict',
+      content: `coverage-session edited ${filePath} while other-session held the claim`,
+      task_id: task.id,
+      metadata: {
+        source: 'post-tool-use',
+        tool: 'Edit',
+        file_path: filePath,
+        other_session: 'other-session',
+      },
+    });
+  }
+}
+
+function seedBashCoordinationEvents(counts: { gitOps: number; fileOps: number }): void {
+  store.startSession({ id: 'bash-session', ide: 'codex', cwd: '/repo' });
+  for (let i = 0; i < counts.gitOps; i++) {
+    store.addObservation({
+      session_id: 'bash-session',
+      kind: 'git-op',
+      content: `Bash git checkout: git checkout branch-${i}`,
+      metadata: { tool: 'Bash', source: 'bash-parser', op: 'checkout' },
+    });
+  }
+  for (let i = 0; i < counts.fileOps; i++) {
+    store.addObservation({
+      session_id: 'bash-session',
+      kind: 'file-op',
+      content: `Bash file mv: src/a-${i}.ts, src/b-${i}.ts`,
+      metadata: { tool: 'Bash', source: 'bash-parser', op: 'mv', file_path: `src/a-${i}.ts` },
+    });
+  }
+}
+
 function setDiscrepancyReport(report: TestDiscrepancyReport): void {
   discrepancyReportMockState.reportByStore.set(store, report);
 }
@@ -338,6 +418,31 @@ describe('worker HTTP', () => {
     expect(body.proposals_without_reinforcement.count).toBe(7);
   });
 
+  it('GET /api/colony/claim-coverage returns the claim coverage snapshot', async () => {
+    seedClaimCoverage({ edits: 3, autoClaims: 2, explicitClaims: 1, conflicts: 1 });
+    seedBashCoordinationEvents({ gitOps: 1, fileOps: 2 });
+
+    const res = await app.request('/api/colony/claim-coverage?since=0');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      edit_write_count: number;
+      auto_claim_count: number;
+      explicit_claim_count: number;
+      claim_conflict_count: number;
+      bash_git_file_op_count: number;
+      bash_git_op_count: number;
+      bash_file_op_count: number;
+    };
+
+    expect(body.edit_write_count).toBe(3);
+    expect(body.auto_claim_count).toBe(2);
+    expect(body.explicit_claim_count).toBe(1);
+    expect(body.claim_conflict_count).toBe(1);
+    expect(body.bash_git_file_op_count).toBe(3);
+    expect(body.bash_git_op_count).toBe(1);
+    expect(body.bash_file_op_count).toBe(2);
+  });
+
   it('GET /api/sessions/:id/observations returns expanded text', async () => {
     seed();
     const res = await app.request('/api/sessions/s1/observations');
@@ -488,6 +593,31 @@ describe('worker HTTP', () => {
     expect(body).toContain('src/orphan.ts');
   });
 
+  it('GET / renders claim coverage counts in Diagnostic', async () => {
+    seedClaimCoverage({ edits: 10, autoClaims: 10 });
+
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+
+    expect(body).toContain('Edit/Write count');
+    expect(body).toContain('Auto-claim count');
+    expect(body).toContain('Explicit claim count');
+    expect(body).toContain('Claim-conflict count');
+    expect(body).toContain('10 / 10');
+    expect(body).not.toContain('hook integration may be broken');
+  });
+
+  it('GET / warns when auto-claim coverage is below Edit/Write count', async () => {
+    seedClaimCoverage({ edits: 10, autoClaims: 9 });
+
+    const res = await app.request('/');
+    expect(res.status).toBe(200);
+    const body = await res.text();
+
+    expect(body).toContain('hook integration may be broken');
+  });
+
   it('GET / renders a Coordination behavior panel between diagnostic and heat-map', async () => {
     seedCoordinationEdits({ unclaimed: 1, claimed: 1 });
 
@@ -504,14 +634,17 @@ describe('worker HTTP', () => {
 
   it('GET / renders the edits-without-claims rate from seeded data', async () => {
     seedCoordinationEdits({ unclaimed: 24, claimed: 18 });
+    seedBashCoordinationEvents({ gitOps: 1, fileOps: 2 });
 
     const res = await app.request('/');
     expect(res.status).toBe(200);
     const body = await res.text();
     const row = coordinationRow(body, 'Edits without claims');
+    const bashRow = coordinationRow(body, 'Bash coordination events');
 
     expect(row).toContain('57% (24 of 42)');
     expect(row).toContain('style="--rate: 57%;"');
+    expect(bashRow).toContain('3 (1 git-op + 2 file-op)');
   });
 
   it('GET / collapses the Coordination behavior panel when data is insufficient', async () => {

@@ -3,14 +3,18 @@ import {
   type HivemindSession,
   type HivemindSnapshot,
   type MemoryStore,
+  type Observation,
   buildDiscrepancyReport,
   inferIdeFromSessionId,
 } from '@colony/core';
 import type { SessionRow, Storage, TaskClaimRow, TaskRow } from '@colony/storage';
 
 const RECENT_EDIT_WINDOW_MS = 5 * 60_000;
+const CLAIM_COVERAGE_WINDOW_MS = 60 * 60_000;
 const RECENT_CLAIM_WINDOW_MS = 60 * 60_000;
 const COORDINATION_BEHAVIOR_WINDOW_MS = 24 * 60 * 60_000;
+const OBSERVATION_SCAN_LIMIT = 5000;
+const CLAIM_COVERAGE_EDIT_TOOLS = new Set(['Edit', 'Write']);
 
 type BuildDiscrepancyReport = (store: MemoryStore, options: { since: number }) => DiscrepancyReport;
 
@@ -47,6 +51,10 @@ const style = `
   .heat-map { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .claim-tile { min-height: 58px; border: 1px solid #31405a; border-radius: 6px; padding: 8px; overflow: hidden; }
   .claim-tile code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; padding: 0; }
+  .diagnostic-stats { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); margin: 10px 0; }
+  .diagnostic-stat { min-width: 0; border: 1px solid #263041; border-radius: 6px; padding: 8px; background: #151a22; }
+  .diagnostic-stat strong { display: block; font-size: 20px; line-height: 1.1; color: #f2f5f8; }
+  .diagnostic-warning { margin: 8px 0; padding: 7px 9px; border: 1px solid #6d2630; border-radius: 6px; background: #2a1117; color: #fecaca; }
   .coordination-behavior { display: grid; gap: 8px; }
   .coordination-row { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(120px, 160px) minmax(92px, auto); gap: 10px; align-items: center; }
   .coordination-bar { position: relative; height: 10px; overflow: hidden; border-radius: 999px; background: #263041; }
@@ -132,6 +140,55 @@ export interface StrandedSessionSummary {
   last_activity_ts: number;
   held_claims: Array<{ file_path: string }>;
   last_tool_error: string | null;
+}
+
+export interface ClaimCoverageSnapshot {
+  since: number;
+  until: number;
+  edit_write_count: number;
+  auto_claim_count: number;
+  explicit_claim_count: number;
+  claim_conflict_count: number;
+  bash_git_op_count: number;
+  bash_file_op_count: number;
+  bash_git_file_op_count: number;
+}
+
+export function buildClaimCoverageSnapshot(
+  store: MemoryStore,
+  since: number,
+): ClaimCoverageSnapshot {
+  const snapshot: ClaimCoverageSnapshot = {
+    since,
+    until: Date.now(),
+    edit_write_count: 0,
+    auto_claim_count: 0,
+    explicit_claim_count: 0,
+    claim_conflict_count: 0,
+    bash_git_op_count: 0,
+    bash_file_op_count: 0,
+    bash_git_file_op_count: 0,
+  };
+
+  for (const observation of recentObservations(store, since)) {
+    if (observation.kind === 'tool_use' && isClaimCoverageEdit(observation)) {
+      snapshot.edit_write_count += 1;
+    } else if (observation.kind === 'auto-claim') {
+      snapshot.auto_claim_count += 1;
+    } else if (observation.kind === 'claim') {
+      snapshot.explicit_claim_count += 1;
+    } else if (observation.kind === 'claim-conflict') {
+      snapshot.claim_conflict_count += 1;
+    } else if (observation.kind === 'git-op') {
+      snapshot.bash_git_op_count += 1;
+      snapshot.bash_git_file_op_count += 1;
+    } else if (observation.kind === 'file-op') {
+      snapshot.bash_file_op_count += 1;
+      snapshot.bash_git_file_op_count += 1;
+    }
+  }
+
+  return snapshot;
 }
 
 export function renderIndex(
@@ -226,7 +283,7 @@ function renderColonyState(store: MemoryStore, reportBuilder: BuildDiscrepancyRe
       <h2>Canonical colony state</h2>
       <div class="viewer-grid">
         <div class="viewer-main">
-          ${raw(renderDiagnostic(storage))}
+          ${raw(renderDiagnostic(store))}
           ${raw(renderCoordinationBehavior(store, reportBuilder))}
           ${raw(renderRecentClaimsHeatMap(storage, tasks))}
           ${raw(renderToolUsageHistogram())}
@@ -236,8 +293,14 @@ function renderColonyState(store: MemoryStore, reportBuilder: BuildDiscrepancyRe
     </section>`;
 }
 
-function renderDiagnostic(storage: Storage): string {
+function renderDiagnostic(store: MemoryStore): string {
+  const storage = store.storage;
   const unclaimed = storage.recentEditsWithoutClaims(Date.now() - RECENT_EDIT_WINDOW_MS);
+  const coverage = buildClaimCoverageSnapshot(store, Date.now() - CLAIM_COVERAGE_WINDOW_MS);
+  const integrationWarning =
+    coverage.auto_claim_count < coverage.edit_write_count
+      ? html`<p class="diagnostic-warning">hook integration may be broken</p>`
+      : '';
   const rows =
     unclaimed.length > 0
       ? html`<ul class="path-list">${unclaimed.slice(0, 10).map((edit) => {
@@ -250,8 +313,20 @@ function renderDiagnostic(storage: Storage): string {
     <div class="card">
       <h2>Diagnostic</h2>
       <p><span class="count">${unclaimed.length}</span><span class="meta">edits without proactive claims (last 5m)</span></p>
+      <div class="diagnostic-stats">
+        ${raw(renderDiagnosticStat('Edit/Write count', coverage.edit_write_count))}
+        ${raw(renderDiagnosticStat('Auto-claim count', coverage.auto_claim_count))}
+        ${raw(renderDiagnosticStat('Explicit claim count', coverage.explicit_claim_count))}
+        ${raw(renderDiagnosticStat('Claim-conflict count', coverage.claim_conflict_count))}
+      </div>
+      <p class="meta">Auto-claim coverage <strong>${coverage.auto_claim_count} / ${coverage.edit_write_count}</strong> (last 1h)</p>
+      ${raw(integrationWarning)}
       ${raw(rows)}
     </div>`;
+}
+
+function renderDiagnosticStat(label: string, value: number): string {
+  return html`<div class="diagnostic-stat"><strong>${value}</strong><span class="meta">${label}</span></div>`;
 }
 
 const COORDINATION_BEHAVIOR_ROWS = [
@@ -314,6 +389,10 @@ function renderCoordinationBehavior(
   const report = reportBuilder(store, {
     since: Date.now() - COORDINATION_BEHAVIOR_WINDOW_MS,
   });
+  const bashEvents = buildClaimCoverageSnapshot(
+    store,
+    Date.now() - COORDINATION_BEHAVIOR_WINDOW_MS,
+  );
   if (report.insufficient_data_reason) {
     return html`
       <div class="card">
@@ -331,9 +410,21 @@ function renderCoordinationBehavior(
               row.label,
               readMetric(report as unknown as CoordinationBehaviorReport, row.key, row.aliases),
             ),
-          ).join(''),
+          )
+            .concat(renderBashCoordinationEventsRow(bashEvents))
+            .join(''),
         )}
       </div>
+    </div>`;
+}
+
+function renderBashCoordinationEventsRow(snapshot: ClaimCoverageSnapshot): string {
+  const rate = snapshot.bash_git_file_op_count > 0 ? 100 : 0;
+  return html`
+    <div class="coordination-row" data-rate-level="green">
+      <div>Bash coordination events</div>
+      <div class="coordination-bar" style="--rate: ${rate}%;" aria-label="Bash coordination events ${snapshot.bash_git_file_op_count}"></div>
+      <div class="meta">${snapshot.bash_git_file_op_count} (${snapshot.bash_git_op_count} git-op + ${snapshot.bash_file_op_count} file-op)</div>
     </div>`;
 }
 
@@ -598,6 +689,22 @@ function claimHeatStyle(ts: number): string {
   const light = Math.round(21 - ratio * 5);
   const borderLight = Math.round(47 - ratio * 14);
   return `background: hsl(${hue} 42% ${light}%); border-color: hsl(${hue} 58% ${borderLight}%);`;
+}
+
+function recentObservations(store: MemoryStore, since: number): Observation[] {
+  return store.storage
+    .listSessions(1000)
+    .flatMap((session) => store.timeline(session.id, undefined, OBSERVATION_SCAN_LIMIT))
+    .filter((observation) => observation.ts > since);
+}
+
+function isClaimCoverageEdit(observation: Observation): boolean {
+  return CLAIM_COVERAGE_EDIT_TOOLS.has(readMetadataString(observation, 'tool'));
+}
+
+function readMetadataString(observation: Observation, key: string): string {
+  const value = observation.metadata?.[key];
+  return typeof value === 'string' ? value : '';
 }
 
 function strandedRescueScript(): string {
