@@ -28,6 +28,9 @@ import * as spec from './tools/spec.js';
 import * as suggest from './tools/suggest.js';
 import * as task from './tools/task.js';
 
+export { buildBridgeStatusPayload } from './tools/bridge.js';
+export type { BridgeStatus, BridgeStatusOptions } from './tools/bridge.js';
+
 /**
  * MCP stdio server exposing progressive-disclosure tools:
  * - search: compact hits with BM25 + optional semantic re-rank

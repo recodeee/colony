@@ -150,6 +150,7 @@ describe('bridge status --json', () => {
         branch: 'agent/codex/bridge-cli',
       },
     );
+    expect(output.join('')).toBe(`${JSON.stringify(payload)}\n`);
     expect(JSON.parse(output.join(''))).toEqual(payload);
   });
 });
