@@ -196,6 +196,8 @@ describe('colony health payload', () => {
     expect(text).toContain('Ready-to-claim vs claimed');
     expect(text).toContain('Adoption thresholds');
     expect(text).toContain('task_list > task_ready_for_agent');
+    expect(text).not.toContain('\n  Good\n');
+    expect(text).not.toContain('\n  Bad\n');
   });
 
   it('emits parseable JSON with the same top-level sections', () => {

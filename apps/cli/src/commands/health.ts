@@ -366,11 +366,9 @@ export function formatColonyHealthOutput(
   );
 
   lines.push('', kleur.bold('Adoption thresholds'));
-  lines.push(kleur.dim('  Good'));
   for (const signal of payload.adoption_thresholds.good) {
     lines.push(formatSignal(signal));
   }
-  lines.push(kleur.dim('  Bad'));
   for (const signal of payload.adoption_thresholds.bad) {
     lines.push(formatSignal(signal));
   }
