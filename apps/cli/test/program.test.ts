@@ -124,6 +124,7 @@ describe('Colony CLI program', () => {
     const health = program.commands.find((c) => c.name() === 'health');
     expect(health).toBeDefined();
     expect(health?.options.find((o) => o.long === '--json')).toBeDefined();
+    expect(health?.options.find((o) => o.long === '--prompts')).toBeDefined();
   });
 
   it('advertises a semantic version', () => {

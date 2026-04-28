@@ -174,6 +174,9 @@ interface ActionHint {
   current: string;
   target: string;
   action: string;
+  tool_call?: string;
+  command?: string;
+  prompt: string;
 }
 
 export interface ColonyHealthPayload {
@@ -301,7 +304,7 @@ export function buildColonyHealthPayload(
 
 export function formatColonyHealthOutput(
   payload: ColonyHealthPayload,
-  options: { json?: boolean } = {},
+  options: { json?: boolean; prompts?: boolean } = {},
 ): string {
   if (options.json) return JSON.stringify(payload, null, 2);
 
@@ -454,7 +457,20 @@ export function formatColonyHealthOutput(
       lines.push(
         `  ${index + 1}. ${hint.metric}: ${hint.current} (target ${hint.target}) - ${hint.action}`,
       );
+      if (hint.tool_call) lines.push(kleur.dim(`     tool: ${hint.tool_call}`));
+      if (hint.command) lines.push(kleur.dim(`     cmd:  ${hint.command}`));
     });
+  }
+
+  if (options.prompts) {
+    lines.push('', kleur.bold('Codex prompt snippets'));
+    if (payload.action_hints.length === 0) {
+      lines.push(kleur.green('  none: tracked thresholds meet targets'));
+    } else {
+      payload.action_hints.forEach((hint, index) => {
+        lines.push(`  ${index + 1}. ${hint.prompt}`);
+      });
+    }
   }
 
   lines.push('', kleur.bold('Adoption thresholds'));
@@ -474,7 +490,8 @@ export function registerHealthCommand(program: Command): void {
     .description('Show Colony adoption ratios from local DB evidence')
     .option('--hours <n>', 'Window size in hours', String(DEFAULT_HOURS))
     .option('--json', 'emit structured JSON')
-    .action(async (opts: { hours: string; json?: boolean }) => {
+    .option('--prompts', 'emit compact Codex prompt snippets for next fixes')
+    .action(async (opts: { hours: string; json?: boolean; prompts?: boolean }) => {
       const hours = parseHours(opts.hours);
       const settings = loadSettings();
       const { withStorage } = await import('../util/store.js');
@@ -486,7 +503,7 @@ export function registerHealthCommand(program: Command): void {
             window_hours: hours,
             claim_stale_minutes: settings.claimStaleMinutes,
           });
-          const formatOptions = opts.json ? { json: true } : {};
+          const formatOptions = opts.json ? { json: true } : { prompts: Boolean(opts.prompts) };
           process.stdout.write(`${formatColonyHealthOutput(payload, formatOptions)}\n`);
         },
         { readonly: true },
@@ -757,6 +774,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_HIVEMIND_TO_ATTENTION)}+`,
       action:
         'After hivemind_context, call attention_inbox to clear handoffs, unread messages, and blockers.',
+      tool_call:
+        'mcp__colony__attention_inbox({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>" })',
+      prompt:
+        'Call mcp__colony__attention_inbox for this repo/session; clear handoffs, unread messages, and blockers before choosing work.',
     });
   }
 
@@ -769,6 +790,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_TASK_LIST_TO_READY)}+`,
       action:
         'Keep task_list for browsing/debugging only; call task_ready_for_agent before selecting work.',
+      tool_call:
+        'mcp__colony__task_ready_for_agent({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>" })',
+      prompt:
+        'Call mcp__colony__task_ready_for_agent for this repo/session; pick the highest-fit ready task instead of browsing task_list.',
     });
   }
 
@@ -781,6 +806,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_READY_TO_CLAIM)}+`,
       action:
         'When ready work fits, claim it with task_plan_claim_subtask, then claim touched files before implementation.',
+      tool_call:
+        'mcp__colony__task_plan_claim_subtask({ agent: "<agent>", session_id: "<session_id>", plan_slug: "<plan_slug>", subtask_index: <index> })',
+      prompt:
+        'Claim the selected ready subtask with mcp__colony__task_plan_claim_subtask, then claim every touched file before editing.',
     });
   }
 
@@ -796,6 +825,11 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       current: formatPercent(payload.task_claim_file_before_edits.claim_before_edit_ratio),
       target: `${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+`,
       action: 'Call task_claim_file for touched files before Edit or Write tool use.',
+      tool_call:
+        'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
+      command: 'colony install --ide <ide>  # enables pre-edit auto-claim hooks',
+      prompt:
+        'Before editing, call mcp__colony__task_claim_file for each touched path; if agents keep missing this, run colony install --ide <ide> to enable pre-edit auto-claim hooks.',
     });
   }
 
@@ -807,6 +841,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: '0',
       action:
         'Run colony coordination sweep/rescue, then release, hand off, or reclaim stale ownership.',
+      tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
+      command: 'colony coordination sweep --json',
+      prompt:
+        'Run colony coordination sweep --json and mcp__colony__rescue_stranded_scan; release, hand off, or reclaim stale ownership.',
     });
   }
 
@@ -817,6 +855,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       current: String(payload.queen_wave_health.stale_claims_blocking_downstream),
       target: '0',
       action: 'Run colony queen sweep/rescue so later waves can become claimable.',
+      tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
+      command: 'colony queen sweep --json',
+      prompt:
+        'Run colony queen sweep --json and rescue stale blockers so later wave subtasks become claimable.',
     });
   }
 
@@ -831,6 +873,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_COLONY_NOTE_SHARE)}+`,
       action:
         'Use task_note_working first for working state; use task_post when task_id is known; use OMX notepad only when Colony is unavailable.',
+      tool_call:
+        'mcp__colony__task_note_working({ session_id: "<session_id>", repo_root: "<repo_root>", branch: "<branch>", content: "branch=<branch>; task=<task>; blocker=<blocker>; next=<next>; evidence=<evidence>" })',
+      prompt:
+        'Save current working state with mcp__colony__task_note_working using branch/task/blocker/next/evidence; use OMX notepad only if Colony is unavailable.',
     });
   }
 

@@ -314,6 +314,8 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('queen_wave_health');
     expect(json).toHaveProperty('adoption_thresholds');
     expect(json).toHaveProperty('action_hints');
+    expect(json.action_hints[0]).toHaveProperty('tool_call');
+    expect(json.action_hints[0]).toHaveProperty('prompt');
   });
 
   it('reports stale claimed subtasks that block later Queen waves', () => {
@@ -501,36 +503,50 @@ describe('colony health payload', () => {
         current: '0%',
         target: '50%+',
         action: expect.stringContaining('call attention_inbox'),
+        tool_call: expect.stringContaining('mcp__colony__attention_inbox'),
+        prompt: expect.stringContaining('attention_inbox'),
       }),
       expect.objectContaining({
         metric: 'task_list -> task_ready_for_agent',
         current: '25%',
         target: '30%+',
         action: expect.stringContaining('call task_ready_for_agent'),
+        tool_call: expect.stringContaining('mcp__colony__task_ready_for_agent'),
+        prompt: expect.stringContaining('task_ready_for_agent'),
       }),
       expect.objectContaining({
         metric: 'task_ready_for_agent -> claim',
         current: '0%',
         target: '30%+',
         action: expect.stringContaining('task_plan_claim_subtask'),
+        tool_call: expect.stringContaining('mcp__colony__task_plan_claim_subtask'),
+        prompt: expect.stringContaining('task_plan_claim_subtask'),
       }),
       expect.objectContaining({
         metric: 'claim-before-edit',
         current: '0%',
         target: '50%+',
         action: expect.stringContaining('task_claim_file'),
+        tool_call: expect.stringContaining('mcp__colony__task_claim_file'),
+        command: expect.stringContaining('colony install --ide <ide>'),
+        prompt: expect.stringContaining('pre-edit auto-claim hooks'),
       }),
       expect.objectContaining({
         metric: 'stale claims',
         current: '1',
         target: '0',
         action: expect.stringContaining('coordination sweep/rescue'),
+        tool_call: expect.stringContaining('mcp__colony__rescue_stranded_scan'),
+        command: 'colony coordination sweep --json',
+        prompt: expect.stringContaining('colony coordination sweep --json'),
       }),
       expect.objectContaining({
         metric: 'task_post/task_note_working share',
         current: '0%',
         target: '70%+',
         action: expect.stringContaining('task_note_working first'),
+        tool_call: expect.stringContaining('mcp__colony__task_note_working'),
+        prompt: expect.stringContaining('branch/task/blocker/next/evidence'),
       }),
     ]);
 
@@ -546,10 +562,22 @@ describe('colony health payload', () => {
       'task_ready_for_agent -> claim: 0% (target 30%+) - When ready work fits',
     );
     expect(text).toContain('claim-before-edit: 0% (target 50%+) - Call task_claim_file');
+    expect(text).toContain(
+      'tool: mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
+    );
+    expect(text).toContain('cmd:  colony install --ide <ide>');
     expect(text).toContain('stale claims: 1 (target 0) - Run colony coordination sweep/rescue');
+    expect(text).toContain('cmd:  colony coordination sweep --json');
     expect(text).toContain(
       'task_post/task_note_working share: 0% (target 70%+) - Use task_note_working first',
     );
+    expect(text).toContain('tool: mcp__colony__task_note_working');
+
+    const promptText = formatColonyHealthOutput(payload, { prompts: true });
+    expect(promptText).toContain('Codex prompt snippets');
+    expect(promptText).toContain('Call mcp__colony__attention_inbox');
+    expect(promptText).toContain('Run colony coordination sweep --json');
+    expect(promptText).toContain('Save current working state with mcp__colony__task_note_working');
   });
 
   it('surfaces top recorded tools and a hook-wiring hint when no mcp__ calls land in the window', () => {
