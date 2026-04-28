@@ -1,9 +1,12 @@
 import {
+  type AttentionBudgetOutput,
+  type AttentionItem,
   type Embedder,
   type InboxMessage,
   type MemoryStore,
   ProposalSystem,
   TaskThread,
+  applyAttentionBudget,
   buildAttentionInbox,
   detectRepoBranch,
 } from '@colony/core';
@@ -93,6 +96,7 @@ export async function sessionStart(
   const proposalPreface = buildProposalPreface(store, input);
   const foragingPreface = buildForagingPreface(store, input);
   const scopeCheckPreface = buildScopeCheckPreface(store, input);
+  const attentionBudgetPreface = buildAttentionBudgetSection(store, input);
 
   return [
     priorPreface,
@@ -101,6 +105,7 @@ export async function sessionStart(
     proposalPreface,
     foragingPreface,
     scopeCheckPreface,
+    attentionBudgetPreface,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -142,6 +147,66 @@ export function buildForagingPreface(store: MemoryStore, input: Pick<HookInput, 
     `${rows.length} food source${rows.length === 1 ? '' : 's'}: ${names}${more}.`,
     'Query with examples_query; fetch a plan with examples_integrate_plan.',
   ].join('\n');
+}
+
+export function buildAttentionBudgetSection(
+  store: MemoryStore,
+  input: Pick<HookInput, 'session_id' | 'cwd' | 'ide'>,
+): string {
+  const cwd = input.cwd;
+  if (!cwd) return '';
+  const detected = detectRepoBranch(cwd);
+  if (!detected) return '';
+
+  const agent = deriveAgent(input.ide, detected.branch);
+  const inbox = buildAttentionInbox(store, {
+    session_id: input.session_id,
+    agent,
+    repo_root: detected.repo_root,
+  });
+  const budget = applyAttentionBudget(inbox);
+  return renderAttentionBudget(budget, inbox.generated_at);
+}
+
+function renderAttentionBudget(budget: AttentionBudgetOutput, now: number): string {
+  if (budget.total === 0) return '';
+
+  const lines = [`Attention (${budget.prominent.length} of ${budget.total}):`];
+  for (const item of budget.prominent) {
+    lines.push(`  → ${item.urgency}: ${compactPreview(item.summary)}${attentionTiming(item, now)}`);
+  }
+
+  const collapsed = collapsedCountText(budget.collapsed_counts);
+  if (collapsed) {
+    lines.push(`  Plus ${collapsed} collapsed. Run attention_inbox to see all.`);
+  }
+
+  return lines.join('\n');
+}
+
+function collapsedCountText(counts: AttentionBudgetOutput['collapsed_counts']): string {
+  const parts = (['blocking', 'needs_reply', 'fyi'] as const)
+    .filter((urgency) => counts[urgency] > 0)
+    .map((urgency) => `${counts[urgency]} ${urgency} item${counts[urgency] === 1 ? '' : 's'}`);
+  return parts.join(', ');
+}
+
+function attentionTiming(item: AttentionItem, now: number): string {
+  if (item.expires_at !== null) {
+    return ` (expires in ${formatDuration(item.expires_at - now)})`;
+  }
+  if (item.ts !== null && Number.isFinite(item.ts)) {
+    return ` (${formatDuration(now - item.ts)} old)`;
+  }
+  return '';
+}
+
+function formatDuration(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 function buildPriorPreface(store: MemoryStore, input: HookInput): string {

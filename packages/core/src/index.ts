@@ -71,6 +71,12 @@ export {
   type InboxWake,
   type ReadReceipt,
 } from './attention-inbox.js';
+export {
+  applyAttentionBudget,
+  type AttentionBudgetOutput,
+  type AttentionItem,
+  type AttentionItemKind,
+} from './attention-budget.js';
 export { detectRepoBranch } from './git-detect.js';
 export {
   PheromoneSystem,
