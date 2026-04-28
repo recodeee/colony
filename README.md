@@ -111,7 +111,7 @@ Copy-paste startup:
 { "name": "task_ready_for_agent", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo", "limit": 5 } }
 ```
 
-If the ready item needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. Before editing, inspect ownership, then claim touched files on the active task with `task_claim_file` or `task_plan_claim_subtask`. Claims are warnings, not locks; they help avoid conflict and do not block writes.
+If the ready item needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. When plan work is claimable, `task_ready_for_agent` returns `next_tool: "task_plan_claim_subtask"` plus exact `claim_args`. When nothing is claimable, it returns `empty_state: "No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, or use task_list only for browsing."` Before editing, inspect ownership, then claim touched files on the active task with `task_claim_file` or `task_plan_claim_subtask`. Claims are warnings, not locks; they help avoid conflict and do not block writes.
 
 ### Memory and session recall
 

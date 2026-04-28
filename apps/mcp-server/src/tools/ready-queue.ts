@@ -22,6 +22,8 @@ const RECENT_CLAIM_COOLDOWN_MS = 20 * 60 * 1000;
 const RECENT_CLAIM_COOLDOWN_MARGIN = 0.05;
 const PLAN_SUBTASK_KIND = 'plan-subtask';
 const PLAN_SUBTASK_CLAIM_KIND = 'plan-subtask-claim';
+export const NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE =
+  'No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, or use task_list only for browsing.';
 const CAPABILITY_HINT_TEXT: Record<string, string> = {
   ui_work: 'ui',
   api_work: 'api',
@@ -50,9 +52,21 @@ export interface ReadySubtaskWithWarnings extends ReadySubtask {
   negative_warnings: CompactNegativeWarning[];
 }
 
+export interface TaskPlanClaimArgs {
+  plan_slug: string;
+  subtask_index: number;
+  session_id: string;
+  agent: string;
+}
+
 export interface ReadyForAgentResult {
   ready: ReadySubtaskWithWarnings[];
   total_available: number;
+  next_tool?: 'task_plan_claim_subtask';
+  plan_slug?: string;
+  subtask_index?: number;
+  claim_args?: TaskPlanClaimArgs;
+  empty_state?: string;
 }
 
 interface RankedSubtask extends ReadySubtask {
@@ -73,7 +87,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_ready_for_agent',
-    'Find the next task to claim for this agent. Use this when deciding what to work on. Returns ready sub-tasks ranked by fit_score with wave metadata, capability hints, claim conflicts, and blocked work filtered out.',
+    'Find the next task to claim for this agent. Use this when deciding what to work on. Returns exact task_plan_claim_subtask args when work is claimable, or a compact empty_state when no plan sub-tasks can be claimed.',
     {
       session_id: z.string().min(1),
       agent: z.string().min(1),
@@ -153,6 +167,7 @@ export async function buildReadyForAgent(
   );
 
   const selected = ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
+  const claimable = ranked.find((task) => !task.current_claim) ?? null;
   const ready = await Promise.all(
     selected.map(
       async ({
@@ -168,9 +183,33 @@ export async function buildReadyForAgent(
     ),
   );
 
+  return buildReadyResult({ ready, total_available: available.length }, claimable, args);
+}
+
+function buildReadyResult(
+  base: Pick<ReadyForAgentResult, 'ready' | 'total_available'>,
+  claimable: RankedSubtask | null,
+  args: { session_id: string; agent: string },
+): ReadyForAgentResult {
+  if (claimable === null) {
+    return {
+      ...base,
+      empty_state: NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE,
+    };
+  }
+
+  const claim_args: TaskPlanClaimArgs = {
+    plan_slug: claimable.plan_slug,
+    subtask_index: claimable.subtask_index,
+    session_id: args.session_id,
+    agent: args.agent,
+  };
   return {
-    ready,
-    total_available: available.length,
+    ...base,
+    next_tool: 'task_plan_claim_subtask',
+    plan_slug: claimable.plan_slug,
+    subtask_index: claimable.subtask_index,
+    claim_args,
   };
 }
 

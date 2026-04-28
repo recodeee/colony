@@ -1194,7 +1194,25 @@ Find the next task to claim for this agent. Use this when deciding what to work 
 }
 ```
 
-Returns `{ ready, total_available }`. Each `ready` entry includes `plan_slug`, `subtask_index`, `title`, `capability_hint`, `file_scope`, `fit_score`, compact `reason`, and `reasoning`. `reason` is one of `continue_current_task`, `urgent_override`, or `ready_high_score`. Blocked work is filtered out, and conflicting active file claims lower the score. Claim new selected work with `task_plan_claim_subtask`; if the top reason is `continue_current_task`, keep working the already-claimed sub-task.
+Returns `{ ready, total_available }`. Each `ready` entry includes `plan_slug`, `subtask_index`, `title`, `capability_hint`, `file_scope`, `fit_score`, compact `reason`, and `reasoning`. `reason` is one of `continue_current_task`, `urgent_override`, or `ready_high_score`. Blocked work is filtered out, and conflicting active file claims lower the score.
+
+When claimable work exists, the response also includes exact routing fields:
+
+```json
+{
+  "next_tool": "task_plan_claim_subtask",
+  "plan_slug": "example-plan",
+  "subtask_index": 0,
+  "claim_args": {
+    "plan_slug": "example-plan",
+    "subtask_index": 0,
+    "session_id": "sess_def",
+    "agent": "codex"
+  }
+}
+```
+
+When there is nothing to claim, the response includes `empty_state: "No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, or use task_list only for browsing."`
 
 ## `rescue_stranded_scan`
 

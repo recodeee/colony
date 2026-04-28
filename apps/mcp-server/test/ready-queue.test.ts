@@ -60,7 +60,20 @@ async function claimAndComplete(planSlug: string, subtaskIndex: number): Promise
 interface ReadyResult {
   ready: ReadyEntry[];
   total_available: number;
+  next_tool?: 'task_plan_claim_subtask';
+  plan_slug?: string;
+  subtask_index?: number;
+  claim_args?: {
+    plan_slug: string;
+    subtask_index: number;
+    session_id: string;
+    agent: string;
+  };
+  empty_state?: string;
 }
+
+const EMPTY_READY_STATE =
+  'No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, or use task_list only for browsing.';
 
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const res = await client.callTool({ name, arguments: args });
@@ -146,6 +159,85 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready).toEqual([]);
     expect(result.total_available).toBe(0);
+    expect(result.empty_state).toBe(EMPTY_READY_STATE);
+    expect(result.next_tool).toBeUndefined();
+  });
+
+  it('returns exact claim args for a ready sub-task', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Build claimable API',
+            description: 'Expose the claimable endpoint.',
+            file_scope: ['apps/api/claimable.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Document claimable API',
+            description: 'Document the claimable endpoint.',
+            file_scope: ['docs/claimable.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'claimable-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0]);
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.plan_slug).toBe('claimable-plan');
+    expect(result.subtask_index).toBe(0);
+    expect(result.claim_args).toEqual({
+      plan_slug: 'claimable-plan',
+      subtask_index: 0,
+      session_id: 'agent-session',
+      agent: 'codex',
+    });
+    expect(result.empty_state).toBeUndefined();
+  });
+
+  it('returns the empty state when all future sub-tasks are blocked', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Blocked dependency',
+            description: 'This dependency is blocked.',
+            file_scope: ['apps/api/blocked-dependency.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Future UI',
+            description: 'Cannot start until the dependency completes.',
+            file_scope: ['apps/web/future.tsx'],
+            depends_on: [0],
+            capability_hint: 'ui_work',
+          },
+        ],
+        { slug: 'blocked-future-plan' },
+      ),
+    });
+    const claim = await claimSubtask('blocked-future-plan', 0);
+    blockSubtask('blocked-future-plan', 0, claim.task_id);
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.total_available).toBe(0);
+    expect(result.empty_state).toBe(EMPTY_READY_STATE);
+    expect(result.next_tool).toBeUndefined();
   });
 
   it('ranks the sub-task matching the agent capability first', async () => {
