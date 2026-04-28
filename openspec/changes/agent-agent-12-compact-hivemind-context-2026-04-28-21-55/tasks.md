@@ -26,5 +26,11 @@
 
 ## 4. Completion
 
-- [ ] Commit, push, PR, merge.
-- [ ] Record final `MERGED` evidence and sandbox cleanup.
+- [x] Commit, push, PR, merge.
+      Evidence: PR https://github.com/recodeee/colony/pull/157 is `MERGED`;
+      merge commit `b9065d24119823fcc89c49bc556325af34c2d07a`.
+- [x] Record final `MERGED` evidence and sandbox cleanup.
+      Evidence: `gx cleanup --base main` pruned
+      `.omx/agent-worktrees/colony__agent-12__compact-hivemind-context-2026-04-28-21-55`;
+      `git merge-base --is-ancestor b9065d24119823fcc89c49bc556325af34c2d07a HEAD`
+      passed on `main`.
