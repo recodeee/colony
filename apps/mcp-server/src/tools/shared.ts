@@ -8,11 +8,15 @@ import type {
   SearchResult,
 } from '@colony/core';
 import {
+  type ClaimAgeClass,
+  type ClaimOwnershipStrength,
   NEGATIVE_COORDINATION_KINDS,
   PheromoneSystem,
   TASK_THREAD_ERROR_CODES,
   TaskThreadError,
+  classifyClaimAge,
   isNegativeCoordinationKind,
+  isStrongClaimAge,
 } from '@colony/core';
 import type { TaskThreadErrorCode } from '@colony/core';
 
@@ -104,6 +108,9 @@ export interface HivemindLocalClaim {
   file_path: string;
   by_session_id: string;
   claimed_at: number;
+  age_minutes: number;
+  age_class: ClaimAgeClass;
+  ownership_strength: ClaimOwnershipStrength;
   yours: boolean;
 }
 
@@ -170,6 +177,8 @@ export interface HivemindContextAttention {
   pending_wakes: number;
   blocking: boolean;
   stale_claims: number;
+  expired_claims: number;
+  weak_claims: number;
   stalled_lanes: number;
   counts: HivemindContextAttentionCounts;
   observation_ids: number[];
@@ -186,6 +195,10 @@ export interface HivemindContextAttentionCounts {
   unread_message_count: number;
   stalled_lane_count: number;
   recent_other_claim_count: number;
+  fresh_other_claim_count: number;
+  stale_other_claim_count: number;
+  expired_other_claim_count: number;
+  weak_other_claim_count: number;
   blocked: boolean;
 }
 
@@ -366,7 +379,14 @@ function findFileScopedLocalTask(
       if (store.storage.getParticipantAgent(candidate.id, input.sessionId) === undefined) {
         return false;
       }
-      return files.some((file) => store.storage.getClaim(candidate.id, file) !== undefined);
+      return files.some((file) => {
+        const claim = store.storage.getClaim(candidate.id, file);
+        if (!claim) return false;
+        const age = classifyClaimAge(claim.claimed_at, {
+          claim_stale_minutes: store.settings.claimStaleMinutes,
+        });
+        return isStrongClaimAge(age);
+      });
     })
     .sort((a, b) => b.updated_at - a.updated_at)[0];
   return task ? compactLocalTask(store, input, task.id) : null;
@@ -497,13 +517,25 @@ function localClaims(
           return claim ? [claim] : [];
         })
       : store.storage.listClaims(input.taskId);
-  const sorted = claims.sort((a, b) => b.claimed_at - a.claimed_at);
+  const classified = claims.map((claim) => {
+    const age = classifyClaimAge(claim.claimed_at, {
+      claim_stale_minutes: store.settings.claimStaleMinutes,
+    });
+    return { claim, age };
+  });
+  const sorted = classified.sort((a, b) => {
+    const strengthDelta = Number(isStrongClaimAge(b.age)) - Number(isStrongClaimAge(a.age));
+    return strengthDelta || b.claim.claimed_at - a.claim.claimed_at;
+  });
   return {
-    rows: sorted.slice(0, input.limit).map((claim) => ({
+    rows: sorted.slice(0, input.limit).map(({ claim, age }) => ({
       task_id: claim.task_id,
       file_path: claim.file_path,
       by_session_id: claim.session_id,
       claimed_at: claim.claimed_at,
+      age_minutes: age.age_minutes,
+      age_class: age.age_class,
+      ownership_strength: age.ownership_strength,
       yours: claim.session_id === input.sessionId,
     })),
     truncated: sorted.length > input.limit,
@@ -566,7 +598,9 @@ function localNextAction(input: {
   ) {
     return input.attention.next_action;
   }
-  const otherClaims = input.claims.filter((claim) => !claim.yours);
+  const otherClaims = input.claims.filter(
+    (claim) => !claim.yours && claim.ownership_strength === 'strong',
+  );
   if (otherClaims.length > 0) {
     return 'Coordinate before editing: another session claims one of these local files.';
   }
@@ -684,6 +718,10 @@ function buildAttention(
     unread_message_count: input?.summary.unread_message_count ?? 0,
     stalled_lane_count: Math.max(input?.summary.stalled_lane_count ?? 0, laneNeedsAttentionCount),
     recent_other_claim_count: input?.summary.recent_other_claim_count ?? 0,
+    fresh_other_claim_count: input?.summary.fresh_other_claim_count ?? 0,
+    stale_other_claim_count: input?.summary.stale_other_claim_count ?? 0,
+    expired_other_claim_count: input?.summary.expired_other_claim_count ?? 0,
+    weak_other_claim_count: input?.summary.weak_other_claim_count ?? 0,
     blocked: input?.summary.blocked ?? false,
   };
 
@@ -694,7 +732,9 @@ function buildAttention(
     pending_handoffs: counts.pending_handoff_count,
     pending_wakes: counts.pending_wake_count,
     blocking: counts.blocked,
-    stale_claims: counts.recent_other_claim_count,
+    stale_claims: counts.stale_other_claim_count,
+    expired_claims: counts.expired_other_claim_count,
+    weak_claims: counts.weak_other_claim_count,
     stalled_lanes: counts.stalled_lane_count,
     counts,
     observation_ids: input?.observation_ids ?? [],

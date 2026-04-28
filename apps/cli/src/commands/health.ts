@@ -1,8 +1,10 @@
-import { loadSettings } from '@colony/config';
+import { defaultSettings, loadSettings } from '@colony/config';
 import {
   ProposalSystem,
+  classifyClaimAge,
   currentSignalStrength,
   isSignalExpired,
+  isStrongClaimAge,
   signalMetadataFromObservation,
   signalMetadataFromProposal,
 } from '@colony/core';
@@ -21,7 +23,6 @@ import { readCodexMcpToolCallsSince } from '../lib/codex-rollouts.js';
 
 const DEFAULT_HOURS = 24;
 const HEALTH_TOOL_LIMIT = 5;
-const STALE_CLAIM_MINUTES = 4 * 60;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
 const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const TARGET_HIVEMIND_TO_ATTENTION = 0.5;
@@ -107,8 +108,12 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
 }
 
 interface SignalHealthPayload {
+  total_claims: number;
   active_claims: number;
+  fresh_claims: number;
   stale_claims: number;
+  expired_claims: number;
+  weak_claims: number;
   stale_claim_minutes: number;
   expired_handoffs: number;
   expired_messages: number;
@@ -187,6 +192,7 @@ export function buildColonyHealthPayload(
     since: number;
     window_hours: number;
     now?: number;
+    claim_stale_minutes?: number;
     codex_sessions_root?: string;
   },
 ): ColonyHealthPayload {
@@ -248,7 +254,7 @@ export function buildColonyHealthPayload(
     signal_health: signalHealthPayload(storage, tasks, {
       since: options.since,
       now,
-      stale_claim_minutes: STALE_CLAIM_MINUTES,
+      stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
     }),
     proposal_health: proposalHealthPayload(storage, tasks, {
       since: options.since,
@@ -375,8 +381,10 @@ export function formatColonyHealthOutput(
   lines.push(
     '',
     kleur.bold('Signal health'),
+    `  total claims:     ${payload.signal_health.total_claims}`,
     `  active claims:    ${payload.signal_health.active_claims}`,
     `  stale claims:     ${payload.signal_health.stale_claims} (>${payload.signal_health.stale_claim_minutes}m)`,
+    `  expired/weak:     ${payload.signal_health.expired_claims}`,
     `  expired handoffs: ${payload.signal_health.expired_handoffs}`,
     `  expired messages: ${payload.signal_health.expired_messages}`,
     '',
@@ -434,6 +442,7 @@ export function registerHealthCommand(program: Command): void {
           const payload = buildColonyHealthPayload(storage, {
             since: Date.now() - hours * 3_600_000,
             window_hours: hours,
+            claim_stale_minutes: settings.claimStaleMinutes,
           });
           const formatOptions = opts.json ? { json: true } : {};
           process.stdout.write(`${formatColonyHealthOutput(payload, formatOptions)}\n`);
@@ -562,9 +571,16 @@ function signalHealthPayload(
   tasks: TaskRow[],
   options: { since: number; now: number; stale_claim_minutes: number },
 ): SignalHealthPayload {
-  const staleBefore = options.now - options.stale_claim_minutes * 60_000;
   const claims = tasks.flatMap((task) => storage.listClaims(task.id));
-  const staleClaims = claims.filter((claim) => claim.claimed_at < staleBefore).length;
+  const classified = claims.map((claim) =>
+    classifyClaimAge(claim.claimed_at, {
+      now: options.now,
+      claim_stale_minutes: options.stale_claim_minutes,
+    }),
+  );
+  const activeClaims = classified.filter(isStrongClaimAge).length;
+  const expiredClaims = classified.filter((claim) => claim.age_class === 'expired/weak').length;
+  const weakClaims = classified.filter((claim) => claim.ownership_strength === 'weak').length;
   let expiredHandoffs = 0;
   let expiredMessages = 0;
 
@@ -580,8 +596,12 @@ function signalHealthPayload(
   }
 
   return {
-    active_claims: claims.length,
-    stale_claims: staleClaims,
+    total_claims: claims.length,
+    active_claims: activeClaims,
+    fresh_claims: activeClaims,
+    stale_claims: weakClaims,
+    expired_claims: expiredClaims,
+    weak_claims: weakClaims,
     stale_claim_minutes: options.stale_claim_minutes,
     expired_handoffs: expiredHandoffs,
     expired_messages: expiredMessages,

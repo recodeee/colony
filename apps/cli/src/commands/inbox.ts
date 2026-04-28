@@ -72,7 +72,7 @@ export function registerInboxCommand(program: Command): void {
             kleur.bold(`Inbox for ${agent}@${session.slice(0, 8)} — ${inbox.summary.next_action}`),
           );
           lines.push(
-            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  recent other claims: ${inbox.summary.recent_other_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
+            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claims: ${inbox.summary.stale_other_claim_count}  expired/weak: ${inbox.summary.expired_other_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
           );
 
           const blockingMessages = inbox.unread_messages.filter((m) => m.urgency === 'blocking');
@@ -137,7 +137,9 @@ export function registerInboxCommand(program: Command): void {
             lines.push('');
             lines.push(kleur.gray('Recent other-session claims:'));
             for (const c of inbox.recent_other_claims) {
-              lines.push(`  task ${c.task_id}  ${c.file_path}  by ${c.by_session_id.slice(0, 8)}`);
+              lines.push(
+                `  task ${c.task_id}  ${c.file_path}  by ${c.by_session_id.slice(0, 8)}  ${c.age_class}/${c.ownership_strength}  ${c.age_minutes}m`,
+              );
             }
           }
           if (inbox.file_heat.length > 0) {

@@ -5,7 +5,7 @@ import { defaultSettings } from '@colony/config';
 import { MemoryStore, PheromoneSystem, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildServer } from '../src/server.js';
 
 let dir: string;
@@ -37,6 +37,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await client.close();
   store.close();
   rmSync(dir, { recursive: true, force: true });
@@ -714,6 +715,60 @@ describe('MCP server', () => {
       local_context: { current_task: { id: number } | null };
     };
     expect(implicit.local_context.current_task?.id).toBe(thread.task_id);
+  });
+
+  it('hivemind_context labels stale local claims as weak instead of active blockers', async () => {
+    const repoRoot = join(dir, 'repo-stale-local-claim');
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    store.startSession({ id: 'claude', ide: 'claude-code', cwd: repoRoot });
+    store.startSession({ id: 'codex', ide: 'codex', cwd: repoRoot });
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/codex/stale-local-claim',
+      session_id: 'codex',
+      title: 'Repair stale local claim context',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.claimFile({ session_id: 'claude', file_path: 'src/local.ts' });
+
+    vi.setSystemTime(t0 + 241 * 60_000);
+
+    const res = await client.callTool({
+      name: 'hivemind_context',
+      arguments: {
+        mode: 'local',
+        repo_root: repoRoot,
+        session_id: 'codex',
+        agent: 'codex',
+        task_id: thread.task_id,
+        files: ['src/local.ts'],
+      },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      local_context: {
+        claims: Array<{
+          file_path: string;
+          age_class: string;
+          ownership_strength: string;
+        }>;
+        ready_next_action: string;
+      };
+    };
+
+    expect(payload.local_context.claims).toEqual([
+      expect.objectContaining({
+        file_path: 'src/local.ts',
+        age_class: 'stale',
+        ownership_strength: 'weak',
+      }),
+    ]);
+    expect(payload.local_context.ready_next_action).toBe(
+      'No local blockers found; claim these files before editing.',
+    );
   });
 
   it('hivemind falls back to worktree AGENT.lock task previews', async () => {

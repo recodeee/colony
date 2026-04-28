@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildAttentionInbox } from '../src/attention-inbox.js';
 import { MemoryStore } from '../src/memory-store.js';
 import { listMessagesForAgent } from '../src/messages.js';
@@ -23,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -177,6 +178,42 @@ describe('buildAttentionInbox', () => {
     expect(inbox.pending_handoffs).toHaveLength(0);
     expect(inbox.recent_other_claims.find((c) => c.file_path === 'src/own.ts')).toBeUndefined();
     expect(inbox.unread_messages).toHaveLength(0);
+  });
+
+  it('classifies stale recent claims without counting them as active ownership', () => {
+    seed('claude', 'codex');
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/inbox-stale-claims',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.claimFile({ session_id: 'claude', file_path: 'src/stale.ts' });
+
+    vi.setSystemTime(t0 + 241 * 60_000);
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+      recent_claim_window_ms: 300 * 60_000,
+      claim_stale_ms: 240 * 60_000,
+    });
+
+    expect(inbox.summary.recent_other_claim_count).toBe(0);
+    expect(inbox.summary.stale_other_claim_count).toBe(1);
+    expect(inbox.summary.weak_other_claim_count).toBe(1);
+    expect(inbox.recent_other_claims).toEqual([
+      expect.objectContaining({
+        file_path: 'src/stale.ts',
+        age_class: 'stale',
+        ownership_strength: 'weak',
+      }),
+    ]);
   });
 
   it('shows only live pending handoffs before expiry', () => {

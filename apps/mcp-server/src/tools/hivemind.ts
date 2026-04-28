@@ -152,13 +152,17 @@ export function register(server: McpServer, ctx: ToolContext): void {
         };
         const scopedAttentionInbox = buildAttentionInbox(store, {
           ...attentionBaseOptions,
+          claim_stale_ms: ctx.settings.claimStaleMinutes * 60_000,
           ...(localMode && currentTask ? { task_ids: [currentTask.id] } : {}),
         });
         const attentionInbox =
           localMode && currentTask
             ? preserveBlockingAttention(
                 scopedAttentionInbox,
-                buildAttentionInbox(store, attentionBaseOptions),
+                buildAttentionInbox(store, {
+                  ...attentionBaseOptions,
+                  claim_stale_ms: ctx.settings.claimStaleMinutes * 60_000,
+                }),
                 attentionLimit,
               )
             : scopedAttentionInbox;
@@ -177,6 +181,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
           unread_message_count: attentionInput.summary.unread_message_count,
           stalled_lane_count: attentionInput.summary.stalled_lane_count,
           recent_other_claim_count: attentionInput.summary.recent_other_claim_count,
+          fresh_other_claim_count: attentionInput.summary.fresh_other_claim_count,
+          stale_other_claim_count: attentionInput.summary.stale_other_claim_count,
+          expired_other_claim_count: attentionInput.summary.expired_other_claim_count,
+          weak_other_claim_count: attentionInput.summary.weak_other_claim_count,
           blocked: attentionInput.summary.blocked,
         };
         const attentionContext = {
@@ -186,7 +194,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
           pending_handoffs: attentionCounts.pending_handoff_count,
           pending_wakes: attentionCounts.pending_wake_count,
           blocking: attentionCounts.blocked,
-          stale_claims: attentionCounts.recent_other_claim_count,
+          stale_claims: attentionCounts.stale_other_claim_count,
+          expired_claims: attentionCounts.expired_other_claim_count,
+          weak_claims: attentionCounts.weak_other_claim_count,
           stalled_lanes: attentionCounts.stalled_lane_count,
           counts: attentionCounts,
           observation_ids: attentionInput.observation_ids,

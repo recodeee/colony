@@ -34,6 +34,12 @@ export const SettingsSchema = z
       .positive()
       .default(30)
       .describe('Minutes for file activity heat to decay by half on read-side context surfaces.'),
+    claimStaleMinutes: z
+      .number()
+      .int()
+      .positive()
+      .default(240)
+      .describe('Minutes before a file claim is downgraded from active ownership to stale/weak.'),
     compression: z
       .object({
         intensity: CompressionIntensity.default('full').describe(

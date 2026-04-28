@@ -149,8 +149,12 @@ describe('colony health payload', () => {
       claim_before_edit_ratio: 1 / 2,
     });
     expect(payload.signal_health).toMatchObject({
-      active_claims: 2,
+      total_claims: 2,
+      active_claims: 1,
+      fresh_claims: 1,
       stale_claims: 1,
+      expired_claims: 0,
+      weak_claims: 1,
       expired_handoffs: 1,
       expired_messages: 1,
     });

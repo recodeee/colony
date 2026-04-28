@@ -1,9 +1,14 @@
 import type { TaskClaimRow } from '@colony/storage';
+import {
+  type ClaimAgeClass,
+  type ClaimOwnershipStrength,
+  classifyClaimAge,
+  isStrongClaimAge,
+} from './claim-age.js';
 import { inferIdeFromSessionId } from './infer-ide.js';
 import type { MemoryStore } from './memory-store.js';
 
 const ALL_TASKS_LIMIT = 1_000_000;
-const MINUTE_MS = 60_000;
 
 export interface ClaimHolder {
   session_id: string;
@@ -11,6 +16,8 @@ export interface ClaimHolder {
   task_id: number;
   claimed_at: number;
   age_minutes: number;
+  age_class: ClaimAgeClass;
+  ownership_strength: ClaimOwnershipStrength;
 }
 
 export interface ScopeOverlap {
@@ -18,10 +25,17 @@ export interface ScopeOverlap {
   held_by: ClaimHolder;
 }
 
-/** For each file_path, list current holders (or null if free). */
+export interface ClaimGraphOptions {
+  now?: number;
+  claim_stale_minutes?: number;
+  include_weak?: boolean;
+}
+
+/** For each file_path, list current strong holders (or null if free). */
 export function claimsForPaths(
   store: MemoryStore,
   paths: string[],
+  options: ClaimGraphOptions = {},
 ): Map<string, ClaimHolder | null> {
   const result = new Map<string, ClaimHolder | null>();
   for (const path of paths) result.set(path, null);
@@ -38,9 +52,14 @@ export function claimsForPaths(
     }
   }
 
-  const now = Date.now();
+  const now = options.now ?? Date.now();
+  const includeWeak = options.include_weak ?? false;
   for (const [path, claim] of claimsByPath.entries()) {
-    result.set(path, toClaimHolder(claim, now));
+    const holder = toClaimHolder(claim, {
+      now,
+      claim_stale_minutes: options.claim_stale_minutes ?? store.settings.claimStaleMinutes,
+    });
+    if (includeWeak || isStrongClaimAge(holder)) result.set(path, holder);
   }
   return result;
 }
@@ -51,10 +70,10 @@ export function claimsForPaths(
  */
 export function scopeOverlap(
   store: MemoryStore,
-  args: { intended_paths: string[]; my_session_id: string },
+  args: { intended_paths: string[]; my_session_id: string } & ClaimGraphOptions,
 ): ScopeOverlap[] {
   const overlaps: ScopeOverlap[] = [];
-  for (const [file_path, holder] of claimsForPaths(store, args.intended_paths).entries()) {
+  for (const [file_path, holder] of claimsForPaths(store, args.intended_paths, args).entries()) {
     if (holder && holder.session_id !== args.my_session_id) {
       overlaps.push({ file_path, held_by: holder });
     }
@@ -87,13 +106,16 @@ export function pairwiseScopeOverlap(
   return overlaps;
 }
 
-function toClaimHolder(claim: TaskClaimRow, now: number): ClaimHolder {
+function toClaimHolder(claim: TaskClaimRow, options: ClaimGraphOptions): ClaimHolder {
+  const classification = classifyClaimAge(claim.claimed_at, options);
   return {
     session_id: claim.session_id,
     agent: inferIdeFromSessionId(claim.session_id) ?? null,
     task_id: claim.task_id,
     claimed_at: claim.claimed_at,
-    age_minutes: Math.max(0, Math.floor((now - claim.claimed_at) / MINUTE_MS)),
+    age_minutes: classification.age_minutes,
+    age_class: classification.age_class,
+    ownership_strength: classification.ownership_strength,
   };
 }
 

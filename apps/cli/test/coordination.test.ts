@@ -180,7 +180,7 @@ describe('colony coordination CLI', () => {
 async function seedSweepSignals(): Promise<void> {
   const settings = loadSettings();
   await withStore(settings, (store) => {
-    setMinutesAgo(180);
+    setMinutesAgo(300);
     store.startSession({ id: 'codex@stale', ide: 'codex', cwd: repoRoot });
     store.startSession({ id: 'claude@target', ide: 'claude-code', cwd: repoRoot });
     const thread = TaskThread.open(store, {

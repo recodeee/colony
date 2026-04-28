@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import type { FileHeatRow, TaskClaimRow } from '@colony/storage';
+import { type ClaimAgeClass, type ClaimOwnershipStrength, classifyClaimAge } from './claim-age.js';
 import {
   type HivemindActivity,
   type HivemindOptions,
@@ -61,6 +62,9 @@ export interface InboxRecentClaim {
   file_path: string;
   by_session_id: string;
   claimed_at: number;
+  age_minutes: number;
+  age_class: ClaimAgeClass;
+  ownership_strength: ClaimOwnershipStrength;
 }
 
 export interface InboxFileHeat {
@@ -119,6 +123,10 @@ export interface AttentionInbox {
     pending_wake_count: number;
     unread_message_count: number;
     stalled_lane_count: number;
+    fresh_other_claim_count: number;
+    stale_other_claim_count: number;
+    expired_other_claim_count: number;
+    weak_other_claim_count: number;
     recent_other_claim_count: number;
     hot_file_count: number;
     /**
@@ -156,6 +164,7 @@ export interface AttentionInboxOptions {
    * preface uses, because the inbox is a review surface, not a live warning.
    */
   recent_claim_window_ms?: number;
+  claim_stale_ms?: number;
   recent_claim_limit?: number;
   /** Tasks to scan for pending handoffs/wakes. Defaults to all tasks the
    *  session participates in. */
@@ -222,6 +231,8 @@ export function buildAttentionInbox(
 
   const recentWindow = opts.recent_claim_window_ms ?? DEFAULT_RECENT_CLAIM_WINDOW_MS;
   const recentLimit = opts.recent_claim_limit ?? DEFAULT_RECENT_CLAIM_LIMIT;
+  const claimStaleMinutes =
+    (opts.claim_stale_ms ?? store.settings.claimStaleMinutes * 60_000) / 60_000;
   const recentSince = now - recentWindow;
 
   for (const task_id of taskIds) {
@@ -234,7 +245,9 @@ export function buildAttentionInbox(
     }
     for (const claim of store.storage.recentClaims(task_id, recentSince, recentLimit)) {
       if (claim.session_id === opts.session_id) continue;
-      recent_other_claims.push(compactClaim(claim));
+      recent_other_claims.push(
+        compactClaim(claim, { now, claim_stale_minutes: claimStaleMinutes }),
+      );
     }
   }
 
@@ -244,13 +257,21 @@ export function buildAttentionInbox(
   const read_receipts = collectReadReceipts(store, opts, taskIds, now);
   const coalesced_messages = coalesceMessages(unread_messages);
   const blocked = unread_messages.some((m) => m.urgency === 'blocking');
+  const freshClaims = recent_other_claims.filter((claim) => claim.age_class === 'fresh');
+  const staleClaims = recent_other_claims.filter((claim) => claim.age_class === 'stale');
+  const expiredClaims = recent_other_claims.filter((claim) => claim.age_class === 'expired/weak');
+  const weakClaims = recent_other_claims.filter((claim) => claim.ownership_strength === 'weak');
 
   const summary = {
     pending_handoff_count: pending_handoffs.length,
     pending_wake_count: pending_wakes.length,
     unread_message_count: unread_messages.length,
     stalled_lane_count: stalled_lanes.length,
-    recent_other_claim_count: recent_other_claims.length,
+    fresh_other_claim_count: freshClaims.length,
+    stale_other_claim_count: staleClaims.length,
+    expired_other_claim_count: expiredClaims.length,
+    weak_other_claim_count: weakClaims.length,
+    recent_other_claim_count: freshClaims.length,
     hot_file_count: file_heat.length,
     blocked,
     next_action: deriveNextAction({
@@ -258,7 +279,7 @@ export function buildAttentionInbox(
       pending_wakes,
       unread_messages,
       stalled_lanes,
-      recent_other_claims,
+      recent_other_claims: freshClaims,
       file_heat,
       read_receipts,
     }),
@@ -460,12 +481,19 @@ function compactWake(
   };
 }
 
-function compactClaim(row: TaskClaimRow): InboxRecentClaim {
+function compactClaim(
+  row: TaskClaimRow,
+  options: { now: number; claim_stale_minutes: number },
+): InboxRecentClaim {
+  const classification = classifyClaimAge(row.claimed_at, options);
   return {
     task_id: row.task_id,
     file_path: row.file_path,
     by_session_id: row.session_id,
     claimed_at: row.claimed_at,
+    age_minutes: classification.age_minutes,
+    age_class: classification.age_class,
+    ownership_strength: classification.ownership_strength,
   };
 }
 

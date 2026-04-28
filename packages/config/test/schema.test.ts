@@ -10,6 +10,7 @@ describe('SettingsSchema', () => {
     expect(parsed.foraging.proposalNoiseFloor).toBe(0.3);
     expect(parsed.foraging.promotionThreshold).toBe(2.5);
     expect(parsed.fileHeatHalfLifeMinutes).toBe(30);
+    expect(parsed.claimStaleMinutes).toBe(240);
     expect(parsed.bridge.writeOmxNotepadPointer).toBe(false);
   });
 
@@ -29,6 +30,7 @@ describe('SettingsSchema', () => {
     expect(defaultSettings.foraging.proposalNoiseFloor).toBe(0.3);
     expect(defaultSettings.foraging.promotionThreshold).toBe(2.5);
     expect(defaultSettings.fileHeatHalfLifeMinutes).toBe(30);
+    expect(defaultSettings.claimStaleMinutes).toBe(240);
     expect(defaultSettings.bridge.writeOmxNotepadPointer).toBe(false);
   });
 

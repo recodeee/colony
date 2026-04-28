@@ -5,7 +5,7 @@ import { defaultSettings } from '@colony/config';
 import { MemoryStore, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildServer } from '../src/server.js';
 
 let dataDir: string;
@@ -129,6 +129,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await client.close();
   store.close();
   rmSync(dataDir, { recursive: true, force: true });
@@ -316,6 +317,48 @@ describe('task_ready_for_agent', () => {
     expect(result.ready.map((entry) => entry.title)).toEqual(['Clear API', 'Conflicted API']);
     expect(result.ready[0]?.reasoning).toContain('scope clear of live claims');
     expect(result.ready[1]?.reasoning).toContain('1 of 1 files in scope held by');
+  });
+
+  it('does not rank stale claims as live scope conflicts', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    await call('task_plan_publish', {
+      ...publishArgs([
+        {
+          title: 'Previously conflicted API',
+          description: 'Touches a file with only a stale claim.',
+          file_scope: ['apps/api/conflicted.ts'],
+          capability_hint: 'api_work',
+        },
+        {
+          title: 'Clear API',
+          description: 'Touches a clear file.',
+          file_scope: ['apps/api/clear.ts'],
+          capability_hint: 'api_work',
+        },
+      ]),
+      slug: 'ready-stale-claim-plan',
+    });
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/other/stale-conflict',
+      session_id: 'other-session',
+    });
+    thread.claimFile({ session_id: 'other-session', file_path: 'apps/api/conflicted.ts' });
+
+    vi.setSystemTime(t0 + 241 * 60_000);
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    const previouslyConflicted = result.ready.find(
+      (entry) => entry.title === 'Previously conflicted API',
+    );
+    expect(previouslyConflicted?.reasoning).toContain('scope clear of live claims');
   });
 
   it('omits sub-tasks with unmet dependencies', async () => {

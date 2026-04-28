@@ -5,7 +5,6 @@ import { type SubtaskInfo, listPlans } from './plan.js';
 import { ProposalSystem } from './proposal-system.js';
 import { type HandoffMetadata, parseMessage } from './task-thread.js';
 
-const DEFAULT_STALE_CLAIM_MINUTES = 60;
 const HOT_FILE_NOISE_FLOOR = 0.1;
 const STALE_HOT_FILE_MIN_ORIGINAL_STRENGTH = 1;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
@@ -172,7 +171,7 @@ export function buildCoordinationSweep(
   const now = opts.now ?? Date.now();
   const proposalSystem = new ProposalSystem(store, { now: () => now });
   const thresholds = {
-    stale_claim_minutes: opts.stale_claim_minutes ?? DEFAULT_STALE_CLAIM_MINUTES,
+    stale_claim_minutes: opts.stale_claim_minutes ?? store.settings.claimStaleMinutes,
     hot_file_noise_floor: opts.hot_file_noise_floor ?? HOT_FILE_NOISE_FLOOR,
     stale_hot_file_min_original_strength:
       opts.stale_hot_file_min_original_strength ?? STALE_HOT_FILE_MIN_ORIGINAL_STRENGTH,

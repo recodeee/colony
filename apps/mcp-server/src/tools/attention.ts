@@ -35,6 +35,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       if (args.recent_claim_limit !== undefined) {
         options.recent_claim_limit = args.recent_claim_limit;
       }
+      options.claim_stale_ms = settings.claimStaleMinutes * 60_000;
       const fileHeatHalfLifeMinutes =
         args.file_heat_half_life_minutes ?? settings.fileHeatHalfLifeMinutes;
       options.file_heat_half_life_ms = fileHeatHalfLifeMinutes * 60_000;

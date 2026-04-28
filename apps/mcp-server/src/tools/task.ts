@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { TaskThread, listPlans } from '@colony/core';
+import { TaskThread, classifyClaimAge, listPlans } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
@@ -23,6 +23,7 @@ const WorkingNotePointerSchema = z.object({
 });
 
 type WorkingNotePointerInput = z.infer<typeof WorkingNotePointerSchema>;
+type ExistingTaskClaim = NonNullable<ReturnType<ToolContext['store']['storage']['getClaim']>>;
 
 interface OmxNotepadPointerResult {
   status: 'skipped' | 'written' | 'unavailable';
@@ -32,7 +33,7 @@ interface OmxNotepadPointerResult {
 
 export function register(server: McpServer, ctx: ToolContext): void {
   const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
-  const { store } = ctx;
+  const { store, settings } = ctx;
 
   // Task-thread tools. Agents already know their session_id from SessionStart;
   // it's passed explicitly on every call so this server stays session-agnostic
@@ -265,13 +266,21 @@ export function register(server: McpServer, ctx: ToolContext): void {
       note: z.string().optional(),
     },
     wrapHandler('task_claim_file', async ({ task_id, session_id, file_path, note }) => {
+      const previous = store.storage.getClaim(task_id, file_path);
       const thread = new TaskThread(store, task_id);
       const id = thread.claimFile({
         session_id,
         file_path,
         ...(note !== undefined ? { note } : {}),
       });
-      return { content: [{ type: 'text', text: JSON.stringify({ observation_id: id }) }] };
+      const previousClaim = previous
+        ? compactPreviousClaim(previous, session_id, settings.claimStaleMinutes)
+        : null;
+      return jsonReply({
+        observation_id: id,
+        overlap: previousClaim?.overlap ?? 'none',
+        previous_claim: previousClaim,
+      });
     }),
   );
 
@@ -341,6 +350,38 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
 function jsonReply(value: unknown): { content: Array<{ type: 'text'; text: string }> } {
   return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+}
+
+function compactPreviousClaim(
+  claim: ExistingTaskClaim,
+  currentSessionId: string,
+  claimStaleMinutes: number,
+): {
+  task_id: number;
+  file_path: string;
+  by_session_id: string;
+  claimed_at: number;
+  age_minutes: number;
+  age_class: string;
+  ownership_strength: string;
+  overlap: 'same_session' | 'strong_active' | 'weak_stale';
+} {
+  const age = classifyClaimAge(claim.claimed_at, { claim_stale_minutes: claimStaleMinutes });
+  const sameSession = claim.session_id === currentSessionId;
+  return {
+    task_id: claim.task_id,
+    file_path: claim.file_path,
+    by_session_id: claim.session_id,
+    claimed_at: claim.claimed_at,
+    age_minutes: age.age_minutes,
+    age_class: age.age_class,
+    ownership_strength: age.ownership_strength,
+    overlap: sameSession
+      ? 'same_session'
+      : age.ownership_strength === 'strong'
+        ? 'strong_active'
+        : 'weak_stale',
+  };
 }
 
 function taskListHintForSession(store: ToolContext['store'], sessionId: string): string {

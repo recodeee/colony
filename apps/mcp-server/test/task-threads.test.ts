@@ -5,7 +5,7 @@ import { defaultSettings } from '@colony/config';
 import { MemoryStore, TASK_THREAD_ERROR_CODES, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildServer } from '../src/server.js';
 
 let dir: string;
@@ -64,9 +64,52 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await client.close();
   store.close();
   rmSync(dir, { recursive: true, force: true });
+});
+
+describe('task threads — file claims', () => {
+  it('returns weak stale overlap details without deleting the audit claim', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/viewer.tsx',
+    });
+
+    vi.setSystemTime(t0 + 241 * 60_000);
+    const result = await call<{
+      observation_id: number;
+      overlap: string;
+      previous_claim: {
+        by_session_id: string;
+        file_path: string;
+        age_class: string;
+        ownership_strength: string;
+        overlap: string;
+      };
+    }>('task_claim_file', {
+      task_id,
+      session_id: sessionB,
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result.overlap).toBe('weak_stale');
+    expect(result.previous_claim).toMatchObject({
+      by_session_id: sessionA,
+      file_path: 'src/viewer.tsx',
+      age_class: 'stale',
+      ownership_strength: 'weak',
+      overlap: 'weak_stale',
+    });
+    expect(store.storage.taskObservationsByKind(task_id, 'claim', 10)).toHaveLength(2);
+  });
 });
 
 describe('task threads — handoff lifecycle', () => {

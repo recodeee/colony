@@ -5,7 +5,7 @@ import { defaultSettings } from '@colony/config';
 import { MemoryStore, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildServer } from '../src/server.js';
 
 let dir: string;
@@ -73,6 +73,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await client.close();
   store.close();
   rmSync(dir, { recursive: true, force: true });
@@ -133,6 +134,28 @@ describe('task_plan_validate', () => {
         holder_branch: 'agent/codex/held-file',
       },
     ]);
+  });
+
+  it('ignores stale claims as live-claim collisions', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/codex/stale-held-file',
+      session_id: 'A',
+    });
+    thread.join('A', 'codex');
+    thread.claimFile({ session_id: 'A', file_path: 'apps/api/src/widgets.ts' });
+
+    vi.setSystemTime(t0 + 241 * 60_000);
+
+    const result = await callValidate([
+      subtask('API', ['apps/api/src/widgets.ts']),
+      subtask('UI', ['apps/frontend/src/widgets.tsx']),
+    ]);
+
+    expect(result.live_claim_collisions).toEqual([]);
   });
 
   it('warns when independent sub-tasks touch different files in the same module', async () => {

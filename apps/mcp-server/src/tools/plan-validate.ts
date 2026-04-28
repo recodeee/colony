@@ -1,5 +1,5 @@
 import { dirname } from 'node:path/posix';
-import type { MemoryStore } from '@colony/core';
+import { type MemoryStore, classifyClaimAge, isStrongClaimAge } from '@colony/core';
 import { hasDependencyPath, validateOrderedPlan } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -131,7 +131,11 @@ function claimsForPaths(store: MemoryStore, repoRoot: string, paths: string[]): 
   for (const task of store.storage.listTasks(2000)) {
     if (task.repo_root !== repoRoot) continue;
     for (const claim of store.storage.listClaims(task.id)) {
-      if (wanted.has(claim.file_path)) rows.push({ ...claim, branch: task.branch });
+      if (!wanted.has(claim.file_path)) continue;
+      const age = classifyClaimAge(claim.claimed_at, {
+        claim_stale_minutes: store.settings.claimStaleMinutes,
+      });
+      if (isStrongClaimAge(age)) rows.push({ ...claim, branch: task.branch });
     }
   }
   return rows;

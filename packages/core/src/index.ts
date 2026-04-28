@@ -24,6 +24,14 @@ export type { SearchResult, GetObservationsOptions, Observation, Session } from 
 export { createSessionId } from './ids.js';
 export { inferIdeFromSessionId } from './infer-ide.js';
 export {
+  classifyClaimAge,
+  isStrongClaimAge,
+  type ClaimAgeClass,
+  type ClaimAgeClassification,
+  type ClaimAgeOptions,
+  type ClaimOwnershipStrength,
+} from './claim-age.js';
+export {
   claimsForPaths,
   pairwiseScopeOverlap,
   scopeOverlap,
