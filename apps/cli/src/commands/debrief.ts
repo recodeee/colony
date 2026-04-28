@@ -10,11 +10,45 @@ import { withStorage } from '../util/store.js';
  */
 const DEFAULT_HOURS = 24;
 
+// These values are starting guesses based on the Apr 2026 debrief snapshot
+// showing ~0.07, and will need tuning after a week of running.
+export const COMMIT_RATIO_HEALTHY = 0.3;
+export const COMMIT_RATIO_MIXED = 0.1;
+
 interface DebriefContext {
   storage: Storage;
   since: number;
   taskId?: number | undefined;
 }
+
+interface CoordinationActivityResult {
+  commits: number;
+  reads: number;
+  commits_by_session: Map<string, number>;
+  reads_by_session: Map<string, number>;
+}
+
+interface CoordinationActivityStorage {
+  coordinationActivity(since: number): CoordinationActivityResult;
+}
+
+interface CoordinationRatioPayload {
+  commits: number;
+  reads: number;
+  ratio: number | null;
+  verdict: 'healthy' | 'mixed' | 'reading without committing' | null;
+  sessions: Array<{
+    session_id: string;
+    ide: string;
+    commits: number;
+    reads: number;
+    total: number;
+    ratio: number | null;
+  }>;
+}
+
+const COMMIT_RATIO_COMMIT_EXAMPLES = ['task_hand_off', 'task_claim_file', 'task_message'];
+const COMMIT_RATIO_READ_EXAMPLES = ['hivemind_context', 'task_list', 'attention_inbox'];
 
 /**
  * Section 1 — did agents use the task tools at all?
@@ -181,14 +215,45 @@ function sectionToolDistribution(ctx: DebriefContext): string[] {
 }
 
 /**
- * Section 6 — interleaved timeline.
+ * Section 7 — coordination commit ratio.
+ *
+ * Compares coordination writes with coordination reads. Low ratios mean
+ * agents can see Colony state but are not leaving durable coordination behind.
+ */
+export function sectionCoordinationRatio(ctx: DebriefContext): string[] {
+  const lines = ['', kleur.bold('7. Coordination commit ratio')];
+  const payload = coordinationRatioPayload(ctx);
+  if (payload.commits === 0 && payload.reads === 0) {
+    lines.push(kleur.dim('  no coordination activity in window.'));
+    return lines;
+  }
+  lines.push(`  Commits:     ${payload.commits} (${toolExamples(COMMIT_RATIO_COMMIT_EXAMPLES)})`);
+  lines.push(`  Reads:       ${payload.reads} (${toolExamples(COMMIT_RATIO_READ_EXAMPLES)})`);
+  lines.push(
+    `  Ratio:       ${formatRatio(payload.ratio)}  →  ${colorRatioVerdict(payload.verdict)}; ${ratioExplanation(payload)}`,
+  );
+  lines.push('  Per session (top 5 by total activity):');
+  for (const session of payload.sessions) {
+    lines.push(
+      `    ${coordinationSessionLabel(session).padEnd(16)} commits=${String(session.commits).padEnd(4)} reads=${String(session.reads).padEnd(5)} ratio=${formatRatio(session.ratio)}`,
+    );
+  }
+  if (payload.sessions.length === 0) lines.push(kleur.dim('    none'));
+  lines.push(
+    kleur.dim('  Interpretation: >0.3 healthy; 0.1-0.3 mixed; <0.1 reading-without-committing.'),
+  );
+  return lines;
+}
+
+/**
+ * Section 8 — interleaved timeline.
  *
  * No analysis, just chronology. Observer notes are colored magenta so
  * you can scan for moments where your note sits next to an agent event —
  * those are the coordination failures the numeric sections can't surface.
  */
 function sectionTimeline(ctx: DebriefContext): string[] {
-  const lines = ['', kleur.bold('6. Timeline (observer notes interleaved with agent activity)')];
+  const lines = ['', kleur.bold('8. Timeline (observer notes interleaved with agent activity)')];
   const events = ctx.storage.mixedTimeline(ctx.since, ctx.taskId);
   if (events.length === 0) {
     lines.push(kleur.dim('  No events.'));
@@ -205,13 +270,97 @@ function sectionTimeline(ctx: DebriefContext): string[] {
   return lines;
 }
 
+function coordinationRatioPayload(ctx: DebriefContext): CoordinationRatioPayload {
+  const activity = (ctx.storage as Storage & CoordinationActivityStorage).coordinationActivity(
+    ctx.since,
+  );
+  const ideBySession = new Map(
+    ctx.storage.listSessions(500).map((session) => [session.id, session.ide]),
+  );
+  const ids = new Set<string>([
+    ...activity.commits_by_session.keys(),
+    ...activity.reads_by_session.keys(),
+  ]);
+  const sessions = Array.from(ids, (session_id) => {
+    const commits = activity.commits_by_session.get(session_id) ?? 0;
+    const reads = activity.reads_by_session.get(session_id) ?? 0;
+    return {
+      session_id,
+      ide: ideBySession.get(session_id) ?? 'agent',
+      commits,
+      reads,
+      total: commits + reads,
+      ratio: reads > 0 ? commits / reads : null,
+    };
+  })
+    .sort((a, b) => b.total - a.total || a.session_id.localeCompare(b.session_id))
+    .slice(0, 5);
+  const ratio = activity.reads > 0 ? activity.commits / activity.reads : null;
+  return {
+    commits: activity.commits,
+    reads: activity.reads,
+    ratio,
+    verdict:
+      ratio === null
+        ? null
+        : ratio >= COMMIT_RATIO_HEALTHY
+          ? 'healthy'
+          : ratio >= COMMIT_RATIO_MIXED
+            ? 'mixed'
+            : 'reading without committing',
+    sessions,
+  };
+}
+
+function debriefJson(ctx: DebriefContext): Record<string, unknown> {
+  const sessions = ctx.storage
+    .listSessions(200)
+    .filter((s) => s.started_at >= ctx.since && s.id !== 'observer');
+  const autoJoin = sessions.reduce(
+    (acc, session) => {
+      const join = ctx.storage.participantJoinFor(session.id);
+      if (join && join.joined_at - session.started_at < 2000) acc.joined++;
+      else acc.missed_sessions.push(session.id);
+      return acc;
+    },
+    { joined: 0, missed_sessions: [] as string[] },
+  );
+  const claimStats = ctx.storage.editVsClaimStats(ctx.since);
+  const handoffs = ctx.storage.handoffStatusDistribution(ctx.since);
+  const latencies = ctx.storage.handoffAcceptLatencies(ctx.since).sort((a, b) => a - b);
+  const toolDistribution = ctx.storage.toolInvocationDistribution(ctx.since, 20);
+  return {
+    tool_usage: ctx.storage.toolUsageBySession(ctx.since),
+    auto_join: {
+      sessions_started: sessions.length,
+      joined: autoJoin.joined,
+      missed: autoJoin.missed_sessions.length,
+      missed_sessions: autoJoin.missed_sessions,
+    },
+    proactive_claims: {
+      ...claimStats,
+      ratio: claimStats.edit_count > 0 ? claimStats.claim_count / claimStats.edit_count : null,
+    },
+    handoffs: {
+      ...handoffs,
+      total: handoffs.accepted + handoffs.cancelled + handoffs.expired + handoffs.pending,
+      median_accept_latency_ms:
+        latencies.length > 0 ? (latencies[Math.floor(latencies.length / 2)] ?? 0) : null,
+    },
+    tool_distribution: toolDistribution,
+    coordination_ratio: coordinationRatioPayload(ctx),
+    timeline: ctx.storage.mixedTimeline(ctx.since, ctx.taskId),
+  };
+}
+
 export function registerDebriefCommand(program: Command): void {
   program
     .command('debrief')
-    .description('End-of-day collaboration post-mortem: 6 structured sections over DB evidence.')
+    .description('End-of-day collaboration post-mortem over structured DB evidence.')
     .option('--hours <n>', 'Window size in hours', String(DEFAULT_HOURS))
     .option('--task <id>', 'Narrow the timeline section to a specific task thread')
-    .action(async (opts: { hours: string; task?: string }) => {
+    .option('--json', 'Emit structured section payloads as JSON')
+    .action(async (opts: { hours: string; task?: string; json?: boolean }) => {
       const settings = loadSettings();
       await withStorage(settings, (storage) => {
         const ctx: DebriefContext = {
@@ -219,12 +368,17 @@ export function registerDebriefCommand(program: Command): void {
           since: Date.now() - Number(opts.hours) * 3_600_000,
           taskId: opts.task ? Number(opts.task) : undefined,
         };
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(debriefJson(ctx), null, 2)}\n`);
+          return;
+        }
         const sections = [
           sectionToolUsage(ctx),
           sectionAutoJoin(ctx),
           sectionProactiveClaims(ctx),
           sectionHandoffs(ctx),
           sectionToolDistribution(ctx),
+          sectionCoordinationRatio(ctx),
           sectionTimeline(ctx),
         ];
         for (const s of sections) process.stdout.write(`${s.join('\n')}\n`);
@@ -239,4 +393,44 @@ export function registerDebriefCommand(program: Command): void {
         process.stdout.write('  • What was the most valuable moment the system created?\n');
       });
     });
+}
+
+function formatRatio(ratio: number | null): string {
+  return ratio === null ? 'n/a' : ratio.toFixed(2);
+}
+
+function colorRatioVerdict(verdict: CoordinationRatioPayload['verdict']): string {
+  if (verdict === 'healthy') return kleur.green('healthy');
+  if (verdict === 'mixed') return kleur.yellow('mixed');
+  if (verdict === 'reading without committing') return kleur.red('reading without committing');
+  return kleur.dim('n/a');
+}
+
+function ratioExplanation(payload: CoordinationRatioPayload): string {
+  if (payload.commits === 0 && payload.reads > 0) {
+    return 'agents reading colony without commits; primitives invisible';
+  }
+  if (payload.reads === 0) return 'no coordination reads recorded';
+  const readsPerCommit =
+    payload.commits > 0 ? Math.max(1, Math.round(payload.reads / payload.commits)) : 0;
+  const suffix =
+    payload.ratio !== null && payload.ratio < COMMIT_RATIO_MIXED ? '; primitives invisible' : '';
+  return `agents reading colony ${readsPerCommit}x for every commit${suffix}`;
+}
+
+function toolExamples(tools: string[]): string {
+  return `${tools.join(', ')}, ...`;
+}
+
+function coordinationSessionLabel(session: CoordinationRatioPayload['sessions'][number]): string {
+  if (session.session_id.includes('@')) return shortSession(session.session_id);
+  return `${session.ide}@${shortSession(session.session_id)}`;
+}
+
+function shortSession(sessionId: string): string {
+  const parts = sessionId.includes('@') ? sessionId.split('@', 2) : ['', sessionId];
+  const agent = parts[0] ?? '';
+  const id = parts[1] ?? sessionId;
+  const short = id.length > 6 ? `${id.slice(0, 6)}...` : id;
+  return agent ? `${agent}@${short}` : short;
 }

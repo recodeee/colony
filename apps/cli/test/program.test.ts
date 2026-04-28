@@ -70,8 +70,8 @@ describe('Colony CLI program', () => {
                                             the memory timeline
         observe [options]                   Live dashboard of collaboration state.
                                             Run in a spare terminal during a session.
-        debrief [options]                   End-of-day collaboration post-mortem: 6
-                                            structured sections over DB evidence.
+        debrief [options]                   End-of-day collaboration post-mortem over
+                                            structured DB evidence.
         inbox [options]                     Compact list of attention items for a
                                             session: pending handoffs, wakes, stalled
                                             lanes, recent claims
@@ -95,6 +95,13 @@ describe('Colony CLI program', () => {
     const hook = program.commands.find((c) => c.name() === 'hook');
     expect(hook).toBeDefined();
     expect(hook?.commands.map((c) => c.name())).toContain('run');
+  });
+
+  it('exposes debrief JSON output for worker rendering', () => {
+    const program = createProgram();
+    const debrief = program.commands.find((c) => c.name() === 'debrief');
+    expect(debrief).toBeDefined();
+    expect(debrief?.options.find((o) => o.long === '--json')).toBeDefined();
   });
 
   it('advertises a semantic version', () => {
