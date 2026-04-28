@@ -5,6 +5,7 @@ import type { Command } from 'commander';
 const VALID: HookName[] = [
   'session-start',
   'user-prompt-submit',
+  'pre-tool-use',
   'post-tool-use',
   'stop',
   'session-end',
@@ -15,6 +16,7 @@ const VALID: HookName[] = [
 const CLAUDE_EVENT_NAME: Record<HookName, string> = {
   'session-start': 'SessionStart',
   'user-prompt-submit': 'UserPromptSubmit',
+  'pre-tool-use': 'PreToolUse',
   'post-tool-use': 'PostToolUse',
   stop: 'Stop',
   'session-end': 'SessionEnd',

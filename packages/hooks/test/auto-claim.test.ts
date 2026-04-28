@@ -6,6 +6,7 @@ import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { autoClaimFileForSession } from '../src/auto-claim.js';
 import { autoClaimFromToolUse, extractTouchedFiles } from '../src/handlers/post-tool-use.js';
+import { claimBeforeEditFromToolUse } from '../src/handlers/pre-tool-use.js';
 import { buildConflictPreface } from '../src/handlers/user-prompt-submit.js';
 import { runHook } from '../src/runner.js';
 
@@ -217,6 +218,78 @@ describe('autoClaimFromToolUse', () => {
   });
 });
 
+describe('claimBeforeEditFromToolUse', () => {
+  it('creates a claim observation before the edit hook records the write', () => {
+    const task_id = seedTwoSessionTask();
+    const result = claimBeforeEditFromToolUse(store, {
+      session_id: 'A',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/viewer.tsx' },
+    });
+
+    expect(result).toMatchObject({
+      edits_with_claim: [],
+      edits_missing_claim: ['src/viewer.tsx'],
+      auto_claimed_before_edit: ['src/viewer.tsx'],
+      warnings: [],
+    });
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
+    const claims = store.storage.taskObservationsByKind(task_id, 'claim');
+    expect(claims).toHaveLength(1);
+    expect(metadataOf(claims[0])).toMatchObject({
+      source: 'pre-tool-use',
+      file_path: 'src/viewer.tsx',
+      tool: 'Edit',
+      auto_claimed_before_edit: true,
+    });
+    expect(store.storage.taskObservationsByKind(task_id, 'claim-before-edit')).toHaveLength(2);
+  });
+
+  it('records already-claimed edits without duplicating the claim', () => {
+    const task_id = seedTwoSessionTask();
+    const thread = new TaskThread(store, task_id);
+    thread.claimFile({ session_id: 'A', file_path: 'src/viewer.tsx' });
+
+    const result = claimBeforeEditFromToolUse(store, {
+      session_id: 'A',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/viewer.tsx' },
+    });
+
+    expect(result.edits_with_claim).toEqual(['src/viewer.tsx']);
+    expect(result.auto_claimed_before_edit).toEqual([]);
+    expect(store.storage.taskObservationsByKind(task_id, 'claim')).toHaveLength(1);
+    const telemetry = store.storage.taskObservationsByKind(task_id, 'claim-before-edit');
+    expect(telemetry).toHaveLength(1);
+    expect(metadataOf(telemetry[0])).toMatchObject({
+      outcome: 'edits_with_claim',
+      file_path: 'src/viewer.tsx',
+    });
+  });
+
+  it('records advisory conflict telemetry and still pre-claims for the editing session', () => {
+    const task_id = seedTwoSessionTask();
+    const thread = new TaskThread(store, task_id);
+    thread.claimFile({ session_id: 'A', file_path: 'src/viewer.tsx' });
+
+    const result = claimBeforeEditFromToolUse(store, {
+      session_id: 'B',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/viewer.tsx' },
+    });
+
+    expect(result.auto_claimed_before_edit).toEqual(['src/viewer.tsx']);
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    const conflicts = store.storage.taskObservationsByKind(task_id, 'claim-conflict');
+    expect(conflicts).toHaveLength(1);
+    expect(metadataOf(conflicts[0])).toMatchObject({
+      source: 'pre-tool-use',
+      file_path: 'src/viewer.tsx',
+      other_session: 'A',
+    });
+  });
+});
+
 describe('buildConflictPreface', () => {
   it("surfaces other sessions' recent claims, grouped by session", () => {
     seedTwoSessionTask();
@@ -245,6 +318,43 @@ describe('buildConflictPreface', () => {
 });
 
 describe('runHook integration: A edits -> B sees warning', () => {
+  it('PreToolUse claims first so health can count the later edit as covered', async () => {
+    const task_id = seedTwoSessionTask();
+
+    const before = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'A',
+        ide: 'claude-code',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/viewer.tsx' },
+      },
+      { store },
+    );
+    expect(before.ok).toBe(true);
+
+    const edit = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'A',
+        ide: 'claude-code',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/viewer.tsx' },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+    expect(edit.ok).toBe(true);
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
+    expect(store.storage.taskObservationsByKind(task_id, 'auto-claim')).toHaveLength(0);
+    expect(store.storage.claimBeforeEditStats(0)).toMatchObject({
+      edit_tool_calls: 1,
+      edits_with_file_path: 1,
+      edits_claimed_before: 1,
+      auto_claimed_before_edit: 1,
+    });
+  });
+
   it('PostToolUse auto-claims, and the next UserPromptSubmit warns the other session', async () => {
     const task_id = seedTwoSessionTask();
 

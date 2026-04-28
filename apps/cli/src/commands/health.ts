@@ -91,6 +91,9 @@ interface SearchCallsPayload {
 interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   status: 'available' | 'not_available' | 'no_data';
   task_claim_file_calls: number;
+  edits_with_claim: number;
+  edits_missing_claim: number;
+  auto_claimed_before_edit: number;
   edits_without_claim_before: number;
   claim_before_edit_ratio: number | null;
 }
@@ -487,6 +490,7 @@ function claimBeforeEditPayload(
   taskClaimFileCalls: number,
 ): ClaimBeforeEditPayload {
   const editsWithoutClaimBefore = stats.edits_with_file_path - stats.edits_claimed_before;
+  const autoClaimedBeforeEdit = stats.auto_claimed_before_edit ?? 0;
   const status =
     stats.edit_tool_calls === 0
       ? 'no_data'
@@ -497,6 +501,9 @@ function claimBeforeEditPayload(
     ...stats,
     status,
     task_claim_file_calls: taskClaimFileCalls,
+    edits_with_claim: stats.edits_claimed_before,
+    edits_missing_claim: editsWithoutClaimBefore,
+    auto_claimed_before_edit: autoClaimedBeforeEdit,
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_before_edit_ratio:
       status === 'available' ? ratio(stats.edits_claimed_before, stats.edits_with_file_path) : null,
@@ -623,6 +630,9 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
     )})`,
   );
   lines.push(`  missing proactive claim: ${payload.edits_without_claim_before}`);
+  lines.push(
+    `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}`,
+  );
   return lines;
 }
 

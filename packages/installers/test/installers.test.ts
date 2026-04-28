@@ -68,10 +68,20 @@ describe('claude-code installer', () => {
       mcpServers: Record<string, { command: string; args?: string[] }>;
     };
     expect(Object.keys(first.hooks).sort()).toEqual(
-      ['PostToolUse', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit'].sort(),
+      [
+        'PostToolUse',
+        'PreToolUse',
+        'SessionEnd',
+        'SessionStart',
+        'Stop',
+        'UserPromptSubmit',
+      ].sort(),
     );
     expect(first.hooks.SessionStart?.[0]?.hooks?.[0]?.command).toBe(
       `${ctx.nodeBin} ${ctx.cliPath} hook run session-start --ide claude-code`,
+    );
+    expect(first.hooks.PreToolUse?.[0]?.hooks?.[0]?.command).toBe(
+      `${ctx.nodeBin} ${ctx.cliPath} hook run pre-tool-use --ide claude-code`,
     );
     expect(first.mcpServers.colony).toEqual({
       command: ctx.nodeBin,

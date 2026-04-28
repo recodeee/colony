@@ -18,6 +18,7 @@ interface ClaudeSettings {
 const HOOK_NAMES: Array<[string, string]> = [
   ['SessionStart', 'session-start'],
   ['UserPromptSubmit', 'user-prompt-submit'],
+  ['PreToolUse', 'pre-tool-use'],
   ['PostToolUse', 'post-tool-use'],
   ['Stop', 'stop'],
   ['SessionEnd', 'session-end'],

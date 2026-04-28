@@ -128,6 +128,7 @@ export interface ClaimBeforeEditStats {
   edit_tool_calls: number;
   edits_with_file_path: number;
   edits_claimed_before: number;
+  auto_claimed_before_edit?: number;
 }
 
 export interface ClaimCoverageSnapshot {
@@ -1521,18 +1522,27 @@ export class Storage {
                     AND c.session_id = edit_rows.session_id
                     AND json_extract(c.metadata, '$.file_path') = edit_rows.file_path
                     AND c.ts <= edit_rows.ts
-                ) THEN 1 ELSE 0 END) AS edits_claimed_before
+                ) THEN 1 ELSE 0 END) AS edits_claimed_before,
+                (
+                  SELECT COUNT(*) FROM observations c
+                  WHERE c.ts > ?
+                    AND c.kind = 'claim'
+                    AND json_extract(c.metadata, '$.source') = 'pre-tool-use'
+                    AND json_extract(c.metadata, '$.auto_claimed_before_edit') = 1
+                ) AS auto_claimed_before_edit
          FROM edit_rows`,
       )
-      .get(FILE_EDIT_TOOLS_JSON, since_ts) as {
+      .get(FILE_EDIT_TOOLS_JSON, since_ts, since_ts) as {
       edit_tool_calls: number;
       edits_with_file_path: number | null;
       edits_claimed_before: number | null;
+      auto_claimed_before_edit: number | null;
     };
     return {
       edit_tool_calls: row.edit_tool_calls,
       edits_with_file_path: row.edits_with_file_path ?? 0,
       edits_claimed_before: row.edits_claimed_before ?? 0,
+      auto_claimed_before_edit: row.auto_claimed_before_edit ?? 0,
     };
   }
 

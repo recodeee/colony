@@ -4,6 +4,7 @@ import { MemoryStore, inferIdeFromSessionId } from '@colony/core';
 import { removeActiveSession, upsertActiveSession } from './active-session.js';
 import { ensureWorkerRunning } from './auto-spawn.js';
 import { postToolUse } from './handlers/post-tool-use.js';
+import { preToolUse } from './handlers/pre-tool-use.js';
 import { sessionEnd } from './handlers/session-end.js';
 import { buildProposalPreface, buildTaskPreface, sessionStart } from './handlers/session-start.js';
 import { stop } from './handlers/stop.js';
@@ -53,6 +54,10 @@ export async function runHook(
       case 'user-prompt-submit':
         upsertActiveSession(input, name);
         context = joinContext(bootstrapContext, await userPromptSubmit(store, input));
+        break;
+      case 'pre-tool-use':
+        upsertActiveSession(input, name);
+        context = preToolUse(store, input);
         break;
       case 'post-tool-use':
         upsertActiveSession(input, name);

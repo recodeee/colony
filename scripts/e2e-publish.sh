@@ -77,10 +77,12 @@ echo "==> 7. install --ide claude-code"
 echo "==> 8. claude settings written"
 test -f "$HOME/.claude/settings.json"
 grep -q "hook run session-start --ide claude-code" "$HOME/.claude/settings.json"
+grep -q "hook run pre-tool-use --ide claude-code" "$HOME/.claude/settings.json"
 
 echo "==> 9. drive full hook lifecycle"
 echo '{"session_id":"e2e","hook_event_name":"SessionStart","source":"startup","cwd":"/tmp"}' | "$BIN" hook run session-start --ide claude-code
 echo '{"session_id":"e2e","hook_event_name":"UserPromptSubmit","prompt":"Edit the broken /etc/hosts file"}' | "$BIN" hook run user-prompt-submit --ide claude-code
+echo '{"session_id":"e2e","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.ts"}}' | "$BIN" hook run pre-tool-use --ide claude-code
 echo '{"session_id":"e2e","hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"/tmp/x.ts"},"tool_response":{"success":true}}' | "$BIN" hook run post-tool-use --ide claude-code
 echo '{"session_id":"e2e","hook_event_name":"Stop","last_assistant_message":"shipped the migration"}' | "$BIN" hook run stop --ide claude-code
 echo '{"session_id":"e2e","hook_event_name":"SessionEnd","reason":"logout"}' | "$BIN" hook run session-end --ide claude-code

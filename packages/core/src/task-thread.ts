@@ -494,7 +494,12 @@ export class TaskThread {
    * Record an explicit file claim. Advisory only — edits are never blocked,
    * but the PostToolUse hook surfaces the overlap next turn.
    */
-  claimFile(p: { session_id: string; file_path: string; note?: string }): number {
+  claimFile(p: {
+    session_id: string;
+    file_path: string;
+    note?: string;
+    metadata?: Record<string, unknown>;
+  }): number {
     return this.store.storage.transaction(() => {
       this.store.storage.claimFile({
         task_id: this.task_id,
@@ -506,7 +511,7 @@ export class TaskThread {
         kind: 'claim',
         content: p.note ? `claim ${p.file_path} — ${p.note}` : `claim ${p.file_path}`,
         task_id: this.task_id,
-        metadata: { kind: 'claim', file_path: p.file_path },
+        metadata: { kind: 'claim', file_path: p.file_path, ...(p.metadata ?? {}) },
       });
     });
   }

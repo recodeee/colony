@@ -1,6 +1,7 @@
 export type HookName =
   | 'session-start'
   | 'user-prompt-submit'
+  | 'pre-tool-use'
   | 'post-tool-use'
   | 'stop'
   | 'session-end';
@@ -34,7 +35,7 @@ export interface HookInput {
   // UserPromptSubmit.
   prompt?: string;
 
-  // PostToolUse.
+  // PreToolUse / PostToolUse.
   tool_name?: string;
   tool_input?: unknown;
   tool_response?: unknown;
