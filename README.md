@@ -110,7 +110,7 @@ Copy-paste startup:
 { "name": "task_ready_for_agent", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo", "limit": 5 } }
 ```
 
-If the ready item needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. Claim files with `task_claim_file` or `task_plan_claim_subtask` before editing.
+If the ready item needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. Before editing, inspect ownership, then claim touched files on the active task with `task_claim_file` or `task_plan_claim_subtask`. Claims are warnings, not locks; they help avoid conflict and do not block writes.
 
 ### Memory and session recall
 
@@ -127,7 +127,7 @@ If the ready item needs implementation context, call `search` with the task titl
 | Tool | Use it for |
 | --- | --- |
 | `hivemind` | See active agents, branches, task previews, and live lanes. |
-| `hivemind_context` | Combine active lane ownership with compact relevant memory hits. |
+| `hivemind_context` | Inspect active lane ownership before editing and before claiming touched files. |
 | `attention_inbox` | See pending handoffs, messages, wakes, stalled lanes, and recent claims. |
 | `task_list` | Browse recent task threads by repo, branch, and status. |
 | `task_timeline` | Read compact task-thread activity. |
@@ -143,7 +143,7 @@ If the ready item needs implementation context, call `search` with the task titl
 | `task_message_mark_read` | Acknowledge a message and emit a read receipt. |
 | `task_message_claim` | Claim a broadcast message before replying. |
 | `task_message_retract` | Retract a message that has not been replied to. |
-| `task_claim_file` | Soft-claim a file before editing so overlaps surface as warnings. |
+| `task_claim_file` | Claim a file before editing so file ownership is visible and overlaps warn, not lock. |
 | `task_hand_off` | Transfer work and file claims to another agent. |
 | `task_accept_handoff` / `task_decline_handoff` | Accept or decline pending handoffs. |
 

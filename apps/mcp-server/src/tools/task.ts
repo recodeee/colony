@@ -97,7 +97,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_claim_file',
-    'Claim a file before editing so other agents see ownership. Records file_path, session ownership, note, and overlap warnings for next-turn coordination.',
+    'Claim a file before editing so other agents see ownership and overlap warnings. Use before editing to avoid conflict and make file ownership visible; claims are soft coordination and never block writes.',
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1),

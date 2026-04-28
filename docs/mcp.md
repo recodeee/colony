@@ -153,6 +153,7 @@ Use this from a Codex skill as the first context step when the skill needs to kn
 ## `hivemind_context`
 
 Return live lane ownership plus compact relevant memory hits in one request.
+Before editing, inspect ownership, then claim touched files on the active task.
 
 ```json
 {
@@ -199,6 +200,64 @@ Inputs:
 - `memory_limit`: compact memory hits to return, capped at 10 and defaulting to 3.
 
 Use this for takeover, review, or resume flows where the agent needs current ownership and a small memory index before deciding which full observations to fetch.
+
+### Normal edit workflow
+
+Call `hivemind_context` before editing:
+
+```json
+{
+  "name": "hivemind_context",
+  "input": {
+    "repo_root": "/home/deadpool/Documents/recodee",
+    "query": "files I expect to touch",
+    "memory_limit": 3,
+    "limit": 20
+  }
+}
+```
+
+Inspect active lanes for branches, owners, and file ownership:
+
+```json
+{
+  "lanes": [
+    {
+      "branch": "agent/codex/live-task",
+      "owner": "codex/codex",
+      "locked_file_preview": ["apps/mcp-server/src/tools/task.ts"]
+    }
+  ]
+}
+```
+
+Call `task_claim_file` once for each file you expect to edit:
+
+```json
+{
+  "name": "task_claim_file",
+  "input": {
+    "task_id": 17,
+    "session_id": "sess_abc",
+    "file_path": "apps/mcp-server/src/tools/task.ts",
+    "note": "updating claim-before-edit wording"
+  }
+}
+```
+
+```json
+{
+  "name": "task_claim_file",
+  "input": {
+    "task_id": 17,
+    "session_id": "sess_abc",
+    "file_path": "docs/mcp.md",
+    "note": "documenting normal edit workflow"
+  }
+}
+```
+
+Then edit. Claims are warnings, not locks. They never block writes. They make overlap visible so agents can coordinate before a collision.
 
 ## `examples_list`
 
@@ -315,7 +374,9 @@ Post a coordination message on a task thread. Use the dedicated tools (`task_cla
 
 ## `task_claim_file`
 
-Claim a file on a task so overlapping edits from other sessions surface a warning next turn. This is the soft-lock path — it never blocks writes; it arms the conflict preface.
+Claim a file before editing so other agents see ownership and overlap warnings. Use this to avoid conflict and make file ownership visible before touching shared files.
+
+Claims are warnings, not locks. They never block writes. They arm the conflict preface for the next turn.
 
 ```json
 {

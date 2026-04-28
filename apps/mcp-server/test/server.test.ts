@@ -147,7 +147,33 @@ describe('MCP server', () => {
     expect(taskListDescription).toContain('use task_ready_for_agent when choosing work to claim');
     expect(taskListDescription).not.toMatch(/^Find task threads/);
     expect(byName.get('task_hand_off')?.description).toMatch(/^Give work to another agent/);
-    expect(byName.get('hivemind_context')?.description).toContain('BEFORE editing');
+    expect(byName.get('hivemind_context')?.description).toContain(
+      'Before editing, inspect ownership',
+    );
+  });
+
+  it('keeps claim-before-edit language discoverable and soft', async () => {
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    const claimDescription = byName.get('task_claim_file')?.description ?? '';
+    const hivemindDescription = byName.get('hivemind_context')?.description ?? '';
+    const docs = readFileSync(new URL('../../../docs/mcp.md', import.meta.url), 'utf8');
+
+    expect(claimDescription).toContain(
+      'Claim a file before editing so other agents see ownership and overlap warnings.',
+    );
+    expect(claimDescription).toContain('avoid conflict');
+    expect(claimDescription).toContain('file ownership');
+    expect(claimDescription).toContain('never block writes');
+    expect(hivemindDescription).toContain(
+      'Before editing, inspect ownership, then claim touched files on the active task.',
+    );
+    expect(docs).toContain(
+      'Before editing, inspect ownership, then claim touched files on the active task.',
+    );
+    expect(docs).toContain('Claims are warnings, not locks. They never block writes.');
+    expect(docs).toContain('"name": "hivemind_context"');
+    expect(docs).toContain('"name": "task_claim_file"');
   });
 
   it('hivemind returns compact active-session task state', async () => {

@@ -12,13 +12,13 @@ status details, and edge-case rules in the second sentence or later.
 | what needs my attention, pending, unread, blocking | `attention_inbox` |
 | what should I work on, pick a task, available work | `task_ready_for_agent` |
 | give my work to, transfer, pass to another agent | `task_hand_off` |
-| who is editing, active agents, files held, before editing | `hivemind_context` |
+| who is editing, active agents, files held, before editing, inspect ownership | `hivemind_context` |
 | search memory, prior decisions, old errors | `search` |
 | full observation body, read IDs | `get_observations` |
 | recent sessions, inspect session history | `list_sessions` |
 | task thread history, recent coordination | `task_timeline` |
 | unread task changes, updates since | `task_updates_since` |
-| claim file, file ownership, before editing | `task_claim_file` |
+| claim file, avoid conflict, file ownership, before editing | `task_claim_file` |
 | queen workflow, publish goal | `queen_plan_goal` |
 | split large task, publish subtasks | `task_plan_publish` |
 | plan conflicts, validate parallel split | `task_plan_validate` |
