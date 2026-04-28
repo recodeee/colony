@@ -10,17 +10,18 @@ import {
 } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 import { mcpErrorResponse } from './shared.js';
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
     'spec_read',
     'Read the repo SPEC.md contract before changing behavior. Returns parsed sections, always invariants, row counts, and rootHash for scoped planning.',
     { repo_root: z.string().min(1) },
-    async ({ repo_root }) => {
+    wrapHandler('spec_read', async ({ repo_root }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
       const spec = repo.readRoot();
       return {
@@ -40,7 +41,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -56,7 +57,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       agent: z.string().min(1),
       proposal: z.string().optional(),
     },
-    async ({ repo_root, slug, session_id, agent, proposal }) => {
+    wrapHandler('spec_change_open', async ({ repo_root, slug, session_id, agent, proposal }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
       const result = repo.openChange({
         slug,
@@ -76,7 +77,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -90,26 +91,31 @@ export function register(server: McpServer, ctx: ToolContext): void {
       target: z.string().min(1),
       row_cells: z.array(z.string()).optional(),
     },
-    async ({ repo_root, slug, session_id, op, target, row_cells }) => {
-      const repo = new SpecRepository({ repoRoot: repo_root, store });
-      const change = repo.readChange(slug);
-      change.deltaRows.push({
-        op,
-        target,
-        ...(row_cells ? { row: { id: target, cells: row_cells } } : {}),
-      });
-      repo.writeChange(change);
-      const task = repo.listSpecTasks().find((t) => t.slug === slug);
-      store.addObservation({
-        session_id,
-        kind: 'spec-delta',
-        content: `${op} ${target}${row_cells ? ` = ${row_cells.join(' | ')}` : ''}`,
-        ...(task ? { task_id: task.task_id } : {}),
-      });
-      return {
-        content: [{ type: 'text', text: JSON.stringify({ delta_count: change.deltaRows.length }) }],
-      };
-    },
+    wrapHandler(
+      'spec_change_add_delta',
+      async ({ repo_root, slug, session_id, op, target, row_cells }) => {
+        const repo = new SpecRepository({ repoRoot: repo_root, store });
+        const change = repo.readChange(slug);
+        change.deltaRows.push({
+          op,
+          target,
+          ...(row_cells ? { row: { id: target, cells: row_cells } } : {}),
+        });
+        repo.writeChange(change);
+        const task = repo.listSpecTasks().find((t) => t.slug === slug);
+        store.addObservation({
+          session_id,
+          kind: 'spec-delta',
+          content: `${op} ${target}${row_cells ? ` = ${row_cells.join(' | ')}` : ''}`,
+          ...(task ? { task_id: task.task_id } : {}),
+        });
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ delta_count: change.deltaRows.length }) },
+          ],
+        };
+      },
+    ),
   );
 
   server.tool(
@@ -119,7 +125,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       repo_root: z.string().min(1),
       task_id: z.string().min(1).describe('§T row id, e.g. T5'),
     },
-    async ({ repo_root, task_id }) => {
+    wrapHandler('spec_build_context', async ({ repo_root, task_id }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
       const spec = repo.readRoot();
       const resolved = resolveTaskContext(spec, task_id);
@@ -138,7 +144,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -155,7 +161,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       error_summary: z.string().min(1),
       promote_after: z.number().int().positive().optional(),
     },
-    async (args) => {
+    wrapHandler('spec_build_record_failure', async (args) => {
       const repo = new SpecRepository({ repoRoot: args.repo_root, store });
       const specTask = repo.listSpecTasks().find((t) => t.slug === args.slug);
       if (!specTask) {
@@ -192,7 +198,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -205,7 +211,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       agent: z.string().min(1),
       strategy: z.enum(['three_way', 'refuse_on_conflict', 'last_writer_wins']).optional(),
     },
-    async (args) => {
+    wrapHandler('spec_archive', async (args) => {
       const repo = new SpecRepository({ repoRoot: args.repo_root, store });
       const currentRoot = repo.readRoot();
       const change = repo.readChange(args.slug);
@@ -224,19 +230,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const merge = engine.merge(currentRoot, baseRoot, change);
 
       if (!merge.clean && strategy === 'refuse_on_conflict') {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                status: 'refused',
-                conflicts: merge.conflicts,
-                applied: merge.applied,
-              }),
-            },
-          ],
-          isError: true,
-        };
+        return mcpErrorResponse('SPEC_ARCHIVE_CONFLICT', 'spec archive refused due to conflicts', {
+          status: 'refused',
+          conflicts: merge.conflicts,
+          applied: merge.applied,
+        });
       }
 
       repo.writeRoot(merge.spec, {
@@ -260,6 +258,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 }

@@ -10,7 +10,7 @@ import * as attention from './tools/attention.js';
 import type { ToolContext } from './tools/context.js';
 import * as foraging from './tools/foraging.js';
 import * as handoff from './tools/handoff.js';
-import { installActiveSessionHeartbeat } from './tools/heartbeat.js';
+import { installActiveSessionHeartbeat, wrapHandler } from './tools/heartbeat.js';
 import * as hivemind from './tools/hivemind.js';
 import * as message from './tools/message.js';
 import * as planValidate from './tools/plan-validate.js';
@@ -66,13 +66,10 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
     return embedder;
   };
 
-  const ctx: ToolContext = { store, settings, resolveEmbedder };
+  const ctx: ToolContext = { store, settings, resolveEmbedder, wrapHandler };
 
-  // Registration order is load-bearing: `installActiveSessionHeartbeat` wraps
-  // every subsequent `server.tool(...)` so tool-invocation telemetry uses the
-  // original tool names. The order below mirrors the order the tools appeared
-  // in the pre-split monolithic server.ts so existing MCP inspector fixtures
-  // and snapshot tests stay stable.
+  // Registration order mirrors the pre-split monolithic server.ts so existing
+  // MCP inspector fixtures and snapshot tests stay stable.
   search.register(server, ctx);
   hivemind.register(server, ctx);
   task.register(server, ctx);

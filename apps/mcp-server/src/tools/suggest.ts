@@ -7,9 +7,10 @@ import {
 } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   server.tool(
     'task_suggest_approach',
     'Find a proven approach from similar past tasks. Use before planning or implementation; returns similarity-backed guidance or insufficient_data_reason.',
@@ -19,7 +20,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       current_task_id: z.number().int().positive().optional(),
       limit: z.number().int().positive().max(50).optional(),
     },
-    async ({ query, repo_root, current_task_id, limit }) => {
+    wrapHandler('task_suggest_approach', async ({ query, repo_root, current_task_id, limit }) => {
       const payload = await suggestApproach(ctx, {
         query,
         ...(repo_root !== undefined ? { repo_root } : {}),
@@ -27,7 +28,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(limit !== undefined ? { limit } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
-    },
+    }),
   );
 }
 

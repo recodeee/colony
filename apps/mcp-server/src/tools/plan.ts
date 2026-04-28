@@ -24,8 +24,8 @@ import {
 } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
-import { mcpErrorResponse } from './shared.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
+import { mcpError, mcpErrorResponse } from './shared.js';
 
 const SubtaskInputSchema = z.object({
   title: z.string().min(1),
@@ -43,6 +43,7 @@ interface CodedError extends Error {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -81,7 +82,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           'When true, the parent spec change auto-archives via three-way merge after the last sub-task completes. Defaults to false because silent state change after the final completion is risky if the merged spec has not been verified — opt in per plan once you trust the lane. Conflicts block auto-archive (surface as a plan-archive-blocked observation) instead of forcing.',
         ),
     },
-    async (args) => {
+    wrapHandler('task_plan_publish', async (args) => {
       try {
         const result = publishPlan({
           store,
@@ -100,9 +101,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
         if (err instanceof PublishPlanError) {
           return mcpErrorResponse(err.code, err.message);
         }
-        throw err;
+        return mcpError(err);
       }
-    },
+    }),
   );
 
   server.tool(
@@ -116,7 +117,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .optional(),
       limit: z.number().int().positive().max(50).optional(),
     },
-    async (args) => {
+    wrapHandler('task_plan_list', async (args) => {
       const plans = listPlans(store, {
         ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
         ...(args.only_with_available_subtasks !== undefined
@@ -126,7 +127,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(plans) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -138,7 +139,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       agent: z.string().min(1),
     },
-    async (args) => {
+    wrapHandler('task_plan_claim_subtask', async (args) => {
       const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
       const located = readSubtaskByBranch(store, branch);
       if (!located) {
@@ -214,7 +215,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         if (code === 'PLAN_SUBTASK_NOT_AVAILABLE') {
           return mcpErrorResponse(code, (err as Error).message);
         }
-        throw err;
+        return mcpError(err);
       }
 
       return {
@@ -229,7 +230,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -241,7 +242,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       summary: z.string().min(1).describe('What landed. Surfaces in the parent plan rollup.'),
     },
-    async (args) => {
+    wrapHandler('task_plan_complete_subtask', async (args) => {
       const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
       const located = readSubtaskByBranch(store, branch);
       if (!located) {
@@ -340,7 +341,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -350,7 +351,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       repo_root: z.string().min(1),
       spec_row_id: z.string().min(1),
     },
-    async (args) => {
+    wrapHandler('task_plan_status_for_spec_row', async (args) => {
       const found = findSubtaskBySpecRow(store, args.repo_root, args.spec_row_id);
       if (!found) {
         return {
@@ -388,7 +389,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 }
 

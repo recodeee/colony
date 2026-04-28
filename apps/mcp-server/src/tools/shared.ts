@@ -229,14 +229,20 @@ export function mcpErrorResponse(
     | 'PLAN_SUBTASK_DEPS_UNMET'
     | 'PLAN_SUBTASK_NOT_AVAILABLE'
     | 'PLAN_SUBTASK_NOT_CLAIMED'
-    | 'PLAN_SUBTASK_NOT_YOURS',
+    | 'PLAN_SUBTASK_NOT_YOURS'
+    | 'QUEEN_INVALID_GOAL'
+    | 'RESCUE_CONFIRM_REQUIRED'
+    | 'SESSION_NOT_FOUND'
+    | 'SPEC_ARCHIVE_CONFLICT'
+    | 'TASK_LINK_SELF',
   error: string,
+  details: Record<string, unknown> = {},
 ): {
   content: Array<{ type: 'text'; text: string }>;
   isError: true;
 } {
   return {
-    content: [{ type: 'text', text: JSON.stringify({ code, error }) }],
+    content: [{ type: 'text', text: JSON.stringify({ code, error, ...details }) }],
     isError: true,
   };
 }

@@ -9,8 +9,8 @@ import {
 import { PublishPlanError } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
-import { mcpErrorResponse } from './shared.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
+import { mcpError, mcpErrorResponse } from './shared.js';
 
 interface QueenToolGoal extends Goal {
   affected_files?: string[];
@@ -92,6 +92,7 @@ type QueenToolInput = {
 };
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   server.tool(
     'queen_plan_goal',
     [
@@ -100,7 +101,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       'Queen plans are published with auto_archive=true, and sub-tasks can be claimed through the task_plan_claim_subtask MCP tool.',
     ].join(' '),
     ToolInputSchema,
-    async (args) => {
+    wrapHandler('queen_plan_goal', async (args) => {
       try {
         const plan = planGoalForTool(args);
         if (args.dry_run === true) {
@@ -120,9 +121,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
         if (err instanceof PublishPlanError) {
           return mcpErrorResponse(err.code, err.message);
         }
-        throw err;
+        return mcpError(err);
       }
-    },
+    }),
   );
 }
 
@@ -279,27 +280,18 @@ function nonEmptyArray(values: string[], fallback: string[]): string[] {
   return filtered.length > 0 ? filtered : fallback;
 }
 
-function invalidGoalResponse(err: unknown): {
-  content: Array<{ type: 'text'; text: string }>;
-  isError: true;
-} | null {
+function invalidGoalResponse(err: unknown): ReturnType<typeof mcpErrorResponse> | null {
   const fields = invalidGoalFields(err);
   if (fields.length === 0) return null;
   const validationErrors = orderingValidationErrors(err);
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify({
-          code: 'QUEEN_INVALID_GOAL',
-          error: err instanceof Error ? err.message : 'invalid queen goal',
-          fields,
-          ...(validationErrors.length > 0 ? { validation_errors: validationErrors } : {}),
-        }),
-      },
-    ],
-    isError: true,
-  };
+  return mcpErrorResponse(
+    'QUEEN_INVALID_GOAL',
+    err instanceof Error ? err.message : 'invalid queen goal',
+    {
+      fields,
+      ...(validationErrors.length > 0 ? { validation_errors: validationErrors } : {}),
+    },
+  );
 }
 
 function orderingValidationErrors(err: unknown): string[] {

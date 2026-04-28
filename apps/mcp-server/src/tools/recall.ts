@@ -1,7 +1,8 @@
 import { inferIdeFromSessionId } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
+import { mcpErrorResponse } from './shared.js';
 
 /**
  * `recall_session` lets an agent pull a compact timeline of a *different*
@@ -21,6 +22,7 @@ import type { ToolContext } from './context.js';
  * recall observation into it. The early checks make the failure loud.
  */
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -35,78 +37,70 @@ export function register(server: McpServer, ctx: ToolContext): void {
       around_id: z.number().int().positive().optional(),
       limit: z.number().int().positive().max(100).optional(),
     },
-    async ({ target_session_id, current_session_id, around_id, limit }) => {
-      const target = store.storage.getSession(target_session_id);
-      if (!target) return sessionNotFound('target', target_session_id);
-      const current = store.storage.getSession(current_session_id);
-      if (!current) return sessionNotFound('current', current_session_id);
+    wrapHandler(
+      'recall_session',
+      async ({ target_session_id, current_session_id, around_id, limit }) => {
+        const target = store.storage.getSession(target_session_id);
+        if (!target) return sessionNotFound('target', target_session_id);
+        const current = store.storage.getSession(current_session_id);
+        if (!current) return sessionNotFound('current', current_session_id);
 
-      const cap = limit ?? 20;
-      // Storage.timeline filters by session_id but uses aroundId purely as a
-      // numeric anchor — a foreign-session anchor won't bleed rows from the
-      // wrong session, but it WILL silently slice the target's history at a
-      // position the caller did not mean. Detect that case and return an
-      // empty timeline instead of a misaligned slice. The recall observation
-      // still gets written so the recall attempt remains auditable.
-      let rows: ReturnType<typeof store.timeline>;
-      if (around_id !== undefined) {
-        const anchorRow = store.storage.getObservation(around_id);
-        rows =
-          !anchorRow || anchorRow.session_id !== target_session_id
-            ? []
-            : store.timeline(target_session_id, around_id, cap);
-      } else {
-        rows = store.timeline(target_session_id, undefined, cap);
-      }
-      const ownerIde =
-        target.ide && target.ide !== 'unknown'
-          ? target.ide
-          : (inferIdeFromSessionId(target_session_id) ?? 'unknown');
-      const observation_ids = rows.map((r) => r.id);
+        const cap = limit ?? 20;
+        // Storage.timeline filters by session_id but uses aroundId purely as a
+        // numeric anchor — a foreign-session anchor won't bleed rows from the
+        // wrong session, but it WILL silently slice the target's history at a
+        // position the caller did not mean. Detect that case and return an
+        // empty timeline instead of a misaligned slice. The recall observation
+        // still gets written so the recall attempt remains auditable.
+        let rows: ReturnType<typeof store.timeline>;
+        if (around_id !== undefined) {
+          const anchorRow = store.storage.getObservation(around_id);
+          rows =
+            !anchorRow || anchorRow.session_id !== target_session_id
+              ? []
+              : store.timeline(target_session_id, around_id, cap);
+        } else {
+          rows = store.timeline(target_session_id, undefined, cap);
+        }
+        const ownerIde =
+          target.ide && target.ide !== 'unknown'
+            ? target.ide
+            : (inferIdeFromSessionId(target_session_id) ?? 'unknown');
+        const observation_ids = rows.map((r) => r.id);
 
-      const recall_observation_id = store.addObservation({
-        session_id: current_session_id,
-        kind: 'recall',
-        content: `Recalled session ${target_session_id} (owner_ide=${ownerIde}, observations=${observation_ids.length}).`,
-        metadata: {
-          recalled_session_id: target_session_id,
-          owner_ide: ownerIde,
-          observation_ids,
-          ...(around_id !== undefined ? { around_id } : {}),
-          limit: cap,
-        },
-      });
+        const recall_observation_id = store.addObservation({
+          session_id: current_session_id,
+          kind: 'recall',
+          content: `Recalled session ${target_session_id} (owner_ide=${ownerIde}, observations=${observation_ids.length}).`,
+          metadata: {
+            recalled_session_id: target_session_id,
+            owner_ide: ownerIde,
+            observation_ids,
+            ...(around_id !== undefined ? { around_id } : {}),
+            limit: cap,
+          },
+        });
 
-      const payload = {
-        recall_observation_id,
-        session: {
-          id: target.id,
-          ide: ownerIde,
-          cwd: target.cwd,
-          started_at: target.started_at,
-          ended_at: target.ended_at,
-        },
-        observations: rows.map((r) => ({ id: r.id, kind: r.kind, ts: r.ts })),
-      };
-      return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
-    },
+        const payload = {
+          recall_observation_id,
+          session: {
+            id: target.id,
+            ide: ownerIde,
+            cwd: target.cwd,
+            started_at: target.started_at,
+            ended_at: target.ended_at,
+          },
+          observations: rows.map((r) => ({ id: r.id, kind: r.kind, ts: r.ts })),
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
+      },
+    ),
   );
 }
 
 function sessionNotFound(
   label: 'target' | 'current',
   id: string,
-): { content: Array<{ type: 'text'; text: string }>; isError: true } {
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify({
-          code: 'SESSION_NOT_FOUND',
-          error: `${label} session ${id} does not exist`,
-        }),
-      },
-    ],
-    isError: true,
-  };
+): ReturnType<typeof mcpErrorResponse> {
+  return mcpErrorResponse('SESSION_NOT_FOUND', `${label} session ${id} does not exist`);
 }

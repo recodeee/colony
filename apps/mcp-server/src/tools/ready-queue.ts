@@ -12,7 +12,7 @@ import {
 import type { ObservationRow } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 import { type CompactNegativeWarning, searchNegativeWarnings } from './shared.js';
 
 const DEFAULT_LIMIT = 5;
@@ -59,6 +59,7 @@ interface ScopeConflict {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -70,7 +71,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       repo_root: z.string().min(1).optional(),
       limit: z.number().int().positive().max(20).optional(),
     },
-    async ({ session_id, agent, repo_root, limit }) => {
+    wrapHandler('task_ready_for_agent', async ({ session_id, agent, repo_root, limit }) => {
       const plans = listPlans(store, {
         ...(repo_root !== undefined ? { repo_root } : {}),
         limit: 2000,
@@ -146,7 +147,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ready,
         total_available: available.length,
       });
-    },
+    }),
   );
 }
 

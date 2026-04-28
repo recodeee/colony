@@ -1,7 +1,7 @@
 import { buildIntegrationPlan } from '@colony/foraging';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 
 /**
  * Foraging surface exposed to MCP clients.
@@ -13,13 +13,14 @@ import type { ToolContext } from './context.js';
  * under the MCP response-size budget even on large example sets.
  */
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store, resolveEmbedder } = ctx;
 
   server.tool(
     'examples_list',
     'List example projects available for this repo. Use before examples_query to choose reference sources, manifests, and indexed example names.',
     { repo_root: z.string().min(1) },
-    async ({ repo_root }) => {
+    wrapHandler('examples_list', async ({ repo_root }) => {
       const rows = store.storage.listExamples(repo_root);
       const compact = rows.map((r) => ({
         example_name: r.example_name,
@@ -28,7 +29,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         last_scanned_at: r.last_scanned_at,
       }));
       return { content: [{ type: 'text', text: JSON.stringify(compact) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -39,7 +40,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       example_name: z.string().optional(),
       limit: z.number().int().positive().max(20).optional(),
     },
-    async ({ query, example_name, limit }) => {
+    wrapHandler('examples_query', async ({ query, example_name, limit }) => {
       const e = (await resolveEmbedder()) ?? undefined;
       const filter: { kind: string; metadata?: Record<string, string> } = {
         kind: 'foraged-pattern',
@@ -47,7 +48,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       if (example_name) filter.metadata = { example_name };
       const hits = await store.search(query, limit ?? 10, e, filter);
       return { content: [{ type: 'text', text: JSON.stringify(hits) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -58,13 +59,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
       repo_root: z.string().min(1),
       target_hint: z.string().optional(),
     },
-    async ({ example_name, repo_root, target_hint }) => {
+    wrapHandler('examples_integrate_plan', async ({ example_name, repo_root, target_hint }) => {
       const plan = buildIntegrationPlan(store.storage, {
         example_name,
         repo_root,
         ...(target_hint !== undefined ? { target_hint } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(plan) }] };
-    },
+    }),
   );
 }

@@ -1,7 +1,8 @@
 import type { MemoryStore } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
+import { mcpErrorResponse } from './shared.js';
 
 interface RescueStrandedOptions {
   dry_run: boolean;
@@ -25,6 +26,7 @@ export function register(
   ctx: ToolContext,
   opts: { rescueStrandedSessions?: RescueStrandedSessionsFn } = {},
 ): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -33,7 +35,7 @@ export function register(
     {
       stranded_after_minutes: z.number().positive().optional(),
     },
-    async (args) => {
+    wrapHandler('rescue_stranded_scan', async (args) => {
       const outcome = await runRescue(store, opts.rescueStrandedSessions, {
         dry_run: true,
         ...(args.stranded_after_minutes !== undefined
@@ -41,7 +43,7 @@ export function register(
           : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(outcome) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -51,9 +53,12 @@ export function register(
       stranded_after_minutes: z.number().positive().optional(),
       confirm: z.boolean().optional(),
     },
-    async (args) => {
+    wrapHandler('rescue_stranded_run', async (args) => {
       if (args.confirm !== true) {
-        return rescueError('RESCUE_CONFIRM_REQUIRED', 'rescue_stranded_run requires confirm: true');
+        return mcpErrorResponse(
+          'RESCUE_CONFIRM_REQUIRED',
+          'rescue_stranded_run requires confirm: true',
+        );
       }
       const outcome = await runRescue(store, opts.rescueStrandedSessions, {
         dry_run: false,
@@ -62,21 +67,8 @@ export function register(
           : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(outcome) }] };
-    },
+    }),
   );
-}
-
-function rescueError(
-  code: 'RESCUE_CONFIRM_REQUIRED',
-  error: string,
-): {
-  content: Array<{ type: 'text'; text: string }>;
-  isError: true;
-} {
-  return {
-    content: [{ type: 'text', text: JSON.stringify({ code, error }) }],
-    isError: true,
-  };
 }
 
 async function runRescue(

@@ -2,8 +2,9 @@ import { resolve } from 'node:path';
 import { TaskThread, listPlans } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 import { detectMcpClientIdentity } from './heartbeat.js';
+import { mcpErrorResponse } from './shared.js';
 
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const TASK_LIST_HINT =
@@ -13,6 +14,7 @@ const TASK_LIST_REPEAT_HINT =
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   // Task-thread tools. Agents already know their session_id from SessionStart;
@@ -26,14 +28,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
       limit: z.number().int().positive().max(200).optional(),
       session_id: z.string().min(1).optional(),
     },
-    async ({ limit, session_id }) => {
+    wrapHandler('task_list', async ({ limit, session_id }) => {
       const tasks = store.storage.listTasks(limit ?? 50);
       const callerSessionId = session_id ?? detectMcpClientIdentity().sessionId;
       return jsonReply({
         tasks,
         hint: taskListHintForSession(store, callerSessionId),
       });
-    },
+    }),
   );
 
   server.tool(
@@ -43,7 +45,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       task_id: z.number().int().positive(),
       limit: z.number().int().positive().max(200).optional(),
     },
-    async ({ task_id, limit }) => {
+    wrapHandler('task_timeline', async ({ task_id, limit }) => {
       const rows = store.storage.taskTimeline(task_id, limit ?? 50);
       const planMetadata = compactPlanTimelineMetadata(store, task_id);
       const compact = rows.map((r) => ({
@@ -55,7 +57,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(planMetadata ?? {}),
       }));
       return { content: [{ type: 'text', text: JSON.stringify(compact) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -67,7 +69,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       since_ts: z.number().int().nonnegative(),
       limit: z.number().int().positive().max(200).optional(),
     },
-    async ({ task_id, session_id, since_ts, limit }) => {
+    wrapHandler('task_updates_since', async ({ task_id, session_id, since_ts, limit }) => {
       const rows = store.storage
         .taskObservationsSince(task_id, since_ts, limit ?? 50)
         .filter((o) => o.session_id !== session_id);
@@ -78,7 +80,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ts: r.ts,
       }));
       return { content: [{ type: 'text', text: JSON.stringify(compact) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -104,7 +106,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       content: z.string().min(1),
       reply_to: z.number().int().positive().optional(),
     },
-    async ({ task_id, session_id, kind, content, reply_to }) => {
+    wrapHandler('task_post', async ({ task_id, session_id, kind, content, reply_to }) => {
       const thread = new TaskThread(store, task_id);
       const id = thread.post({
         session_id,
@@ -113,7 +115,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(reply_to !== undefined ? { reply_to } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify({ id }) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -126,61 +128,64 @@ export function register(server: McpServer, ctx: ToolContext): void {
       branch: z.string().min(1).optional(),
       candidate_limit: z.number().int().positive().max(50).optional(),
     },
-    async ({ session_id, content, repo_root, branch, candidate_limit }) => {
-      const candidates = activeTaskCandidates(store, {
-        session_id,
-        ...(repo_root !== undefined ? { repo_root } : {}),
-        ...(branch !== undefined ? { branch } : {}),
-      });
-      const visibleCandidates = candidates.slice(0, candidate_limit ?? 10);
+    wrapHandler(
+      'task_note_working',
+      async ({ session_id, content, repo_root, branch, candidate_limit }) => {
+        const candidates = activeTaskCandidates(store, {
+          session_id,
+          ...(repo_root !== undefined ? { repo_root } : {}),
+          ...(branch !== undefined ? { branch } : {}),
+        });
+        const visibleCandidates = candidates.slice(0, candidate_limit ?? 10);
 
-      if (candidates.length !== 1) {
-        const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+        if (candidates.length !== 1) {
+          const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  code,
+                  error:
+                    candidates.length === 0
+                      ? 'no active Colony task matched session/repo/branch'
+                      : 'multiple active Colony tasks matched session/repo/branch',
+                  candidates: visibleCandidates,
+                }),
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        const candidate = candidates[0];
+        if (!candidate) throw new Error('working note task resolution lost its only candidate');
+        const thread = new TaskThread(store, candidate.task_id);
+        const observation_id = thread.post({
+          session_id,
+          kind: 'note',
+          content,
+          metadata: {
+            working_note: true,
+            resolved_by: 'task_note_working',
+            ...(repo_root !== undefined ? { requested_repo_root: repo_root } : {}),
+            ...(branch !== undefined ? { requested_branch: branch } : {}),
+          },
+        });
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify({
-                code,
-                error:
-                  candidates.length === 0
-                    ? 'no active Colony task matched session/repo/branch'
-                    : 'multiple active Colony tasks matched session/repo/branch',
-                candidates: visibleCandidates,
+                observation_id,
+                id: observation_id,
+                task_id: candidate.task_id,
               }),
             },
           ],
-          isError: true,
         };
-      }
-
-      const candidate = candidates[0];
-      if (!candidate) throw new Error('working note task resolution lost its only candidate');
-      const thread = new TaskThread(store, candidate.task_id);
-      const observation_id = thread.post({
-        session_id,
-        kind: 'note',
-        content,
-        metadata: {
-          working_note: true,
-          resolved_by: 'task_note_working',
-          ...(repo_root !== undefined ? { requested_repo_root: repo_root } : {}),
-          ...(branch !== undefined ? { requested_branch: branch } : {}),
-        },
-      });
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              observation_id,
-              id: observation_id,
-              task_id: candidate.task_id,
-            }),
-          },
-        ],
-      };
-    },
+      },
+    ),
   );
 
   server.tool(
@@ -192,7 +197,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       file_path: z.string().min(1),
       note: z.string().optional(),
     },
-    async ({ task_id, session_id, file_path, note }) => {
+    wrapHandler('task_claim_file', async ({ task_id, session_id, file_path, note }) => {
       const thread = new TaskThread(store, task_id);
       const id = thread.claimFile({
         session_id,
@@ -200,7 +205,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(note !== undefined ? { note } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify({ observation_id: id }) }] };
-    },
+    }),
   );
 
   // --- task links ---
@@ -218,14 +223,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       note: z.string().max(280).optional(),
     },
-    async ({ task_id, other_task_id, session_id, note }) => {
+    wrapHandler('task_link', async ({ task_id, other_task_id, session_id, note }) => {
       if (task_id === other_task_id) {
-        return {
-          content: [
-            { type: 'text', text: JSON.stringify({ error: 'cannot link a task to itself' }) },
-          ],
-          isError: true,
-        };
+        return mcpErrorResponse('TASK_LINK_SELF', 'cannot link a task to itself');
       }
       const thread = new TaskThread(store, task_id);
       const link = thread.link(other_task_id, session_id, note);
@@ -243,7 +243,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -253,22 +253,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
       task_id: z.number().int().positive(),
       other_task_id: z.number().int().positive(),
     },
-    async ({ task_id, other_task_id }) => {
+    wrapHandler('task_unlink', async ({ task_id, other_task_id }) => {
       const thread = new TaskThread(store, task_id);
       const removed = thread.unlink(other_task_id);
       return { content: [{ type: 'text', text: JSON.stringify({ removed }) }] };
-    },
+    }),
   );
 
   server.tool(
     'task_links',
     'List related tasks linked to this task thread. Returns each edge, other task side, notes, and link metadata for coordination context.',
     { task_id: z.number().int().positive() },
-    async ({ task_id }) => {
+    wrapHandler('task_links', async ({ task_id }) => {
       const thread = new TaskThread(store, task_id);
       const links = thread.linkedTasks();
       return { content: [{ type: 'text', text: JSON.stringify(links) }] };
-    },
+    }),
   );
 }
 

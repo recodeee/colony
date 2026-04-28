@@ -1,9 +1,10 @@
 import { ProposalSystem } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -17,30 +18,33 @@ export function register(server: McpServer, ctx: ToolContext): void {
       touches_files: z.array(z.string()).default([]),
       session_id: z.string().min(1),
     },
-    async ({ repo_root, branch, summary, rationale, touches_files, session_id }) => {
-      const proposals = new ProposalSystem(store);
-      const id = proposals.propose({
-        repo_root,
-        branch,
-        summary,
-        rationale,
-        touches_files,
-        session_id,
-      });
-      const strength = proposals.currentStrength(id);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              proposal_id: id,
-              strength,
-              promotion_threshold: proposals.promotionThreshold,
-            }),
-          },
-        ],
-      };
-    },
+    wrapHandler(
+      'task_propose',
+      async ({ repo_root, branch, summary, rationale, touches_files, session_id }) => {
+        const proposals = new ProposalSystem(store);
+        const id = proposals.propose({
+          repo_root,
+          branch,
+          summary,
+          rationale,
+          touches_files,
+          session_id,
+        });
+        const strength = proposals.currentStrength(id);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                proposal_id: id,
+                strength,
+                promotion_threshold: proposals.promotionThreshold,
+              }),
+            },
+          ],
+        };
+      },
+    ),
   );
 
   server.tool(
@@ -51,7 +55,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       kind: z.enum(['explicit', 'rediscovered']).default('explicit'),
     },
-    async ({ proposal_id, session_id, kind }) => {
+    wrapHandler('task_reinforce', async ({ proposal_id, session_id, kind }) => {
       const proposals = new ProposalSystem(store);
       const { strength, promoted } = proposals.reinforce({
         proposal_id,
@@ -72,6 +76,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 }

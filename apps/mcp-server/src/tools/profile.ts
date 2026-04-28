@@ -6,9 +6,10 @@ import {
 } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -26,20 +27,20 @@ export function register(server: McpServer, ctx: ToolContext): void {
         })
         .default({}),
     },
-    async ({ agent, capabilities }) => {
+    wrapHandler('agent_upsert_profile', async ({ agent, capabilities }) => {
       const definedCapabilities = Object.fromEntries(
         Object.entries(capabilities).filter(([, value]) => value !== undefined),
       ) as Partial<AgentCapabilities>;
       const profile = saveProfile(store.storage, agent, definedCapabilities);
       return { content: [{ type: 'text', text: JSON.stringify(profile) }] };
-    },
+    }),
   );
 
   server.tool(
     'agent_get_profile',
     'Read an agent skill profile for routing or fit checks. Unknown agents return default 0.5 capability weights for handoff and ready-work ranking.',
     { agent: z.string().min(1) },
-    async ({ agent }) => {
+    wrapHandler('agent_get_profile', async ({ agent }) => {
       const profile = loadProfile(store.storage, agent);
       return {
         content: [
@@ -49,6 +50,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 }

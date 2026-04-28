@@ -3,7 +3,7 @@ import type { MemoryStore } from '@colony/core';
 import { hasDependencyPath, validateOrderedPlan } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 
 const SubtaskInputSchema = z.object({
   title: z.string().min(1),
@@ -48,6 +48,7 @@ interface LiveClaim {
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -57,7 +58,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       repo_root: z.string().min(1),
       subtasks: z.array(SubtaskInputSchema).min(2).max(20),
     },
-    async ({ repo_root, subtasks }) => {
+    wrapHandler('task_plan_validate', async ({ repo_root, subtasks }) => {
       const pairwise = pairwiseScopeOverlap(subtasks);
       const liveCollisions = liveClaimCollisions(store, repo_root, subtasks);
       const moduleWarnings = computeModuleOverlaps(subtasks);
@@ -71,7 +72,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         partition_clean:
           pairwise.length === 0 && liveCollisions.length === 0 && orderedWaveErrors.length === 0,
       });
-    },
+    }),
   );
 }
 

@@ -1,7 +1,7 @@
 import { TASK_THREAD_ERROR_CODES, TaskThread } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 // 12 hours hard cap. Relays should expire faster than handoffs because the
@@ -9,6 +9,7 @@ import { mcpError, mcpErrorResponse } from './shared.js';
 const EXPIRES_IN_MINUTES_MAX = 60 * 12;
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -42,7 +43,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ),
       expires_in_minutes: z.number().int().positive().max(EXPIRES_IN_MINUTES_MAX).optional(),
     },
-    async (args) => {
+    wrapHandler('task_relay', async (args) => {
       const thread = new TaskThread(store, args.task_id);
       try {
         const id = thread.relay({
@@ -66,7 +67,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 
   server.tool(
@@ -76,7 +77,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       relay_observation_id: z.number().int().positive(),
       session_id: z.string().min(1),
     },
-    async ({ relay_observation_id, session_id }) => {
+    wrapHandler('task_accept_relay', async ({ relay_observation_id, session_id }) => {
       const obs = store.storage.getObservation(relay_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -91,7 +92,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 
   server.tool(
@@ -102,7 +103,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       reason: z.string().optional(),
     },
-    async ({ relay_observation_id, session_id, reason }) => {
+    wrapHandler('task_decline_relay', async ({ relay_observation_id, session_id, reason }) => {
       const obs = store.storage.getObservation(relay_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -117,6 +118,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 }

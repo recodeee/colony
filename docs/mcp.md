@@ -677,7 +677,7 @@ Errors include `{ "code": "SESSION_NOT_FOUND", "error": "..." }` when either `ta
 
 ## `attention_inbox`
 
-Compact post-`hivemind_context` attention check for live pending handoffs, unread messages, blockers, stalled lanes, pending wakes, recent other-session file claims, and decaying hot files. Expired handoffs are hidden from the pending bucket; the original observations remain available via timeline/search for audit. This is the main surface where live `task_message` items show up: expired unread messages are hidden, read/replied messages stop triggering attention, and blocking messages remain prominent until read, replied, retracted, or expired. Use `task_messages` for a focused message-only inbox. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
+Compact post-`hivemind_context` attention check for live pending handoffs, unread messages, blockers, stalled lanes, pending wakes, recent other-session file claims, and decaying hot files. Expired handoffs are hidden from the pending bucket; the original observations remain available via timeline/search for audit. This is the main surface where `task_message` items show up: expired unread messages are hidden, read/replied messages stop triggering attention, and blocking messages remain prominent until read, replied, retracted, or expired. Use `task_messages` for a focused message-only inbox. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
 
 ```json
 {

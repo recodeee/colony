@@ -1,7 +1,7 @@
 import { TASK_THREAD_ERROR_CODES, TaskThread } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 const RELAY_FALLBACK_RULE = [
@@ -11,6 +11,7 @@ const RELAY_FALLBACK_RULE = [
 ].join(' ');
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -32,7 +33,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       transferred_files: z.array(z.string()).optional(),
       expires_in_minutes: z.number().int().positive().max(480).optional(),
     },
-    async (args) => {
+    wrapHandler('task_hand_off', async (args) => {
       const thread = new TaskThread(store, args.task_id);
       const id = thread.handOff({
         from_session_id: args.session_id,
@@ -55,7 +56,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           { type: 'text', text: JSON.stringify({ handoff_observation_id: id, status: 'pending' }) },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -65,7 +66,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       handoff_observation_id: z.number().int().positive(),
       session_id: z.string().min(1),
     },
-    async ({ handoff_observation_id, session_id }) => {
+    wrapHandler('task_accept_handoff', async ({ handoff_observation_id, session_id }) => {
       const obs = store.storage.getObservation(handoff_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -80,7 +81,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 
   server.tool(
@@ -91,7 +92,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       reason: z.string().optional(),
     },
-    async ({ handoff_observation_id, session_id, reason }) => {
+    wrapHandler('task_decline_handoff', async ({ handoff_observation_id, session_id, reason }) => {
       const obs = store.storage.getObservation(handoff_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -106,6 +107,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 }

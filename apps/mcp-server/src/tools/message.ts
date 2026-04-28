@@ -1,12 +1,13 @@
 import { TASK_THREAD_ERROR_CODES, TaskThread, listMessagesForAgent } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 const EXPIRES_IN_MINUTES_MAX = 60 * 24 * 7;
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store } = ctx;
 
   server.tool(
@@ -43,7 +44,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           'Optional message TTL in minutes (max 7 days). Past-TTL unread messages disappear from the inbox; bodies remain searchable.',
         ),
     },
-    async (args) => {
+    wrapHandler('task_message', async (args) => {
       const thread = new TaskThread(store, args.task_id);
       const id = thread.postMessage({
         from_session_id: args.session_id,
@@ -65,7 +66,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
-    },
+    }),
   );
 
   server.tool(
@@ -79,7 +80,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       unread_only: z.boolean().optional(),
       limit: z.number().int().positive().max(200).optional(),
     },
-    async (args) => {
+    wrapHandler('task_messages', async (args) => {
       const messages = listMessagesForAgent(store, {
         session_id: args.session_id,
         agent: args.agent,
@@ -89,7 +90,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(messages) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -99,7 +100,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       message_observation_id: z.number().int().positive(),
       session_id: z.string().min(1),
     },
-    async ({ message_observation_id, session_id }) => {
+    wrapHandler('task_message_mark_read', async ({ message_observation_id, session_id }) => {
       const obs = store.storage.getObservation(message_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -114,7 +115,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 
   server.tool(
@@ -125,7 +126,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1).describe('your session_id (must match the original sender)'),
       reason: z.string().min(1).optional(),
     },
-    async ({ message_observation_id, session_id, reason }) => {
+    wrapHandler('task_message_retract', async ({ message_observation_id, session_id, reason }) => {
       const obs = store.storage.getObservation(message_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -142,7 +143,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 
   server.tool(
@@ -153,7 +154,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       session_id: z.string().min(1),
       agent: z.string().min(1),
     },
-    async ({ message_observation_id, session_id, agent }) => {
+    wrapHandler('task_message_claim', async ({ message_observation_id, session_id, agent }) => {
       const obs = store.storage.getObservation(message_observation_id);
       if (!obs?.task_id) {
         return mcpErrorResponse(
@@ -180,6 +181,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
       } catch (err) {
         return mcpError(err);
       }
-    },
+    }),
   );
 }

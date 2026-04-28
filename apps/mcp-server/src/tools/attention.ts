@@ -1,9 +1,10 @@
 import { type AttentionInboxOptions, ProposalSystem, buildAttentionInbox } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { ToolContext } from './context.js';
+import { type ToolContext, defaultWrapHandler } from './context.js';
 
 export function register(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
   const { store, settings } = ctx;
 
   server.tool(
@@ -21,7 +22,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       file_heat_min_heat: z.number().positive().max(100).optional(),
       task_ids: z.array(z.number().int().positive()).max(100).optional(),
     },
-    async (args) => {
+    wrapHandler('attention_inbox', async (args) => {
       const options: AttentionInboxOptions = {
         session_id: args.session_id,
         agent: args.agent,
@@ -44,7 +45,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       if (args.task_ids !== undefined) options.task_ids = args.task_ids;
       const inbox = buildAttentionInbox(store, options);
       return { content: [{ type: 'text', text: JSON.stringify(inbox) }] };
-    },
+    }),
   );
 
   server.tool(
@@ -54,10 +55,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
       repo_root: z.string().min(1),
       branch: z.string().min(1),
     },
-    async ({ repo_root, branch }) => {
+    wrapHandler('task_foraging_report', async ({ repo_root, branch }) => {
       const proposals = new ProposalSystem(store);
       const report = proposals.foragingReport(repo_root, branch);
       return { content: [{ type: 'text', text: JSON.stringify(report) }] };
-    },
+    }),
   );
 }
