@@ -7,11 +7,13 @@ export {
 } from './tool-classes.js';
 export type {
   BashCoordinationVolume,
+  ClaimBeforeEditStats,
   ClaimCoverageStats,
   CoordinationActivity,
   EditsWithoutClaimsRow,
   KindCount,
   SessionsEndedWithoutHandoffRow,
+  ToolCallRow,
 } from './storage.js';
 export type { ToolClass } from './tool-classes.js';
 export type {

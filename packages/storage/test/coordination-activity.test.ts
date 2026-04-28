@@ -127,6 +127,32 @@ describe('editsWithoutClaims', () => {
   });
 });
 
+describe('colony health read queries', () => {
+  it('returns ordered tool calls and exact claim-before-edit stats', () => {
+    session('codex@health');
+    session('claude@health');
+    toolUse('codex@health', 'mcp__colony__task_list', 1_000);
+    toolUse('codex@health', 'mcp__colony__task_ready_for_agent', 2_000);
+    claim('codex@health', 'src/claimed.ts', 2_500);
+    toolUse('codex@health', 'Edit', 3_000, 'src/claimed.ts');
+    toolUse('claude@health', 'Edit', 4_000, 'src/unclaimed.ts');
+    toolUse('claude@health', 'Edit', 5_000);
+
+    expect(storage.toolCallsSince(0).map((row) => row.tool)).toEqual([
+      'mcp__colony__task_list',
+      'mcp__colony__task_ready_for_agent',
+      'Edit',
+      'Edit',
+      'Edit',
+    ]);
+    expect(storage.claimBeforeEditStats(0)).toEqual({
+      edit_tool_calls: 3,
+      edits_with_file_path: 2,
+      edits_claimed_before: 1,
+    });
+  });
+});
+
 describe('sessionsEndedWithoutHandoff', () => {
   it('reports quiet sessions with active claims and whether they handed off', () => {
     const now = new Date('2026-04-28T12:00:00.000Z');
