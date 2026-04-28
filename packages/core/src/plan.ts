@@ -10,12 +10,19 @@ export interface SubtaskInfo {
   status: SubtaskStatus;
   file_scope: string[];
   depends_on: number[];
+  spec_row_id: string | null;
   capability_hint: string | null;
   claimed_by_session_id: string | null;
   claimed_by_agent: string | null;
   parent_plan_slug: string;
   parent_plan_title: string | null;
   parent_spec_task_id: number | null;
+}
+
+export interface SubtaskLookup {
+  task_id: number;
+  branch: string;
+  info: SubtaskInfo;
 }
 
 export interface PlanInfo {
@@ -86,6 +93,7 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
     status,
     file_scope: Array.isArray(meta.file_scope) ? (meta.file_scope as string[]) : [],
     depends_on: Array.isArray(meta.depends_on) ? (meta.depends_on as number[]) : [],
+    spec_row_id: typeof meta.spec_row_id === 'string' ? (meta.spec_row_id as string) : null,
     capability_hint:
       typeof meta.capability_hint === 'string' ? (meta.capability_hint as string) : null,
     claimed_by_session_id:
@@ -99,10 +107,7 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
   };
 }
 
-export function readSubtaskByBranch(
-  store: MemoryStore,
-  branch: string,
-): { task_id: number; info: SubtaskInfo } | null {
+export function readSubtaskByBranch(store: MemoryStore, branch: string): SubtaskLookup | null {
   const m = branch.match(SUBTASK_BRANCH_RE);
   if (!m) return null;
   const slug = m[1];
@@ -112,7 +117,26 @@ export function readSubtaskByBranch(
   if (!t) return null;
   const info = readSubtask(store, t.id, slug);
   if (!info) return null;
-  return { task_id: t.id, info };
+  return { task_id: t.id, branch, info };
+}
+
+export function findSubtaskBySpecRow(
+  store: MemoryStore,
+  repo_root: string,
+  spec_row_id: string,
+): SubtaskLookup | null {
+  const tasks = store.storage.listTasks(2000);
+  for (const task of tasks) {
+    if (task.repo_root !== repo_root) continue;
+    const m = task.branch.match(SUBTASK_BRANCH_RE);
+    const slug = m?.[1];
+    if (!slug) continue;
+    const info = readSubtask(store, task.id, slug);
+    if (info?.spec_row_id === spec_row_id) {
+      return { task_id: task.id, branch: task.branch, info };
+    }
+  }
+  return null;
 }
 
 export function areDepsMet(subtask: SubtaskInfo, all: SubtaskInfo[]): boolean {

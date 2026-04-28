@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -32,6 +32,17 @@ interface ClaimResult {
   task_id: number;
   branch: string;
   file_scope: string[];
+}
+
+interface SpecRowStatusResult {
+  plan_slug: string;
+  subtask_index: number;
+  status: string;
+  binding: {
+    plan_slug: string;
+    subtask_index: number;
+    spec_row_id: string | null;
+  } | null;
 }
 
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
@@ -78,6 +89,10 @@ function basicPublishArgs(overrides: Record<string, unknown> = {}): Record<strin
   };
 }
 
+function readChangeText(slug: string): string {
+  return readFileSync(join(repoRoot, 'openspec/changes', slug, 'CHANGE.md'), 'utf8');
+}
+
 const MINIMAL_SPEC = `# SPEC
 
 ## §G  goal
@@ -95,9 +110,10 @@ id|rule|cites
 V1|placeholder|-
 
 ## §T  tasks
-id|task|cites
--|-|-
-T1|placeholder|V1
+id|status|task|cites
+-|-|-|-
+T1|todo|placeholder|V1
+T5|todo|bound plan task|V1
 
 ## §B  bugs
 id|bug|cites
@@ -276,6 +292,43 @@ describe('task_plan_claim_subtask', () => {
     const err = await callError('task_plan_claim_subtask', args('C', 'claude'));
     expect(err.code).toBe('PLAN_SUBTASK_NOT_AVAILABLE');
   });
+
+  it('reports a claimed sub-task by bound spec row id', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'status-for-spec-row',
+        subtasks: [
+          {
+            title: 'Bound row task',
+            description: 'Complete T5.',
+            file_scope: ['apps/api/src/bound.ts'],
+            spec_row_id: 'T5',
+          },
+          {
+            title: 'Unbound row task',
+            description: 'No row binding.',
+            file_scope: ['apps/api/src/unbound.ts'],
+          },
+        ],
+      }),
+    );
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'status-for-spec-row',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+
+    const status = await call<SpecRowStatusResult>('task_plan_status_for_spec_row', {
+      repo_root: repoRoot,
+      spec_row_id: 'T5',
+    });
+    expect(status.plan_slug).toBe('status-for-spec-row');
+    expect(status.subtask_index).toBe(0);
+    expect(status.status).toBe('claimed');
+    expect(status.binding?.spec_row_id).toBe('T5');
+  });
 });
 
 describe('task_plan_complete_subtask', () => {
@@ -327,6 +380,94 @@ describe('task_plan_complete_subtask', () => {
       summary: 'nothing claimed',
     });
     expect(err.code).toBe('PLAN_SUBTASK_NOT_CLAIMED');
+  });
+
+  it('appends a spec modify delta when completing a bound sub-task', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'spec-row-binding',
+        subtasks: [
+          {
+            title: 'Bound row task',
+            description: 'Complete T5.',
+            file_scope: ['apps/api/src/bound.ts'],
+            spec_row_id: 'T5',
+          },
+          {
+            title: 'Other task',
+            description: 'No row binding.',
+            file_scope: ['apps/api/src/other.ts'],
+          },
+        ],
+      }),
+    );
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'spec-row-binding',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+    await call<{ status: string }>('task_plan_complete_subtask', {
+      plan_slug: 'spec-row-binding',
+      subtask_index: 0,
+      session_id: 'B',
+      summary: 'T5 implementation landed.',
+    });
+
+    const changeText = readChangeText('spec-row-binding');
+    expect(changeText).toMatch(/^modify\|T5\|T5 done bound plan task V1$/m);
+  });
+
+  it('only appends a spec delta for bound completed sub-tasks', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'mixed-spec-row-binding',
+        subtasks: [
+          {
+            title: 'Bound row task',
+            description: 'Complete T5.',
+            file_scope: ['apps/api/src/bound.ts'],
+            spec_row_id: 'T5',
+          },
+          {
+            title: 'Unbound row task',
+            description: 'No row binding.',
+            file_scope: ['apps/api/src/unbound.ts'],
+          },
+        ],
+      }),
+    );
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'mixed-spec-row-binding',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+    await call<{ status: string }>('task_plan_complete_subtask', {
+      plan_slug: 'mixed-spec-row-binding',
+      subtask_index: 0,
+      session_id: 'B',
+      summary: 'T5 done.',
+    });
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'mixed-spec-row-binding',
+      subtask_index: 1,
+      session_id: 'C',
+      agent: 'claude',
+    });
+    await call<{ status: string }>('task_plan_complete_subtask', {
+      plan_slug: 'mixed-spec-row-binding',
+      subtask_index: 1,
+      session_id: 'C',
+      summary: 'Unbound work done.',
+    });
+
+    const deltaLines = readChangeText('mixed-spec-row-binding')
+      .split('\n')
+      .filter((line) => line.startsWith('modify|'));
+    expect(deltaLines).toEqual(['modify|T5|T5 done bound plan task V1']);
   });
 });
 

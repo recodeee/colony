@@ -1,12 +1,14 @@
 import {
   type MemoryStore,
   type SubtaskInfo,
+  type SubtaskLookup,
   TaskThread,
   areDepsMet,
+  findSubtaskBySpecRow,
   listPlans,
   readSubtaskByBranch,
 } from '@colony/core';
-import { SpecRepository, SyncEngine, parseSpec, serializeSpec } from '@colony/spec';
+import { type Spec, SpecRepository, SyncEngine, parseSpec, serializeSpec } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ToolContext } from './context.js';
@@ -17,6 +19,7 @@ const SubtaskInputSchema = z.object({
   description: z.string().min(1),
   file_scope: z.array(z.string().min(1)).min(1),
   depends_on: z.array(z.number().int().nonnegative()).optional(),
+  spec_row_id: z.string().optional(),
   capability_hint: z
     .enum(['ui_work', 'api_work', 'test_work', 'infra_work', 'doc_work'])
     .optional(),
@@ -133,6 +136,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
             subtask_index: index,
             file_scope: subtask.file_scope,
             depends_on: subtask.depends_on ?? [],
+            spec_row_id: subtask.spec_row_id ?? null,
             capability_hint: subtask.capability_hint ?? null,
             status: 'available',
           },
@@ -208,7 +212,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           return Boolean(m && m[1] === args.plan_slug);
         })
         .map((t) => readSubtaskByBranch(store, t.branch))
-        .filter((s): s is { task_id: number; info: SubtaskInfo } => s !== null)
+        .filter((s): s is SubtaskLookup => s !== null)
         .map((s) => s.info);
 
       if (!areDepsMet(located.info, siblings)) {
@@ -338,6 +342,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
             completed_at: Date.now(),
           },
         });
+        if (located.info.spec_row_id !== null) {
+          appendSpecRowCompletionDelta(store, {
+            plan_slug: args.plan_slug,
+            session_id: args.session_id,
+            subtask: located.info,
+          });
+        }
       });
 
       // Auto-archive: when this completion was the last outstanding sub-task
@@ -363,6 +374,109 @@ export function register(server: McpServer, ctx: ToolContext): void {
       };
     },
   );
+
+  server.tool(
+    'task_plan_status_for_spec_row',
+    'Find the plan sub-task bound to a spec row and return its current status, if any.',
+    {
+      repo_root: z.string().min(1),
+      spec_row_id: z.string().min(1),
+    },
+    async (args) => {
+      const found = findSubtaskBySpecRow(store, args.repo_root, args.spec_row_id);
+      if (!found) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                spec_row_id: args.spec_row_id,
+                binding: null,
+                status: null,
+              }),
+            },
+          ],
+        };
+      }
+
+      const binding = {
+        plan_slug: found.info.parent_plan_slug,
+        subtask_index: found.info.subtask_index,
+        task_id: found.task_id,
+        branch: found.branch,
+        spec_row_id: found.info.spec_row_id,
+      };
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              ...binding,
+              status: found.info.status,
+              claimed_by_session_id: found.info.claimed_by_session_id,
+              claimed_by_agent: found.info.claimed_by_agent,
+              binding,
+            }),
+          },
+        ],
+      };
+    },
+  );
+}
+
+function appendSpecRowCompletionDelta(
+  store: MemoryStore,
+  args: {
+    plan_slug: string;
+    session_id: string;
+    subtask: SubtaskInfo;
+  },
+): void {
+  const specRowId = args.subtask.spec_row_id;
+  if (specRowId === null) return;
+  if (args.subtask.parent_spec_task_id === null) {
+    throw new Error(
+      `bound sub-task ${args.plan_slug}/${args.subtask.subtask_index} has no parent spec task`,
+    );
+  }
+
+  const parentTask = store.storage
+    .listTasks(2000)
+    .find((task) => task.id === args.subtask.parent_spec_task_id);
+  if (!parentTask) {
+    throw new Error(`parent spec task ${args.subtask.parent_spec_task_id} not found`);
+  }
+
+  const repo = new SpecRepository({ repoRoot: parentTask.repo_root, store });
+  const change = repo.readChange(args.plan_slug);
+  const rowCells = completedSpecRowCells(repo.readRoot(), specRowId);
+  change.deltaRows.push({
+    op: 'modify',
+    target: specRowId,
+    row: { id: specRowId, cells: rowCells },
+  });
+  repo.writeChange(change);
+  store.addObservation({
+    session_id: args.session_id,
+    task_id: args.subtask.parent_spec_task_id,
+    kind: 'spec-delta',
+    content: `modify ${specRowId} = ${rowCells.join(' | ')}`,
+  });
+}
+
+function completedSpecRowCells(spec: Spec, specRowId: string): string[] {
+  const row =
+    spec.sections.T.rows?.find((candidate) => candidate.id === specRowId) ??
+    spec.sections.V.rows?.find((candidate) => candidate.id === specRowId) ??
+    spec.sections.B.rows?.find((candidate) => candidate.id === specRowId);
+  const cells = row ? [...row.cells] : [specRowId];
+  cells[0] = specRowId;
+  if (cells.length < 2) {
+    cells.push('done');
+  } else {
+    cells[1] = 'done';
+  }
+  return cells;
 }
 
 interface AutoArchiveOutcome {
@@ -401,7 +515,7 @@ function runAutoArchiveIfReady(
   const siblingTasks = allTasks.filter((t) => t.branch.startsWith(siblingBranchPrefix));
   const siblingInfos = siblingTasks
     .map((t) => readSubtaskByBranch(store, t.branch))
-    .filter((s): s is { task_id: number; info: SubtaskInfo } => s !== null)
+    .filter((s): s is SubtaskLookup => s !== null)
     .map((s) => s.info);
   if (siblingInfos.length === 0) {
     return { status: 'skipped', reason: 'no sub-tasks found' };

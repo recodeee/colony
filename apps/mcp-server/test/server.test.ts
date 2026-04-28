@@ -85,6 +85,7 @@ describe('MCP server', () => {
       'task_plan_complete_subtask',
       'task_plan_list',
       'task_plan_publish',
+      'task_plan_status_for_spec_row',
       'task_post',
       'task_propose',
       'task_reinforce',

@@ -83,11 +83,13 @@ export {
 } from './response-thresholds.js';
 export {
   areDepsMet,
+  findSubtaskBySpecRow,
   listPlans,
   readSubtaskByBranch,
   type ListPlansOptions,
   type PlanInfo,
   type SubtaskInfo,
+  type SubtaskLookup,
   type SubtaskStatus,
 } from './plan.js';
 export {
