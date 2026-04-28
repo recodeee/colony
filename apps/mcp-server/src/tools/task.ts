@@ -10,8 +10,9 @@ import { mcpErrorResponse } from './shared.js';
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const TASK_LIST_HINT =
   'Use task_ready_for_agent to choose claimable work; task_list is for browsing.';
-const TASK_LIST_REPEAT_HINT =
+const TASK_LIST_COORDINATION_WARNING =
   'task_list is inventory. Use task_ready_for_agent to choose claimable work.';
+const TASK_LIST_REPEAT_WARNING = 'Stop browsing. Call task_ready_for_agent before selecting work.';
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
 const OMX_POINTER_VALUE_LIMIT = 180;
 const WorkingNotePointerSchema = z.object({
@@ -49,9 +50,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
     wrapHandler('task_list', async ({ limit, session_id }) => {
       const tasks = store.storage.listTasks(limit ?? 50);
       const callerSessionId = session_id ?? detectMcpClientIdentity().sessionId;
+      const routing = taskListRoutingForSession(store, callerSessionId);
       return jsonReply({
         tasks,
-        hint: taskListHintForSession(store, callerSessionId),
+        hint: routing.hint,
+        coordination_warning: routing.coordination_warning,
+        next_tool: 'task_ready_for_agent',
       });
     }),
   );
@@ -402,12 +406,21 @@ function compactPreviousClaim(
   };
 }
 
-function taskListHintForSession(store: ToolContext['store'], sessionId: string): string {
+function taskListRoutingForSession(
+  store: ToolContext['store'],
+  sessionId: string,
+): { hint: string; coordination_warning: string } {
   const calls = store.storage.toolCallsSince(Date.now() - TASK_LIST_LOOKBACK_MS);
   const sessionCalls = calls.filter((call) => call.session_id === sessionId);
   const hasReadyCall = sessionCalls.some((call) => isTool(call.tool, 'task_ready_for_agent'));
   const priorTaskListCalls = sessionCalls.filter((call) => isTool(call.tool, 'task_list')).length;
-  return !hasReadyCall && priorTaskListCalls >= 1 ? TASK_LIST_REPEAT_HINT : TASK_LIST_HINT;
+  const repeatedInventoryBrowsing = !hasReadyCall && priorTaskListCalls >= 1;
+  return {
+    hint: repeatedInventoryBrowsing ? TASK_LIST_COORDINATION_WARNING : TASK_LIST_HINT,
+    coordination_warning: repeatedInventoryBrowsing
+      ? TASK_LIST_REPEAT_WARNING
+      : TASK_LIST_COORDINATION_WARNING,
+  };
 }
 
 function isTool(tool: string, name: string): boolean {

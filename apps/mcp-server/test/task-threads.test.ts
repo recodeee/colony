@@ -546,16 +546,29 @@ describe('task threads — handoff lifecycle', () => {
     expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_FALLBACK');
   });
 
-  it('task_list includes a ready-queue hint and strengthens it after repeated inventory reads', async () => {
+  it('task_list includes a ready-queue warning and next tool', async () => {
     const { sessionA } = seedTwoSessionTask();
 
-    const first = await call<{ hint: string; tasks: unknown[] }>('task_list', {
+    const first = await call<{
+      hint: string;
+      coordination_warning: string;
+      next_tool: string;
+      tasks: unknown[];
+    }>('task_list', {
       session_id: sessionA,
     });
     expect(first.tasks).toHaveLength(1);
     expect(first.hint).toBe(
       'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
     );
+    expect(first.coordination_warning).toBe(
+      'task_list is inventory. Use task_ready_for_agent to choose claimable work.',
+    );
+    expect(first.next_tool).toBe('task_ready_for_agent');
+  });
+
+  it('task_list strengthens the warning after repeated inventory reads', async () => {
+    const { sessionA } = seedTwoSessionTask();
 
     store.addObservation({
       session_id: sessionA,
@@ -564,10 +577,18 @@ describe('task threads — handoff lifecycle', () => {
       metadata: { tool: 'mcp__colony__task_list' },
     });
 
-    const repeated = await call<{ hint: string }>('task_list', { session_id: sessionA });
+    const repeated = await call<{
+      hint: string;
+      coordination_warning: string;
+      next_tool: string;
+    }>('task_list', { session_id: sessionA });
     expect(repeated.hint).toBe(
       'task_list is inventory. Use task_ready_for_agent to choose claimable work.',
     );
+    expect(repeated.coordination_warning).toBe(
+      'Stop browsing. Call task_ready_for_agent before selecting work.',
+    );
+    expect(repeated.next_tool).toBe('task_ready_for_agent');
 
     store.addObservation({
       session_id: sessionA,
@@ -576,9 +597,14 @@ describe('task threads — handoff lifecycle', () => {
       metadata: { tool: 'mcp__colony__task_ready_for_agent' },
     });
 
-    const afterReady = await call<{ hint: string }>('task_list', { session_id: sessionA });
+    const afterReady = await call<{ hint: string; coordination_warning: string }>('task_list', {
+      session_id: sessionA,
+    });
     expect(afterReady.hint).toBe(
       'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
+    );
+    expect(afterReady.coordination_warning).toBe(
+      'task_list is inventory. Use task_ready_for_agent to choose claimable work.',
     );
   });
 

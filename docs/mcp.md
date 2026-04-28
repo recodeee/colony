@@ -538,7 +538,7 @@ Use `task_list` when you need to inspect existing task threads by repo or branch
 { "name": "task_list", "input": { "limit": 50, "session_id": "sess_abc" } }
 ```
 
-Returns: `{ tasks, hint }`. The default hint is `Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.` Repeated `task_list` calls without `task_ready_for_agent` return the stronger inventory warning.
+Returns: `{ tasks, hint, coordination_warning, next_tool }`. `coordination_warning` is `task_list is inventory. Use task_ready_for_agent to choose claimable work.` and `next_tool` is `task_ready_for_agent`. Repeated `task_list` calls without `task_ready_for_agent` return `Stop browsing. Call task_ready_for_agent before selecting work.` as the stronger warning. The legacy `hint` field remains for backward compatibility.
 
 ## `task_timeline`
 
