@@ -229,6 +229,58 @@ describe('colony health payload', () => {
     expect(text).not.toContain('\n  Bad\n');
   });
 
+  it('keeps expired claims out of stale and active health counts', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+        tasks: [{ id: 1, repo_root: '/r', branch: 'b' }],
+        observationsByTask: { 1: [] },
+        claimsByTask: {
+          1: [
+            {
+              task_id: 1,
+              file_path: 'src/fresh.ts',
+              session_id: 'fresh',
+              claimed_at: NOW - 60_000,
+            },
+            {
+              task_id: 1,
+              file_path: 'src/stale.ts',
+              session_id: 'stale',
+              claimed_at: NOW - 5 * 3_600_000,
+            },
+            {
+              task_id: 1,
+              file_path: 'src/expired.ts',
+              session_id: 'expired',
+              claimed_at: NOW - 9 * 3_600_000,
+            },
+          ],
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.signal_health).toMatchObject({
+      total_claims: 3,
+      active_claims: 1,
+      fresh_claims: 1,
+      stale_claims: 1,
+      expired_claims: 1,
+      weak_claims: 2,
+    });
+  });
+
   it('emits parseable JSON with the same top-level sections', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({

@@ -672,6 +672,8 @@ Claim a file before editing so other agents see ownership and overlap warnings. 
 
 Claims are warnings, not locks. They never block writes. They arm the conflict preface for the next turn.
 
+Existing claims are age-classified before they are treated as ownership. Fresh claims can produce active overlap warnings; stale or expired/weak claims remain in audit history and may be returned as `weak_stale` details, but they are not active ownership and are not inherited by `task_relay`.
+
 ```json
 {
   "name": "task_claim_file",

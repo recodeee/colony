@@ -621,6 +621,7 @@ function signalHealthPayload(
     }),
   );
   const activeClaims = classified.filter(isStrongClaimAge).length;
+  const staleClaims = classified.filter((claim) => claim.age_class === 'stale').length;
   const expiredClaims = classified.filter((claim) => claim.age_class === 'expired/weak').length;
   const weakClaims = classified.filter((claim) => claim.ownership_strength === 'weak').length;
   let expiredHandoffs = 0;
@@ -641,7 +642,7 @@ function signalHealthPayload(
     total_claims: claims.length,
     active_claims: activeClaims,
     fresh_claims: activeClaims,
-    stale_claims: weakClaims,
+    stale_claims: staleClaims,
     expired_claims: expiredClaims,
     weak_claims: weakClaims,
     stale_claim_minutes: options.stale_claim_minutes,

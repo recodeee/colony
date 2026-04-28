@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryStore } from '../src/memory-store.js';
 import { TASK_THREAD_ERROR_CODES, TaskThread, TaskThreadError } from '../src/task-thread.js';
 
@@ -21,6 +21,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -602,6 +603,54 @@ describe('TaskThread', () => {
       expect(err).toBeInstanceOf(TaskThreadError);
       expect((err as TaskThreadError).code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_ACCEPTED);
     }
+  });
+
+  it('relay does not inherit stale or expired sender claims as active ownership', () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay-stale-claims',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.claimFile({ session_id: 'claude', file_path: 'src/expired.ts' });
+
+    vi.setSystemTime(t0 + 240 * 60_000);
+    thread.claimFile({ session_id: 'claude', file_path: 'src/stale.ts' });
+
+    vi.setSystemTime(t0 + 481 * 60_000);
+    thread.claimFile({ session_id: 'claude', file_path: 'src/fresh.ts' });
+
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'continue only the current file',
+      base_branch: 'main',
+    });
+
+    const row = store.storage.getObservation(relayId);
+    const meta = JSON.parse(row?.metadata ?? '{}') as {
+      resumable_state: { active_claims: Array<{ file_path: string; held_by: string }> };
+      worktree_recipe: { inherit_claims: string[] };
+    };
+    expect(meta.resumable_state.active_claims).toEqual([
+      { file_path: 'src/fresh.ts', held_by: 'claude' },
+    ]);
+    expect(meta.worktree_recipe.inherit_claims).toEqual(['src/fresh.ts']);
+
+    expect(store.storage.getClaim(thread.task_id, 'src/fresh.ts')).toBeUndefined();
+    expect(store.storage.getClaim(thread.task_id, 'src/stale.ts')?.session_id).toBe('claude');
+    expect(store.storage.getClaim(thread.task_id, 'src/expired.ts')?.session_id).toBe('claude');
+
+    thread.acceptRelay(relayId, 'codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/fresh.ts')?.session_id).toBe('codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/stale.ts')?.session_id).toBe('claude');
+    expect(store.storage.getClaim(thread.task_id, 'src/expired.ts')?.session_id).toBe('claude');
   });
 
   it('relay flags untracked files when fetch_files_at is omitted', () => {

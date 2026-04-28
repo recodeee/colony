@@ -6,6 +6,7 @@ import type {
   TaskParticipantRow,
   TaskRow,
 } from '@colony/storage';
+import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
 import type { MemoryStore } from './memory-store.js';
 import {
   type AgentProfile,
@@ -1225,7 +1226,7 @@ export class TaskThread {
    * basics; everything else is synthesized from the last 30 minutes of task
    * activity so a Stop / SessionEnd hook firing seconds before the process
    * dies still produces something the receiver can resume from. Sender's
-   * existing claims are *dropped* (not transferred) — relays assume the
+   * existing fresh claims are *dropped* (not transferred) — relays assume the
    * sender is gone, and the receiver re-claims via
    * `worktree_recipe.inherit_claims` on accept. This mirrors the
    * `transferred_files` invariant of handoffs and prevents a third agent
@@ -1417,10 +1418,21 @@ export class TaskThread {
       .filter((x): x is { file_path: string; ts: number; session_id: string } => x !== null)
       .slice(-8);
 
-    const active_claims = this.store.storage.listClaims(this.task_id).map((c) => ({
-      file_path: c.file_path,
-      held_by: c.session_id,
-    }));
+    const now = Date.now();
+    const active_claims = this.store.storage
+      .listClaims(this.task_id)
+      .filter((c) =>
+        isStrongClaimAge(
+          classifyClaimAge(c.claimed_at, {
+            now,
+            claim_stale_minutes: this.store.settings.claimStaleMinutes,
+          }),
+        ),
+      )
+      .map((c) => ({
+        file_path: c.file_path,
+        held_by: c.session_id,
+      }));
 
     // Most recent prior baton-pass — handoff or relay, whichever ran last —
     // gives the receiver the conversational arc, not just immediate state.
