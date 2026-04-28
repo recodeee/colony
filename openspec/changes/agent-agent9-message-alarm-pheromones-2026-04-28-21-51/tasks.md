@@ -32,8 +32,8 @@
 
 ## 5. Completion
 
-- [ ] Commit changes.
-- [ ] Push branch.
-- [ ] Open/update PR.
-- [ ] Merge PR and record final `MERGED` evidence.
-- [ ] Confirm sandbox worktree cleanup.
+- [x] Commit changes: `d0df292` before PR merge.
+- [x] Push branch: `agent/agent9/message-alarm-pheromones-2026-04-28-21-51`.
+- [x] Open/update PR: https://github.com/recodeee/colony/pull/154.
+- [x] Merge PR and record final `MERGED` evidence: `gh pr view 154 --repo recodeee/colony --json number,url,state,mergeCommit` returned `state=MERGED`, `mergeCommit=030b85e8ae6d87183311f670c3062c9a2c2fcb46`.
+- [x] Confirm sandbox worktree cleanup: `git worktree list` no longer includes `colony__agent9__message-alarm-pheromones-2026-04-28-21-51`, and `git branch --list "agent/agent9/message-alarm-pheromones-2026-04-28-21-51"` returned no local branch.
