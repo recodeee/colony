@@ -2,15 +2,41 @@
 
 colony exposes MCP tools over a stdio server. IDE installers register that server as `colony`, so agent tool calls appear under the `colony` namespace. The design goal is **progressive disclosure**: hits are compact until the agent asks for more.
 
-The recommended workflow is a three-layer pattern:
+For memory lookup, the recommended workflow is a three-layer pattern:
 
 1. `search` (or `list_sessions` → `timeline`) to get a compact index.
 2. Review IDs.
 3. `get_observations` with the filtered set.
 
+## Agent startup loop
+
+Agent startup, resume, "what needs me?", and "what should I do next?" flows should call these first:
+
+1. `hivemind_context` to see active agents, owned branches, live lanes, and compact memory hits.
+2. `attention_inbox` to see what needs your attention: handoffs, messages, wakes, stalled lanes, and recent claim activity.
+3. `task_ready_for_agent` to choose available work matched to the current agent.
+
+Use `task_list` for browsing recent task threads. Use `task_ready_for_agent` for choosing what to work on next.
+
+Copy-paste startup:
+
+```json
+{ "name": "hivemind_context", "input": { "repo_root": "/abs/repo", "query": "current task or branch", "memory_limit": 3, "limit": 20 } }
+```
+
+```json
+{ "name": "attention_inbox", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo" } }
+```
+
+```json
+{ "name": "task_ready_for_agent", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo", "limit": 5 } }
+```
+
+When the selected task needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. Claim files with `task_claim_file` or `task_plan_claim_subtask` before editing.
+
 For multi-agent runtime awareness, call `hivemind_context` first when you need ownership plus likely memory hits, or `hivemind` when you only need the runtime map. Both return compact active worktrees, branches, agents, and task previews from `.omx` proxy-runtime state without fetching observation bodies.
 
-Following this pattern saves ~10× tokens versus fetching full bodies upfront.
+Following the progressive-disclosure pattern saves ~10× tokens versus fetching full bodies upfront.
 
 ## `search`
 
@@ -229,7 +255,9 @@ Returns:
 
 ## `task_list`
 
-List recent task threads. Each task groups sessions collaborating on the same `(repo_root, branch)`.
+Browse recent task threads. Each task groups sessions collaborating on the same `(repo_root, branch)`.
+
+Use `task_list` when you need to inspect existing task threads by repo or branch. Do not use it as the main work picker; call `task_ready_for_agent` when the question is "what should I work on next?"
 
 ```json
 { "name": "task_list", "input": { "limit": 50 } }
@@ -739,6 +767,24 @@ List published plans with a sub-task rollup.
 ```
 
 Returns `[{ plan_slug, repo_root, spec_task_id, title, created_at, subtask_counts: { available, claimed, completed, blocked }, subtasks: [...], next_available: [...] }]`. `next_available` is the list of sub-tasks whose status is `available` **and** whose `depends_on` chain is fully `completed`. `capability_match` filters plans where at least one sub-task in `next_available` has the matching `capability_hint`.
+
+## `task_ready_for_agent`
+
+Find work to claim, pick a task, or choose available work for the current agent. This is the canonical "what should I work on next?" tool.
+
+```json
+{
+  "name": "task_ready_for_agent",
+  "input": {
+    "session_id": "sess_def",
+    "agent": "codex",
+    "repo_root": "/abs/repo",
+    "limit": 5
+  }
+}
+```
+
+Returns `{ ready, total_available }`. Each `ready` entry includes `plan_slug`, `subtask_index`, `title`, `capability_hint`, `file_scope`, `fit_score`, and `reasoning`. Blocked work is filtered out, and conflicting active file claims lower the score. Claim the selected item with `task_plan_claim_subtask`, or claim specific files with `task_claim_file` before editing.
 
 ## `task_plan_claim_subtask`
 
