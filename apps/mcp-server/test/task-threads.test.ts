@@ -186,69 +186,6 @@ describe('task threads — handoff lifecycle', () => {
     expect(afterMeta.status).toBe('expired');
   });
 
-  it('task_wake + task_ack_wake + attention_inbox round trip', async () => {
-    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
-
-    const { wake_observation_id } = await call<{ wake_observation_id: number }>('task_wake', {
-      task_id,
-      session_id: sessionA,
-      agent: 'claude',
-      to_agent: 'codex',
-      reason: 'please review the migration shape',
-      next_step: 'look at packages/storage/src/schema.ts',
-    });
-
-    const inbox = await call<{
-      pending_wakes: Array<{ id: number; reason: string }>;
-      summary: { pending_wake_count: number; next_action: string };
-    }>('attention_inbox', {
-      session_id: sessionB,
-      agent: 'codex',
-      task_ids: [task_id],
-    });
-    expect(inbox.pending_wakes.map((w) => w.id)).toContain(wake_observation_id);
-    expect(inbox.summary.pending_wake_count).toBeGreaterThan(0);
-
-    const acked = await call<{ status: string }>('task_ack_wake', {
-      wake_observation_id,
-      session_id: sessionB,
-    });
-    expect(acked.status).toBe('acknowledged');
-
-    const row = store.storage.getObservation(wake_observation_id);
-    const meta = JSON.parse(row?.metadata ?? '{}');
-    expect(meta.status).toBe('acknowledged');
-    expect(meta.acknowledged_by_session_id).toBe(sessionB);
-
-    const retry = await callError('task_ack_wake', { wake_observation_id, session_id: sessionB });
-    expect(retry.code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_ACKNOWLEDGED);
-  });
-
-  it('task_cancel_wake cancels a pending wake without side effects on claims', async () => {
-    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
-
-    const { wake_observation_id } = await call<{ wake_observation_id: number }>('task_wake', {
-      task_id,
-      session_id: sessionA,
-      agent: 'claude',
-      to_agent: 'codex',
-      reason: 'nevermind',
-    });
-
-    await call('task_cancel_wake', {
-      wake_observation_id,
-      session_id: sessionA,
-      reason: 'resolved offline',
-    });
-
-    const row = store.storage.getObservation(wake_observation_id);
-    const meta = JSON.parse(row?.metadata ?? '{}');
-    expect(meta.status).toBe('cancelled');
-
-    const error = await callError('task_ack_wake', { wake_observation_id, session_id: sessionB });
-    expect(error.code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_CANCELLED);
-  });
-
   it("task_updates_since filters out the caller's own posts", async () => {
     const { task_id, sessionA, sessionB } = seedTwoSessionTask();
     const cursor = Date.now() - 1; // strictly before either post

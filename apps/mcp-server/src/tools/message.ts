@@ -12,7 +12,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_message',
     [
-      "Send a direct message to another agent on a task thread. Use for coordination chat that doesn't transfer file claims — for 'hand off the work + files', use task_hand_off instead.",
+      "Send a message to agents on a task thread. Minimum call: task_id, session_id, agent, content; it broadcasts to_agent='any' with urgency='fyi'. Use to_agent / to_session_id for direct coordination that doesn't transfer file claims — for 'hand off the work + files', use task_hand_off instead.",
       'Urgency controls preface prominence: fyi (coalesced into a counter), needs_reply (rendered as a summary + expected action), blocking (top-of-preface, never coalesced).',
       'Pass reply_to to chain onto an earlier message; the parent\'s immediate status flips to "replied". Reply chains are 1-deep authoritative: replies-to-replies are allowed but only the immediate parent flips, never a transitively-referenced ancestor.',
       'expires_in_minutes is an optional TTL. Past-TTL messages drop out of unread inbox queries and any later mark_read fails with MESSAGE_EXPIRED; their bodies stay in storage for audit and FTS.',
@@ -22,14 +22,20 @@ export function register(server: McpServer, ctx: ToolContext): void {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1).describe('your session_id (the sender)'),
       agent: z.string().min(1).describe('your agent name, e.g. claude or codex'),
-      to_agent: z.enum(['claude', 'codex', 'any']),
+      content: z.string().min(1),
+      to_agent: z
+        .enum(['claude', 'codex', 'any'])
+        .default('any')
+        .describe("Optional recipient agent class. Defaults to 'any' broadcast."),
+      urgency: z
+        .enum(['fyi', 'needs_reply', 'blocking'])
+        .default('fyi')
+        .describe("Optional message urgency. Defaults to 'fyi'."),
       to_session_id: z
         .string()
         .optional()
         .describe('Optional: target a specific live session. Prefer to_agent for durability.'),
-      content: z.string().min(1),
       reply_to: z.number().int().positive().optional(),
-      urgency: z.enum(['fyi', 'needs_reply', 'blocking']).optional(),
       expires_in_minutes: z
         .number()
         .int()
@@ -45,11 +51,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const id = thread.postMessage({
         from_session_id: args.session_id,
         from_agent: args.agent,
-        to_agent: args.to_agent,
+        to_agent: args.to_agent ?? 'any',
         ...(args.to_session_id !== undefined ? { to_session_id: args.to_session_id } : {}),
         content: args.content,
         ...(args.reply_to !== undefined ? { reply_to: args.reply_to } : {}),
-        ...(args.urgency !== undefined ? { urgency: args.urgency } : {}),
+        urgency: args.urgency ?? 'fyi',
         ...(args.expires_in_minutes !== undefined
           ? { expires_in_ms: args.expires_in_minutes * 60_000 }
           : {}),

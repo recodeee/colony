@@ -191,6 +191,42 @@ describe('task threads — direct messages', () => {
     expect(senderInbox.find((m) => m.id === message_observation_id)).toBeUndefined();
   });
 
+  it('task_message defaults four-arg calls to fyi broadcasts', async () => {
+    const { task_id, sessionA, sessionB, sessionC } = seedThreeSessionTask();
+
+    const { message_observation_id, status } = await call<{
+      message_observation_id: number;
+      status: string;
+    }>('task_message', {
+      task_id,
+      session_id: sessionA,
+      agent: 'claude',
+      content: 'default broadcast shape',
+    });
+    expect(status).toBe('unread');
+
+    const meta = JSON.parse(store.storage.getObservation(message_observation_id)?.metadata ?? '{}');
+    expect(meta.to_agent).toBe('any');
+    expect(meta.urgency).toBe('fyi');
+
+    for (const [session_id, agent] of [
+      [sessionB, 'codex'],
+      [sessionC, 'claude'],
+    ] as const) {
+      const inbox = await call<Array<{ id: number; to_agent: string; urgency: string }>>(
+        'task_messages',
+        {
+          session_id,
+          agent,
+          task_ids: [task_id],
+        },
+      );
+      const found = inbox.find((m) => m.id === message_observation_id);
+      expect(found?.to_agent).toBe('any');
+      expect(found?.urgency).toBe('fyi');
+    }
+  });
+
   it('to_session_id routes only to the target session, not every matching-agent participant', async () => {
     const { task_id, sessionA, sessionB, sessionC } = seedThreeSessionTask();
     store.startSession({ id: 'D', ide: 'claude-code', cwd: '/repo' });

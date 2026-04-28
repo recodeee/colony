@@ -69,8 +69,6 @@ describe('MCP server', () => {
       'spec_read',
       'task_accept_handoff',
       'task_accept_relay',
-      'task_ack_wake',
-      'task_cancel_wake',
       'task_claim_file',
       'task_decline_handoff',
       'task_decline_relay',
@@ -99,12 +97,20 @@ describe('MCP server', () => {
       'task_timeline',
       'task_unlink',
       'task_updates_since',
-      'task_wake',
       'timeline',
     ]);
     expect(byName.get('task_post')?.description).toContain(
       'Fallback when task_relay is unavailable',
     );
+    expect(byName.get('task_post')?.description).toContain(
+      'use task_message for non-broadcast agent-to-agent coordination',
+    );
+    expect(byName.get('task_message')?.inputSchema.required).toEqual([
+      'task_id',
+      'session_id',
+      'agent',
+      'content',
+    ]);
     expect(byName.get('task_hand_off')?.description).toContain(
       'Fallback when task_relay is unavailable',
     );

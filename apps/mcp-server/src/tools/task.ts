@@ -72,6 +72,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     'task_post',
     [
       'Post a coordination message on a task thread. Use specific tools for claim / hand_off / accept.',
+      "Deprecation note: use task_message for non-broadcast agent-to-agent coordination; keep task_post for kind:'note'|'blocker'|'question'|'answer'|'decision' style threading.",
       RELAY_FALLBACK_POST_RULE,
     ].join(' '),
     {
