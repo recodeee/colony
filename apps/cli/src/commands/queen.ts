@@ -6,6 +6,7 @@ import {
   DEFAULT_UNCLAIMED_MINUTES,
   type QueenAttentionItem,
   type QueenPlan,
+  type QueenSweepWaveSummary,
   planGoal,
   publishOrderedPlan,
   sweepQueenPlans,
@@ -200,6 +201,13 @@ function renderSweep(result: ReturnType<typeof sweepQueenPlans>, opts: SweepOpts
     );
   }
 
+  const waveDiagnostics = renderWaveDiagnostics(result);
+  if (waveDiagnostics.length > 0) {
+    lines.push('');
+    lines.push(kleur.cyan('Wave diagnostics:'));
+    lines.push(...waveDiagnostics);
+  }
+
   lines.push('');
   lines.push(kleur.cyan('Examples:'));
   for (const item of items.slice(0, 5)) {
@@ -210,6 +218,43 @@ function renderSweep(result: ReturnType<typeof sweepQueenPlans>, opts: SweepOpts
   }
 
   return lines.join('\n');
+}
+
+function renderWaveDiagnostics(result: ReturnType<typeof sweepQueenPlans>): string[] {
+  const lines: string[] = [];
+  for (const plan of result) {
+    const planLines = (plan.waves ?? []).flatMap(renderWaveSummary);
+    if (planLines.length === 0) continue;
+    lines.push(`  ${plan.plan_slug}:`);
+    lines.push(...planLines.map((line) => `    ${line}`));
+  }
+  return lines;
+}
+
+function renderWaveSummary(wave: QueenSweepWaveSummary): string[] {
+  const lines: string[] = [];
+  if (wave.stalled_subtask_count > 0) {
+    lines.push(
+      `${wave.label} has ${wave.stalled_subtask_count} ${plural(wave.stalled_subtask_count, 'stalled subtask')}`,
+    );
+  }
+  if (wave.unclaimed_subtask_count > 0) {
+    lines.push(
+      `${wave.label} has ${wave.unclaimed_subtask_count} ${plural(wave.unclaimed_subtask_count, 'unclaimed subtask')}`,
+    );
+  }
+  if (wave.waiting_on_subtask_count > 0) {
+    if (wave.is_finalizer === true) {
+      lines.push(
+        `${wave.label} waiting on ${wave.waiting_on_subtask_count} ${plural(wave.waiting_on_subtask_count, 'subtask')}`,
+      );
+    } else if (wave.blocked_by.length > 0) {
+      lines.push(
+        `${wave.label} is blocked by ${formatWaveBlockers(wave.blocked_by.map((blocker) => blocker.label))}`,
+      );
+    }
+  }
+  return lines;
 }
 
 function renderExample(item: QueenAttentionItem): string {
@@ -325,4 +370,13 @@ function formatFiles(files: string[]): string {
 
 function formatDepends(dependsOn: number[] | undefined): string {
   return dependsOn?.length ? dependsOn.map((dep) => `sub-${dep}`).join(', ') : '-';
+}
+
+function plural(count: number, singular: string): string {
+  return count === 1 ? singular : `${singular}s`;
+}
+
+function formatWaveBlockers(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? 'earlier waves';
+  return `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
 }
