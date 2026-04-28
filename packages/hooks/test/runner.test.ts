@@ -99,6 +99,36 @@ describe('runHook', () => {
     expect(tl[0]?.metadata).toEqual({ tool: 'Bash' });
   });
 
+  it('post-tool-use surfaces Bash git and file operations as coordination events', async () => {
+    await runHook('session-start', { session_id: 'sess-bash', ide: 'codex' }, { store });
+    const r = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'sess-bash',
+        ide: 'codex',
+        tool_name: 'Bash',
+        tool_input: { command: 'git checkout main && rm old.ts' },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+    expect(r.ok).toBe(true);
+
+    const tl = store.timeline('sess-bash');
+    expect(tl.filter((obs) => obs.kind === 'git-op')).toHaveLength(1);
+    expect(tl.filter((obs) => obs.kind === 'file-op')).toHaveLength(1);
+    expect(tl.filter((obs) => obs.kind === 'auto-claim')).toHaveLength(0);
+    expect(tl.find((obs) => obs.kind === 'git-op')?.metadata).toMatchObject({
+      op: 'checkout',
+      source: 'bash-parser',
+    });
+    expect(tl.find((obs) => obs.kind === 'file-op')?.metadata).toMatchObject({
+      op: 'rm',
+      file_path: 'old.ts',
+      source: 'bash-parser',
+    });
+  });
+
   it('stop stores a turn summary; session-end rolls up turns and closes the session', async () => {
     await runHook('session-start', { session_id: 'sess-d', ide: 'claude-code' }, { store });
     await runHook(

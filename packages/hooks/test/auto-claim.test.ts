@@ -259,4 +259,38 @@ describe('runHook integration: A edits -> B sees warning', () => {
       other_session: 'A',
     });
   });
+
+  it('Bash redirects use the same auto-claim path as Write', async () => {
+    const task_id = seedTwoSessionTask();
+
+    const bash = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'A',
+        ide: 'codex',
+        cwd: '/repo',
+        tool_name: 'Bash',
+        tool_input: { command: 'printf "exported" > src/generated.ts' },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+    expect(bash.ok).toBe(true);
+    expect(store.storage.getClaim(task_id, 'src/generated.ts')?.session_id).toBe('A');
+    const autoClaims = store.storage.taskObservationsByKind(task_id, 'auto-claim');
+    expect(autoClaims).toHaveLength(1);
+    expect(metadataOf(autoClaims[0])).toMatchObject({
+      source: 'post-tool-use',
+      file_path: 'src/generated.ts',
+      tool: 'Write',
+    });
+
+    const nextTurn = await runHook(
+      'user-prompt-submit',
+      { session_id: 'B', ide: 'codex', prompt: 'continue' },
+      { store },
+    );
+    expect(nextTurn.ok).toBe(true);
+    expect(nextTurn.context).toContain('src/generated.ts');
+  });
 });

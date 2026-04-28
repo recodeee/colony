@@ -6,14 +6,14 @@ import {
   detectRepoBranch,
   inferIdeFromSessionId,
 } from '@colony/core';
+import { type BashCoordinationEvent, parseBashCoordinationEvents } from '../bash-parser.js';
 import type { HookInput } from '../types.js';
 
 /**
  * Tool names whose `file_path` input indicates "this agent just edited that
  * file". Conservative on purpose — `Read` and `Glob` aren't claim-worthy
- * because they don't mutate; `Bash` isn't because we can't reliably parse
- * file paths out of arbitrary shell. Expand only when a new tool
- * demonstrably means "I am editing this file".
+ * because they don't mutate. `Bash` redirects are handled separately through
+ * parseBashCoordinationEvents so ordinary Write/Edit handling stays simple.
  */
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const TASK_MIRROR_TOOLS = new Set(['TaskCreate', 'TaskUpdate']);
@@ -47,6 +47,18 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
 
   mirrorTaskToolUse(store, input);
 
+  const bashEvents = extractBashCoordinationEvents(store, input, tool, toolInput);
+  for (const event of bashEvents) {
+    if (event.kind === 'auto-claim') continue;
+    store.addObservation({
+      session_id: input.session_id,
+      kind: event.kind,
+      content: bashEventContent(event),
+      metadata: bashEventMetadata(tool, event),
+    });
+  }
+  applyBashRedirectAutoClaims(store, input, bashEvents);
+
   // Side effect: record a claim for every file this tool edited. Observed
   // (not predictive) — the agent doesn't have to know the claim system
   // exists for the claim system to protect its work. The next session that
@@ -66,6 +78,84 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
   // thinking about them explicitly — the ordinary work of editing code
   // feeds the foraging algorithm for free.
   reinforceAdjacentProposals(store, input);
+}
+
+function extractBashCoordinationEvents(
+  store: MemoryStore,
+  input: HookInput,
+  tool: string,
+  toolInput: unknown,
+): BashCoordinationEvent[] {
+  if (tool !== 'Bash' || typeof toolInput !== 'object' || toolInput === null) return [];
+
+  const command = (toolInput as Record<string, unknown>).command;
+  if (typeof command !== 'string') return [];
+
+  const taskId = store.storage.findActiveTaskForSession(input.session_id);
+  const task = taskId === undefined ? undefined : store.storage.getTask(taskId);
+  const detected = task ? null : input.cwd ? detectRepoBranch(input.cwd) : null;
+  return parseBashCoordinationEvents(command, {
+    cwd: input.cwd,
+    repoRoot: task?.repo_root ?? detected?.repo_root ?? input.cwd,
+  });
+}
+
+function applyBashRedirectAutoClaims(
+  store: MemoryStore,
+  input: HookInput,
+  events: BashCoordinationEvent[],
+): void {
+  const files = Array.from(
+    new Set(events.flatMap((event) => (event.kind === 'auto-claim' ? [event.file_path] : []))),
+  );
+  for (const file_path of files) {
+    const syntheticWrite: Pick<
+      HookInput,
+      'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'ide' | 'cwd'
+    > = {
+      session_id: input.session_id,
+      tool_name: 'Write',
+      tool_input: { file_path },
+    };
+    if (typeof input.ide === 'string') syntheticWrite.ide = input.ide;
+    if (typeof input.cwd === 'string') syntheticWrite.cwd = input.cwd;
+    autoClaimFromToolUse(store, syntheticWrite);
+    depositPheromoneFromToolUse(store, syntheticWrite);
+    reinforceAdjacentProposals(store, syntheticWrite);
+  }
+}
+
+function bashEventContent(event: BashCoordinationEvent): string {
+  switch (event.kind) {
+    case 'git-op':
+      return `Bash git ${event.op}: ${event.segment}`;
+    case 'file-op':
+      return `Bash file ${event.op}: ${event.file_paths.join(', ')}`;
+    case 'auto-claim':
+      return `Bash redirect ${event.operator}: ${event.file_path}`;
+  }
+}
+
+function bashEventMetadata(tool: string, event: BashCoordinationEvent): Record<string, unknown> {
+  const base = { tool, source: 'bash-parser', op: event.op, segment: event.segment };
+  switch (event.kind) {
+    case 'git-op':
+      return { ...base, argv: event.argv };
+    case 'file-op':
+      return {
+        ...base,
+        argv: event.argv,
+        file_path: event.file_paths[0],
+        file_paths: event.file_paths,
+      };
+    case 'auto-claim':
+      return {
+        ...base,
+        operator: event.operator,
+        file_path: event.file_path,
+        file_paths: [event.file_path],
+      };
+  }
 }
 
 /**
