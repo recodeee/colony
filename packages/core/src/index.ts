@@ -161,6 +161,17 @@ export {
 } from './suggestion-payload.js';
 export { buildDiscrepancyReport, type DiscrepancyReport } from './discrepancy.js';
 export {
+  buildCoordinationSweep,
+  type BlockedDownstreamTaskSignal,
+  type CoordinationSweepOptions,
+  type CoordinationSweepResult,
+  type DecayedProposalSignal,
+  type ExpiredHandoffSignal,
+  type ExpiredMessageSignal,
+  type StaleClaimSignal,
+  type StaleHotFileSignal,
+} from './coordination-sweep.js';
+export {
   ABANDONED_TASK_DAYS,
   MIN_CORPUS_SIZE,
   MIN_SIMILAR_TASKS_FOR_SUGGESTION,

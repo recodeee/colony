@@ -1162,6 +1162,18 @@ export class Storage {
       .all(repo_root, branch) as ProposalRow[];
   }
 
+  /** Every proposal, optionally scoped to a repository. Ordered newest-first. */
+  listProposals(repo_root?: string): ProposalRow[] {
+    if (repo_root !== undefined) {
+      return this.db
+        .prepare('SELECT * FROM proposals WHERE repo_root = ? ORDER BY proposed_at DESC')
+        .all(repo_root) as ProposalRow[];
+    }
+    return this.db
+      .prepare('SELECT * FROM proposals ORDER BY proposed_at DESC')
+      .all() as ProposalRow[];
+  }
+
   // --- proposal reinforcements ---
 
   insertReinforcement(r: NewReinforcement): void {

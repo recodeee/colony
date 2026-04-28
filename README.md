@@ -70,6 +70,7 @@ Colony requires Node 20 or newer. The CLI package is `@imdeadpool/colony-cli`; t
 | `colony search "<query>"` | Search prior observations and session memory. |
 | `colony timeline <session-id>` | Inspect one session chronologically. |
 | `colony observe` | Watch task threads and coordination state. |
+| `colony coordination sweep` | Report stale claims, expired handoffs/messages, decayed proposals, stale hot files, and blocked downstream work. |
 | `colony plan create <slug>` | Create an OpenSpec-like local plan workspace under `openspec/plans/<slug>`. |
 | `colony plan status [slug]` | Inspect local plan tasks, checkpoints, and rollup counts. |
 | `colony plan publish <slug>` | Publish a local plan workspace into Colony task threads and `openspec/changes`. |

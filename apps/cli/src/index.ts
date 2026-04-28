@@ -5,6 +5,7 @@ import { Command } from 'commander';
 import { registerBackfillCommand } from './commands/backfill.js';
 import { registerCompressCommands } from './commands/compress.js';
 import { registerConfigCommand } from './commands/config.js';
+import { registerCoordinationCommand } from './commands/coordination.js';
 import { registerDebriefCommand } from './commands/debrief.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerExportCommand } from './commands/export.js';
@@ -46,6 +47,7 @@ export function createProgram(): Command {
   registerSearchCommand(program);
   registerSuggestCommand(program);
   registerCompressCommands(program);
+  registerCoordinationCommand(program);
   registerExportCommand(program);
   registerHookCommand(program);
   registerReindexCommand(program);
