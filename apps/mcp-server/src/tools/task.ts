@@ -5,11 +5,6 @@ import type { ToolContext } from './context.js';
 
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 
-const RELAY_FALLBACK_POST_RULE = [
-  'Fallback when task_relay is unavailable in your client tool surface: post a note or blocker containing reason, one_line, base_branch, fetch_files_at if known, touched files, and whether the named source branch/worktree is missing.',
-  'After that, use task_hand_off when another agent must resume the work.',
-].join(' ');
-
 export function register(server: McpServer, ctx: ToolContext): void {
   const { store } = ctx;
 
@@ -75,11 +70,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_post',
     [
-      'Write a working note or save current state on a task thread. Use for questions, answers, decisions, blockers, and general notes when no direct task_message is needed.',
-      "Working-state shortcut: write working note, save current state, remember progress, or log what I am doing by posting kind:'note'.",
-      "Deprecation note: use task_message for non-broadcast agent-to-agent coordination; keep task_post for kind:'note'|'blocker'|'question'|'answer'|'decision' style threading.",
-      'Use specific tools for claim / hand_off / accept.',
-      RELAY_FALLBACK_POST_RULE,
+      'Write a working note or save current state on a task thread.',
+      'Use for questions, answers, decisions, blockers, and general notes; use specific tools for claim / hand_off / accept.',
     ].join(' '),
     {
       task_id: z.number().int().positive(),

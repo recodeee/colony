@@ -100,16 +100,13 @@ describe('MCP server', () => {
       'task_updates_since',
       'timeline',
     ]);
-    expect(byName.get('task_post')?.description).toContain(
-      'Fallback when task_relay is unavailable',
+    const taskPostDescription = byName.get('task_post')?.description ?? '';
+    expect(taskPostDescription).toMatch(/^Write a working note/);
+    expect(taskPostDescription).toContain('save current state');
+    expect(taskPostDescription).toContain(
+      'Use for questions, answers, decisions, blockers, and general notes',
     );
-    expect(byName.get('task_post')?.description).toContain(
-      'use task_message for non-broadcast agent-to-agent coordination',
-    );
-    expect(byName.get('task_post')?.description).toContain('write working note');
-    expect(byName.get('task_post')?.description).toContain('save current state');
-    expect(byName.get('task_post')?.description).toContain('remember progress');
-    expect(byName.get('task_post')?.description).toContain('log what I am doing');
+    expect(taskPostDescription.length).toBeLessThanOrEqual(240);
     expect(byName.get('task_message')?.inputSchema.required).toEqual([
       'task_id',
       'session_id',
@@ -122,8 +119,10 @@ describe('MCP server', () => {
     expect(byName.get('task_hand_off')?.description).toContain(
       'Fallback when task_relay is unavailable',
     );
-    expect(byName.get('task_message')?.description).toMatch(/^Send a message to another agent\./);
-    expect(byName.get('task_message')?.description).toContain('instead of generic task_post notes');
+    const taskMessageDescription = byName.get('task_message')?.description ?? '';
+    expect(taskMessageDescription).toMatch(/^Send a message to another agent on a task thread\./);
+    expect(taskMessageDescription).toContain('Defaults to fyi broadcast');
+    expect(taskMessageDescription.length).toBeLessThanOrEqual(240);
     expect(byName.get('task_messages')?.description).toMatch(/^Read unread messages\./);
     expect(byName.get('task_messages')?.description).toContain(
       'fetch full bodies via get_observations',

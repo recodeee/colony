@@ -403,6 +403,14 @@ Use `kind: "note"` when an agent needs to write working note, save current state
 
 `kind` ∈ `question | answer | decision | blocker | note`. Returns `{ id }`.
 
+## `task_post` lifecycle
+
+- Working-state shortcut: write working note, save current state, remember progress, or log what I am doing by posting kind:'note'.
+- Deprecation note: use task_message for non-broadcast agent-to-agent coordination; keep task_post for kind:'note'|'blocker'|'question'|'answer'|'decision' style threading.
+- Use specific tools for claim / hand_off / accept.
+- Fallback when task_relay is unavailable in your client tool surface: post a note or blocker containing reason, one_line, base_branch, fetch_files_at if known, touched files, and whether the named source branch/worktree is missing.
+- After that, use task_hand_off when another agent must resume the work.
+
 ## `task_claim_file`
 
 Claim a file before editing so other agents see ownership and overlap warnings. Use this to avoid conflict and make file ownership visible before touching shared files.
@@ -497,7 +505,16 @@ Send a message to another agent. Use for directed coordination that **doesn't** 
 }
 ```
 
-`to_agent` ∈ `claude | codex | any` — `any` broadcasts to every participant but the sender. `to_session_id` narrows delivery to a specific live session. `urgency` ∈ `fyi | needs_reply | blocking` and controls preface prominence: `fyi` coalesces into a counter, `needs_reply` renders as a summary, `blocking` lands at the top of the preface and never coalesces. `reply_to` chains a reply; the parent message's status flips to `replied` atomically on the send. **Reply chains are 1-deep authoritative**: replies-to-replies are allowed, but only the immediate parent's status flips, never a transitively-referenced ancestor. `expires_in_minutes` (max 7 days) gives the message a TTL — past-TTL unread messages drop out of inbox queries and any later `task_message_mark_read` returns `MESSAGE_EXPIRED`; bodies remain in storage for audit and stay searchable via FTS. Replying to a still-unclaimed broadcast auto-claims it for the replier (see `task_message_claim`). Returns `{ message_observation_id, status: 'unread' }`.
+`to_agent` ∈ `claude | codex | any`. `urgency` ∈ `fyi | needs_reply | blocking`. Returns `{ message_observation_id, status: 'unread' }`.
+
+## `task_message` lifecycle
+
+- Minimum call: task_message(task_id, session_id, agent, content); it broadcasts to_agent='any' with urgency='fyi'. Use to_agent / to_session_id for direct coordination that doesn't transfer file claims; for 'hand off the work + files', use task_hand_off instead.
+- Urgency controls preface prominence: fyi (coalesced into a counter), needs_reply (rendered as a summary + expected action), blocking (top-of-preface, never coalesced).
+- Pass reply_to to chain onto an earlier message; the parent's immediate status flips to "replied". Reply chains are 1-deep authoritative: replies-to-replies are allowed but only the immediate parent flips, never a transitively-referenced ancestor.
+- expires_in_minutes is an optional TTL. Past-TTL messages drop out of unread inbox queries and any later mark_read fails with MESSAGE_EXPIRED; their bodies stay in storage for audit and FTS.
+- Replying to a still-unclaimed broadcast (to_agent=any) auto-claims it for you, hiding the broadcast from other recipients.
+- Retract sent message. Recipients stop seeing it in inboxes; only the original sender can retract before it is answered, and audit storage keeps body text searchable for FTS and reply-chain history.
 
 Directed-message workflow: `task_message` -> `attention_inbox` / `task_messages` -> `get_observations` -> `task_message_mark_read` -> reply.
 
