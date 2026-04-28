@@ -12,6 +12,7 @@ import * as handoff from './tools/handoff.js';
 import { installActiveSessionHeartbeat } from './tools/heartbeat.js';
 import * as hivemind from './tools/hivemind.js';
 import * as message from './tools/message.js';
+import * as planValidate from './tools/plan-validate.js';
 import * as plan from './tools/plan.js';
 import * as profile from './tools/profile.js';
 import * as proposal from './tools/proposal.js';
@@ -79,6 +80,7 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   message.register(server, ctx);
   relay.register(server, ctx);
   plan.register(server, ctx);
+  planValidate.register(server, ctx);
   recall.register(server, ctx);
   suggest.register(server, ctx);
 
