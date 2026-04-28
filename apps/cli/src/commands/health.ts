@@ -702,7 +702,14 @@ function adoptionThresholds(
 }
 
 function formatSignal(signal: AdoptionSignal): string {
-  return `  ${signal.status.padEnd(15)} ${signal.name}: ${formatSignalValue(signal.value)} - ${signal.hint}`;
+  return `  ${formatSignalStatus(signal.status)} ${signal.name}: ${formatSignalValue(signal.value)} - ${signal.hint}`;
+}
+
+function formatSignalStatus(status: AdoptionSignal['status']): string {
+  const label = status.padEnd(15);
+  if (status === 'good') return kleur.green(label);
+  if (status === 'bad') return kleur.red(label);
+  return kleur.yellow(label);
 }
 
 function formatSignalValue(value: number | null): string {

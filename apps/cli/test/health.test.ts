@@ -231,6 +231,30 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('adoption_thresholds');
   });
 
+  it('colors adoption threshold status labels by severity', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 2,
+          edits_with_file_path: 2,
+          edits_claimed_before: 1,
+        },
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    kleur.enabled = true;
+    try {
+      const text = formatColonyHealthOutput(payload);
+      expect(text).toContain(kleur.green('good'.padEnd(15)));
+      expect(text).toContain(kleur.yellow('ok'.padEnd(15)));
+      expect(text).toContain(kleur.red('bad'.padEnd(15)));
+    } finally {
+      kleur.enabled = false;
+    }
+  });
+
   it('flags notepad and missing inbox or ready queue adoption gaps', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
