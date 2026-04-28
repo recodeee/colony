@@ -10,6 +10,7 @@ import { runHook } from '../src/runner.js';
 
 let dir: string;
 let store: MemoryStore;
+let previousCavememNoAutostart: string | undefined;
 
 /** Set up two sessions (A, B) joined to the same task. Bypasses the hook
  *  layer because these tests target auto-claim behaviour, not hook wiring. */
@@ -26,7 +27,13 @@ function seedTwoSessionTask(): number {
   return thread.task_id;
 }
 
+function metadataOf(row: { metadata: string | null } | undefined): Record<string, unknown> {
+  return row?.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : {};
+}
+
 beforeEach(() => {
+  previousCavememNoAutostart = process.env.CAVEMEM_NO_AUTOSTART;
+  process.env.CAVEMEM_NO_AUTOSTART = '1';
   dir = mkdtempSync(join(tmpdir(), 'colony-auto-claim-'));
   store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
 });
@@ -34,6 +41,11 @@ beforeEach(() => {
 afterEach(() => {
   store.close();
   rmSync(dir, { recursive: true, force: true });
+  if (previousCavememNoAutostart === undefined) {
+    delete process.env.CAVEMEM_NO_AUTOSTART;
+  } else {
+    process.env.CAVEMEM_NO_AUTOSTART = previousCavememNoAutostart;
+  }
 });
 
 describe('extractTouchedFiles', () => {
@@ -64,6 +76,31 @@ describe('autoClaimFromToolUse', () => {
     expect(result.claimed).toEqual(['src/viewer.tsx']);
     expect(result.conflicts).toEqual([]);
     expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
+    const observations = store.storage.taskObservationsByKind(task_id, 'auto-claim');
+    expect(observations).toHaveLength(1);
+    expect(metadataOf(observations[0])).toMatchObject({
+      source: 'post-tool-use',
+      file_path: 'src/viewer.tsx',
+      tool: 'Edit',
+    });
+  });
+
+  it('does not emit another auto-claim when the same session edits an already-claimed file', () => {
+    const task_id = seedTwoSessionTask();
+    const first = autoClaimFromToolUse(store, {
+      session_id: 'A',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/viewer.tsx' },
+    });
+    const second = autoClaimFromToolUse(store, {
+      session_id: 'A',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/viewer.tsx' },
+    });
+
+    expect(first.claimed).toEqual(['src/viewer.tsx']);
+    expect(second).toEqual({ claimed: [], conflicts: [] });
+    expect(store.storage.taskObservationsByKind(task_id, 'auto-claim')).toHaveLength(1);
   });
 
   it('reports a conflict when another session already holds a fresh claim', () => {
@@ -84,16 +121,30 @@ describe('autoClaimFromToolUse', () => {
     expect(result.claimed).toEqual(['src/viewer.tsx']);
     expect(result.conflicts).toEqual([{ file_path: 'src/viewer.tsx', other_session: 'A' }]);
     expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    const conflicts = store.storage.taskObservationsByKind(task_id, 'claim-conflict');
+    expect(conflicts).toHaveLength(1);
+    expect(metadataOf(conflicts[0])).toMatchObject({
+      source: 'post-tool-use',
+      file_path: 'src/viewer.tsx',
+      tool: 'Edit',
+      other_session: 'A',
+    });
   });
 
-  it('is a no-op for sessions not joined to any task', () => {
+  it('materializes a synthetic task for sessions not joined to any task', () => {
     store.startSession({ id: 'solo', ide: 'claude-code', cwd: '/repo' });
     const result = autoClaimFromToolUse(store, {
       session_id: 'solo',
       tool_name: 'Edit',
       tool_input: { file_path: 'src/x.ts' },
+      ide: 'claude-code',
+      cwd: '/repo',
     });
-    expect(result).toEqual({ claimed: [], conflicts: [] });
+    const task_id = store.storage.findActiveTaskForSession('solo');
+    expect(task_id).toBeDefined();
+    expect(store.storage.getTask(task_id ?? -1)?.branch).toBe('agent/claude-code/solo');
+    expect(result).toEqual({ claimed: ['src/x.ts'], conflicts: [] });
+    expect(store.storage.getClaim(task_id ?? -1, 'src/x.ts')?.session_id).toBe('solo');
   });
 });
 
@@ -142,6 +193,13 @@ describe('runHook integration: A edits -> B sees warning', () => {
     expect(edit.ok).toBe(true);
     // The claim is the ground truth the next turn depends on.
     expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
+    const autoClaims = store.storage.taskObservationsByKind(task_id, 'auto-claim');
+    expect(autoClaims).toHaveLength(1);
+    expect(metadataOf(autoClaims[0])).toMatchObject({
+      source: 'post-tool-use',
+      file_path: 'src/viewer.tsx',
+      tool: 'Edit',
+    });
 
     const nextTurn = await runHook(
       'user-prompt-submit',
@@ -151,5 +209,54 @@ describe('runHook integration: A edits -> B sees warning', () => {
     expect(nextTurn.ok).toBe(true);
     expect(nextTurn.context).toContain('src/viewer.tsx');
     expect(nextTurn.context).toContain('A'); // the other session's id
+  });
+
+  it('does not duplicate auto-claim observations on repeated Edit hooks', async () => {
+    const task_id = seedTwoSessionTask();
+
+    for (let i = 0; i < 2; i++) {
+      const edit = await runHook(
+        'post-tool-use',
+        {
+          session_id: 'A',
+          ide: 'claude-code',
+          tool_name: 'Edit',
+          tool_input: { file_path: 'src/viewer.tsx' },
+          tool_response: { success: true },
+        },
+        { store },
+      );
+      expect(edit.ok).toBe(true);
+    }
+
+    expect(store.storage.taskObservationsByKind(task_id, 'auto-claim')).toHaveLength(1);
+  });
+
+  it('records claim-conflict but allows Edit when a different session holds the file', async () => {
+    const task_id = seedTwoSessionTask();
+    store.storage.claimFile({ task_id, file_path: 'src/viewer.tsx', session_id: 'A' });
+
+    const edit = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/viewer.tsx' },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+
+    expect(edit.ok).toBe(true);
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    const conflicts = store.storage.taskObservationsByKind(task_id, 'claim-conflict');
+    expect(conflicts).toHaveLength(1);
+    expect(metadataOf(conflicts[0])).toMatchObject({
+      source: 'post-tool-use',
+      file_path: 'src/viewer.tsx',
+      tool: 'Edit',
+      other_session: 'A',
+    });
   });
 });

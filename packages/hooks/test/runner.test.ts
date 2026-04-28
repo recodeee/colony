@@ -283,12 +283,19 @@ describe('runHook', () => {
     );
     expect(r.ok).toBe(true);
     const tl = store.timeline('sess-cc');
-    expect(tl).toHaveLength(1);
+    expect(tl).toHaveLength(2);
+    const toolUse = tl.find((obs) => obs.kind === 'tool_use');
+    const autoClaim = tl.find((obs) => obs.kind === 'auto-claim');
     // Edit + file_path: the handler now records the touched file path in
     // metadata so observe/debrief can correlate edits with claims without
     // re-parsing the content field.
-    expect(tl[0]?.metadata).toEqual({ tool: 'Edit', file_path: '/tmp/x.txt' });
-    expect(tl[0]?.content).toContain('Edit');
+    expect(toolUse?.metadata).toEqual({ tool: 'Edit', file_path: '/tmp/x.txt' });
+    expect(toolUse?.content).toContain('Edit');
+    expect(autoClaim?.metadata).toMatchObject({
+      source: 'post-tool-use',
+      file_path: '/tmp/x.txt',
+      tool: 'Edit',
+    });
   });
 
   it('stop accepts Claude Code last_assistant_message and skips empty turns', async () => {

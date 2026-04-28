@@ -1,4 +1,11 @@
-import { type MemoryStore, PheromoneSystem, ProposalSystem } from '@colony/core';
+import {
+  type MemoryStore,
+  PheromoneSystem,
+  ProposalSystem,
+  TaskThread,
+  detectRepoBranch,
+  inferIdeFromSessionId,
+} from '@colony/core';
 import type { HookInput } from '../types.js';
 
 /**
@@ -9,13 +16,6 @@ import type { HookInput } from '../types.js';
  * demonstrably means "I am editing this file".
  */
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-
-/**
- * Claims older than this window are considered stale and no longer count
- * as "active editing" for the purpose of conflict warnings. Matches the
- * default handoff TTL so the two user-facing timeouts stay aligned.
- */
-const STALE_CLAIM_MS = 30 * 60_000;
 
 export async function postToolUse(store: MemoryStore, input: HookInput): Promise<void> {
   const tool = input.tool_name ?? input.tool ?? 'unknown';
@@ -93,14 +93,13 @@ export function extractTouchedFiles(toolName: string, toolInput: unknown): strin
  */
 export function autoClaimFromToolUse(
   store: MemoryStore,
-  input: Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input'>,
+  input: Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'ide' | 'cwd'>,
 ): { claimed: string[]; conflicts: Array<{ file_path: string; other_session: string }> } {
   const toolName = input.tool_name ?? input.tool ?? '';
   const files = extractTouchedFiles(toolName, input.tool_input);
   if (files.length === 0) return { claimed: [], conflicts: [] };
 
-  const task_id = store.storage.findActiveTaskForSession(input.session_id);
-  if (task_id === undefined) return { claimed: [], conflicts: [] };
+  const task_id = ensureAutoClaimTask(store, input);
 
   const claimed: string[] = [];
   const conflicts: Array<{ file_path: string; other_session: string }> = [];
@@ -111,18 +110,59 @@ export function autoClaimFromToolUse(
     // separate ops let us report "this WAS someone else's before I took
     // over" cleanly in the return value.
     const existing = store.storage.getClaim(task_id, file_path);
-    if (
-      existing &&
-      existing.session_id !== input.session_id &&
-      Date.now() - existing.claimed_at < STALE_CLAIM_MS
-    ) {
+    if (existing?.session_id === input.session_id) continue;
+    if (existing && existing.session_id !== input.session_id) {
       conflicts.push({ file_path, other_session: existing.session_id });
+      store.addObservation({
+        session_id: input.session_id,
+        kind: 'claim-conflict',
+        content: `${input.session_id} edited ${file_path} while ${existing.session_id} held the claim`,
+        task_id,
+        metadata: {
+          source: 'post-tool-use',
+          file_path,
+          tool: toolName,
+          other_session: existing.session_id,
+        },
+      });
     }
     store.storage.claimFile({ task_id, file_path, session_id: input.session_id });
+    store.addObservation({
+      session_id: input.session_id,
+      kind: 'auto-claim',
+      content: `${input.session_id} auto-claimed ${file_path} after ${toolName}`,
+      task_id,
+      metadata: { source: 'post-tool-use', file_path, tool: toolName },
+    });
     claimed.push(file_path);
   }
 
   return { claimed, conflicts };
+}
+
+function ensureAutoClaimTask(
+  store: MemoryStore,
+  input: Pick<HookInput, 'session_id' | 'ide' | 'cwd'>,
+): number {
+  const active = store.storage.findActiveTaskForSession(input.session_id);
+  if (active !== undefined) return active;
+
+  const session = store.storage.getSession(input.session_id);
+  const cwd = input.cwd ?? session?.cwd ?? null;
+  const detected = cwd ? detectRepoBranch(cwd) : null;
+  const ide = input.ide ?? session?.ide ?? inferIdeFromSessionId(input.session_id) ?? 'unknown';
+  const branch = `agent/${slugSegment(ide)}/${slugSegment(input.session_id).slice(0, 12)}`;
+  const thread = TaskThread.open(store, {
+    repo_root: detected?.repo_root ?? cwd ?? 'synthetic',
+    branch,
+    session_id: input.session_id,
+  });
+  thread.join(input.session_id, ide);
+  return thread.task_id;
+}
+
+function slugSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
 }
 
 /**
