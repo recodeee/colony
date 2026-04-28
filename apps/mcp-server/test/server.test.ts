@@ -134,7 +134,18 @@ describe('MCP server', () => {
     expect(attentionDescription.slice(0, 80)).toContain('pending handoffs');
     expect(attentionDescription.slice(0, 80)).toContain('unread messages');
     expect(attentionDescription.slice(0, 80)).toContain('blockers');
-    expect(byName.get('task_ready_for_agent')?.description).toMatch(/^Find work to claim/);
+    const readyDescription = byName.get('task_ready_for_agent')?.description ?? '';
+    expect(readyDescription).toMatch(
+      /^Find the next task to claim for this agent\. Use this when deciding what to work on\./,
+    );
+    expect(readyDescription.toLowerCase()).toContain('next task');
+    expect(readyDescription.toLowerCase()).toContain('claim');
+    expect(readyDescription.toLowerCase()).toContain('work');
+    expect(readyDescription.toLowerCase().indexOf('next task')).toBeLessThan(80);
+    const taskListDescription = byName.get('task_list')?.description ?? '';
+    expect(taskListDescription).toMatch(/^Browse task threads;/);
+    expect(taskListDescription).toContain('use task_ready_for_agent when choosing work to claim');
+    expect(taskListDescription).not.toMatch(/^Find task threads/);
     expect(byName.get('task_hand_off')?.description).toMatch(/^Give work to another agent/);
     expect(byName.get('hivemind_context')?.description).toContain('BEFORE editing');
   });

@@ -38,6 +38,10 @@ For multi-agent runtime awareness, call `hivemind_context` first when you need o
 
 After `hivemind_context`, call `attention_inbox` to check what needs you now: pending handoffs, unread messages, blockers, stalled lanes, and recent claims. Review its compact IDs first; fetch full bodies with `get_observations` only after you pick the IDs worth reading.
 
+For choosing work to claim, the compact path is:
+
+`hivemind_context -> attention_inbox -> task_ready_for_agent -> task_plan_claim_subtask`
+
 Following the progressive-disclosure pattern saves ~10× tokens versus fetching full bodies upfront.
 
 ## `search`
@@ -257,7 +261,7 @@ Returns:
 
 ## `task_list`
 
-Browse recent task threads. Each task groups sessions collaborating on the same `(repo_root, branch)`.
+Browse task threads; use `task_ready_for_agent` when choosing work to claim. Each task groups sessions collaborating on the same `(repo_root, branch)`.
 
 Use `task_list` when you need to inspect existing task threads by repo or branch. Do not use it as the main work picker; call `task_ready_for_agent` when the question is "what should I work on next?"
 
@@ -779,7 +783,7 @@ Returns `[{ plan_slug, repo_root, spec_task_id, title, created_at, subtask_count
 
 ## `task_ready_for_agent`
 
-Find work to claim, pick a task, or choose available work for the current agent. This is the canonical "what should I work on next?" tool.
+Find the next task to claim for this agent. Use this when deciding what to work on.
 
 ```json
 {

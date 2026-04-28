@@ -17,7 +17,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_list',
-    'Find task threads for this repo or branch. Lists shared work lanes by repo_root, branch, participants, status, and recent coordination state.',
+    'Browse task threads; use task_ready_for_agent when choosing work to claim. Lists shared coordination lanes by repo_root, branch, participants, status, and recent activity.',
     { limit: z.number().int().positive().max(200).optional() },
     async ({ limit }) => {
       const tasks = store.storage.listTasks(limit ?? 50);
