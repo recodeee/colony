@@ -159,12 +159,13 @@ describe('MCP server', () => {
     );
     const attentionDescription = byName.get('attention_inbox')?.description ?? '';
     expect(attentionDescription).toMatch(
-      /^See what needs your attention: live pending handoffs, unread messages, blockers, stalled lanes, recent claims, and decaying hot files\./,
+      /^See what needs your attention: live pending handoffs, unread messages, blockers, stalled lanes, recent claims, stale claim cleanup signals, and decaying hot files\./,
     );
     expect(attentionDescription.slice(0, 80)).toContain('pending handoffs');
     expect(attentionDescription.slice(0, 80)).toContain('unread messages');
     expect(attentionDescription.slice(0, 80)).toContain('blockers');
     expect(attentionDescription).toContain('Expired handoffs are not surfaced as pending');
+    expect(attentionDescription).toContain('stale claim cleanup signals');
     expect(attentionDescription).toContain('decaying hot files');
     expect(byName.get('attention_inbox')?.inputSchema.properties).toHaveProperty(
       'file_heat_half_life_minutes',

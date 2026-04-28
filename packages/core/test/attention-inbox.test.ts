@@ -236,7 +236,7 @@ describe('buildAttentionInbox', () => {
     expect(inbox.unread_messages).toHaveLength(0);
   });
 
-  it('classifies stale recent claims without counting them as active ownership', () => {
+  it('routes stale recent claims into cleanup signals instead of active ownership', () => {
     seed('claude', 'codex');
     const t0 = Date.parse('2026-04-28T12:00:00.000Z');
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -263,13 +263,77 @@ describe('buildAttentionInbox', () => {
     expect(inbox.summary.recent_other_claim_count).toBe(0);
     expect(inbox.summary.stale_other_claim_count).toBe(1);
     expect(inbox.summary.weak_other_claim_count).toBe(1);
-    expect(inbox.recent_other_claims).toEqual([
+    expect(inbox.recent_other_claims).toEqual([]);
+    expect(inbox.stale_claim_signals).toMatchObject({
+      stale_claim_count: 1,
+      top_stale_branches: [
+        {
+          repo_root: '/r',
+          branch: 'feat/inbox-stale-claims',
+          stale_claim_count: 1,
+          expired_weak_claim_count: 0,
+          oldest_claim_age_minutes: 241,
+        },
+      ],
+    });
+    expect(inbox.stale_claim_signals.sweep_suggestion).toContain('review 1 stale advisory claim');
+    expect(inbox.stale_claim_signals.top_stale_branches[0]?.sweep_suggestion).toContain(
+      'before release or handoff',
+    );
+  });
+
+  it('surfaces repo-wide stale claim signals outside the recent active-claim window', () => {
+    seed('claude', 'codex');
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+
+    const busyThread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'agent/busy-old',
+      session_id: 'claude',
+    });
+    busyThread.claimFile({ session_id: 'claude', file_path: 'src/old-a.ts' });
+    busyThread.claimFile({ session_id: 'claude', file_path: 'src/old-b.ts' });
+
+    const quietThread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'agent/quiet-old',
+      session_id: 'claude',
+    });
+    quietThread.claimFile({ session_id: 'claude', file_path: 'src/old-c.ts' });
+
+    vi.setSystemTime(t0 + 481 * 60_000);
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      repo_root: '/r',
+      now: Date.now(),
+      recent_claim_window_ms: 15 * 60_000,
+      claim_stale_ms: 240 * 60_000,
+    });
+
+    expect(inbox.recent_other_claims).toEqual([]);
+    expect(inbox.summary.recent_other_claim_count).toBe(0);
+    expect(inbox.summary.stale_other_claim_count).toBe(0);
+    expect(inbox.stale_claim_signals.stale_claim_count).toBe(3);
+    expect(inbox.stale_claim_signals.sweep_suggestion).toContain('including 3 expired/weak claim');
+    expect(inbox.stale_claim_signals.top_stale_branches).toEqual([
       expect.objectContaining({
-        file_path: 'src/stale.ts',
-        age_class: 'stale',
-        ownership_strength: 'weak',
+        branch: 'agent/busy-old',
+        stale_claim_count: 2,
+        expired_weak_claim_count: 2,
+        oldest_claim_age_minutes: 481,
+      }),
+      expect.objectContaining({
+        branch: 'agent/quiet-old',
+        stale_claim_count: 1,
+        expired_weak_claim_count: 1,
+        oldest_claim_age_minutes: 481,
       }),
     ]);
+    expect(inbox.summary.next_action).toMatch(/stale claim cleanup signal/i);
   });
 
   it('shows only live pending handoffs before expiry', () => {

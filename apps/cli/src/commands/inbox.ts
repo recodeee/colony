@@ -23,7 +23,7 @@ export function registerInboxCommand(program: Command): void {
   program
     .command('inbox')
     .description(
-      'Compact list of attention items for a session: pending handoffs, wakes, stalled lanes, recent claims, hot files',
+      'Compact list of attention items for a session: pending handoffs, wakes, stalled lanes, recent claims, stale claim signals, hot files',
     )
     .option(
       '--session <id>',
@@ -72,7 +72,7 @@ export function registerInboxCommand(program: Command): void {
             kleur.bold(`Inbox for ${agent}@${session.slice(0, 8)} — ${inbox.summary.next_action}`),
           );
           lines.push(
-            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claims: ${inbox.summary.stale_other_claim_count}  expired/weak: ${inbox.summary.expired_other_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
+            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claim signals: ${inbox.stale_claim_signals.stale_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
           );
 
           const blockingMessages = inbox.unread_messages.filter((m) => m.urgency === 'blocking');
@@ -130,6 +130,18 @@ export function registerInboxCommand(program: Command): void {
             for (const lane of inbox.stalled_lanes) {
               lines.push(
                 `  ${lane.branch} [${lane.activity}] ${lane.owner}: ${lane.activity_summary}`,
+              );
+            }
+          }
+          if (inbox.stale_claim_signals.stale_claim_count > 0) {
+            lines.push('');
+            lines.push(kleur.yellow('Stale claim signals:'));
+            lines.push(
+              `  ${inbox.stale_claim_signals.stale_claim_count} stale advisory claim(s): ${inbox.stale_claim_signals.sweep_suggestion}`,
+            );
+            for (const branch of inbox.stale_claim_signals.top_stale_branches) {
+              lines.push(
+                `  ${branch.branch} stale=${branch.stale_claim_count} expired/weak=${branch.expired_weak_claim_count} oldest=${branch.oldest_claim_age_minutes}m -> ${branch.sweep_suggestion}`,
               );
             }
           }

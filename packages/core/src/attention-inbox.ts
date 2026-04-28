@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { FileHeatRow, TaskClaimRow } from '@colony/storage';
+import type { FileHeatRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import { type ClaimAgeClass, type ClaimOwnershipStrength, classifyClaimAge } from './claim-age.js';
 import {
   type HivemindActivity,
@@ -102,6 +102,21 @@ export interface InboxFileHeat {
   event_count: number;
 }
 
+export interface InboxStaleClaimBranch {
+  repo_root: string;
+  branch: string;
+  stale_claim_count: number;
+  expired_weak_claim_count: number;
+  oldest_claim_age_minutes: number;
+  sweep_suggestion: string;
+}
+
+export interface InboxStaleClaimSignals {
+  stale_claim_count: number;
+  top_stale_branches: InboxStaleClaimBranch[];
+  sweep_suggestion: string;
+}
+
 /**
  * Coalesced view: a group of inbox messages that share `(task_id,
  * from_session_id, urgency)`. Lets the preface render "B sent 4 fyi
@@ -175,6 +190,7 @@ export interface AttentionInbox {
    *  that have not been replied to. Sized by `read_receipt_window_ms`. */
   read_receipts: ReadReceipt[];
   stalled_lanes: InboxLane[];
+  stale_claim_signals: InboxStaleClaimSignals;
   recent_other_claims: InboxRecentClaim[];
   file_heat: InboxFileHeat[];
 }
@@ -223,6 +239,7 @@ const DEFAULT_RECENT_CLAIM_WINDOW_MS = 15 * 60_000;
 const DEFAULT_RECENT_CLAIM_LIMIT = 20;
 const DEFAULT_FILE_HEAT_HALF_LIFE_MS = 30 * 60_000;
 const DEFAULT_FILE_HEAT_LIMIT = 10;
+const DEFAULT_STALE_CLAIM_BRANCH_LIMIT = 5;
 const DEFAULT_READ_RECEIPT_WINDOW_MS = 6 * 60 * 60_000;
 const DEFAULT_READ_RECEIPT_MIN_AGE_MS = 5 * 60_000;
 const DEFAULT_READ_RECEIPT_LIMIT = 20;
@@ -233,9 +250,10 @@ const DEFAULT_READ_RECEIPT_LIMIT = 20;
  * observation bodies are fetched via get_observations by id.
  *
  * Scope intentionally narrow: pending handoffs, pending wakes, stalled
- * lanes, other-session recent claims. Items explicitly not here yet —
- * "PRs open needing merge" (no GitHub integration) and "stale lock > TTL"
- * (claim TTL renewal is a separate follow-up) — are deferred to later PRs.
+ * lanes, fresh other-session claims, and a compact stale-claim summary.
+ * Items explicitly not here yet — "PRs open needing merge" (no GitHub
+ * integration) and a cleanup apply path for stale claims — are deferred to
+ * later PRs.
  */
 export function buildAttentionInbox(
   store: MemoryStore,
@@ -246,7 +264,7 @@ export function buildAttentionInbox(
 
   const pending_handoffs: InboxHandoff[] = [];
   const pending_wakes: InboxWake[] = [];
-  const recent_other_claims: InboxRecentClaim[] = [];
+  const scanned_other_claims: InboxRecentClaim[] = [];
   const unread_messages = listMessagesForAgent(store, {
     session_id: opts.session_id,
     agent: opts.agent,
@@ -272,33 +290,37 @@ export function buildAttentionInbox(
     }
     for (const claim of store.storage.recentClaims(task_id, recentSince, recentLimit)) {
       if (claim.session_id === opts.session_id) continue;
-      recent_other_claims.push(
+      scanned_other_claims.push(
         compactClaim(claim, { now, claim_stale_minutes: claimStaleMinutes }),
       );
     }
   }
 
+  const recent_other_claims = scanned_other_claims.filter((claim) => claim.age_class === 'fresh');
+  const stale_claim_signals = collectStaleClaimSignals(store, opts, taskIds, {
+    now,
+    claim_stale_minutes: claimStaleMinutes,
+  });
   const stalled_lanes = opts.include_stalled_lanes === false ? [] : collectStalledLanes(opts);
   const file_heat = collectFileHeat(store, opts, taskIds, now);
 
   const read_receipts = collectReadReceipts(store, opts, taskIds, now);
   const coalesced_messages = coalesceMessages(unread_messages);
   const blocked = unread_messages.some((m) => m.urgency === 'blocking');
-  const freshClaims = recent_other_claims.filter((claim) => claim.age_class === 'fresh');
-  const staleClaims = recent_other_claims.filter((claim) => claim.age_class === 'stale');
-  const expiredClaims = recent_other_claims.filter((claim) => claim.age_class === 'expired/weak');
-  const weakClaims = recent_other_claims.filter((claim) => claim.ownership_strength === 'weak');
+  const staleClaims = scanned_other_claims.filter((claim) => claim.age_class === 'stale');
+  const expiredClaims = scanned_other_claims.filter((claim) => claim.age_class === 'expired/weak');
+  const weakClaims = scanned_other_claims.filter((claim) => claim.ownership_strength === 'weak');
 
   const summary = {
     pending_handoff_count: pending_handoffs.length,
     pending_wake_count: pending_wakes.length,
     unread_message_count: unread_messages.length,
     stalled_lane_count: stalled_lanes.length,
-    fresh_other_claim_count: freshClaims.length,
+    fresh_other_claim_count: recent_other_claims.length,
     stale_other_claim_count: staleClaims.length,
     expired_other_claim_count: expiredClaims.length,
     weak_other_claim_count: weakClaims.length,
-    recent_other_claim_count: freshClaims.length,
+    recent_other_claim_count: recent_other_claims.length,
     hot_file_count: file_heat.length,
     blocked,
     next_action: deriveNextAction({
@@ -306,7 +328,8 @@ export function buildAttentionInbox(
       pending_wakes,
       unread_messages,
       stalled_lanes,
-      recent_other_claims: freshClaims,
+      stale_claim_signals,
+      recent_other_claims,
       file_heat,
       read_receipts,
     }),
@@ -323,6 +346,7 @@ export function buildAttentionInbox(
     coalesced_messages,
     read_receipts,
     stalled_lanes,
+    stale_claim_signals,
     recent_other_claims,
     file_heat,
   };
@@ -562,6 +586,92 @@ function compactClaim(
   };
 }
 
+function collectStaleClaimSignals(
+  store: MemoryStore,
+  opts: AttentionInboxOptions,
+  taskIds: number[],
+  options: { now: number; claim_stale_minutes: number },
+): InboxStaleClaimSignals {
+  const byBranch = new Map<string, InboxStaleClaimBranch>();
+  let staleClaimCount = 0;
+  let expiredWeakClaimCount = 0;
+
+  for (const task of staleClaimTasks(store, opts, taskIds)) {
+    for (const claim of store.storage.listClaims(task.id)) {
+      const classification = classifyClaimAge(claim.claimed_at, options);
+      if (classification.ownership_strength === 'strong') continue;
+
+      staleClaimCount += 1;
+      const key = `${task.repo_root}\u0000${task.branch}`;
+      const branch =
+        byBranch.get(key) ??
+        ({
+          repo_root: task.repo_root,
+          branch: task.branch,
+          stale_claim_count: 0,
+          expired_weak_claim_count: 0,
+          oldest_claim_age_minutes: 0,
+          sweep_suggestion: '',
+        } satisfies InboxStaleClaimBranch);
+
+      branch.stale_claim_count += 1;
+      if (classification.age_class === 'expired/weak') {
+        branch.expired_weak_claim_count += 1;
+        expiredWeakClaimCount += 1;
+      }
+      branch.oldest_claim_age_minutes = Math.max(
+        branch.oldest_claim_age_minutes,
+        classification.age_minutes,
+      );
+      branch.sweep_suggestion =
+        branch.expired_weak_claim_count > 0
+          ? `review ${branch.expired_weak_claim_count} expired/weak advisory claim(s) before release; keep audit history`
+          : `review ${branch.stale_claim_count} stale advisory claim(s) before release or handoff`;
+      byBranch.set(key, branch);
+    }
+  }
+
+  const top_stale_branches = [...byBranch.values()]
+    .sort(
+      (a, b) =>
+        b.stale_claim_count - a.stale_claim_count ||
+        b.expired_weak_claim_count - a.expired_weak_claim_count ||
+        b.oldest_claim_age_minutes - a.oldest_claim_age_minutes ||
+        a.branch.localeCompare(b.branch),
+    )
+    .slice(0, DEFAULT_STALE_CLAIM_BRANCH_LIMIT);
+
+  return {
+    stale_claim_count: staleClaimCount,
+    top_stale_branches,
+    sweep_suggestion: staleClaimSweepSuggestion(staleClaimCount, expiredWeakClaimCount),
+  };
+}
+
+function staleClaimTasks(
+  store: MemoryStore,
+  opts: AttentionInboxOptions,
+  taskIds: number[],
+): TaskRow[] {
+  const explicitTaskIds = new Set(opts.task_ids ?? []);
+  const repoRoots = attentionRepoRoots(opts);
+  const participatingTaskIds = new Set(taskIds);
+
+  return store.storage.listTasks(2_000).filter((task) => {
+    if (explicitTaskIds.size > 0) return explicitTaskIds.has(task.id);
+    if (repoRoots.size > 0) return repoRoots.has(resolve(task.repo_root));
+    return participatingTaskIds.has(task.id);
+  });
+}
+
+function staleClaimSweepSuggestion(staleClaimCount: number, expiredWeakClaimCount: number): string {
+  if (staleClaimCount === 0) return 'no sweep needed; no stale advisory claims found';
+  if (expiredWeakClaimCount > 0) {
+    return `run coordination sweep dry-run; review ${staleClaimCount} stale advisory claim(s), including ${expiredWeakClaimCount} expired/weak claim(s); keep audit history`;
+  }
+  return `run coordination sweep dry-run; review ${staleClaimCount} stale advisory claim(s) before release or handoff`;
+}
+
 function collectFileHeat(
   store: MemoryStore,
   opts: AttentionInboxOptions,
@@ -628,6 +738,7 @@ function deriveNextAction(parts: {
   pending_wakes: InboxWake[];
   unread_messages: InboxMessage[];
   stalled_lanes: InboxLane[];
+  stale_claim_signals: InboxStaleClaimSignals;
   recent_other_claims: InboxRecentClaim[];
   file_heat: InboxFileHeat[];
   read_receipts: ReadReceipt[];
@@ -652,6 +763,9 @@ function deriveNextAction(parts: {
   }
   if (parts.stalled_lanes.length > 0) {
     return 'Review stalled lanes — takeover may be safer than waiting for the owner to return.';
+  }
+  if (parts.stale_claim_signals.stale_claim_count > 0) {
+    return 'Review stale claim cleanup signal before treating old ownership as active.';
   }
   if (parts.recent_other_claims.length > 0) {
     return 'Other sessions have recent file claims nearby; coordinate before editing the same files.';

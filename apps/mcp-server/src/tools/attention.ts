@@ -9,7 +9,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'attention_inbox',
-    'See what needs your attention: live pending handoffs, unread messages, blockers, stalled lanes, recent claims, and decaying hot files. Expired handoffs are not surfaced as pending recruitment signals. This is the main surface where task_message items show up; unread message entries include reply_with_tool=task_message and mark_read_with_tool=task_message_mark_read hints, with next_action for blocking/needs_reply items. Post-hivemind_context attention check, review compact IDs first, then fetch full bodies with get_observations only when needed.',
+    'See what needs your attention: live pending handoffs, unread messages, blockers, stalled lanes, recent claims, stale claim cleanup signals, and decaying hot files. Expired handoffs are not surfaced as pending recruitment signals. This is the main surface where task_message items show up; unread message entries include reply_with_tool=task_message and mark_read_with_tool=task_message_mark_read hints, with next_action for blocking/needs_reply items. Post-hivemind_context attention check, review compact IDs first, then fetch full bodies with get_observations only when needed.',
     {
       session_id: z.string().min(1),
       agent: z.string().min(1),

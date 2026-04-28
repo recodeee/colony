@@ -86,7 +86,8 @@ describe('Colony CLI program', () => {
                                             structured DB evidence.
         inbox [options]                     Compact list of attention items for a
                                             session: pending handoffs, wakes, stalled
-                                            lanes, recent claims, hot files
+                                            lanes, recent claims, stale claim
+                                            signals, hot files
         foraging                            Index and query <repo_root>/examples food
                                             sources
         queen                               Queen coordination helpers for published

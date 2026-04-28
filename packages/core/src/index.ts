@@ -88,6 +88,8 @@ export {
   type InboxLane,
   type InboxMessage,
   type InboxRecentClaim,
+  type InboxStaleClaimBranch,
+  type InboxStaleClaimSignals,
   type InboxWake,
   type ReadReceipt,
 } from './attention-inbox.js';
