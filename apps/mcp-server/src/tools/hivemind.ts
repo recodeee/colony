@@ -29,7 +29,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'hivemind_context',
-    'Before editing, inspect ownership, then claim touched files on the active task. Returns active lanes, file ownership, compact memory hits, and observation IDs for follow-up.',
+    'Before editing, inspect ownership, then claim touched files on the active task. Relevant memory and active ownership stay visible through active lanes, file ownership, compact memory hits, and observation IDs for follow-up.',
     {
       repo_root: z.string().min(1).optional(),
       repo_roots: z.array(z.string().min(1)).max(20).optional(),

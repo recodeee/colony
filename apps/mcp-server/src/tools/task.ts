@@ -71,7 +71,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
   server.tool(
     'task_post',
     [
-      'Send a coordination note on a task thread. Use for questions, answers, decisions, blockers, and general notes when no direct task_message is needed.',
+      'Write a working note or save current state on a task thread. Use for questions, answers, decisions, blockers, and general notes when no direct task_message is needed.',
       "Deprecation note: use task_message for non-broadcast agent-to-agent coordination; keep task_post for kind:'note'|'blocker'|'question'|'answer'|'decision' style threading.",
       'Use specific tools for claim / hand_off / accept.',
       RELAY_FALLBACK_POST_RULE,

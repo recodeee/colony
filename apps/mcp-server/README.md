@@ -10,10 +10,11 @@ status details, and edge-case rules in the second sentence or later.
 | --- | --- |
 | send message, note to agent, tell another agent | `task_message` |
 | what needs my attention, pending, unread, blocking | `attention_inbox` |
-| what should I work on, pick a task, available work | `task_ready_for_agent` |
+| write working note, save current state, coordination note | `task_post` |
+| what should I work on, pick next task, available work | `task_ready_for_agent` |
 | give my work to, transfer, pass to another agent | `task_hand_off` |
-| who is editing, active agents, files held, before editing, inspect ownership | `hivemind_context` |
-| search memory, prior decisions, old errors | `search` |
+| before editing, inspect ownership, active ownership, relevant memory | `hivemind_context` |
+| search prior memory, prior decisions, old errors, notes | `search` |
 | full observation body, read IDs | `get_observations` |
 | recent sessions, inspect session history | `list_sessions` |
 | task thread history, recent coordination | `task_timeline` |
