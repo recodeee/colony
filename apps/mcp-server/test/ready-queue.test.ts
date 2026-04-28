@@ -6,6 +6,7 @@ import { MemoryStore, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { colonyImprovementWaveFixture } from '../../../packages/queen/test/fixtures/colony-improvement-waves.js';
 import { buildServer } from '../src/server.js';
 
 let dataDir: string;
@@ -60,6 +61,7 @@ async function claimAndComplete(planSlug: string, subtaskIndex: number): Promise
 interface ReadyResult {
   ready: ReadyEntry[];
   total_available: number;
+  next_action: string;
   next_tool?: 'task_plan_claim_subtask';
   plan_slug?: string;
   subtask_index?: number;
@@ -161,6 +163,7 @@ describe('task_ready_for_agent', () => {
     expect(result.total_available).toBe(0);
     expect(result.empty_state).toBe(EMPTY_READY_STATE);
     expect(result.next_tool).toBeUndefined();
+    expect(result.next_action).toContain('queen_plan_goal or task_plan_publish');
   });
 
   it('returns exact claim args for a ready sub-task', async () => {
@@ -195,6 +198,8 @@ describe('task_ready_for_agent', () => {
     expect(result.next_tool).toBe('task_plan_claim_subtask');
     expect(result.plan_slug).toBe('claimable-plan');
     expect(result.subtask_index).toBe(0);
+    expect(result.next_action).toContain('task_plan_claim_subtask');
+    expect(result.next_action).toContain('plan_slug="claimable-plan"');
     expect(result.claim_args).toEqual({
       plan_slug: 'claimable-plan',
       subtask_index: 0,
@@ -238,6 +243,60 @@ describe('task_ready_for_agent', () => {
     expect(result.total_available).toBe(0);
     expect(result.empty_state).toBe(EMPTY_READY_STATE);
     expect(result.next_tool).toBeUndefined();
+    expect(result.next_action).toContain('complete upstream dependencies');
+  });
+
+  it('returns the current adoption-fix wave and points agents to task_plan_claim_subtask', async () => {
+    await call('task_plan_publish', {
+      repo_root: repoRoot,
+      slug: colonyImprovementWaveFixture.slug,
+      session_id: 'queen',
+      agent: 'queen',
+      title: colonyImprovementWaveFixture.title,
+      problem: colonyImprovementWaveFixture.problem,
+      acceptance_criteria: colonyImprovementWaveFixture.acceptance_criteria,
+      subtasks: colonyImprovementWaveFixture.subtasks,
+      auto_archive: false,
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.total_available).toBe(4);
+    expect(result.ready.map((entry) => entry.subtask_index).sort((a, b) => a - b)).toEqual([
+      0, 1, 2, 3,
+    ]);
+    expect(new Set(result.ready.map((entry) => entry.wave_index))).toEqual(new Set([0]));
+    expect(result.ready.map((entry) => entry.title)).toEqual(
+      expect.arrayContaining([
+        'Tighten hivemind_context funnel',
+        'Add task_list ready-work nudge',
+        'Add claim-before-edit preflight',
+        'Increase task_note_working adoption',
+      ]),
+    );
+    expect(result.next_action).toContain('task_plan_claim_subtask');
+    expect(result.next_action).toContain('plan_slug="colony-adoption-fixes"');
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.plan_slug).toBe(colonyImprovementWaveFixture.slug);
+    expect(result.subtask_index).toBe(result.ready[0]?.subtask_index);
+    expect(result.claim_args).toEqual({
+      plan_slug: colonyImprovementWaveFixture.slug,
+      subtask_index: result.ready[0]?.subtask_index,
+      session_id: 'agent-session',
+      agent: 'codex',
+    });
+
+    const claimed = await claimSubtask(
+      colonyImprovementWaveFixture.slug,
+      result.ready[0]?.subtask_index ?? 0,
+    );
+    expect(claimed.branch).toMatch(/^spec\/colony-adoption-fixes\/sub-/);
+    expect(claimed.file_scope.length).toBeGreaterThan(0);
   });
 
   it('ranks the sub-task matching the agent capability first', async () => {

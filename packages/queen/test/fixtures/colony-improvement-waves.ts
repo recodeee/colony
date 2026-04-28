@@ -1,97 +1,103 @@
 import { type QueenOrderedPlanInput, orderedPlanFromWaves } from '../../src/decompose.js';
 
 export const colonyImprovementWaveInput: QueenOrderedPlanInput = {
-  slug: 'colony-improvement-plan',
-  title: 'Colony improvement plan',
+  slug: 'colony-adoption-fixes',
+  title: 'Colony adoption fixes',
   problem:
-    'Queen should model the manual Colony improvement plan as low-risk discoverability work first, deeper product work second, and the final documentation merge last.',
+    'Queen should publish the current adoption fixes as claimable waves so agents pull work through task_ready_for_agent and task_plan_claim_subtask instead of direct runtime assignment.',
   acceptance_criteria: [
-    'Wave 1 captures low-risk discoverability and coordination work.',
-    'Wave 2 captures deeper Colony product adoption work.',
-    'Wave 3 merges the documentation story after Wave 1 and Wave 2 are complete.',
+    'Wave 1 exposes the coordination funnel and preflight fixes as immediately claimable work.',
+    'Wave 2 unlocks bridge status, stale-claim sweep, and health telemetry after Wave 1 completes.',
+    'Wave 3 unlocks integration docs and tests after Wave 2 completes.',
+    'Queen publishes structure only; agents pull and claim subtasks themselves.',
   ],
   waves: [
     {
       id: 'wave-1',
-      title: 'Low-risk discoverability work',
+      title: 'Coordination adoption funnel',
       subtasks: [
         {
-          title: 'Improve attention_inbox ToolSearch ranking',
-          description: 'Make attention_inbox easier to discover from ToolSearch.',
-          file_scope: ['apps/mcp-server/README.md'],
-          capability_hint: 'doc_work',
-        },
-        {
-          title: 'Improve task_ready_for_agent adoption',
-          description: 'Make task_ready_for_agent the default pull surface for ready work.',
-          file_scope: ['apps/mcp-server/src/tools/ready-queue.ts'],
+          title: 'Tighten hivemind_context funnel',
+          description:
+            'Keep hivemind_context routing agents toward attention_inbox and task_ready_for_agent before they choose work.',
+          file_scope: [
+            'apps/mcp-server/src/tools/shared.ts',
+            'apps/mcp-server/test/server.test.ts',
+          ],
           capability_hint: 'api_work',
         },
         {
-          title: 'Add search-before-implementation guidance',
-          description: 'Guide agents to search existing Colony context before editing.',
-          file_scope: ['docs/QUEEN.md'],
-          capability_hint: 'doc_work',
+          title: 'Add task_list ready-work nudge',
+          description:
+            'Keep task_list as inventory and nudge task_ready_for_agent before work selection.',
+          file_scope: [
+            'apps/mcp-server/src/tools/task.ts',
+            'apps/mcp-server/test/task-threads.test.ts',
+          ],
+          capability_hint: 'api_work',
         },
         {
-          title: 'Improve claim-before-edit workflow',
-          description: 'Clarify the file-claim step before implementation edits.',
-          file_scope: ['docs/mcp.md'],
-          capability_hint: 'doc_work',
+          title: 'Add claim-before-edit preflight',
+          description:
+            'Warn before write-like tools when the active task has no explicit claim for touched files.',
+          file_scope: [
+            'packages/hooks/src/handlers/pre-tool-use.ts',
+            'packages/hooks/test/session-start-conflicts.test.ts',
+          ],
+          capability_hint: 'infra_work',
         },
         {
-          title: 'Add coordination-loop tests',
-          description: 'Lock the search, claim, message, and ready-work coordination loop.',
-          file_scope: ['apps/mcp-server/test/coordination-loop.test.ts'],
+          title: 'Increase task_note_working adoption',
+          description:
+            'Measure and nudge task_note_working as the Colony-native working-state path.',
+          file_scope: ['apps/cli/src/bridge-adoption.ts', 'apps/cli/test/bridge-adoption.test.ts'],
           capability_hint: 'test_work',
         },
       ],
     },
     {
       id: 'wave-2',
-      title: 'Deeper product work',
+      title: 'Runtime health adoption',
       subtasks: [
         {
-          title: 'Absorb OMX notepad usage',
-          description: 'Move useful notepad handoff behavior into Colony-owned surfaces.',
-          file_scope: ['packages/hooks/src/handlers/session-start.ts'],
-          capability_hint: 'infra_work',
-        },
-        {
-          title: 'Add Colony usage/adoption dashboard',
-          description: 'Show whether agents are using the Colony coordination primitives.',
-          file_scope: ['apps/cli/src/commands/debrief.ts', 'apps/cli/test/debrief.test.ts'],
-          capability_hint: 'test_work',
-        },
-        {
-          title: 'Improve task_message and attention_inbox loop',
-          description: 'Close the loop between directed messages and attention triage.',
+          title: 'Expose OMX bridge status',
+          description: 'Surface compact Colony bridge status for OMX HUD and status consumers.',
           file_scope: [
-            'apps/mcp-server/src/tools/message.ts',
-            'apps/mcp-server/src/tools/attention.ts',
-            'apps/mcp-server/test/messages.test.ts',
+            'apps/mcp-server/src/tools/bridge.ts',
+            'apps/mcp-server/test/bridge-status.test.ts',
           ],
           capability_hint: 'api_work',
         },
         {
-          title: 'Reduce overlap with OMX state tools',
-          description: 'Make the boundary between Colony state and OMX state explicit.',
-          file_scope: ['docs/omx-state-boundary.md'],
-          capability_hint: 'doc_work',
+          title: 'Add stale claim sweep',
+          description:
+            'Expose stale claim cleanup signals so old claims stop suppressing ready work.',
+          file_scope: ['packages/core/src/claim-age.ts', 'packages/core/test/claim-graph.test.ts'],
+          capability_hint: 'api_work',
+        },
+        {
+          title: 'Add health telemetry',
+          description:
+            'Show loop adoption health, including ready-to-claim and ready-to-claim-to-claim ratios.',
+          file_scope: ['apps/cli/src/commands/health.ts', 'apps/cli/test/health.test.ts'],
+          capability_hint: 'test_work',
         },
       ],
     },
     {
       id: 'wave-3',
-      title: 'Final docs merge',
+      title: 'Integration docs and tests',
       subtasks: [
         {
-          title: 'Merge docs story and canonical startup loop',
+          title: 'Add integration docs/tests',
           description:
-            'Merge the complete Colony story only after discoverability and product work are done.',
-          file_scope: ['README.md', 'docs/QUEEN.md', 'docs/mcp.md'],
-          depends_on: [0, 1, 2, 3, 4],
-          capability_hint: 'doc_work',
+            'Document and test the full adoption loop after the funnel and health waves land.',
+          file_scope: [
+            'docs/mcp.md',
+            'docs/QUEEN.md',
+            'apps/mcp-server/test/coordination-loop.test.ts',
+          ],
+          capability_hint: 'test_work',
         },
       ],
     },

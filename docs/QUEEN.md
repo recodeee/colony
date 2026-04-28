@@ -161,7 +161,7 @@ Mapping to `task_plan`:
   for an earlier-wave sub-task. The wave model does not replace existing
   dependency semantics.
 
-Example ordered plan shape:
+Example ordered plan shape for the current adoption fixes:
 
 ```json
 {
@@ -174,41 +174,38 @@ Example ordered plan shape:
   "waves": [
     {
       "id": "wave-1",
-      "title": "Low-risk discoverability",
-      "subtask_indexes": [0, 1, 2, 3, 4]
+      "title": "Coordination adoption funnel",
+      "subtask_indexes": [0, 1, 2, 3]
     },
     {
       "id": "wave-2",
-      "title": "Deeper product work",
-      "subtask_indexes": [5, 6, 7, 8]
+      "title": "Runtime health adoption",
+      "subtask_indexes": [4, 5, 6]
     },
     {
       "id": "wave-3",
-      "title": "Docs and integration",
-      "subtask_indexes": [9]
+      "title": "Integration docs and tests",
+      "subtask_indexes": [7]
     }
   ],
   "subtasks": [
-    { "title": "Planning label Agent 2 task", "depends_on": [] },
-    { "title": "Planning label Agent 3 task", "depends_on": [] },
-    { "title": "Planning label Agent 5 task", "depends_on": [] },
-    { "title": "Planning label Agent 6 task", "depends_on": [] },
-    { "title": "Planning label Agent 10 task", "depends_on": [] },
-    { "title": "Planning label Agent 4 task", "depends_on": [0, 1, 2, 3, 4] },
-    { "title": "Planning label Agent 7 task", "depends_on": [0, 1, 2, 3, 4] },
-    { "title": "Planning label Agent 8 task", "depends_on": [0, 1, 2, 3, 4] },
-    { "title": "Planning label Agent 9 task", "depends_on": [0, 1, 2, 3, 4] },
-    { "title": "Planning label Agent 1 task", "depends_on": [5, 6, 7, 8] }
+    { "title": "Tighten hivemind_context funnel", "depends_on": [] },
+    { "title": "Add task_list ready-work nudge", "depends_on": [] },
+    { "title": "Add claim-before-edit preflight", "depends_on": [] },
+    { "title": "Increase task_note_working adoption", "depends_on": [] },
+    { "title": "Expose OMX bridge status", "depends_on": [0, 1, 2, 3] },
+    { "title": "Add stale claim sweep", "depends_on": [0, 1, 2, 3] },
+    { "title": "Add health telemetry", "depends_on": [0, 1, 2, 3] },
+    { "title": "Add integration docs/tests", "depends_on": [4, 5, 6] }
   ]
 }
 ```
 
-The `Agent N` text here is a planning label copied from the source plan, not a
-runtime assignment or command. Workers still choose work by reading
-`task_ready_for_agent` and claiming with `task_plan_claim_subtask`. Queen
-publishes the flat sub-task structure, so existing `task_plan_publish`,
-`task_plan_validate`, claim, completion, and dependency-unlock behavior remain
-the only execution mechanism.
+The titles here are plan labels, not runtime assignments or commands. Workers
+still choose work by reading `task_ready_for_agent` and claiming with
+`task_plan_claim_subtask`. Queen publishes the flat sub-task structure, so
+existing `task_plan_publish`, `task_plan_validate`, claim, completion, and
+dependency-unlock behavior remain the only execution mechanism.
 
 Example: add Stripe webhook with four sub-tasks.
 

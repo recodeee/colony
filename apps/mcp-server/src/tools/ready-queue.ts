@@ -62,6 +62,7 @@ export interface TaskPlanClaimArgs {
 export interface ReadyForAgentResult {
   ready: ReadySubtaskWithWarnings[];
   total_available: number;
+  next_action: string;
   next_tool?: 'task_plan_claim_subtask';
   plan_slug?: string;
   subtask_index?: number;
@@ -194,6 +195,7 @@ function buildReadyResult(
   if (claimable === null) {
     return {
       ...base,
+      next_action: readyNextAction(base.ready, args),
       empty_state: NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE,
     };
   }
@@ -206,11 +208,26 @@ function buildReadyResult(
   };
   return {
     ...base,
+    next_action: readyNextAction(base.ready, args),
     next_tool: 'task_plan_claim_subtask',
     plan_slug: claimable.plan_slug,
     subtask_index: claimable.subtask_index,
     claim_args,
   };
+}
+
+function readyNextAction(
+  ready: ReadySubtaskWithWarnings[],
+  args: { session_id: string; agent: string },
+): string {
+  const top = ready[0];
+  if (!top) {
+    return 'No ready plan sub-tasks; publish claimable work with queen_plan_goal or task_plan_publish, or complete upstream dependencies.';
+  }
+  if (top.reason === 'continue_current_task') {
+    return `Continue claimed sub-task ${top.plan_slug}/sub-${top.subtask_index}; call task_plan_complete_subtask when done. Claim different ready work only when it should override the current task.`;
+  }
+  return `Call task_plan_claim_subtask with plan_slug="${top.plan_slug}", subtask_index=${top.subtask_index}, session_id="${args.session_id}", agent="${args.agent}".`;
 }
 
 async function readyNegativeWarnings(
