@@ -97,6 +97,11 @@ Common tools:
 | `mcp__colony__task_hand_off` | Transfer work and file claims to another agent. |
 | `mcp__colony__task_foraging_report` | Review proposals that may become real tasks. |
 
+## Guides
+
+- [Queen workflow](docs/QUEEN.md): when a lead agent should publish a multi-step
+  goal into claimable task-plan work, and when not to.
+
 ## Storage
 
 Default local state:

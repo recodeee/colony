@@ -19,6 +19,7 @@ status details, and edge-case rules in the second sentence or later.
 | task thread history, recent coordination | `task_timeline` |
 | unread task changes, updates since | `task_updates_since` |
 | claim file, file ownership, before editing | `task_claim_file` |
+| queen workflow, publish goal | `queen_plan_goal` |
 | split large task, publish subtasks | `task_plan_publish` |
 | plan conflicts, validate parallel split | `task_plan_validate` |
 | examples, reference implementation | `examples_query` |
