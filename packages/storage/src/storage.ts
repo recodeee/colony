@@ -60,6 +60,25 @@ export interface CoordinationActivity {
   reads_by_session: Map<string, number>;
 }
 
+export interface KindCount {
+  kind: string;
+  count: number;
+}
+
+export interface ClaimCoverageStats {
+  edit_count: number;
+  explicit_claim_count: number;
+  auto_claim_count: number;
+  explicit_claim_kinds: KindCount[];
+  auto_claim_kinds: KindCount[];
+}
+
+export interface BashCoordinationVolume {
+  git_op_count: number;
+  file_op_count: number;
+  top_files_by_file_op: Array<{ file_path: string; count: number }>;
+}
+
 export interface EditsWithoutClaimsRow {
   session_id: string;
   file_path: string;
@@ -80,6 +99,8 @@ const DEFAULT_IDLE_WINDOW_MS = 30 * 60_000;
 const COORDINATION_COMMIT_TOOLS_JSON = JSON.stringify(Array.from(COORDINATION_COMMIT_TOOLS));
 const COORDINATION_READ_TOOLS_JSON = JSON.stringify(Array.from(COORDINATION_READ_TOOLS));
 const FILE_EDIT_TOOLS_JSON = JSON.stringify(Array.from(FILE_EDIT_TOOLS));
+const EXPLICIT_CLAIM_KINDS = ['claim'];
+const AUTO_CLAIM_KINDS = ['auto-claim'];
 
 export class Storage {
   private db: Database.Database;
@@ -1325,6 +1346,12 @@ export class Storage {
   /** Edit count vs explicit-claim count — the critical diagnostic for
    *  whether proactive claiming is working in the wild. */
   editVsClaimStats(since_ts: number): { edit_count: number; claim_count: number } {
+    const coverage = this.claimCoverageStats(since_ts);
+    return { edit_count: coverage.edit_count, claim_count: coverage.explicit_claim_count };
+  }
+
+  /** Edit count split by explicit claim observations and auto-claim observations. */
+  claimCoverageStats(since_ts: number): ClaimCoverageStats {
     const edit = this.db
       .prepare(
         `SELECT COUNT(*) AS n FROM observations
@@ -1332,10 +1359,66 @@ export class Storage {
            AND json_extract(metadata, '$.file_path') IS NOT NULL`,
       )
       .get(since_ts) as { n: number };
-    const claim = this.db
-      .prepare("SELECT COUNT(*) AS n FROM observations WHERE ts > ? AND kind = 'claim'")
-      .get(since_ts) as { n: number };
-    return { edit_count: edit.n, claim_count: claim.n };
+    const claimRows = this.db
+      .prepare(
+        `SELECT kind, COUNT(*) AS count
+         FROM observations
+         WHERE ts > ? AND kind IN ('claim', 'auto-claim')
+         GROUP BY kind
+         ORDER BY kind ASC`,
+      )
+      .all(since_ts) as KindCount[];
+    const explicit_claim_kinds = kindCountsWithZeroes(EXPLICIT_CLAIM_KINDS, claimRows);
+    const auto_claim_kinds = kindCountsWithZeroes(AUTO_CLAIM_KINDS, claimRows);
+    return {
+      edit_count: edit.n,
+      explicit_claim_count: sumKindCounts(explicit_claim_kinds),
+      auto_claim_count: sumKindCounts(auto_claim_kinds),
+      explicit_claim_kinds,
+      auto_claim_kinds,
+    };
+  }
+
+  /** Bash-derived coordination observations from the PostToolUse parser. */
+  bashCoordinationVolume(since_ts: number, file_limit = 5): BashCoordinationVolume {
+    const counts = this.db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN kind = 'git-op' THEN 1 ELSE 0 END) AS git_op_count,
+           SUM(CASE WHEN kind = 'file-op' THEN 1 ELSE 0 END) AS file_op_count
+         FROM observations
+         WHERE ts > ? AND kind IN ('git-op', 'file-op')`,
+      )
+      .get(since_ts) as { git_op_count: number | null; file_op_count: number | null };
+    const topFiles = this.db
+      .prepare(
+        `WITH file_paths AS (
+           SELECT fp.value AS file_path
+           FROM observations o
+           JOIN json_each(
+             CASE
+               WHEN json_type(o.metadata, '$.file_paths') = 'array'
+                 THEN json_extract(o.metadata, '$.file_paths')
+               WHEN json_extract(o.metadata, '$.file_path') IS NOT NULL
+                 THEN json_array(json_extract(o.metadata, '$.file_path'))
+               ELSE json_array()
+             END
+           ) fp
+           WHERE o.ts > ? AND o.kind = 'file-op'
+         )
+         SELECT file_path, COUNT(*) AS count
+         FROM file_paths
+         WHERE file_path IS NOT NULL AND file_path != ''
+         GROUP BY file_path
+         ORDER BY count DESC, file_path ASC
+         LIMIT ?`,
+      )
+      .all(since_ts, file_limit) as Array<{ file_path: string; count: number }>;
+    return {
+      git_op_count: counts.git_op_count ?? 0,
+      file_op_count: counts.file_op_count ?? 0,
+      top_files_by_file_op: topFiles,
+    };
   }
 
   /** Count of handoffs by final status in the window. */
@@ -1394,6 +1477,17 @@ export class Storage {
       .prepare('SELECT * FROM observations WHERE ts > ? ORDER BY ts ASC LIMIT ?')
       .all(since_ts, limit) as ObservationRow[];
   }
+}
+
+function kindCountsWithZeroes(kinds: string[], rows: KindCount[]): KindCount[] {
+  return kinds.map((kind) => ({
+    kind,
+    count: rows.find((row) => row.kind === kind)?.count ?? 0,
+  }));
+}
+
+function sumKindCounts(rows: KindCount[]): number {
+  return rows.reduce((sum, row) => sum + row.count, 0);
 }
 
 function sanitizeMatch(q: string): string {
