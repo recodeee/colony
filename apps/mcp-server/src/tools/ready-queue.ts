@@ -236,7 +236,7 @@ function rankSubtask(
     subtask_index: args.subtask.subtask_index,
     wave_index: args.subtask.wave_index,
     wave_name: args.subtask.wave_name,
-    blocked_by_count: args.subtask.depends_on.length,
+    blocked_by_count: args.subtask.blocked_by_count,
     title: args.subtask.title,
     capability_hint: args.subtask.capability_hint,
     file_scope: args.subtask.file_scope,

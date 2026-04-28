@@ -47,6 +47,9 @@ importers:
       kleur:
         specifier: ^4.1.5
         version: 4.1.5
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
     optionalDependencies:
       '@xenova/transformers':
         specifier: ^2.17.2

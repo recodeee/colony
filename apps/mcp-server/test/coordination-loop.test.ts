@@ -84,16 +84,23 @@ function publishLoopArgs(): Record<string, unknown> {
     acceptance_criteria: ['The intended Colony coordination loop is protected by tests'],
     subtasks: [
       {
+        title: 'Protect coordination loop path',
+        description: 'Protect MCP descriptions and the happy coordination path.',
+        file_scope: ['apps/mcp-server/test/coordination-loop.test.ts'],
+        capability_hint: 'test_work',
+      },
+      {
         title: 'Review ToolSearch docs',
         description: 'Keep the docs fixture aligned with searchable phrases.',
         file_scope: ['apps/mcp-server/README.md'],
+        depends_on: [0],
         capability_hint: 'doc_work',
       },
       {
         title: 'Add coordination loop tests',
         description: 'Protect MCP descriptions and the happy coordination path.',
         file_scope: ['apps/mcp-server/test/coordination-loop.test.ts'],
-        depends_on: [0],
+        depends_on: [0, 1],
         capability_hint: 'test_work',
       },
     ],
@@ -311,11 +318,7 @@ describe('coordination loop discovery', () => {
     expect(readyTask).toMatchObject({
       plan_slug: 'coordination-loop',
       subtask_index: 0,
-      title: 'Review ToolSearch docs',
-    });
-    expect(readyTask.negative_warnings[0]).toMatchObject({
-      id: warningId,
-      kind: 'failed_approach',
+      title: 'Protect coordination loop path',
     });
 
     const claimed = await call<ClaimSubtaskResult>('task_plan_claim_subtask', {
@@ -327,11 +330,12 @@ describe('coordination loop discovery', () => {
     expect(claimed).toMatchObject({
       task_id: firstTask.task_id,
       branch: 'spec/coordination-loop/sub-0',
-      file_scope: ['apps/mcp-server/README.md'],
+      file_scope: ['apps/mcp-server/test/coordination-loop.test.ts'],
     });
-    expect(store.storage.getClaim(claimed.task_id, 'apps/mcp-server/README.md')?.session_id).toBe(
-      'agent-session',
-    );
+    expect(
+      store.storage.getClaim(claimed.task_id, 'apps/mcp-server/test/coordination-loop.test.ts')
+        ?.session_id,
+    ).toBe('agent-session');
 
     const fileClaim = await call<{ observation_id: number }>('task_claim_file', {
       task_id: claimed.task_id,

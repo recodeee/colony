@@ -418,7 +418,7 @@ describe('task_ready_for_agent', () => {
     expect(result.ready.map((entry) => entry.subtask_index)).toEqual([2, 3]);
     expect(result.ready.map((entry) => entry.wave_index)).toEqual([1, 1]);
     expect(result.ready.map((entry) => entry.wave_name)).toEqual(['Wave 2', 'Wave 2']);
-    expect(result.ready.map((entry) => entry.blocked_by_count)).toEqual([2, 2]);
+    expect(result.ready.map((entry) => entry.blocked_by_count)).toEqual([0, 0]);
 
     await claimAndComplete('queen-three-wave-plan', 2);
     await claimAndComplete('queen-three-wave-plan', 3);
@@ -434,7 +434,7 @@ describe('task_ready_for_agent', () => {
       plan_slug: 'queen-three-wave-plan',
       wave_index: 2,
       wave_name: 'Wave 3',
-      blocked_by_count: 2,
+      blocked_by_count: 0,
     });
   });
 

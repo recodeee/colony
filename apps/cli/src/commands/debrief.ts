@@ -12,6 +12,7 @@ const DEFAULT_HOURS = 24;
 
 // These values are starting guesses based on the Apr 2026 debrief snapshot
 // showing ~0.07, and will need tuning after a week of running.
+// TODO(2026-06-01): Change these starting guesses only if debrief telemetry shows a stable write/read ratio band.
 export const COMMIT_RATIO_HEALTHY = 0.3;
 export const COMMIT_RATIO_MIXED = 0.1;
 
