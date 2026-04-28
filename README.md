@@ -184,29 +184,53 @@ Queen is the deterministic plan publisher and sweeper behind this workflow. It i
 | `spec_build_record_failure` | Record test failures and promote repeated failures into invariant proposals. |
 | `spec_archive` | Validate, three-way merge, and archive an in-flight spec change. |
 
-## Design Model
+## Biological Coordination Model
 
-Colony borrows from ant colonies, but the implementation is intentionally plain.
+Colony uses the ant-colony model as an implementation guide, not as branding.
+Agents do not wait for a global commander. They read local traces, reinforce
+useful signals, ignore stale ones, and pull work when the current context fits.
+The durable behavior contract lives in
+[`openspec/specs/biological-coordination/spec.md`](openspec/specs/biological-coordination/spec.md);
+this README is the contributor-facing summary.
 
-### Pheromones
+| Biology | Colony |
+| --- | --- |
+| Ant | agent session |
+| Nest | repository |
+| Trail pheromone | recent activity / claims / reinforced proposals |
+| Stigmergic mark | task post / observation / file claim |
+| Food source | useful example / bug fix / improvement |
+| Forager | discovering agent |
+| Recruitment | reinforce / handoff / message |
+| Evaporation | TTL / decay / sweep |
+| Response threshold | agent profile + ready-work ranking |
+| Queen | plan publisher, not commander |
+| Alarm pheromone | blocking message / attention inbox |
+| Trail pruning | rescue / sweep / archive |
 
-Recent file activity leaves decaying traces. A strong trail means another session has recently touched the same area. This is softer than a lock: agents can still work, but Colony can warn them before they collide.
+Practical examples:
 
-### Foraging
+- **Stale claim decay:** `task_claim_file` leaves a local mark so nearby agents
+  see fresh ownership before editing. Claims warn; they do not lock. When the
+  session goes stale, rescue and sweep move or hide the trail so old ownership
+  stops competing with live work.
+- **Proposal reinforcement and decay:** a forager calls `task_propose` for a bug
+  fix or improvement. Other sessions use `task_reinforce` when they support or
+  independently rediscover it; adjacent edits add weak support. Strength decays
+  over time, so ignored proposals fade while source-diverse proposals promote.
+- **Queen ordered waves:** Queen publishes a `task_plan` with dependencies, for
+  example wave 2 depending on wave 1. It does not launch workers or assign
+  shells. Agents pull unblocked subtasks with `task_ready_for_agent` and claim
+  with `task_plan_claim_subtask`.
+- **Local context before editing:** startup is `hivemind_context`,
+  `attention_inbox`, then `task_ready_for_agent`. Hydrate only the relevant
+  observations with `get_observations`, inspect ownership, then claim files.
+  Compact first, full context only when needed.
 
-Agents can propose candidate work without turning every idea into a task. Proposals gain strength from explicit support, rediscovery, and adjacent edits. Strong proposals promote into real task threads; ignored proposals fade.
-
-### Response thresholds
-
-Broadcast handoffs and ready-work queues use agent capability profiles. Unknown agents get neutral defaults; known profiles help route UI, API, test, infra, and docs work to the most likely fit.
-
-### Progressive disclosure
-
-Colony optimizes for agent context windows. Search, timelines, inboxes, task plans, and live-lane tools return compact shapes first. Full bodies are opt-in through `get_observations`.
-
-### Local write path
-
-Hooks write observations synchronously through `MemoryStore`. They do not call a hosted service and do not wait on a daemon. The worker can backfill embeddings later; if it is down, writes still succeed and keyword search still works.
+Hooks keep this local. They write observations synchronously through
+`MemoryStore` without a hosted coordinator or daemon dependency. The worker can
+backfill embeddings later; if it is down, writes still succeed and keyword
+search still works.
 
 ## Storage
 

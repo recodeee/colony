@@ -16,6 +16,25 @@ That contract is the durable source for the ant model: local stigmergic traces,
 pheromone reinforcement, evaporation, response thresholds, pull-based work, and
 Queen as plan publisher only.
 
+## biological model in practice
+
+In Colony, "Queen" means the plan-publishing role, not a commander. Queen
+creates a useful trail: a bounded `task_plan` with file scopes, capability
+hints, dependencies, and optional ordered waves. Workers still choose work by
+reading local context and pulling an available sub-task.
+
+Use the model this way:
+
+- Queen publishes; workers pull with `task_ready_for_agent`.
+- Ordered waves are dependency edges, not runtime supervision.
+- Handoffs, messages, wakes, and proposal reinforcement recruit agents without
+  assigning them by force.
+- Stale claims and stalled subtasks must evaporate through sweep, rescue, or
+  archive instead of staying live forever.
+- Before editing a Queen-published subtask, read local traces first:
+  `hivemind_context`, `attention_inbox`, `task_ready_for_agent`, then claim the
+  subtask or files.
+
 Conceptually queen has two steps:
 
 1. `planGoal`: derive a bounded, claimable plan from a goal.
