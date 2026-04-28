@@ -1,5 +1,10 @@
 export { MemoryStore, type Embedder } from './memory-store.js';
 export {
+  rescueStrandedSessions,
+  type StrandedRescueOptions,
+  type StrandedRescueOutcome,
+} from './stranded-rescue.js';
+export {
   readHivemind,
   type HivemindActivity,
   type HivemindOptions,
