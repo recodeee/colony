@@ -326,7 +326,7 @@ export function buildHivemindContext(
       needs_attention_count: needsAttentionCount,
       claim_count: ownership.claim_count,
       hot_file_count: ownership.hot_files.length,
-      next_action: localContext?.ready_next_action ?? HIVEMIND_FUNNEL_NEXT_ACTION,
+      next_action: HIVEMIND_FUNNEL_NEXT_ACTION,
       suggested_tools: [
         ...new Set([...HIVEMIND_SUGGESTED_TOOLS, ...adoptionNudges.map((nudge) => nudge.tool)]),
       ],
