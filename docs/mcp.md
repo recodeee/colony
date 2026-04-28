@@ -682,7 +682,7 @@ Returns `{ proposal_id, strength, promotion_threshold }`.
 
 ## `task_reinforce`
 
-Reinforce a pending proposal. `kind='explicit'` for direct support; `'rediscovered'` when you arrived at the same idea independently (weights higher — evidence of convergent need).
+Reinforce a pending proposal. `kind='explicit'` means direct support; `'rediscovered'` means you arrived at the same idea independently and weighs more than explicit support; `'adjacent'` is weak evidence from editing a touched file. Scoring is deterministic and source-diverse: repeated same-session reinforcement is collapsed, different sessions from the same agent type add moderate strength, and a different agent type/session adds stronger evidence. Existing rows keep their stored base weight, and session agent type is read from existing session metadata/IDE fields with conservative fallbacks.
 
 ```json
 {
@@ -704,7 +704,7 @@ List pending and recently promoted proposals on a `(repo_root, branch)`. Pending
 }
 ```
 
-Returns `{ pending: [ { id, strength, summary, ... } ], promoted: [ { id, task_id, summary, ... } ] }`.
+Returns `{ pending: [ { id, strength, summary, ... } ], promoted: [ { id, task_id, summary, ... } ] }`. Pending `reinforcement_count` counts unique reinforcing sessions, not duplicate rows.
 
 ## `agent_upsert_profile`
 

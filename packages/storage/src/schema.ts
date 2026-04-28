@@ -138,10 +138,10 @@ CREATE TABLE IF NOT EXISTS proposals (
 );
 CREATE INDEX IF NOT EXISTS idx_proposals_branch ON proposals(repo_root, branch, status);
 
--- Reinforcements: one row per support event. Kept as discrete rows (not
--- a counter) because each event has its own timestamp and decay needs
--- per-event age. An old reinforcement should count less than a new one,
--- same semantics as pheromone.
+-- Reinforcements: discrete support rows. Proposal scoring collapses
+-- same-session duplicates before summing so one noisy session cannot mimic
+-- independent rediscovery, while keeping rows timestamped for decay and for
+-- backward-compatible historical data.
 CREATE TABLE IF NOT EXISTS proposal_reinforcements (
   proposal_id INTEGER NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

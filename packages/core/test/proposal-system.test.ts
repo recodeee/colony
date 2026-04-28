@@ -10,9 +10,10 @@ import { ProposalSystem } from '../src/proposal-system.js';
 let dir: string;
 let store: MemoryStore;
 
-function seed(...ids: string[]): void {
-  for (const id of ids) {
-    store.startSession({ id, ide: 'claude-code', cwd: '/repo' });
+function seed(...sessions: Array<string | [id: string, ide: string]>): void {
+  for (const session of sessions) {
+    const [id, ide] = Array.isArray(session) ? session : [session, 'claude-code'];
+    store.startSession({ id, ide, cwd: '/repo' });
   }
 }
 
@@ -46,7 +47,7 @@ describe('ProposalSystem.propose', () => {
 
 describe('ProposalSystem.reinforce', () => {
   it('adds reinforcement and reports new strength', () => {
-    seed('A', 'B');
+    seed('A', ['B', 'codex']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -75,7 +76,8 @@ describe('ProposalSystem.reinforce', () => {
       touches_files: [],
       session_id: 'A',
     });
-    // Add two adjacent reinforcements — total strength ~ 1.0 + 0.3 + 0.3 = 1.6.
+    // Repeated adjacent support from the same session stays one source:
+    // proposer 1.0 + same-agent adjacent 0.3 * 0.6 = 1.18.
     proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'adjacent' });
     const result = proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'adjacent' });
     expect(result.promoted).toBe(false);
@@ -85,7 +87,7 @@ describe('ProposalSystem.reinforce', () => {
   });
 
   it('promotes to a real task when strength crosses threshold', () => {
-    seed('A', 'B', 'C');
+    seed('A', 'B', ['C', 'codex']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -95,7 +97,8 @@ describe('ProposalSystem.reinforce', () => {
       touches_files: ['src/x.ts'],
       session_id: 'A',
     });
-    // Proposer = 1.0. Two explicit supporters = 2.0. Total 3.0 > 2.5.
+    // Proposer = 1.0. Same-agent supporter = 0.6. Different-agent supporter = 1.0.
+    // Total 2.6 > 2.5.
     proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'explicit' });
     const result = proposals.reinforce({ proposal_id: id, session_id: 'C', kind: 'explicit' });
     expect(result.promoted).toBe(true);
@@ -114,7 +117,7 @@ describe('ProposalSystem.reinforce', () => {
   });
 
   it('is idempotent after promotion: further reinforcements do not re-promote', () => {
-    seed('A', 'B', 'C', 'D');
+    seed('A', 'B', ['C', 'codex'], ['D', 'gemini']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -132,6 +135,122 @@ describe('ProposalSystem.reinforce', () => {
     const result = proposals.reinforce({ proposal_id: id, session_id: 'D', kind: 'explicit' });
     expect(result.promoted).toBe(false);
     expect(store.storage.getProposal(id)?.task_id).toBe(first_task_id);
+  });
+
+  it('does not inflate strength from repeated same-session reinforcement', () => {
+    seed('A', ['B', 'codex']);
+    const proposals = new ProposalSystem(store);
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const id = proposals.propose({
+      repo_root: '/r',
+      branch: 'b',
+      summary: 's',
+      rationale: 'r',
+      touches_files: [],
+      session_id: 'A',
+    });
+
+    vi.setSystemTime(1_000_001);
+    const first = proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'explicit' });
+    for (let i = 2; i <= 6; i += 1) {
+      vi.setSystemTime(1_000_000 + i);
+      proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'explicit' });
+    }
+    const afterSpam = proposals.currentStrength(id);
+    const rows = store.storage.listReinforcements(id);
+    const report = proposals.foragingReport('/r', 'b');
+
+    expect(afterSpam).toBeCloseTo(first.strength, 4);
+    expect(rows.filter((row) => row.session_id === 'B')).toHaveLength(1);
+    expect(report.pending.find((proposal) => proposal.id === id)?.reinforcement_count).toBe(2);
+  });
+
+  it('adds moderate strength from different sessions of the same agent type', () => {
+    seed('A', 'B', 'C');
+    const proposals = new ProposalSystem(store);
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const id = proposals.propose({
+      repo_root: '/r',
+      branch: 'b',
+      summary: 's',
+      rationale: 'r',
+      touches_files: [],
+      session_id: 'A',
+    });
+
+    const afterB = proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'explicit' });
+    const afterC = proposals.reinforce({ proposal_id: id, session_id: 'C', kind: 'explicit' });
+
+    expect(afterB.strength).toBeCloseTo(
+      ProposalSystem.WEIGHTS.explicit +
+        ProposalSystem.WEIGHTS.explicit * ProposalSystem.DIVERSITY.sameAgentTypeDifferentSession,
+      5,
+    );
+    expect(afterC.strength).toBeGreaterThan(afterB.strength);
+    expect(afterC.strength - afterB.strength).toBeCloseTo(
+      ProposalSystem.WEIGHTS.explicit * ProposalSystem.DIVERSITY.sameAgentTypeDifferentSession,
+      5,
+    );
+  });
+
+  it('gives rediscovery from a different agent type a stronger bonus than explicit support', () => {
+    seed('A', ['B', 'codex']);
+    const proposals = new ProposalSystem(store);
+    const explicit = proposals.propose({
+      repo_root: '/r',
+      branch: 'b',
+      summary: 'explicit',
+      rationale: 'r',
+      touches_files: [],
+      session_id: 'A',
+    });
+    const rediscovered = proposals.propose({
+      repo_root: '/r',
+      branch: 'b',
+      summary: 'rediscovered',
+      rationale: 'r',
+      touches_files: [],
+      session_id: 'A',
+    });
+
+    const explicitResult = proposals.reinforce({
+      proposal_id: explicit,
+      session_id: 'B',
+      kind: 'explicit',
+    });
+    const rediscoveredResult = proposals.reinforce({
+      proposal_id: rediscovered,
+      session_id: 'B',
+      kind: 'rediscovered',
+    });
+
+    expect(rediscoveredResult.strength).toBeGreaterThan(explicitResult.strength);
+    expect(rediscoveredResult.strength - explicitResult.strength).toBeCloseTo(
+      ProposalSystem.WEIGHTS.rediscovered - ProposalSystem.WEIGHTS.explicit,
+      5,
+    );
+  });
+
+  it('promotes when source-diverse rediscovery crosses the threshold', () => {
+    seed('A', 'B', ['C', 'codex']);
+    const proposals = new ProposalSystem(store);
+    const id = proposals.propose({
+      repo_root: '/r',
+      branch: 'b',
+      summary: 'converged work',
+      rationale: 'same food source found independently',
+      touches_files: [],
+      session_id: 'A',
+    });
+
+    proposals.reinforce({ proposal_id: id, session_id: 'B', kind: 'explicit' });
+    const result = proposals.reinforce({ proposal_id: id, session_id: 'C', kind: 'rediscovered' });
+
+    expect(result.strength).toBeGreaterThanOrEqual(ProposalSystem.PROMOTION_THRESHOLD);
+    expect(result.promoted).toBe(true);
+    expect(store.storage.getProposal(id)?.status).toBe('active');
   });
 });
 
@@ -194,7 +313,7 @@ describe('ProposalSystem.pendingProposalsTouching', () => {
   });
 
   it('excludes proposals that have already been promoted', () => {
-    seed('A', 'B', 'C');
+    seed('A', 'B', ['C', 'codex']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -219,7 +338,7 @@ describe('ProposalSystem.pendingProposalsTouching', () => {
 
 describe('ProposalSystem.foragingReport', () => {
   it('ranks pending by strength desc, lists promoted separately, and omits evaporated proposals', () => {
-    seed('A', 'B', 'C');
+    seed('A', ['B', 'codex'], ['C', 'gemini']);
     const proposals = new ProposalSystem(store);
     const strong = proposals.propose({
       repo_root: '/r',
@@ -297,7 +416,7 @@ describe('ProposalSystem.foragingReport', () => {
 
 describe('ProposalSystem promotion-to-plan bridge', () => {
   it('synthesizes a lite plan when a proposal with touches_files crosses threshold', () => {
-    seed('A', 'B', 'C');
+    seed('A', 'B', ['C', 'codex']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -326,7 +445,7 @@ describe('ProposalSystem promotion-to-plan bridge', () => {
   });
 
   it('stamps a proposal-promoted observation on the synthesized plan root', () => {
-    seed('A', 'B', 'C');
+    seed('A', 'B', ['C', 'codex']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -357,7 +476,7 @@ describe('ProposalSystem promotion-to-plan bridge', () => {
   });
 
   it('skips plan synthesis when touches_files is empty (TaskThread still opens)', () => {
-    seed('A', 'B', 'C');
+    seed('A', 'B', ['C', 'codex']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -382,7 +501,7 @@ describe('ProposalSystem promotion-to-plan bridge', () => {
   });
 
   it('is idempotent: the synthesized plan is created exactly once per proposal', () => {
-    seed('A', 'B', 'C', 'D');
+    seed('A', 'B', ['C', 'codex'], ['D', 'gemini']);
     const proposals = new ProposalSystem(store);
     const id = proposals.propose({
       repo_root: '/r',
@@ -413,7 +532,7 @@ describe('ProposalSystem promotion-to-plan bridge', () => {
   });
 
   it('caps synthesized sub-tasks at the explicit-publish maximum (20)', () => {
-    seed('A', 'B', 'C');
+    seed('A', 'B', ['C', 'codex']);
     const proposals = new ProposalSystem(store);
     // 25 files — should clamp to 20 sub-tasks to match task_plan_publish.
     const files = Array.from({ length: 25 }, (_, i) => `src/file-${i}.ts`);

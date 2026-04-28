@@ -1,4 +1,5 @@
 import type { ReinforcementKind } from '@colony/storage';
+import { inferIdeFromSessionId } from './infer-ide.js';
 import type { MemoryStore } from './memory-store.js';
 import { synthesizePlanFromProposal } from './plan.js';
 import type { SignalMetadata } from './signal-metadata.js';
@@ -34,7 +35,9 @@ export interface ForagingReport {
  * improvement the colony might want to pursue. Other agents call
  * `reinforce()` to support it; the PostToolUse hook also calls
  * `reinforce(..., 'adjacent')` whenever an agent edits a file a pending
- * proposal would touch. When total decayed strength crosses
+ * proposal would touch. Strength is source-diverse: repeated same-session
+ * support is collapsed, extra same-agent sessions count moderately, and a
+ * different agent type counts fully. When total decayed strength crosses
  * PROMOTION_THRESHOLD, the proposal is auto-promoted into a real task
  * thread agents can join like any other task.
  */
@@ -48,16 +51,28 @@ export class ProposalSystem {
   private static readonly DECAY_RATE = Math.LN2 / ProposalSystem.HALF_LIFE_MS;
 
   /**
-   * Reinforcement weights by kind. Explicit support weighs most because
-   * the supporter consciously chose; rediscovery next (independent arrival
-   * at the same idea is strong evidence); adjacency least (editing a file
-   * the proposal touches is only weak circumstantial support).
+   * Reinforcement weights by kind. Rediscovery weighs more than explicit
+   * support because independent arrival at the same idea is stronger
+   * evidence than a direct "I agree". Adjacency is weak circumstantial
+   * support from touching a file the proposal mentions.
    */
   static readonly WEIGHTS: Record<ReinforcementKind, number> = {
     explicit: 1.0,
-    rediscovered: 0.7,
+    rediscovered: 1.2,
     adjacent: 0.3,
   };
+
+  /**
+   * Source-diversity multipliers. The first session for an agent type is
+   * a distinct source. More sessions from the same agent family still add
+   * evidence, but at a lower rate than a different agent type/session.
+   * Duplicate reinforcement from the same session is collapsed before
+   * these multipliers are applied.
+   */
+  static readonly DIVERSITY = {
+    differentAgentTypeSession: 1.0,
+    sameAgentTypeDifferentSession: 0.6,
+  } as const;
 
   /**
    * Total decayed strength required for promotion. 2.5 means roughly
@@ -122,31 +137,57 @@ export class ProposalSystem {
     kind: ReinforcementKind;
   }): { strength: number; promoted: boolean } {
     const now = Date.now();
-    this.store.storage.insertReinforcement({
-      proposal_id: args.proposal_id,
-      session_id: args.session_id,
-      kind: args.kind,
-      weight: ProposalSystem.WEIGHTS[args.kind],
-      reinforced_at: now,
-    });
+    const weight = ProposalSystem.WEIGHTS[args.kind];
+    if (!this.hasSameSessionWeightAtLeast(args.proposal_id, args.session_id, weight)) {
+      this.store.storage.insertReinforcement({
+        proposal_id: args.proposal_id,
+        session_id: args.session_id,
+        kind: args.kind,
+        weight,
+        reinforced_at: now,
+      });
+    }
     const strength = this.currentStrength(args.proposal_id);
     const promoted = this.maybePromote(args.proposal_id, strength);
     return { strength, promoted };
   }
 
   /**
-   * Sum of decayed reinforcement weights for a proposal. Called inline on
-   * reinforcement and from the foraging report; O(n) in reinforcement
-   * count but n is small (typically under 20) so this stays cheap.
+   * Sum of decayed, source-diverse reinforcement weights for a proposal.
+   * Each session contributes at most one active signal, repeated same-agent
+   * sessions are downweighted, and different agent types retain full weight.
+   * Called inline on reinforcement and from the foraging report; O(n) in
+   * reinforcement count but n is small (typically under 20) so this stays
+   * cheap.
    */
   currentStrength(proposal_id: number): number {
     const now = Date.now();
     const rows = this.store.storage.listReinforcements(proposal_id);
-    return rows.reduce((sum, r) => {
-      const elapsed = now - r.reinforced_at;
-      if (elapsed <= 0) return sum + r.weight;
-      return sum + r.weight * Math.exp(-ProposalSystem.DECAY_RATE * elapsed);
-    }, 0);
+    const proposal = this.store.storage.getProposal(proposal_id);
+    const sessionTypes = new Map<string, string>();
+    const bySession = new Map<string, SessionEvidence>();
+
+    for (const row of rows) {
+      const strength = ProposalSystem.decay(row.weight, row.reinforced_at, now);
+      const existing = bySession.get(row.session_id);
+      if (
+        !existing ||
+        strength > existing.strength ||
+        (strength === existing.strength && row.reinforced_at > existing.reinforced_at)
+      ) {
+        bySession.set(row.session_id, {
+          session_id: row.session_id,
+          agent_type: this.agentTypeForSession(row.session_id, sessionTypes),
+          strength,
+          reinforced_at: row.reinforced_at,
+        });
+      }
+    }
+
+    return ProposalSystem.applySourceDiversity(
+      Array.from(bySession.values()),
+      proposal?.proposed_by,
+    );
   }
 
   /**
@@ -207,9 +248,10 @@ export class ProposalSystem {
         proposed_by: p.proposed_by,
         proposed_at: p.proposed_at,
         strength,
-        reinforcement_count: reinforcements.length,
+        reinforcement_count: new Set(reinforcements.map((row) => row.session_id)).size,
         signal_metadata: signalMetadataFromProposal(p, {
           reinforcements,
+          strength,
           half_life_minutes: ProposalSystem.HALF_LIFE_MS / 60_000,
         }),
       });
@@ -276,6 +318,84 @@ export class ProposalSystem {
 
     return true;
   }
+
+  private hasSameSessionWeightAtLeast(
+    proposal_id: number,
+    session_id: string,
+    weight: number,
+  ): boolean {
+    return this.store.storage
+      .listReinforcements(proposal_id)
+      .some((row) => row.session_id === session_id && row.weight >= weight);
+  }
+
+  private agentTypeForSession(session_id: string, cache: Map<string, string>): string {
+    const cached = cache.get(session_id);
+    if (cached) return cached;
+
+    const session = this.store.storage.getSession(session_id);
+    const type =
+      agentTypeFromMetadata(session?.metadata) ??
+      normalizeAgentType(session?.ide) ??
+      normalizeAgentType(inferIdeFromSessionId(session_id)) ??
+      'unknown';
+    cache.set(session_id, type);
+    return type;
+  }
+
+  private static decay(weight: number, reinforcedAt: number, now: number): number {
+    const elapsed = now - reinforcedAt;
+    if (elapsed <= 0) return weight;
+    return weight * Math.exp(-ProposalSystem.DECAY_RATE * elapsed);
+  }
+
+  private static applySourceDiversity(
+    entries: SessionEvidence[],
+    proposedBy: string | undefined,
+  ): number {
+    const byAgentType = new Map<string, SessionEvidence[]>();
+    for (const entry of entries) {
+      const group = byAgentType.get(entry.agent_type) ?? [];
+      group.push(entry);
+      byAgentType.set(entry.agent_type, group);
+    }
+
+    let total = 0;
+    for (const group of byAgentType.values()) {
+      group.sort(compareEvidence);
+      const proposerIndex =
+        proposedBy === undefined ? -1 : group.findIndex((entry) => entry.session_id === proposedBy);
+
+      if (proposerIndex >= 0) {
+        const [proposer] = group.splice(proposerIndex, 1);
+        if (proposer) total += proposer.strength;
+      } else {
+        const first = group.shift();
+        if (first) total += first.strength * ProposalSystem.DIVERSITY.differentAgentTypeSession;
+      }
+
+      for (const entry of group) {
+        total += entry.strength * ProposalSystem.DIVERSITY.sameAgentTypeDifferentSession;
+      }
+    }
+
+    return total;
+  }
+}
+
+interface SessionEvidence {
+  session_id: string;
+  agent_type: string;
+  strength: number;
+  reinforced_at: number;
+}
+
+function compareEvidence(a: SessionEvidence, b: SessionEvidence): number {
+  return (
+    b.strength - a.strength ||
+    b.reinforced_at - a.reinforced_at ||
+    a.session_id.localeCompare(b.session_id)
+  );
 }
 
 function parseFiles(raw: string): string[] {
@@ -285,4 +405,28 @@ function parseFiles(raw: string): string[] {
   } catch {
     return [];
   }
+}
+
+function agentTypeFromMetadata(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    const record = parsed as Record<string, unknown>;
+    for (const key of ['agent', 'agentName', 'agent_name', 'ide', 'cliName', 'cli_name']) {
+      const normalized = normalizeAgentType(record[key]);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeAgentType(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === 'unknown') return undefined;
+  if (normalized === 'claude-code' || normalized === 'claudecode') return 'claude';
+  return normalized;
 }
