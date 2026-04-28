@@ -19,6 +19,10 @@ cd apps/cli && pnpm link --global
 colony --help
 ```
 
+When the linked `colony` binary runs from a source checkout, it rebuilds stale CLI
+dist automatically before loading `dist/index.js`. Set `COLONY_SKIP_AUTO_BUILD=1`
+to use the current dist without this freshness check.
+
 ## Run against a scratch data dir
 
 ```bash

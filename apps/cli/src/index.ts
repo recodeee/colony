@@ -2,6 +2,7 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
+import { maybeReexecAfterAutoBuild } from './auto-build.js';
 import { registerBackfillCommand } from './commands/backfill.js';
 import { registerCompressCommands } from './commands/compress.js';
 import { registerConfigCommand } from './commands/config.js';
@@ -64,6 +65,7 @@ export function createProgram(): Command {
 }
 
 if (isMainEntry()) {
+  maybeReexecAfterAutoBuild();
   // When stdout is piped to a consumer that exits early (e.g. `| head`, `| grep -q`),
   // further writes raise EPIPE. Node turns that into an uncaught exception by default,
   // which is noisy and misleading for what is really a successful upstream-terminated pipe.
