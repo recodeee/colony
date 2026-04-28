@@ -17,6 +17,7 @@ status details, and edge-case rules in the second sentence or later.
 | task-scoped question, answer, decision, blocker, note | `task_post` |
 | failed path, blocked approach, do not repeat, reverted solution | `task_post` |
 | what should I work on, pick next task, available work | `task_ready_for_agent` |
+| compact bridge status, OMX HUD, status display | `bridge_status` |
 | give my work to, transfer, pass to another agent | `task_hand_off` |
 | before editing, inspect ownership, active ownership, relevant memory | `hivemind_context` |
 | search prior memory, prior decisions, old errors, notes, negative warnings | `search` |
