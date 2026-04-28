@@ -18,7 +18,7 @@ Agent startup, resume, "what needs me?", and "what should I do next?" flows shou
 2. `attention_inbox` to see what needs your attention: handoffs, messages, wakes, stalled lanes, recent claim activity, and decaying hot files.
 3. `task_ready_for_agent` to choose available work matched to the current agent.
 
-Use `task_list` for browsing recent task threads. Use `task_ready_for_agent` for choosing what to work on next.
+Use `task_list` for browsing/debugging recent task threads. Use `task_ready_for_agent` for choosing what to work on next.
 
 Copy-paste startup:
 
@@ -377,13 +377,13 @@ Returns:
 
 Browse task threads; use `task_ready_for_agent` when choosing work to claim. Each task groups sessions collaborating on the same `(repo_root, branch)`.
 
-Use `task_list` when you need to inspect existing task threads by repo or branch. Do not use it as the main work picker; call `task_ready_for_agent` when the question is "what should I work on next?"
+Use `task_list` when you need to inspect existing task threads by repo or branch for browsing/debugging. Do not use it as the main work picker; call `task_ready_for_agent` when the question is "what should I work on next?"
 
 ```json
 { "name": "task_list", "input": { "limit": 50, "session_id": "sess_abc" } }
 ```
 
-Returns: `{ tasks, hint }`. The hint always routes work selection to `task_ready_for_agent`; repeated `task_list` calls without `task_ready_for_agent` return the stronger inventory warning.
+Returns: `{ tasks, hint }`. The default hint is `Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.` Repeated `task_list` calls without `task_ready_for_agent` return the stronger inventory warning.
 
 ## `task_timeline`
 

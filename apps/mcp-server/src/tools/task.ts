@@ -8,7 +8,7 @@ import { mcpErrorResponse } from './shared.js';
 
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const TASK_LIST_HINT =
-  'Use task_ready_for_agent to choose claimable work; task_list is for browsing.';
+  'Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.';
 const TASK_LIST_REPEAT_HINT =
   'task_list is inventory. Use task_ready_for_agent to choose claimable work.';
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;

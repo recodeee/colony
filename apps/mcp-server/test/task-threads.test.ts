@@ -379,7 +379,7 @@ describe('task threads — handoff lifecycle', () => {
     });
     expect(first.tasks).toHaveLength(1);
     expect(first.hint).toBe(
-      'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
+      'Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.',
     );
 
     store.addObservation({
@@ -403,7 +403,7 @@ describe('task threads — handoff lifecycle', () => {
 
     const afterReady = await call<{ hint: string }>('task_list', { session_id: sessionA });
     expect(afterReady.hint).toBe(
-      'Use task_ready_for_agent to choose claimable work; task_list is for browsing.',
+      'Use task_ready_for_agent to choose claimable work; task_list is for browsing/debugging.',
     );
   });
 
