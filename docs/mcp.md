@@ -571,9 +571,9 @@ Returns: `[ { id, kind, session_id, ts } ]`.
 
 ## `task_post`
 
-Post shared notes, decisions, blockers, questions, and answers on a task thread. Use `task_message` for directed agent-to-agent coordination. If you do not know `task_id`, use `task_note_working`. Use the dedicated tools (`task_claim_file`, `task_hand_off`, `task_accept_handoff`) for structured actions; `task_post` is for free-form shared thread state tagged with a `kind`.
+Post shared notes, decisions, blockers, questions, and answers on a task thread. Use `task_message` for directed agent-to-agent coordination. Use `task_note_working` as the first write path for current working state and when you do not know `task_id`. Use the dedicated tools (`task_claim_file`, `task_hand_off`, `task_accept_handoff`) for structured actions; `task_post` is for free-form shared thread state tagged with a `kind`.
 
-Use `kind: "note"` when an agent needs to write working note, save current state, remember progress, or log what I am doing. The note lands on both the task thread and the posting session's memory through `MemoryStore`, so it stays compressed, timeline-visible, and searchable later.
+Use `kind: "note"` when the caller already knows the `task_id` or needs a normal task-thread note. For current working state without a resolved `task_id`, call `task_note_working` first. The note lands on both the task thread and the posting session's memory through `MemoryStore`, so it stays compressed, timeline-visible, and searchable later.
 
 Use `failed_approach`, `blocked_path`, `conflict_warning`, or `reverted_solution` when another agent should not repeat a concrete bad path. Keep these warnings explicit and evidence-based: failed paths, blocked approaches, reverted solutions, flaky routes, or do-not-touch notes. They show up compactly in `search`, `hivemind_context`, and `task_ready_for_agent`, but they do not lower ready-work ranking.
 
@@ -603,7 +603,15 @@ Save current working state to the active Colony task. Use this to write working 
     "session_id": "sess_abc",
     "repo_root": "/abs/repo",
     "branch": "agent/codex/current-work",
-    "content": "branch=...; task=...; blocker=none; next=run tests; evidence=..."
+    "content": "branch=...; task=...; blocker=none; next=run tests; evidence=...",
+    "pointer": {
+      "branch": "agent/codex/current-work",
+      "task": "bridge status",
+      "blocker": "none",
+      "next": "run tests",
+      "evidence": "bridge_status"
+    },
+    "allow_omx_notepad_fallback": true
   }
 }
 ```
@@ -634,7 +642,7 @@ Filtered when one session participates in multiple active tasks:
 }
 ```
 
-`repo_root` and `branch` are optional filters. The tool scans active task participation for the session, posts `kind:"note"` when exactly one task matches, and returns `{ observation_id, id, task_id }`. If multiple tasks match, it returns `AMBIGUOUS_ACTIVE_TASK` plus compact candidates (`task_id`, `repo_root`, `branch`, `status`, `updated_at`, `agent`) instead of guessing. If none match, it returns `ACTIVE_TASK_NOT_FOUND`.
+`repo_root` and `branch` are optional filters. The tool scans active task participation for the session, posts `kind:"note"` when exactly one task matches, and returns `{ observation_id, id, task_id }`. If `bridge.writeOmxNotepadPointer=true`, a successful write appends only a tiny pointer to `.omx/notepad.md`: `branch`, `task`, `blocker`, `next`, `evidence`, `colony_observation_id`. The full `content` is never duplicated into OMX notepad after a Colony note succeeds. If multiple tasks match, it returns `AMBIGUOUS_ACTIVE_TASK` plus compact candidates (`task_id`, `repo_root`, `branch`, `status`, `updated_at`, `agent`) instead of guessing. If none match, it returns `ACTIVE_TASK_NOT_FOUND`; with `allow_omx_notepad_fallback:true`, it may write the same tiny pointer to OMX notepad so legacy resume still has a breadcrumb.
 
 `task_note_working` is the first write path for working state. On success it
 keeps the full note in Colony and skips `.omx/notepad.md` unless

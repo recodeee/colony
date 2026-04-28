@@ -296,8 +296,9 @@ describe('task threads — handoff lifecycle', () => {
     expect(updatesForB.some((row) => row.session_id === sessionA)).toBe(true);
   });
 
-  it('task_post notes serve as searchable working state without a duplicate notepad', async () => {
-    const { task_id, sessionA } = seedTwoSessionTask();
+  it('task_post notes with a known task_id stay searchable without a duplicate notepad', async () => {
+    const repoRoot = join(dir, 'repo-task-post-note');
+    const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
 
     const { id } = await call<{ id: number }>('task_post', {
       task_id,
@@ -324,6 +325,7 @@ describe('task threads — handoff lifecycle', () => {
 
     const hits = await store.search('save current state', 10);
     expect(hits.some((hit) => hit.id === id)).toBe(true);
+    expect(existsSync(join(repoRoot, '.omx', 'notepad.md'))).toBe(false);
   });
 
   it('task_post hints when a post looks like directed agent coordination', async () => {
@@ -362,7 +364,8 @@ describe('task threads — handoff lifecycle', () => {
   });
 
   it('task_note_working posts a note to the only active task for the session', async () => {
-    const { task_id, sessionA } = seedTwoSessionTask();
+    const repoRoot = join(dir, 'repo-working-note-success');
+    const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
 
     const {
       observation_id,
@@ -374,6 +377,8 @@ describe('task threads — handoff lifecycle', () => {
       omx_notepad_pointer: { status: string; reason: string };
     }>('task_note_working', {
       session_id: sessionA,
+      repo_root: repoRoot,
+      branch: 'feat/handoff',
       content: 'working state: tests are green, unique-working-note-token before push',
     });
 
@@ -399,6 +404,7 @@ describe('task threads — handoff lifecycle', () => {
       status: 'skipped',
       reason: 'bridge.writeOmxNotepadPointer=false',
     });
+    expect(existsSync(join(repoRoot, '.omx', 'notepad.md'))).toBe(false);
   });
 
   it('task_note_working writes a tiny OMX pointer when configured', async () => {
@@ -431,6 +437,9 @@ describe('task threads — handoff lifecycle', () => {
       const note = readFileSync(join(repoRoot, '.omx', 'notepad.md'), 'utf8');
       expect(note).toContain('branch=agent/codex/working-note-bridge');
       expect(note).toContain('task=bridge working notes');
+      expect(note).toContain('blocker=none');
+      expect(note).toContain('next=run focused tests');
+      expect(note).toContain('evidence=very long log line');
       expect(note).toContain(`colony_observation_id=${observation_id}`);
       expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_POINTER');
       expect(note).not.toContain('SECRET_TAIL_SHOULD_NOT_APPEAR');
