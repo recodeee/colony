@@ -38,9 +38,21 @@
 
 ## 4. Completion
 
-- [ ] Commit, push, PR, merge.
-- [ ] Record final `MERGED` evidence and sandbox cleanup.
+- [x] Commit, push, PR, merge.
+      Evidence: implementation commit `8c2700f` was pushed on
+      `agent/agent-19/local-neighborhood-context-2026-04-28-22-31`
+      and merged through PR #177:
+      https://github.com/recodeee/colony/pull/177.
+- [x] Record final `MERGED` evidence and sandbox cleanup.
+      Evidence: `gh pr view
+      agent/agent-19/local-neighborhood-context-2026-04-28-22-31 --json
+      number,url,state,mergeCommit,headRefName,baseRefName` returned
+      `state=MERGED`, `number=177`, and merge commit
+      `c85ceb8857dbf1dc85a3b4c5bef8ec0529024757`. Guardex finish pruned the
+      source worktree, removed the local source branch, and
+      `git ls-remote --heads origin
+      agent/agent-19/local-neighborhood-context-2026-04-28-22-31` returned no
+      remote head.
 
 Closeout resumed after the previous index-write blocker. Verification was rerun
-successfully before staging; final PR and cleanup evidence will be recorded once
-the finish flow completes.
+successfully before staging and again after rebase conflict resolution.
