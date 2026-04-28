@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadSettings } from '@colony/config';
-import { TaskThread, listPlans } from '@colony/core';
+import { TaskThread, buildAttentionInbox, listPlans } from '@colony/core';
 import { SpecRepository } from '@colony/spec';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,6 +35,9 @@ id|bug|cites
 -|-|-
 `;
 
+const MINUTE_MS = 60_000;
+const SWEEP_NOW = Date.UTC(2026, 3, 28, 12, 0, 0);
+
 let repoRoot: string;
 let dataDir: string;
 let output: string;
@@ -61,6 +64,7 @@ afterEach(() => {
   if (originalColonyHome === undefined) delete process.env.COLONY_HOME;
   else process.env.COLONY_HOME = originalColonyHome;
   kleur.enabled = true;
+  vi.useRealTimers();
 });
 
 describe('colony queen CLI', () => {
@@ -157,10 +161,9 @@ describe('colony queen CLI', () => {
     await publishNonQueenPlan();
     output = '';
 
-    await createProgram().parseAsync(
-      ['node', 'test', 'queen', 'list', '--repo-root', repoRoot],
-      { from: 'node' },
-    );
+    await createProgram().parseAsync(['node', 'test', 'queen', 'list', '--repo-root', repoRoot], {
+      from: 'node',
+    });
 
     expect(output).toContain('queen-goal  queen goal');
     expect(output).toContain('status: 2 available, 0 claimed, 0 completed, 0 blocked');
@@ -182,6 +185,32 @@ describe('colony queen CLI', () => {
     expect(output).toContain('sub-0 [claimed] Implement API scope');
     expect(output).toContain('claimed: codex (codex@claim)');
     expect(output).toContain('file-scope: apps/api/claimed.ts');
+  });
+
+  it('renders queen sweep diagnostics grouped by wave without messaging by default', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(SWEEP_NOW);
+    await seedOrderedSweepPlan();
+    output = '';
+
+    await createProgram().parseAsync(['node', 'test', 'queen', 'sweep', '--repo-root', repoRoot], {
+      from: 'node',
+    });
+
+    expect(output).toContain('Wave diagnostics:');
+    expect(output).toContain('Wave 1 has 2 stalled subtasks');
+    expect(output).toContain('Wave 2 is blocked by Wave 1');
+    expect(output).toContain('Finalizer waiting on 3 subtasks');
+
+    const settings = loadSettings();
+    await withStore(settings, (store) => {
+      const inbox = buildAttentionInbox(store, {
+        session_id: 'codex@wave-a',
+        agent: 'codex',
+        include_stalled_lanes: false,
+      });
+      expect(inbox.unread_messages).toHaveLength(0);
+    });
   });
 });
 
@@ -244,7 +273,9 @@ async function publishNonQueenPlan(): Promise<void> {
 async function markFirstSubtaskClaimed(slug: string): Promise<void> {
   const settings = loadSettings();
   await withStore(settings, (store) => {
-    const plan = listPlans(store, { repo_root: repoRoot }).find((candidate) => candidate.plan_slug === slug);
+    const plan = listPlans(store, { repo_root: repoRoot }).find(
+      (candidate) => candidate.plan_slug === slug,
+    );
     const subtask = plan?.subtasks[0];
     if (!subtask) throw new Error(`missing subtask for ${slug}`);
     store.addObservation({
@@ -259,4 +290,121 @@ async function markFirstSubtaskClaimed(slug: string): Promise<void> {
       },
     });
   });
+}
+
+async function seedOrderedSweepPlan(): Promise<void> {
+  const settings = loadSettings();
+  await withStore(settings, (store) => {
+    setSweepMinutesAgo(360);
+    store.startSession({ id: 'queen@ordered', ide: 'codex', cwd: repoRoot });
+    const parent = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'spec/ordered-sweep',
+      title: 'ordered sweep',
+      session_id: 'queen@ordered',
+    });
+    parent.join('queen@ordered', 'queen');
+    store.addObservation({
+      session_id: 'queen@ordered',
+      task_id: parent.task_id,
+      kind: 'plan-config',
+      content: 'plan ordered-sweep config: auto_archive=false',
+      metadata: { plan_slug: 'ordered-sweep', auto_archive: false },
+    });
+
+    const subtasks = [
+      {
+        title: 'Wave one A',
+        depends_on: [],
+        wave_index: 0,
+        wave_id: 'wave-1',
+        wave_title: 'Foundation',
+        claimed_minutes_ago: 95,
+        session_id: 'codex@wave-a',
+      },
+      {
+        title: 'Wave one B',
+        depends_on: [],
+        wave_index: 0,
+        wave_id: 'wave-1',
+        wave_title: 'Foundation',
+        claimed_minutes_ago: 80,
+        session_id: 'codex@wave-b',
+      },
+      {
+        title: 'Wave two blocked',
+        depends_on: [0, 1],
+        wave_index: 1,
+        wave_id: 'wave-2',
+        wave_title: 'Product work',
+      },
+      {
+        title: 'Finalizer',
+        depends_on: [0, 1, 2],
+        wave_index: 2,
+        wave_id: 'finalizer',
+        wave_label: 'Finalizer',
+        wave_role: 'finalizer',
+      },
+    ];
+
+    for (let i = 0; i < subtasks.length; i++) {
+      const subtask = subtasks[i];
+      if (!subtask) continue;
+      setSweepMinutesAgo(300);
+      const thread = TaskThread.open(store, {
+        repo_root: repoRoot,
+        branch: `spec/ordered-sweep/sub-${i}`,
+        session_id: 'queen@ordered',
+      });
+      thread.join('queen@ordered', 'queen');
+      store.addObservation({
+        session_id: 'queen@ordered',
+        task_id: thread.task_id,
+        kind: 'plan-subtask',
+        content: `${subtask.title}\n\nSeeded CLI sweep sub-task ${i}.`,
+        metadata: {
+          parent_plan_slug: 'ordered-sweep',
+          parent_plan_title: 'ordered sweep',
+          parent_spec_task_id: parent.task_id,
+          subtask_index: i,
+          file_scope: [`src/ordered-${i}.ts`],
+          depends_on: subtask.depends_on,
+          spec_row_id: null,
+          capability_hint: 'infra_work',
+          status: 'available',
+          wave_index: subtask.wave_index,
+          wave_id: subtask.wave_id,
+          ...(subtask.wave_title !== undefined ? { wave_title: subtask.wave_title } : {}),
+          ...(subtask.wave_label !== undefined ? { wave_label: subtask.wave_label } : {}),
+          ...(subtask.wave_role !== undefined ? { wave_role: subtask.wave_role } : {}),
+        },
+      });
+
+      if (subtask.claimed_minutes_ago !== undefined) {
+        const sessionId = subtask.session_id ?? `codex@wave-${i}`;
+        store.startSession({ id: sessionId, ide: 'codex', cwd: repoRoot });
+        thread.join(sessionId, 'codex');
+        setSweepMinutesAgo(subtask.claimed_minutes_ago);
+        store.addObservation({
+          session_id: sessionId,
+          task_id: thread.task_id,
+          kind: 'plan-subtask-claim',
+          content: `codex claimed sub-task ${i} of plan ordered-sweep`,
+          metadata: {
+            status: 'claimed',
+            session_id: sessionId,
+            agent: 'codex',
+            plan_slug: 'ordered-sweep',
+            subtask_index: i,
+          },
+        });
+      }
+    }
+    vi.setSystemTime(SWEEP_NOW);
+  });
+}
+
+function setSweepMinutesAgo(minutes: number): void {
+  vi.setSystemTime(SWEEP_NOW - minutes * MINUTE_MS);
 }

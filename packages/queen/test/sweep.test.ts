@@ -21,6 +21,13 @@ interface SeedSubtask {
   session_id?: string;
   agent?: string;
   depends_on?: number[];
+  wave?: {
+    index: number;
+    id?: string;
+    title?: string;
+    label?: string;
+    role?: 'finalizer';
+  };
 }
 
 beforeEach(() => {
@@ -99,6 +106,84 @@ describe('sweepQueenPlans', () => {
       subtask_index: 0,
       age_minutes: 300,
     });
+  });
+
+  it('adds wave summaries for ordered plans with stalled and blocked work', () => {
+    seedPlan('ordered-plan', {
+      auto_archive: false,
+      subtasks: [
+        {
+          status: 'claimed',
+          claimed_minutes_ago: 95,
+          session_id: 'agent-a',
+          wave: { index: 0, id: 'wave-1', title: 'Foundation' },
+        },
+        {
+          status: 'claimed',
+          claimed_minutes_ago: 80,
+          session_id: 'agent-b',
+          wave: { index: 0, id: 'wave-1', title: 'Foundation' },
+        },
+        {
+          status: 'available',
+          created_minutes_ago: 300,
+          depends_on: [0, 1],
+          wave: { index: 1, id: 'wave-2', title: 'Product work' },
+        },
+        {
+          status: 'available',
+          created_minutes_ago: 300,
+          depends_on: [0, 1, 2],
+          wave: { index: 2, id: 'finalizer', label: 'Finalizer', role: 'finalizer' },
+        },
+      ],
+    });
+
+    const result = sweepQueenPlans(store, { now: NOW });
+
+    const plan = result.find((candidate) => candidate.plan_slug === 'ordered-plan');
+    expect(plan?.items.filter((item) => item.reason === 'stalled')).toHaveLength(2);
+    expect(plan?.items[0]).toMatchObject({
+      reason: 'stalled',
+      wave: {
+        index: 1,
+        id: 'wave-1',
+        title: 'Foundation',
+        label: 'Wave 1',
+        source: 'metadata',
+      },
+    });
+    expect(plan?.waves).toMatchObject([
+      {
+        index: 1,
+        label: 'Wave 1',
+        stalled_subtask_count: 2,
+        unclaimed_subtask_count: 0,
+        blocked_subtask_count: 0,
+        waiting_on_subtask_count: 0,
+        blocked_by: [],
+      },
+      {
+        index: 2,
+        label: 'Wave 2',
+        stalled_subtask_count: 0,
+        unclaimed_subtask_count: 0,
+        blocked_subtask_count: 1,
+        waiting_on_subtask_count: 2,
+        blocked_by: [{ index: 1, label: 'Wave 1' }],
+      },
+      {
+        index: 3,
+        label: 'Finalizer',
+        is_finalizer: true,
+        blocked_subtask_count: 1,
+        waiting_on_subtask_count: 3,
+        blocked_by: [
+          { index: 1, label: 'Wave 1' },
+          { index: 2, label: 'Wave 2' },
+        ],
+      },
+    ]);
   });
 
   it('auto-messages stalled claim owners through the attention inbox substrate', () => {
@@ -183,6 +268,7 @@ function seedPlan(
         spec_row_id: null,
         capability_hint: null,
         status: 'available',
+        ...waveMetadata(subtask.wave),
       },
     });
     subtaskTaskIds.push(thread.task_id);
@@ -239,4 +325,15 @@ function seedPlan(
 
 function setMinutesAgo(minutes: number): void {
   vi.setSystemTime(NOW - minutes * MINUTE_MS);
+}
+
+function waveMetadata(wave: SeedSubtask['wave']): Record<string, unknown> {
+  if (!wave) return {};
+  return {
+    wave_index: wave.index,
+    ...(wave.id !== undefined ? { wave_id: wave.id } : {}),
+    ...(wave.title !== undefined ? { wave_title: wave.title } : {}),
+    ...(wave.label !== undefined ? { wave_label: wave.label } : {}),
+    ...(wave.role !== undefined ? { wave_role: wave.role } : {}),
+  };
 }

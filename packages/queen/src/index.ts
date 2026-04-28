@@ -38,4 +38,7 @@ export {
   type StalledSubtaskAttention,
   type SweepQueenPlansOptions,
   type UnclaimedSubtaskAttention,
+  type QueenSweepWaveBlocker,
+  type QueenSweepWaveRef,
+  type QueenSweepWaveSummary,
 } from './sweep.js';
