@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
 import { Storage } from '@colony/storage';
 import type { Command } from 'commander';
@@ -13,16 +12,9 @@ const REFRESH_MS = 3000;
 
 const OBSERVATION_LIMIT = 50;
 
-interface RecentObservationRow {
-  id: number;
-  session_id: string;
-  kind: string;
-  content: string;
-  ts: number;
-}
-
 export function renderFrame(storage: Storage): string {
-  return readRecentObservations(storage, OBSERVATION_LIMIT)
+  return storage
+    .recentObservations(OBSERVATION_LIMIT)
     .map((row) => {
       const ts = new Date(row.ts).toISOString().slice(11, 19);
       const session = colorSession(row.session_id)(row.session_id.slice(0, 8).padEnd(8));
@@ -31,44 +23,6 @@ export function renderFrame(storage: Storage): string {
       return `${kleur.dim(ts)}  ${session}  ${kind} ${snippet}`;
     })
     .join('\n');
-}
-
-function readRecentObservations(storage: Storage, limit: number): RecentObservationRow[] {
-  const storageWithMethod = storage as Storage & {
-    recentObservations?: (limit?: number) => RecentObservationRow[];
-  };
-  if (typeof storageWithMethod.recentObservations === 'function') {
-    return storageWithMethod.recentObservations(limit);
-  }
-
-  const rawDb = (
-    storage as unknown as {
-      db?: { prepare: (sql: string) => { all: (...params: unknown[]) => unknown[] } };
-    }
-  ).db;
-  if (!rawDb) return [];
-  return rawDb
-    .prepare(
-      `SELECT o.id, o.session_id, o.kind, o.content, o.ts
-       FROM observations o
-       JOIN sessions s ON s.id = o.session_id
-       ORDER BY o.ts DESC, o.id DESC
-       LIMIT ?`,
-    )
-    .all(limit)
-    .filter(isRecentObservationRow);
-}
-
-function isRecentObservationRow(row: unknown): row is RecentObservationRow {
-  if (!row || typeof row !== 'object') return false;
-  const r = row as Record<string, unknown>;
-  return (
-    typeof r.id === 'number' &&
-    typeof r.session_id === 'string' &&
-    typeof r.kind === 'string' &&
-    typeof r.content === 'string' &&
-    typeof r.ts === 'number'
-  );
 }
 
 function colorSession(sessionId: string): (value: string) => string {
@@ -87,7 +41,8 @@ export function registerObserveCommand(program: Command): void {
     .option('--interval <ms>', 'Refresh interval in milliseconds', String(REFRESH_MS))
     .action((opts: { interval: string }) => {
       const settings = loadSettings();
-      const dbPath = join(resolveDataDir(settings.dataDir), 'data.db');
+      const dataDir = resolveDataDir(settings.dataDir).replace(/[\\/]+$/, '');
+      const dbPath = `${dataDir}/data.db`;
       const storage = new Storage(dbPath);
       const intervalMs = Math.max(500, Number(opts.interval));
 

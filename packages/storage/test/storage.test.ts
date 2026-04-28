@@ -88,6 +88,66 @@ describe('Storage', () => {
     expect(rows[0]?.compressed).toBe(1);
   });
 
+  it('returns recent observations across sessions in descending order', () => {
+    storage.createSession({
+      id: 'sess-a',
+      ide: 'codex',
+      cwd: '/repo',
+      started_at: 100,
+      metadata: null,
+    });
+    storage.createSession({
+      id: 'sess-b',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 100,
+      metadata: null,
+    });
+    storage.insertObservation({
+      session_id: 'sess-a',
+      kind: 'note',
+      content: 'oldest',
+      compressed: false,
+      intensity: null,
+      ts: 1000,
+    });
+    storage.insertObservation({
+      session_id: 'sess-b',
+      kind: 'handoff',
+      content: 'same ts lower id',
+      compressed: false,
+      intensity: null,
+      ts: 3000,
+    });
+    storage.insertObservation({
+      session_id: 'sess-a',
+      kind: 'note',
+      content: 'same ts higher id',
+      compressed: false,
+      intensity: null,
+      ts: 3000,
+    });
+    storage.insertObservation({
+      session_id: 'sess-b',
+      kind: 'tool_use',
+      content: 'middle',
+      compressed: false,
+      intensity: null,
+      ts: 2000,
+    });
+
+    const rows = storage.recentObservations(4);
+
+    expect(
+      rows.map(({ session_id, kind, content, ts }) => ({ session_id, kind, content, ts })),
+    ).toEqual([
+      { session_id: 'sess-a', kind: 'note', content: 'same ts higher id', ts: 3000 },
+      { session_id: 'sess-b', kind: 'handoff', content: 'same ts lower id', ts: 3000 },
+      { session_id: 'sess-b', kind: 'tool_use', content: 'middle', ts: 2000 },
+      { session_id: 'sess-a', kind: 'note', content: 'oldest', ts: 1000 },
+    ]);
+  });
+
   it('FTS search finds matches', () => {
     storage.createSession({
       id: 's',

@@ -116,6 +116,14 @@ export interface ToolCallRow {
   ts: number;
 }
 
+export interface RecentObservationRow {
+  id: number;
+  session_id: string;
+  kind: string;
+  content: string;
+  ts: number;
+}
+
 export interface ClaimBeforeEditStats {
   edit_tool_calls: number;
   edits_with_file_path: number;
@@ -568,6 +576,18 @@ export class Storage {
     return this.db
       .prepare(`SELECT * FROM observations WHERE id IN (${placeholders})`)
       .all(...ids) as ObservationRow[];
+  }
+
+  recentObservations(limit = 50): RecentObservationRow[] {
+    return this.db
+      .prepare(
+        `SELECT o.id, o.session_id, o.kind, o.content, o.ts
+         FROM observations o
+         JOIN sessions s ON s.id = o.session_id
+         ORDER BY o.ts DESC, o.id DESC
+         LIMIT ?`,
+      )
+      .all(limit) as RecentObservationRow[];
   }
 
   timeline(sessionId: string, aroundId?: number, limit = 50): ObservationRow[] {

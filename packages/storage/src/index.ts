@@ -14,6 +14,7 @@ export type {
   FileHeatOptions,
   FileHeatRow,
   KindCount,
+  RecentObservationRow,
   SessionsEndedWithoutHandoffRow,
   ToolCallRow,
 } from './storage.js';
