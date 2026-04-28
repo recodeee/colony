@@ -127,7 +127,13 @@ describe('MCP server', () => {
     expect(byName.get('queen_plan_goal')?.description).toContain(
       'auto_archive=true, and sub-tasks can be claimed through the task_plan_claim_subtask MCP tool',
     );
-    expect(byName.get('attention_inbox')?.description).toMatch(/^See what needs your attention/);
+    const attentionDescription = byName.get('attention_inbox')?.description ?? '';
+    expect(attentionDescription).toMatch(
+      /^See what needs your attention: pending handoffs, unread messages, blockers, stalled lanes, and recent claims\./,
+    );
+    expect(attentionDescription.slice(0, 80)).toContain('pending handoffs');
+    expect(attentionDescription.slice(0, 80)).toContain('unread messages');
+    expect(attentionDescription.slice(0, 80)).toContain('blockers');
     expect(byName.get('task_ready_for_agent')?.description).toMatch(/^Find work to claim/);
     expect(byName.get('task_hand_off')?.description).toMatch(/^Give work to another agent/);
     expect(byName.get('hivemind_context')?.description).toContain('BEFORE editing');

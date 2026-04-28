@@ -8,7 +8,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'attention_inbox',
-    'See what needs your attention: pending, unread, blocking. Includes handoffs, wakes, messages, stalled lanes, reminders, and recent other-session file claims.',
+    'See what needs your attention: pending handoffs, unread messages, blockers, stalled lanes, and recent claims. Post-hivemind_context attention check; review compact IDs first, then fetch full bodies with get_observations only when needed.',
     {
       session_id: z.string().min(1),
       agent: z.string().min(1),

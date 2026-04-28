@@ -36,6 +36,8 @@ When the selected task needs implementation context, call `search` with the task
 
 For multi-agent runtime awareness, call `hivemind_context` first when you need ownership plus likely memory hits, or `hivemind` when you only need the runtime map. Both return compact active worktrees, branches, agents, and task previews from `.omx` proxy-runtime state without fetching observation bodies.
 
+After `hivemind_context`, call `attention_inbox` to check what needs you now: pending handoffs, unread messages, blockers, stalled lanes, and recent claims. Review its compact IDs first; fetch full bodies with `get_observations` only after you pick the IDs worth reading.
+
 Following the progressive-disclosure pattern saves ~10× tokens versus fetching full bodies upfront.
 
 ## `search`
@@ -513,7 +515,7 @@ Errors include `{ "code": "SESSION_NOT_FOUND", "error": "..." }` when either `ta
 
 ## `attention_inbox`
 
-Compact list of what needs the caller's attention: pending handoffs, pending wakes, stalled lanes, and recent other-session file claims. Fetch full bodies via `get_observations`.
+Compact post-`hivemind_context` attention check for pending handoffs, unread messages, blockers, stalled lanes, pending wakes, and recent other-session file claims. Review compact IDs first, then fetch full bodies via `get_observations` only for the entries you need.
 
 ```json
 {
@@ -528,7 +530,14 @@ Compact list of what needs the caller's attention: pending handoffs, pending wak
 }
 ```
 
-Either `repo_root` or `repo_roots` scopes the inbox. `task_ids` can narrow further. Returns a structured payload with the four buckets above; each entry carries the IDs to hydrate on demand.
+Example workflow:
+
+1. Call `hivemind_context` for active lanes plus compact memory hits.
+2. Call `attention_inbox` with your `session_id`, `agent`, and repo scope.
+3. Review compact item IDs for handoffs, unread messages, blockers, stalled lanes, and claims.
+4. Call `get_observations` only for the selected IDs that need full bodies.
+
+Either `repo_root` or `repo_roots` scopes the inbox. `task_ids` can narrow further. Returns a structured payload with attention buckets; each entry carries the IDs to hydrate on demand.
 
 ## `task_propose`
 
