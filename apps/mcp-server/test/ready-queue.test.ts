@@ -16,11 +16,29 @@ let client: Client;
 interface ReadyEntry {
   plan_slug: string;
   subtask_index: number;
+  wave_index: number;
+  wave_name: string;
+  blocked_by_count: number;
   title: string;
   capability_hint: string | null;
   file_scope: string[];
   fit_score: number;
   reasoning: string;
+}
+
+async function claimAndComplete(planSlug: string, subtaskIndex: number): Promise<void> {
+  await call('task_plan_claim_subtask', {
+    plan_slug: planSlug,
+    subtask_index: subtaskIndex,
+    session_id: 'agent-session',
+    agent: 'codex',
+  });
+  await call('task_plan_complete_subtask', {
+    plan_slug: planSlug,
+    subtask_index: subtaskIndex,
+    session_id: 'agent-session',
+    summary: `sub-${subtaskIndex} complete`,
+  });
 }
 
 interface ReadyResult {
@@ -287,6 +305,97 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready.map((entry) => entry.title)).toEqual(['Build API first']);
     expect(result.total_available).toBe(1);
+  });
+
+  it('walks queen waves through ready work as dependencies complete', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Wave one API',
+            description: 'First wave API task.',
+            file_scope: ['apps/api/one.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave one UI',
+            description: 'First wave UI task.',
+            file_scope: ['apps/web/one.tsx'],
+            capability_hint: 'ui_work',
+          },
+          {
+            title: 'Wave two API',
+            description: 'Second wave API task.',
+            file_scope: ['apps/api/two.ts'],
+            depends_on: [0, 1],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave two UI',
+            description: 'Second wave UI task.',
+            file_scope: ['apps/web/two.tsx'],
+            depends_on: [0, 1],
+            capability_hint: 'ui_work',
+          },
+          {
+            title: 'Final verification',
+            description: 'Final wave verifies previous work.',
+            file_scope: ['apps/mcp-server/test/waves.test.ts'],
+            depends_on: [2, 3],
+            capability_hint: 'test_work',
+          },
+        ],
+        {
+          slug: 'queen-three-wave-plan',
+          session_id: 'queen',
+          agent: 'queen',
+          title: 'Queen waves',
+        },
+      ),
+    });
+
+    let result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0, 1]);
+    expect(result.ready.map((entry) => entry.wave_index)).toEqual([0, 0]);
+    expect(result.ready.map((entry) => entry.wave_name)).toEqual(['Wave 1', 'Wave 1']);
+    expect(result.ready.map((entry) => entry.blocked_by_count)).toEqual([0, 0]);
+
+    await claimAndComplete('queen-three-wave-plan', 0);
+    await claimAndComplete('queen-three-wave-plan', 1);
+    result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([2, 3]);
+    expect(result.ready.map((entry) => entry.wave_index)).toEqual([1, 1]);
+    expect(result.ready.map((entry) => entry.wave_name)).toEqual(['Wave 2', 'Wave 2']);
+    expect(result.ready.map((entry) => entry.blocked_by_count)).toEqual([2, 2]);
+
+    await claimAndComplete('queen-three-wave-plan', 2);
+    await claimAndComplete('queen-three-wave-plan', 3);
+    result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([4]);
+    expect(result.ready[0]).toMatchObject({
+      plan_slug: 'queen-three-wave-plan',
+      wave_index: 2,
+      wave_name: 'Wave 3',
+      blocked_by_count: 2,
+    });
   });
 
   it('returns non-empty reasoning with score components for every entry', async () => {

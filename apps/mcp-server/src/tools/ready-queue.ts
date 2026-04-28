@@ -28,6 +28,9 @@ const CAPABILITY_HINT_TEXT: Record<string, string> = {
 interface ReadySubtask {
   plan_slug: string;
   subtask_index: number;
+  wave_index: number;
+  wave_name: string;
+  blocked_by_count: number;
   title: string;
   capability_hint: string | null;
   file_scope: string[];
@@ -49,7 +52,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_ready_for_agent',
-    'Find the next task to claim for this agent. Use this when deciding what to work on. Returns ready sub-tasks ranked by fit_score with capability hints, claim conflicts, and blocked work filtered out.',
+    'Find the next task to claim for this agent. Use this when deciding what to work on. Returns ready sub-tasks ranked by fit_score with wave metadata, capability hints, claim conflicts, and blocked work filtered out.',
     {
       session_id: z.string().min(1),
       agent: z.string().min(1),
@@ -116,6 +119,9 @@ function rankSubtask(
   return {
     plan_slug: args.plan_slug,
     subtask_index: args.subtask.subtask_index,
+    wave_index: args.subtask.wave_index,
+    wave_name: args.subtask.wave_name,
+    blocked_by_count: args.subtask.blocked_by_count,
     title: args.subtask.title,
     capability_hint: args.subtask.capability_hint,
     file_scope: args.subtask.file_scope,

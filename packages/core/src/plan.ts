@@ -11,6 +11,9 @@ export interface SubtaskInfo {
   status: SubtaskStatus;
   file_scope: string[];
   depends_on: number[];
+  wave_index: number;
+  wave_name: string;
+  blocked_by_count: number;
   spec_row_id: string | null;
   capability_hint: string | null;
   claimed_by_session_id: string | null;
@@ -86,6 +89,8 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
   const status = resolvedStatus ?? (meta.status as SubtaskStatus | undefined) ?? 'available';
 
   const [titleLine, ...rest] = initial.content.split('\n\n');
+  const dependsOn = Array.isArray(meta.depends_on) ? (meta.depends_on as number[]) : [];
+
   return {
     task_id,
     subtask_index: typeof meta.subtask_index === 'number' ? meta.subtask_index : -1,
@@ -93,7 +98,10 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
     description: rest.join('\n\n').trim(),
     status,
     file_scope: Array.isArray(meta.file_scope) ? (meta.file_scope as string[]) : [],
-    depends_on: Array.isArray(meta.depends_on) ? (meta.depends_on as number[]) : [],
+    depends_on: dependsOn,
+    wave_index: 0,
+    wave_name: 'Wave 1',
+    blocked_by_count: dependsOn.length,
     spec_row_id: typeof meta.spec_row_id === 'string' ? (meta.spec_row_id as string) : null,
     capability_hint:
       typeof meta.capability_hint === 'string' ? (meta.capability_hint as string) : null,
@@ -169,10 +177,12 @@ export function listPlans(store: MemoryStore, opts: ListPlansOptions = {}): Plan
         return Boolean(m && m[1] === slug);
       });
 
-      const subtasks = subtaskTasks
-        .map((t) => readSubtask(store, t.id, slug))
-        .filter((s): s is SubtaskInfo => s !== null)
-        .sort((a, b) => a.subtask_index - b.subtask_index);
+      const subtasks = annotateWaveMetadata(
+        subtaskTasks
+          .map((t) => readSubtask(store, t.id, slug))
+          .filter((s): s is SubtaskInfo => s !== null)
+          .sort((a, b) => a.subtask_index - b.subtask_index),
+      );
 
       // No sub-tasks found means this is a plain spec change, not a published
       // plan. Keep the two lanes separate.
@@ -211,6 +221,36 @@ export function listPlans(store: MemoryStore, opts: ListPlansOptions = {}): Plan
         p.next_available.some((s) => s.capability_hint === opts.capability_match),
     )
     .slice(0, limit);
+}
+
+function annotateWaveMetadata(subtasks: SubtaskInfo[]): SubtaskInfo[] {
+  const byIndex = new Map(subtasks.map((subtask) => [subtask.subtask_index, subtask]));
+  const waveByIndex = new Map<number, number>();
+
+  const resolveWave = (subtask: SubtaskInfo): number => {
+    const cached = waveByIndex.get(subtask.subtask_index);
+    if (cached !== undefined) return cached;
+
+    const dependencyWaves = subtask.depends_on
+      .map((idx) => {
+        const dependency = byIndex.get(idx);
+        return dependency ? resolveWave(dependency) : null;
+      })
+      .filter((idx): idx is number => idx !== null);
+    const waveIndex = dependencyWaves.length > 0 ? Math.max(...dependencyWaves) + 1 : 0;
+    waveByIndex.set(subtask.subtask_index, waveIndex);
+    return waveIndex;
+  };
+
+  return subtasks.map((subtask) => {
+    const waveIndex = resolveWave(subtask);
+    return {
+      ...subtask,
+      wave_index: waveIndex,
+      wave_name: `Wave ${waveIndex + 1}`,
+      blocked_by_count: subtask.depends_on.length,
+    };
+  });
 }
 
 /**
