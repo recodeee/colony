@@ -578,8 +578,22 @@ function collectStaleClaimSignals(
   let staleClaimCount = 0;
   let expiredWeakClaimCount = 0;
 
-  for (const task of staleClaimTasks(store, opts, taskIds)) {
-    for (const claim of store.storage.listClaims(task.id)) {
+  let tasks: TaskRow[];
+  try {
+    tasks = staleClaimTasks(store, opts, taskIds);
+  } catch {
+    return emptyStaleClaimSignals();
+  }
+
+  for (const task of tasks) {
+    let claims: TaskClaimRow[];
+    try {
+      claims = store.storage.listClaims(task.id);
+    } catch {
+      continue;
+    }
+
+    for (const claim of claims) {
       const classification = classifyClaimAge(claim.claimed_at, options);
       if (classification.ownership_strength === 'strong') continue;
 
@@ -627,6 +641,14 @@ function collectStaleClaimSignals(
     stale_claim_count: staleClaimCount,
     top_stale_branches,
     sweep_suggestion: staleClaimSweepSuggestion(staleClaimCount, expiredWeakClaimCount),
+  };
+}
+
+function emptyStaleClaimSignals(): InboxStaleClaimSignals {
+  return {
+    stale_claim_count: 0,
+    top_stale_branches: [],
+    sweep_suggestion: staleClaimSweepSuggestion(0, 0),
   };
 }
 

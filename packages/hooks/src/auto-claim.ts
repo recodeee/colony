@@ -23,11 +23,16 @@ export interface AutoClaimFileForSessionInput {
   tool?: string;
   observation_kind?: AutoClaimObservationKind;
   record_conflict?: boolean;
+  resolved_by?: string;
+  auto_claimed_before_edit?: boolean;
 }
 
 export interface AutoClaimFileForSessionCall extends AutoClaimFileForSessionInput {
   store: MemoryStore;
 }
+
+export type AutoClaimFileBeforeEditInput = AutoClaimFileForSessionInput;
+export type AutoClaimFileBeforeEditCall = AutoClaimFileForSessionCall;
 
 export type AutoClaimFileForSessionResult =
   | {
@@ -148,7 +153,8 @@ export function autoClaimFileForSession(
         kind,
         source: input.source ?? 'autoClaimFileForSession',
         file_path: input.file_path,
-        resolved_by: 'autoClaimFileForSession',
+        resolved_by: input.resolved_by ?? 'autoClaimFileForSession',
+        ...(input.auto_claimed_before_edit === true ? { auto_claimed_before_edit: true } : {}),
         ...(input.tool !== undefined ? { tool: input.tool } : {}),
       },
     });
@@ -165,9 +171,31 @@ export function autoClaimFileForSession(
 }
 
 function isActiveStatus(status: string): boolean {
-  return !['completed', 'archived', 'auto-archived', 'abandoned'].includes(
-    status.toLowerCase(),
-  );
+  return !['completed', 'archived', 'auto-archived', 'abandoned'].includes(status.toLowerCase());
+}
+
+export function autoClaimFileBeforeEdit(
+  input: AutoClaimFileBeforeEditCall,
+): AutoClaimFileForSessionResult;
+export function autoClaimFileBeforeEdit(
+  store: MemoryStore,
+  input: AutoClaimFileBeforeEditInput,
+): AutoClaimFileForSessionResult;
+export function autoClaimFileBeforeEdit(
+  storeOrInput: MemoryStore | AutoClaimFileBeforeEditCall,
+  maybeInput?: AutoClaimFileBeforeEditInput,
+): AutoClaimFileForSessionResult {
+  const store = maybeInput
+    ? (storeOrInput as MemoryStore)
+    : (storeOrInput as AutoClaimFileBeforeEditCall).store;
+  const input = maybeInput ?? (storeOrInput as AutoClaimFileBeforeEditCall);
+  const result = autoClaimFileForSession(store, {
+    ...input,
+    source: input.source ?? 'autoClaimFileBeforeEdit',
+    resolved_by: input.resolved_by ?? 'autoClaimFileBeforeEdit',
+    auto_claimed_before_edit: true,
+  });
+  return result;
 }
 
 function claimContent(kind: AutoClaimObservationKind, input: AutoClaimFileForSessionInput): string {

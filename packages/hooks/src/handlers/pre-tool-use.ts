@@ -1,5 +1,5 @@
-import { type MemoryStore, TaskThread } from '@colony/core';
-import { ensureHookTaskForSession } from '../task-mirror.js';
+import { type MemoryStore, detectRepoBranch } from '@colony/core';
+import { type AutoClaimFileForSessionResult, autoClaimFileBeforeEdit } from '../auto-claim.js';
 import type { HookInput } from '../types.js';
 import { extractTouchedFiles } from './post-tool-use.js';
 
@@ -11,13 +11,16 @@ export interface ClaimBeforeEditResult {
   warnings: string[];
 }
 
+type PreToolUseInput = Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd'>;
+type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
+
 export function preToolUse(store: MemoryStore, input: HookInput): string {
   return claimBeforeEditWarning(claimBeforeEditFromToolUse(store, input));
 }
 
 export function claimBeforeEditFromToolUse(
   store: MemoryStore,
-  input: Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'ide' | 'cwd'>,
+  input: PreToolUseInput,
 ): ClaimBeforeEditResult {
   const toolName = input.tool_name ?? input.tool ?? '';
   const files = extractTouchedFiles(toolName, input.tool_input);
@@ -30,36 +33,23 @@ export function claimBeforeEditFromToolUse(
   };
   if (files.length === 0) return result;
 
-  let task_id: number;
-  try {
-    task_id = ensureHookTaskForSession(store, input);
-  } catch (err) {
-    result.edits_missing_claim.push(...files);
-    for (const file_path of files) {
-      store.addObservation({
-        session_id: input.session_id,
-        kind: 'claim-before-edit',
-        content: `edits_missing_claim: ${file_path}`,
-        metadata: {
-          kind: 'claim-before-edit',
-          source: 'pre-tool-use',
-          outcome: 'edits_missing_claim',
-          file_path,
-          tool: toolName,
-          error: err instanceof Error ? err.message : String(err),
-        },
-      });
-    }
-    result.warnings.push(claimWarning(toolName, files, err));
-    return result;
-  }
+  const scope = taskScopeForToolUse(store, input);
 
-  const thread = new TaskThread(store, task_id);
   for (const file_path of files) {
-    const existing = store.storage.getClaim(task_id, file_path);
-    if (existing?.session_id === input.session_id) {
+    const claim = autoClaimFileBeforeEdit({
+      store,
+      session_id: input.session_id,
+      ...scope,
+      file_path,
+      note: `auto before ${toolName}`,
+      source: 'pre-tool-use',
+      tool: toolName,
+      record_conflict: true,
+    });
+
+    if (claim.ok && claim.status === 'already_claimed') {
       result.edits_with_claim.push(file_path);
-      recordClaimBeforeEdit(store, input.session_id, task_id, {
+      recordClaimBeforeEdit(store, input.session_id, claim.task_id, {
         outcome: 'edits_with_claim',
         file_path,
         tool: toolName,
@@ -67,49 +57,88 @@ export function claimBeforeEditFromToolUse(
       continue;
     }
 
-    result.edits_missing_claim.push(file_path);
-    recordClaimBeforeEdit(store, input.session_id, task_id, {
-      outcome: 'edits_missing_claim',
-      file_path,
-      tool: toolName,
-      ...(existing?.session_id ? { other_session: existing.session_id } : {}),
-    });
-
-    if (existing && existing.session_id !== input.session_id) {
-      store.addObservation({
-        session_id: input.session_id,
-        kind: 'claim-conflict',
-        content: `${input.session_id} pre-claimed ${file_path} while ${existing.session_id} held the claim`,
-        task_id,
-        metadata: {
-          source: 'pre-tool-use',
-          file_path,
-          tool: toolName,
-          other_session: existing.session_id,
-        },
+    if (claim.ok) {
+      result.auto_claimed_before_edit.push(file_path);
+      recordClaimBeforeEdit(store, input.session_id, claim.task_id, {
+        outcome: 'auto_claimed_before_edit',
+        file_path,
+        tool: toolName,
+        ...(claim.observation_id !== null ? { claim_observation_id: claim.observation_id } : {}),
       });
+      continue;
     }
 
-    const observation_id = thread.claimFile({
-      session_id: input.session_id,
-      file_path,
-      note: `auto before ${toolName}`,
-      metadata: {
-        source: 'pre-tool-use',
-        tool: toolName,
-        auto_claimed_before_edit: true,
-      },
-    });
-    result.auto_claimed_before_edit.push(file_path);
-    recordClaimBeforeEdit(store, input.session_id, task_id, {
-      outcome: 'auto_claimed_before_edit',
+    result.edits_missing_claim.push(file_path);
+    recordClaimBeforeEditFailure(store, input.session_id, {
       file_path,
       tool: toolName,
-      claim_observation_id: observation_id,
+      code: claim.code,
+      error: claim.error,
+      candidates: claim.candidates,
     });
+    result.warnings.push(claimWarning(toolName, file_path, claim));
   }
 
   return result;
+}
+
+function taskScopeForToolUse(
+  store: MemoryStore,
+  input: PreToolUseInput,
+): {
+  repo_root?: string;
+  branch?: string;
+} {
+  const session = store.storage.getSession(input.session_id);
+  const cwd = input.cwd ?? session?.cwd ?? undefined;
+  const detected = cwd ? detectRepoBranch(cwd) : null;
+  return detected ? { repo_root: detected.repo_root, branch: detected.branch } : {};
+}
+
+function recordClaimBeforeEditFailure(
+  store: MemoryStore,
+  session_id: string,
+  metadata: {
+    file_path: string;
+    tool: string;
+    code: 'ACTIVE_TASK_NOT_FOUND' | 'AMBIGUOUS_ACTIVE_TASK';
+    error: string;
+    candidates: AutoClaimFailure['candidates'];
+  },
+): void {
+  store.addObservation({
+    session_id,
+    kind: 'claim-before-edit',
+    content: `edits_missing_claim: ${metadata.file_path}`,
+    metadata: {
+      kind: 'claim-before-edit',
+      source: 'pre-tool-use',
+      outcome: 'edits_missing_claim',
+      file_path: metadata.file_path,
+      tool: metadata.tool,
+      code: metadata.code,
+      error: metadata.error,
+      candidates: compactCandidates(metadata.candidates),
+    },
+  });
+}
+
+function compactCandidates(candidates: AutoClaimFailure['candidates']): Array<{
+  task_id: number;
+  title: string;
+  repo_root: string;
+  branch: string;
+  status: string;
+  agent: string;
+}> {
+  return candidates.slice(0, 5).map((candidate) => ({
+    task_id: candidate.task_id,
+    title: candidate.title,
+    repo_root: candidate.repo_root,
+    branch: candidate.branch,
+    status: candidate.status,
+    agent: candidate.agent,
+  }));
 }
 
 function recordClaimBeforeEdit(
@@ -137,11 +166,10 @@ function claimBeforeEditWarning(result: ClaimBeforeEditResult): string {
   return result.warnings.join('\n');
 }
 
-function claimWarning(toolName: string, files: string[], err: unknown): string {
-  const reason = err instanceof Error ? err.message : String(err);
+function claimWarning(toolName: string, filePath: string, claim: AutoClaimFailure): string {
   return [
-    `Claim-before-edit warning: ${toolName || 'write tool'} targets ${files.join(', ')}`,
-    'Call task_claim_file before editing. Claims are warnings, not locks.',
-    `Auto-claim skipped: ${reason}`,
+    `${claim.code}: ${toolName || 'write tool'} target ${filePath}`,
+    claim.error,
+    `candidates=${JSON.stringify(compactCandidates(claim.candidates))}`,
   ].join('\n');
 }

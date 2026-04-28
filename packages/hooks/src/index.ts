@@ -2,8 +2,11 @@ export { runHook } from './runner.js';
 export { ensureWorkerRunning } from './auto-spawn.js';
 export {
   activeTaskCandidatesForSession,
+  autoClaimFileBeforeEdit,
   autoClaimFileForSession,
   type ActiveTaskCandidate,
+  type AutoClaimFileBeforeEditCall,
+  type AutoClaimFileBeforeEditInput,
   type AutoClaimFileForSessionCall,
   type AutoClaimFileForSessionInput,
   type AutoClaimFileForSessionResult,
