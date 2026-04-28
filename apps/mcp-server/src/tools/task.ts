@@ -110,7 +110,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     [
       'Post shared task notes, decisions, blockers, questions, or answers.',
       'Use task_message for directed agent-to-agent coordination.',
-      'If you do not know task_id, use task_note_working.',
+      'Use task_note_working first for state/unknown task_id.',
       'Negative warnings use failed_approach/blocked_path/etc.',
     ].join(' '),
     {
@@ -147,7 +147,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_note_working',
-    'Save current working state to the active Colony task. write working note; save current state; remember progress; log what I am doing; notepad replacement. Resolves by session_id and repo_root/branch; returns compact candidates on ambiguity.',
+    'Save current working state to the active Colony task. First write path/notepad replacement: write working note; save current state; remember progress; log what I am doing. Resolves by repo_root/branch; returns compact candidates.',
     {
       session_id: z.string().min(1),
       content: z.string().min(1),

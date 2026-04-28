@@ -478,7 +478,7 @@ describe('colony health payload', () => {
         metric: 'task_post/task_note_working share',
         current: '0%',
         target: '70%+',
-        action: expect.stringContaining('task_note_working or task_post'),
+        action: expect.stringContaining('task_note_working first'),
       }),
     ]);
 
@@ -496,7 +496,7 @@ describe('colony health payload', () => {
     expect(text).toContain('claim-before-edit: 0% (target 50%+) - Call task_claim_file');
     expect(text).toContain('stale claims: 1 (target 0) - Run colony coordination sweep/rescue');
     expect(text).toContain(
-      'task_post/task_note_working share: 0% (target 70%+) - Use task_note_working or task_post',
+      'task_post/task_note_working share: 0% (target 70%+) - Use task_note_working first',
     );
   });
 

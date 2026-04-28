@@ -829,7 +829,7 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       current: formatPercent(payload.task_post_vs_omx_notepad.colony_note_share),
       target: `${formatPercent(TARGET_COLONY_NOTE_SHARE)}+`,
       action:
-        'Use task_note_working or task_post for working state; use OMX notepad only when Colony is unavailable.',
+        'Use task_note_working first for working state; use task_post when task_id is known; use OMX notepad only when Colony is unavailable.',
     });
   }
 
@@ -901,7 +901,7 @@ function adoptionThresholds(
           colonyNoteShare !== null && colonyNoteShare < TARGET_COLONY_NOTE_SHARE ? 'bad' : 'ok',
         value: notepadWriteWorkingCalls - colonyWorkingNoteCalls,
         target: TARGET_COLONY_NOTE_SHARE,
-        hint: 'Use task_note_working or task_post for task-scoped working state.',
+        hint: 'Use task_note_working first; use task_post only when task_id is already known.',
       },
       {
         name: 'attention_inbox = 0',
