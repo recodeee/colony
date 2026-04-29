@@ -1,16 +1,27 @@
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { defaultSettings, loadSettings } from '@colony/config';
 import {
+  type CoordinationSweepResult,
+  type HivemindSession,
   ProposalSystem,
+  type WorktreeContentionReport,
+  buildCoordinationSweep,
   classifyClaimAge,
   currentSignalStrength,
   isSignalExpired,
   isStrongClaimAge,
+  readHivemind,
+  readWorktreeContentionReport,
   signalMetadataFromObservation,
   signalMetadataFromProposal,
 } from '@colony/core';
+import { sweepQueenPlans } from '@colony/queen';
 import type {
-  ClaimBeforeEditMatchSources,
   ClaimBeforeEditStats,
+  ClaimMatchSources,
+  ClaimMissReasons,
+  NearestClaimExample,
   ObservationRow,
   ProposalRow,
   ReinforcementRow,
@@ -32,6 +43,16 @@ const TARGET_READY_TO_CLAIM = 0.3;
 const TARGET_CLAIM_BEFORE_EDIT = 0.5;
 const TARGET_COLONY_NOTE_SHARE = 0.7;
 const TARGET_TASK_MESSAGE_SHARE = 0.2;
+const LIFECYCLE_BRIDGE_MISSING_MIN_TASK_CLAIM_FILE_CALLS = 10;
+const LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS = 10;
+const LIFECYCLE_BRIDGE_NEAR_ZERO_PRE_TOOL_USE_SIGNAL_RATIO = 0.05;
+const LIFECYCLE_BRIDGE_ROOT_CAUSE =
+  'Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.';
+const LIFECYCLE_BRIDGE_ACTION =
+  'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.';
+const LIFECYCLE_BRIDGE_COMMAND =
+  'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json';
+const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 
 const CONVERSIONS = [
   ['hivemind_context', 'attention_inbox'],
@@ -127,10 +148,15 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   /** True when edits happened but no PreToolUse telemetry was recorded —
    *  diagnostic that points at hook wiring rather than agent discipline. */
   likely_missing_hook: boolean;
+  /** Clear operator diagnosis when agents are manually claiming files but the
+   *  lifecycle bridge is not producing pre_tool_use telemetry. */
+  root_cause: RootCauseSummary | null;
   /** User-facing remediation for hook wiring or session-binding failures. */
   install_hint: string | null;
   claim_match_window_ms: number;
-  claim_match_sources: ClaimBeforeEditMatchSources;
+  claim_match_sources: ClaimMatchSources;
+  claim_miss_reasons: ClaimMissReasons;
+  nearest_claim_examples: NearestClaimExample[];
 }
 
 interface SignalHealthPayload {
@@ -140,6 +166,8 @@ interface SignalHealthPayload {
   stale_claims: number;
   expired_claims: number;
   weak_claims: number;
+  quota_pending_claims: number;
+  expired_quota_pending_claims: number;
   stale_claim_minutes: number;
   expired_handoffs: number;
   expired_messages: number;
@@ -169,6 +197,8 @@ interface QueenWavePlanSummary {
   claimed_subtasks: number;
   blocked_subtasks: number;
   stale_claims_blocking_downstream: number;
+  downstream_blockers: QueenDownstreamBlockerReport[];
+  quota_handoffs_blocking_downstream: number;
 }
 
 interface QueenWaveHealthPayload {
@@ -178,7 +208,56 @@ interface QueenWaveHealthPayload {
   claimed_subtasks: number;
   blocked_subtasks: number;
   stale_claims_blocking_downstream: number;
+  quota_handoffs_blocking_downstream: number;
   plans: QueenWavePlanSummary[];
+  downstream_blockers: QueenDownstreamBlockerReport[];
+}
+
+interface QueenDownstreamBlockerReport {
+  plan_slug: string;
+  task_id: number;
+  subtask_index: number;
+  subtask_title: string;
+  file_path: string;
+  owner_session_id: string;
+  owner_agent: string | null;
+  age_minutes: number;
+  unlock_candidate: {
+    task_id: number;
+    subtask_index: number;
+    title: string;
+  };
+}
+
+interface LiveContentionOwner {
+  owner: string;
+  session_id: string;
+  branch: string;
+  task_id: number;
+  task_status: string;
+  activity: string;
+  worktree_path: string;
+  claim_age_minutes: number;
+  claim_strength: string;
+  dirty: boolean;
+}
+
+interface LiveContentionConflict {
+  file_path: string;
+  owner_count: number;
+  protected: boolean;
+  dirty_worktrees: string[];
+  owners: LiveContentionOwner[];
+}
+
+interface LiveContentionPayload {
+  live_file_contentions: number;
+  protected_file_contentions: number;
+  paused_lanes: number;
+  takeover_requests: number;
+  competing_worktrees: number;
+  dirty_contended_files: number;
+  top_conflicts: LiveContentionConflict[];
 }
 
 interface AdoptionSignal {
@@ -207,6 +286,45 @@ interface ActionHint {
   prompt: string;
 }
 
+interface RootCauseSummary {
+  kind: 'lifecycle_bridge_missing';
+  summary: string;
+  evidence: string;
+  action: string;
+  command: string;
+}
+
+interface HealthFixPlanStep {
+  title: string;
+  status: 'suggested' | 'planned' | 'ran' | 'skipped';
+  detail: string;
+  command?: string;
+}
+
+interface HealthFixPlanPayload {
+  generated_at: string;
+  mode: 'dry-run' | 'apply';
+  safety: {
+    mutates_claims: false;
+    installs_hooks: false;
+    ran_coordination_sweep: boolean;
+    ran_queen_sweep: boolean;
+  };
+  current: {
+    pre_tool_use_missing: number;
+    pre_tool_use_missing_dominates: boolean;
+    stale_claims: number;
+    expired_weak_claims: number;
+    live_contentions: number;
+    dirty_contended_files: number;
+    stale_downstream_blockers: number;
+  };
+  steps: HealthFixPlanStep[];
+  verification_commands: string[];
+  coordination_sweep?: CoordinationSweepResult | undefined;
+  queen_sweep?: ReturnType<typeof sweepQueenPlans> | undefined;
+}
+
 function codexPrompt(input: {
   goal: string;
   current: string;
@@ -221,6 +339,7 @@ type ReadinessStatus = 'good' | 'ok' | 'bad';
 interface ReadinessSummaryItem {
   status: ReadinessStatus;
   evidence: string;
+  root_cause?: RootCauseSummary;
 }
 
 interface ReadinessSummaryPayload {
@@ -248,6 +367,7 @@ export interface ColonyHealthPayload {
   proposal_health: ProposalHealthPayload;
   ready_to_claim_vs_claimed: ReadyClaimPayload;
   queen_wave_health: QueenWaveHealthPayload;
+  live_contention_health: LiveContentionPayload;
   adoption_thresholds: AdoptionThresholdsPayload;
   action_hints: ActionHint[];
 }
@@ -275,6 +395,10 @@ export function buildColonyHealthPayload(
     now?: number;
     claim_stale_minutes?: number;
     codex_sessions_root?: string;
+    repo_root?: string;
+    hivemind?: { sessions: HivemindSession[] };
+    dirty_files_by_worktree?: Record<string, string[]>;
+    worktree_contention?: WorktreeContentionReport;
   },
 ): ColonyHealthPayload {
   const now = options.now ?? Date.now();
@@ -353,6 +477,19 @@ export function buildColonyHealthPayload(
     queen_wave_health: queenWaveHealthPayload(storage, tasks, {
       now,
       stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+    }),
+    live_contention_health: liveContentionPayload(storage, tasks, {
+      since: options.since,
+      now,
+      stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+      ...(options.repo_root !== undefined ? { repo_root: options.repo_root } : {}),
+      ...(options.hivemind !== undefined ? { hivemind: options.hivemind } : {}),
+      ...(options.dirty_files_by_worktree !== undefined
+        ? { dirty_files_by_worktree: options.dirty_files_by_worktree }
+        : {}),
+      ...(options.worktree_contention !== undefined
+        ? { worktree_contention: options.worktree_contention }
+        : {}),
     }),
     adoption_thresholds: adoptionThresholds(calls, {
       colony_mcp_share: ratio(colonyMcpToolCalls, mcpToolCalls),
@@ -477,6 +614,9 @@ export function formatColonyHealthOutput(
   lines.push('', kleur.bold('task_claim_file before edits'));
   lines.push(...formatClaimBeforeEdit(payload.task_claim_file_before_edits));
 
+  lines.push('', kleur.bold('Live contention health'));
+  lines.push(...formatLiveContention(payload.live_contention_health));
+
   lines.push(
     '',
     kleur.bold('Signal health'),
@@ -484,6 +624,8 @@ export function formatColonyHealthOutput(
     `  active claims:    ${payload.signal_health.active_claims}`,
     `  stale claims:     ${payload.signal_health.stale_claims} (>${payload.signal_health.stale_claim_minutes}m)`,
     `  expired/weak:     ${payload.signal_health.expired_claims}`,
+    `  quota pending:    ${payload.signal_health.quota_pending_claims}`,
+    `  quota expired:    ${payload.signal_health.expired_quota_pending_claims}`,
     `  expired handoffs: ${payload.signal_health.expired_handoffs}`,
     `  expired messages: ${payload.signal_health.expired_messages}`,
     '',
@@ -509,6 +651,7 @@ export function formatColonyHealthOutput(
     `  claimed subtasks:                   ${payload.queen_wave_health.claimed_subtasks}`,
     `  blocked subtasks:                   ${payload.queen_wave_health.blocked_subtasks}`,
     `  stale claims blocking downstream:   ${payload.queen_wave_health.stale_claims_blocking_downstream}`,
+    `  quota handoffs blocking downstream: ${payload.queen_wave_health.quota_handoffs_blocking_downstream}`,
   );
 
   if (payload.queen_wave_health.plans.length === 0) {
@@ -516,7 +659,18 @@ export function formatColonyHealthOutput(
   } else {
     for (const plan of payload.queen_wave_health.plans.slice(0, HEALTH_TOOL_LIMIT)) {
       lines.push(
-        `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}`,
+        `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}, quota blockers ${plan.quota_handoffs_blocking_downstream}`,
+      );
+    }
+  }
+  if (payload.queen_wave_health.downstream_blockers.length > 0) {
+    lines.push('  stale downstream blockers:');
+    for (const blocker of payload.queen_wave_health.downstream_blockers.slice(
+      0,
+      HEALTH_TOOL_LIMIT,
+    )) {
+      lines.push(
+        `    ${blocker.plan_slug}/sub-${blocker.subtask_index} task #${blocker.task_id} ${blocker.file_path} owner=${blocker.owner_session_id} age=${blocker.age_minutes}m -> unlock candidate sub-${blocker.unlock_candidate.subtask_index}`,
       );
     }
   }
@@ -582,8 +736,14 @@ function readinessSummaryPayload(
         : 'bad';
 
   const claimBeforeEdit = payload.task_claim_file_before_edits;
+  const liveContention = payload.live_contention_health;
   const executionStatus: ReadinessStatus =
-    claimBeforeEdit.codex_rollout_without_bridge || claimBeforeEdit.session_binding_missing > 0
+    liveContention.live_file_contentions > 0 ||
+    liveContention.protected_file_contentions > 0 ||
+    liveContention.dirty_contended_files > 0 ||
+    claimBeforeEdit.codex_rollout_without_bridge ||
+    claimBeforeEdit.root_cause !== null ||
+    claimBeforeEdit.session_binding_missing > 0
       ? 'bad'
       : claimBeforeEdit.claim_before_edit_ratio !== null
         ? isAtOrAboveTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
@@ -613,7 +773,10 @@ function readinessSummaryPayload(
 
   const signals = payload.signal_health;
   const signalStatus: ReadinessStatus =
-    signals.stale_claims === 0 && queen.stale_claims_blocking_downstream === 0
+    signals.stale_claims === 0 &&
+    signals.quota_pending_claims === 0 &&
+    queen.stale_claims_blocking_downstream === 0 &&
+    queen.quota_handoffs_blocking_downstream === 0
       ? signals.expired_handoffs === 0 && signals.expired_messages === 0
         ? 'good'
         : 'ok'
@@ -630,7 +793,8 @@ function readinessSummaryPayload(
       status: executionStatus,
       evidence: `claim-before-edit ${formatPercent(
         claimBeforeEdit.claim_before_edit_ratio,
-      )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+)`,
+      )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+); live contentions ${liveContention.live_file_contentions}, dirty ${liveContention.dirty_contended_files}`,
+      ...(claimBeforeEdit.root_cause ? { root_cause: claimBeforeEdit.root_cause } : {}),
     },
     queen_plan_readiness: {
       status: queenStatus,
@@ -644,23 +808,32 @@ function readinessSummaryPayload(
     },
     signal_evaporation: {
       status: signalStatus,
-      evidence: `${signals.stale_claims} stale claim(s); ${queen.stale_claims_blocking_downstream} downstream blocker(s)`,
+      evidence: `${signals.stale_claims} stale claim(s); ${signals.quota_pending_claims} quota-pending claim(s); ${queen.stale_claims_blocking_downstream} stale downstream blocker(s); ${queen.quota_handoffs_blocking_downstream} quota downstream blocker(s)`,
     },
   };
 }
 
 function formatReadinessSummary(summary: ReadinessSummaryPayload): string[] {
   return [
-    formatReadinessItem('coordination_readiness', summary.coordination_readiness),
-    formatReadinessItem('execution_safety', summary.execution_safety),
-    formatReadinessItem('queen_plan_readiness', summary.queen_plan_readiness),
-    formatReadinessItem('working_state_migration', summary.working_state_migration),
-    formatReadinessItem('signal_evaporation', summary.signal_evaporation),
+    ...formatReadinessItem('coordination_readiness', summary.coordination_readiness),
+    ...formatReadinessItem('execution_safety', summary.execution_safety),
+    ...formatReadinessItem('queen_plan_readiness', summary.queen_plan_readiness),
+    ...formatReadinessItem('working_state_migration', summary.working_state_migration),
+    ...formatReadinessItem('signal_evaporation', summary.signal_evaporation),
   ];
 }
 
-function formatReadinessItem(label: string, item: ReadinessSummaryItem): string {
-  return `  ${label.padEnd(25)} ${formatReadinessStatus(item.status)} ${item.evidence}`;
+function formatReadinessItem(label: string, item: ReadinessSummaryItem): string[] {
+  const lines = [`  ${label.padEnd(25)} ${formatReadinessStatus(item.status)} ${item.evidence}`];
+  if (item.root_cause) {
+    lines.push(
+      `    root cause: ${item.root_cause.summary}`,
+      `    evidence: ${item.root_cause.evidence}`,
+      `    action: ${item.root_cause.action}`,
+      `    cmd:  ${item.root_cause.command}`,
+    );
+  }
+  return lines;
 }
 
 function formatReadinessStatus(status: ReadinessStatus): string {
@@ -675,13 +848,70 @@ export function registerHealthCommand(program: Command): void {
     .command('health')
     .description('Show Colony adoption ratios from local DB evidence')
     .option('--hours <n>', 'Window size in hours', String(DEFAULT_HOURS))
+    .option(
+      '--repo-root <path>',
+      'repo root for fix-plan sweep commands (defaults to process.cwd())',
+    )
     .option('--json', 'emit structured JSON')
     .option('--prompts', 'emit compact Codex prompt snippets for next fixes')
     .option('--verbose', 'show lower-priority health follow-ups in next fixes')
+    .option(
+      '--fix-plan',
+      'print an execution-safety recovery plan instead of the full health report',
+    )
+    .option(
+      '--apply',
+      'with --fix-plan, run coordination and queen sweeps; never releases claims or installs hooks',
+    )
     .action(
-      async (opts: { hours: string; json?: boolean; prompts?: boolean; verbose?: boolean }) => {
+      async (opts: {
+        hours: string;
+        repoRoot?: string;
+        json?: boolean;
+        prompts?: boolean;
+        verbose?: boolean;
+        fixPlan?: boolean;
+        apply?: boolean;
+      }) => {
         const hours = parseHours(opts.hours);
         const settings = loadSettings();
+        const repoRoot = resolve(opts.repoRoot ?? process.cwd());
+
+        if (opts.fixPlan === true) {
+          const { withStore } = await import('../util/store.js');
+          await withStore(settings, (store) => {
+            const payload = buildColonyHealthPayload(store.storage, {
+              since: Date.now() - hours * 3_600_000,
+              window_hours: hours,
+              claim_stale_minutes: settings.claimStaleMinutes,
+              repo_root: repoRoot,
+            });
+            const coordinationSweep =
+              opts.apply === true
+                ? buildCoordinationSweep(store, {
+                    repo_root: repoRoot,
+                  })
+                : undefined;
+            const queenSweep =
+              opts.apply === true
+                ? sweepQueenPlans(store, {
+                    repo_root: repoRoot,
+                    auto_message: false,
+                  })
+                : undefined;
+            const fixPlan = buildHealthFixPlan(payload, {
+              repo_root: repoRoot,
+              apply: opts.apply === true,
+              ...(coordinationSweep !== undefined ? { coordination_sweep: coordinationSweep } : {}),
+              ...(queenSweep !== undefined ? { queen_sweep: queenSweep } : {}),
+            });
+            process.stdout.write(
+              `${opts.json === true ? JSON.stringify(fixPlan, null, 2) : formatHealthFixPlanOutput(fixPlan)}\n`,
+            );
+          });
+          return;
+        }
+
         const { withStorage } = await import('../util/store.js');
         await withStorage(
           settings,
@@ -690,6 +920,7 @@ export function registerHealthCommand(program: Command): void {
               since: Date.now() - hours * 3_600_000,
               window_hours: hours,
               claim_stale_minutes: settings.claimStaleMinutes,
+              repo_root: repoRoot,
             });
             const formatOptions = opts.json
               ? { json: true }
@@ -700,6 +931,163 @@ export function registerHealthCommand(program: Command): void {
         );
       },
     );
+}
+
+export function buildHealthFixPlan(
+  payload: ColonyHealthPayload,
+  options: {
+    repo_root: string;
+    apply: boolean;
+    coordination_sweep?: CoordinationSweepResult;
+    queen_sweep?: ReturnType<typeof sweepQueenPlans>;
+  },
+): HealthFixPlanPayload {
+  const claim = payload.task_claim_file_before_edits;
+  const preToolUseMissing = claim.claim_miss_reasons.pre_tool_use_missing;
+  const preToolUseMissingDominates = isDominantPreToolUseMiss(claim.claim_miss_reasons);
+  const healthCommand = `colony health --repo-root ${shellQuote(options.repo_root)} --json`;
+  const coordinationCommand = `colony coordination sweep --repo-root ${shellQuote(options.repo_root)} --json`;
+  const queenCommand = `colony queen sweep --repo-root ${shellQuote(options.repo_root)} --json`;
+  const steps: HealthFixPlanStep[] = [];
+
+  if (preToolUseMissingDominates) {
+    steps.push({
+      title: 'Reinstall/restart lifecycle hooks',
+      status: 'suggested',
+      detail:
+        'pre_tool_use_missing dominates claim misses; reinstall the affected IDE hooks, then restart the operator session before trusting claim-before-edit telemetry.',
+      command: 'colony install --ide codex  # then restart Codex/OMX',
+    });
+  } else {
+    steps.push({
+      title: 'Lifecycle hook reinstall',
+      status: 'skipped',
+      detail: 'pre_tool_use_missing does not dominate current claim misses.',
+    });
+  }
+
+  steps.push({
+    title: 'Inspect live contentions',
+    status:
+      payload.live_contention_health.live_file_contentions > 0 ||
+      payload.live_contention_health.dirty_contended_files > 0
+        ? 'suggested'
+        : 'skipped',
+    detail:
+      payload.live_contention_health.live_file_contentions > 0
+        ? 'Resolve same-file owners before broad verification; hand off, reclaim, or wait instead of overwriting another lane.'
+        : 'No live same-file contention is visible in current health.',
+    command: healthCommand,
+  });
+
+  if (options.apply) {
+    steps.push({
+      title: 'Run coordination sweep',
+      status: 'ran',
+      detail:
+        options.coordination_sweep === undefined
+          ? 'Coordination sweep result was not provided.'
+          : `stale=${options.coordination_sweep.summary.stale_claim_count}, expired/weak=${options.coordination_sweep.summary.expired_weak_claim_count}; ${options.coordination_sweep.recommended_action}`,
+      command: coordinationCommand,
+    });
+    steps.push({
+      title: 'Run queen sweep',
+      status: 'ran',
+      detail:
+        options.queen_sweep === undefined
+          ? 'Queen sweep result was not provided.'
+          : queenSweepSummary(options.queen_sweep),
+      command: queenCommand,
+    });
+  } else {
+    steps.push({
+      title: 'Run coordination sweep',
+      status: 'planned',
+      detail:
+        'Dry-run only: pass --apply to run this sweep. The command reports stale claims and keeps audit history.',
+      command: coordinationCommand,
+    });
+    steps.push({
+      title: 'Run queen sweep',
+      status: 'planned',
+      detail:
+        'Dry-run only: pass --apply to run this sweep. The command uses auto-message=false and does not mutate claims.',
+      command: queenCommand,
+    });
+  }
+
+  return {
+    generated_at: payload.generated_at,
+    mode: options.apply ? 'apply' : 'dry-run',
+    safety: {
+      mutates_claims: false,
+      installs_hooks: false,
+      ran_coordination_sweep: options.apply,
+      ran_queen_sweep: options.apply,
+    },
+    current: {
+      pre_tool_use_missing: preToolUseMissing,
+      pre_tool_use_missing_dominates: preToolUseMissingDominates,
+      stale_claims: payload.signal_health.stale_claims,
+      expired_weak_claims: payload.signal_health.expired_claims,
+      live_contentions: payload.live_contention_health.live_file_contentions,
+      dirty_contended_files: payload.live_contention_health.dirty_contended_files,
+      stale_downstream_blockers: payload.queen_wave_health.stale_claims_blocking_downstream,
+    },
+    steps,
+    verification_commands: [
+      healthCommand,
+      coordinationCommand,
+      queenCommand,
+      'pnpm smoke:codex-omx-pretool',
+    ],
+    coordination_sweep: options.coordination_sweep,
+    queen_sweep: options.queen_sweep,
+  };
+}
+
+export function formatHealthFixPlanOutput(plan: HealthFixPlanPayload): string {
+  const lines = [
+    kleur.bold('colony health --fix-plan'),
+    `mode: ${plan.mode}${plan.mode === 'dry-run' ? ' (no sweeps run)' : ' (sweeps run)'}`,
+    'safety: does not release claims; does not install hooks; queen sweep auto-message disabled',
+    '',
+    kleur.bold('Current health'),
+    `  pre_tool_use_missing: ${plan.current.pre_tool_use_missing}${plan.current.pre_tool_use_missing_dominates ? ' (dominates)' : ''}`,
+    `  stale claims:         ${plan.current.stale_claims}`,
+    `  expired/weak claims:  ${plan.current.expired_weak_claims}`,
+    `  live contentions:     ${plan.current.live_contentions}`,
+    `  dirty contended:      ${plan.current.dirty_contended_files}`,
+    `  stale downstream:     ${plan.current.stale_downstream_blockers}`,
+    '',
+    kleur.bold('Recovery plan'),
+  ];
+
+  plan.steps.forEach((step, index) => {
+    lines.push(`  ${index + 1}. [${step.status}] ${step.title}: ${step.detail}`);
+    if (step.command) lines.push(kleur.dim(`     cmd: ${step.command}`));
+  });
+
+  lines.push('', kleur.bold('Verification commands'));
+  for (const command of plan.verification_commands) {
+    lines.push(`  ${command}`);
+  }
+
+  return lines.join('\n');
+}
+
+function queenSweepSummary(result: ReturnType<typeof sweepQueenPlans>): string {
+  const items = result.flatMap((plan) => plan.items);
+  const stalled = items.filter((item) => item.reason === 'stalled').length;
+  const unclaimed = items.filter((item) => item.reason === 'unclaimed').length;
+  const ready = items.filter((item) => item.reason === 'ready-to-archive').length;
+  if (items.length === 0) return 'no queen plans need attention';
+  return `${result.length} plan(s) need attention; stalled=${stalled}, unclaimed=${unclaimed}, ready-to-archive=${ready}`;
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function conversion(calls: ToolCallRow[], fromTool: string, toTool: string): ConversionPayload {
@@ -801,6 +1189,10 @@ function claimBeforeEditPayload(
   const preToolUseSignals = stats.pre_tool_use_signals ?? 0;
   const sessionBindingMissing = stats.session_binding_missing ?? 0;
   const claimMatchSources = claimMatchSourcesPayload(stats.claim_match_sources);
+  const claimMissReasons = claimMissReasonsPayload(
+    stats.claim_miss_reasons,
+    editsWithoutClaimBefore,
+  );
   const codexRolloutWithoutBridge = codexRolloutEdits > 0 && preToolUseSignals === 0;
   const status =
     stats.edit_tool_calls === 0
@@ -815,6 +1207,11 @@ function claimBeforeEditPayload(
   const codexRolloutHint = codexRolloutWithoutBridge
     ? 'Codex rollout edits are present, but no Codex PreToolUse signal is installed or firing. Run colony install --ide codex and restart Codex; without Codex hooks or a rollout bridge, rollout edits stay unsupported for claim-before-edit auto-claim.'
     : null;
+  const rootCause = lifecycleBridgeRootCause({
+    task_claim_file_calls: taskClaimFileCalls,
+    hook_capable_edits: stats.edits_with_file_path,
+    pre_tool_use_signals: preToolUseSignals,
+  });
   const sessionBindingHint =
     sessionBindingMissing > 0
       ? 'PreToolUse is firing, but Colony session binding is missing. Restart the editor session so SessionStart binds the session id; keep calling task_claim_file manually until binding is restored.'
@@ -844,20 +1241,73 @@ function claimBeforeEditPayload(
     },
     codex_rollout_without_bridge: codexRolloutWithoutBridge,
     likely_missing_hook: likelyMissingHook,
+    root_cause: rootCause,
     install_hint: installHint,
     claim_match_window_ms: stats.claim_match_window_ms ?? 0,
     claim_match_sources: claimMatchSources,
+    claim_miss_reasons: claimMissReasons,
+    nearest_claim_examples: stats.nearest_claim_examples ?? [],
   };
 }
 
+function lifecycleBridgeRootCause(input: {
+  task_claim_file_calls: number;
+  hook_capable_edits: number;
+  pre_tool_use_signals: number;
+}): RootCauseSummary | null {
+  if (input.task_claim_file_calls < LIFECYCLE_BRIDGE_MISSING_MIN_TASK_CLAIM_FILE_CALLS) {
+    return null;
+  }
+  if (input.hook_capable_edits < LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS) {
+    return null;
+  }
+  if (!isNearZeroPreToolUseSignals(input.pre_tool_use_signals, input.hook_capable_edits)) {
+    return null;
+  }
+  return {
+    kind: 'lifecycle_bridge_missing',
+    summary: LIFECYCLE_BRIDGE_ROOT_CAUSE,
+    evidence: `task_claim_file_calls=${input.task_claim_file_calls}, hook_capable_edits=${input.hook_capable_edits}, pre_tool_use_signals=${input.pre_tool_use_signals}`,
+    action: LIFECYCLE_BRIDGE_ACTION,
+    command: LIFECYCLE_BRIDGE_COMMAND,
+  };
+}
+
+function isNearZeroPreToolUseSignals(preToolUseSignals: number, hookCapableEdits: number): boolean {
+  if (preToolUseSignals === 0) return true;
+  if (hookCapableEdits <= 0) return false;
+  const nearZeroLimit = Math.max(
+    1,
+    Math.floor(hookCapableEdits * LIFECYCLE_BRIDGE_NEAR_ZERO_PRE_TOOL_USE_SIGNAL_RATIO),
+  );
+  return preToolUseSignals <= nearZeroLimit;
+}
+
 function claimMatchSourcesPayload(
-  sources: Partial<ClaimBeforeEditMatchSources> | undefined,
-): ClaimBeforeEditMatchSources {
+  sources: Partial<ClaimMatchSources> | undefined,
+): ClaimMatchSources {
   return {
     exact_session: sources?.exact_session ?? 0,
     repo_branch: sources?.repo_branch ?? 0,
     worktree: sources?.worktree ?? 0,
     agent_lane: sources?.agent_lane ?? 0,
+  };
+}
+
+function claimMissReasonsPayload(
+  reasons: Partial<ClaimMissReasons> | undefined,
+  fallbackNoClaim: number,
+): ClaimMissReasons {
+  return {
+    no_claim_for_file: reasons?.no_claim_for_file ?? fallbackNoClaim,
+    claim_after_edit: reasons?.claim_after_edit ?? 0,
+    session_id_mismatch: reasons?.session_id_mismatch ?? 0,
+    repo_root_mismatch: reasons?.repo_root_mismatch ?? 0,
+    branch_mismatch: reasons?.branch_mismatch ?? 0,
+    path_mismatch: reasons?.path_mismatch ?? 0,
+    worktree_path_mismatch: reasons?.worktree_path_mismatch ?? 0,
+    pseudo_path_skipped: reasons?.pseudo_path_skipped ?? 0,
+    pre_tool_use_missing: reasons?.pre_tool_use_missing ?? 0,
   };
 }
 
@@ -868,15 +1318,23 @@ function signalHealthPayload(
 ): SignalHealthPayload {
   const claims = tasks.flatMap((task) => storage.listClaims(task.id));
   const classified = claims.map((claim) =>
-    classifyClaimAge(claim.claimed_at, {
+    classifyClaimAge(claim, {
       now: options.now,
       claim_stale_minutes: options.stale_claim_minutes,
     }),
   );
   const activeClaims = classified.filter(isStrongClaimAge).length;
-  const staleClaims = classified.filter((claim) => claim.age_class === 'stale').length;
-  const expiredClaims = classified.filter((claim) => claim.age_class === 'expired/weak').length;
+  const staleClaims = classified.filter(
+    (claim) => claim.state === 'active' && claim.age_class === 'stale',
+  ).length;
+  const expiredClaims = classified.filter(
+    (claim) => claim.state === 'active' && claim.age_class === 'expired/weak',
+  ).length;
   const weakClaims = classified.filter((claim) => claim.ownership_strength === 'weak').length;
+  const quotaPendingClaims = classified.filter((claim) => claim.state === 'handoff_pending').length;
+  const expiredQuotaPendingClaims = classified.filter(
+    (claim) => claim.state === 'handoff_pending' && claim.age_class === 'expired/weak',
+  ).length;
   let expiredHandoffs = 0;
   let expiredMessages = 0;
 
@@ -898,6 +1356,8 @@ function signalHealthPayload(
     stale_claims: staleClaims,
     expired_claims: expiredClaims,
     weak_claims: weakClaims,
+    quota_pending_claims: quotaPendingClaims,
+    expired_quota_pending_claims: expiredQuotaPendingClaims,
     stale_claim_minutes: options.stale_claim_minutes,
     expired_handoffs: expiredHandoffs,
     expired_messages: expiredMessages,
@@ -1007,6 +1467,8 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
     `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}, pre_tool_use_signals=${payload.pre_tool_use_signals}`,
   );
   lines.push(...formatClaimMatchSources(payload));
+  lines.push(...formatClaimMissReasons(payload.claim_miss_reasons));
+  lines.push(...formatNearestClaimExamples(payload.nearest_claim_examples));
   lines.push(...formatEditSourceBreakdown(payload));
   if (payload.session_binding_missing > 0) {
     lines.push(kleur.yellow(`  session binding missing: ${payload.session_binding_missing}`));
@@ -1022,8 +1484,78 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
 function formatClaimMatchSources(payload: ClaimBeforeEditPayload): string[] {
   const sources = payload.claim_match_sources;
   return [
-    `  match_source: exact_session=${sources.exact_session}, repo_branch=${sources.repo_branch}, worktree=${sources.worktree}, agent_lane=${sources.agent_lane}, window_ms=${payload.claim_match_window_ms}`,
+    `  claim_match_sources: exact_session=${sources.exact_session}, repo_branch=${sources.repo_branch}, worktree=${sources.worktree}, agent_lane=${sources.agent_lane}, window_ms=${payload.claim_match_window_ms} (health-only fallback)`,
   ];
+}
+
+function formatClaimMissReasons(reasons: ClaimMissReasons): string[] {
+  return [
+    '  why claims did not match edits:',
+    `    no_claim_for_file: ${reasons.no_claim_for_file}`,
+    `    claim_after_edit: ${reasons.claim_after_edit}`,
+    `    session_id_mismatch: ${reasons.session_id_mismatch}`,
+    `    repo_root_mismatch: ${reasons.repo_root_mismatch}`,
+    `    branch_mismatch: ${reasons.branch_mismatch}`,
+    `    path_mismatch: ${reasons.path_mismatch}`,
+    `    worktree_path_mismatch: ${reasons.worktree_path_mismatch}`,
+    `    pseudo_path_skipped: ${reasons.pseudo_path_skipped}`,
+    `    pre_tool_use_missing: ${reasons.pre_tool_use_missing}`,
+  ];
+}
+
+function formatNearestClaimExamples(examples: NearestClaimExample[]): string[] {
+  if (examples.length === 0) return [];
+  const lines = ['  nearest claim examples:'];
+  for (const example of examples.slice(0, HEALTH_TOOL_LIMIT)) {
+    const claimRef =
+      example.nearest_claim_id === null
+        ? 'no nearby claim'
+        : `claim#${example.nearest_claim_id} ${example.claim_file_path ?? 'unknown'} by ${example.claim_session_id ?? 'unknown'} ${formatDistance(example.distance_ms)}`;
+    lines.push(
+      `    ${example.reason}: edit#${example.edit_id} ${example.edit_file_path ?? 'unknown'} by ${example.edit_session_id}; ${claimRef}`,
+    );
+  }
+  return lines;
+}
+
+function formatDistance(distanceMs: number | null): string {
+  if (distanceMs === null) return '';
+  return `${distanceMs}ms away`;
+}
+
+function formatLiveContention(payload: LiveContentionPayload): string[] {
+  const lines = [
+    `  live_file_contentions:      ${payload.live_file_contentions}`,
+    `  protected_file_contentions: ${payload.protected_file_contentions}`,
+    `  paused_lanes:               ${payload.paused_lanes}`,
+    `  takeover_requests:          ${payload.takeover_requests}`,
+    `  competing_worktrees:        ${payload.competing_worktrees}`,
+    `  dirty_contended_files:      ${payload.dirty_contended_files}`,
+  ];
+
+  if (payload.top_conflicts.length === 0) {
+    lines.push(kleur.dim('  top conflicts: none'));
+    return lines;
+  }
+
+  lines.push('  top conflicts:');
+  for (const conflict of payload.top_conflicts) {
+    const flags = [
+      conflict.protected ? 'protected' : '',
+      conflict.dirty_worktrees.length > 0 ? 'dirty' : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    lines.push(
+      `  ${conflict.file_path} (${conflict.owner_count} owners${flags ? `; ${flags}` : ''})`,
+    );
+    for (const owner of conflict.owners) {
+      lines.push(
+        `    - owner=${owner.owner} session=${shortSession(owner.session_id)} branch=${owner.branch} activity=${owner.activity}`,
+      );
+    }
+  }
+  return lines;
 }
 
 function formatEditSourceBreakdown(payload: ClaimBeforeEditPayload): string[] {
@@ -1043,6 +1575,31 @@ function formatEditSourceBreakdown(payload: ClaimBeforeEditPayload): string[] {
 
 function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint[] {
   const hints: ActionHint[] = [];
+  const liveContention = payload.live_contention_health;
+  if (liveContention.live_file_contentions > 0) {
+    hints.push({
+      metric: 'live file contentions',
+      status: 'bad',
+      current: `${liveContention.live_file_contentions} conflict(s), ${liveContention.dirty_contended_files} dirty`,
+      target: '0 conflicts',
+      action:
+        'Resolve same-file multi-owner claims before running broad verification or trusting branch health.',
+      readiness_scope: 'execution_safety',
+      priority: 5,
+      tool_call:
+        'mcp__colony__hivemind_context({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>", files: ["<file>"] })',
+      command: 'colony health --json',
+      prompt: codexPrompt({
+        goal: 'resolve live same-file ownership conflicts before branch verification',
+        current: `${liveContention.live_file_contentions} live file contentions; ${liveContention.dirty_contended_files} dirty contended files`,
+        inspect:
+          'colony health --json, mcp__colony__hivemind_context, mcp__colony__attention_inbox',
+        acceptance:
+          'top conflicts are handed off, released, or reclaimed and live_file_contentions returns 0',
+      }),
+    });
+  }
+
   const hivemindToAttention = payload.conversions.hivemind_context_to_attention_inbox;
   if (isBelowTarget(hivemindToAttention.conversion_rate, TARGET_HIVEMIND_TO_ATTENTION)) {
     hints.push({
@@ -1144,7 +1701,28 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   const claimBeforeEdit = payload.task_claim_file_before_edits;
-  if (
+  const preToolUseMissing = claimBeforeEdit.claim_miss_reasons.pre_tool_use_missing;
+  const preToolUseMissingDominates = isDominantPreToolUseMiss(claimBeforeEdit.claim_miss_reasons);
+  if (claimBeforeEdit.root_cause?.kind === 'lifecycle_bridge_missing') {
+    hints.push({
+      metric: 'claim-before-edit',
+      status: 'bad',
+      current: `${claimBeforeEdit.root_cause.summary} (${claimBeforeEdit.root_cause.evidence})`,
+      target: 'pre_tool_use before file mutation',
+      action: claimBeforeEdit.root_cause.action,
+      readiness_scope: 'execution_safety',
+      priority: 5,
+      command: claimBeforeEdit.root_cause.command,
+      prompt: codexPrompt({
+        goal: 'wire the runtime lifecycle bridge before file mutation',
+        current: claimBeforeEdit.root_cause.evidence,
+        inspect:
+          'colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/contracts/fixtures/colony-omx-lifecycle-v1/*.pre.json, packages/hooks/src/lifecycle-envelope.ts, pnpm smoke:codex-omx-pretool',
+        acceptance:
+          'runtime emits pre_tool_use before file mutation and pre_tool_use_signals rises above near-zero',
+      }),
+    });
+  } else if (
     claimBeforeEdit.codex_rollout_without_bridge &&
     (claimBeforeEdit.claim_before_edit_ratio === null ||
       isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT))
@@ -1166,6 +1744,32 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
           'packages/hooks/src/handlers/pre-tool-use.ts, packages/hooks/src/auto-claim.ts, apps/cli/src/lib/codex-rollouts.ts, colony install --ide codex',
         acceptance:
           'Codex PreToolUse or rollout bridge fires and claim-before-edit coverage can be measured',
+      }),
+    });
+  } else if (
+    preToolUseMissingDominates &&
+    isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
+  ) {
+    const manualClaimAdoptionHigh =
+      preToolUseMissing > 0 && claimBeforeEdit.task_claim_file_calls >= preToolUseMissing;
+    hints.push({
+      metric: 'claim-before-edit',
+      status: 'bad',
+      current: `pre_tool_use_missing: ${preToolUseMissing}, task_claim_file calls: ${claimBeforeEdit.task_claim_file_calls}`,
+      target: 'pre_tool_use before file mutation',
+      action: LIFECYCLE_BRIDGE_ACTION,
+      readiness_scope: 'execution_safety',
+      priority: 5,
+      command: LIFECYCLE_BRIDGE_COMMAND,
+      prompt: codexPrompt({
+        goal: 'wire the runtime lifecycle bridge before file mutation',
+        current: manualClaimAdoptionHigh
+          ? `manual claims already high (${claimBeforeEdit.task_claim_file_calls}); pre_tool_use_missing dominates (${preToolUseMissing})`
+          : `pre_tool_use_missing dominates (${preToolUseMissing})`,
+        inspect:
+          'colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/contracts/fixtures/colony-omx-lifecycle-v1/*.pre.json, packages/hooks/src/lifecycle-envelope.ts, pnpm smoke:codex-omx-pretool',
+        acceptance:
+          'runtime emits pre_tool_use before file mutation and pre_tool_use_missing stops dominating health misses',
       }),
     });
   } else if (isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)) {
@@ -1281,6 +1885,26 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
+  if (payload.signal_health.quota_pending_claims > 0) {
+    hints.push({
+      metric: 'quota-pending claims',
+      status: 'bad',
+      current: String(payload.signal_health.quota_pending_claims),
+      target: '0',
+      action: 'Accept the quota relay or let the short TTL expire before treating it as ordinary weak ownership.',
+      readiness_scope: 'signal_evaporation',
+      priority: 39,
+      tool_call: 'mcp__colony__attention_inbox({ agent: <agent>, session_id: <session_id>, repo_root: <repo_root> })',
+      command: 'colony inbox --json',
+      prompt: codexPrompt({
+        goal: 'resolve quota-pending ownership without deleting claim history',
+        current: `${payload.signal_health.quota_pending_claims} quota-pending claims`,
+        inspect: 'colony inbox --json, mcp__colony__attention_inbox, task_accept_relay',
+        acceptance: 'quota relay is accepted or expires into weak audit-only ownership',
+      }),
+    });
+  }
+
   if (payload.queen_wave_health.stale_claims_blocking_downstream > 0) {
     hints.push({
       metric: 'stale claims blocking downstream',
@@ -1298,6 +1922,26 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
         inspect:
           'colony queen sweep --json, mcp__colony__rescue_stranded_scan, packages/queen/src/sweep.ts',
         acceptance: 'stale blockers are rescued and later wave subtasks become claimable',
+      }),
+    });
+  }
+
+  if (payload.queen_wave_health.quota_handoffs_blocking_downstream > 0) {
+    hints.push({
+      metric: 'quota handoffs blocking downstream',
+      status: 'bad',
+      current: String(payload.queen_wave_health.quota_handoffs_blocking_downstream),
+      target: '0',
+      action: 'Accept or reroute quota relays before waiting on downstream waves.',
+      readiness_scope: 'queen_plan_readiness',
+      priority: 24,
+      tool_call: 'mcp__colony__attention_inbox({ agent: <agent>, session_id: <session_id>, repo_root: <repo_root> })',
+      command: 'colony inbox --json',
+      prompt: codexPrompt({
+        goal: 'unblock downstream Queen waves held by quota relays',
+        current: `${payload.queen_wave_health.quota_handoffs_blocking_downstream} quota blockers`,
+        inspect: 'colony inbox --json, task_accept_relay, task_decline_relay',
+        acceptance: 'quota relays are accepted, declined, or expired with audit trail intact',
       }),
     });
   }
@@ -1328,6 +1972,22 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   return hints;
+}
+
+function isDominantPreToolUseMiss(reasons: ClaimMissReasons): boolean {
+  const preToolUseMissing = reasons.pre_tool_use_missing;
+  if (preToolUseMissing <= 0) return false;
+  const otherMax = Math.max(
+    reasons.no_claim_for_file,
+    reasons.claim_after_edit,
+    reasons.session_id_mismatch,
+    reasons.repo_root_mismatch,
+    reasons.branch_mismatch,
+    reasons.path_mismatch,
+    reasons.worktree_path_mismatch,
+    reasons.pseudo_path_skipped,
+  );
+  return preToolUseMissing >= otherMax;
 }
 
 function visibleActionHints(
@@ -1574,11 +2234,17 @@ function isExpiredLifecycleRow(
 }
 
 interface PlanSubtaskHealth {
+  task_id: number;
   plan_slug: string;
   index: number;
+  title: string;
   status: 'available' | 'claimed' | 'completed' | 'blocked';
   depends_on: number[];
   claimed_at: number | null;
+  claimed_by_session_id: string | null;
+  claimed_by_agent: string | null;
+  file_scope: string[];
+  quota_handoff_pending: boolean;
   wave_index: number;
   wave_name: string;
 }
@@ -1598,12 +2264,19 @@ function readPlanSubtasks(
     if (!initial) continue;
     const initialMeta = parseJsonObject(initial.metadata);
     const lifecycle = readSubtaskLifecycle(rows, initialMeta, initial.ts);
+    const titleLine = initial.content.split('\n\n')[0] ?? '(untitled)';
     subtasks.push({
+      task_id: task.id,
       plan_slug: planSlug,
       index,
+      title: typeof initialMeta.title === 'string' ? initialMeta.title : titleLine,
       status: lifecycle.status,
       depends_on: readNumberArray(initialMeta.depends_on),
       claimed_at: lifecycle.claimed_at,
+      claimed_by_session_id: lifecycle.claimed_by_session_id,
+      claimed_by_agent: lifecycle.claimed_by_agent,
+      file_scope: readStringArray(initialMeta.file_scope),
+      quota_handoff_pending: lifecycle.quota_handoff_pending,
       wave_index: 0,
       wave_name: 'Wave 1',
     });
@@ -1615,14 +2288,37 @@ function readSubtaskLifecycle(
   rows: ObservationRow[],
   initialMeta: Record<string, unknown>,
   initialTs: number,
-): Pick<PlanSubtaskHealth, 'status' | 'claimed_at'> {
-  const claimRows = rows.filter((row) => row.kind === 'plan-subtask-claim');
-  for (const precedence of ['completed', 'blocked', 'claimed'] as const) {
-    const match = claimRows
-      .filter((row) => parseJsonObject(row.metadata).status === precedence)
-      .sort((a, b) => b.ts - a.ts)[0];
-    if (match)
-      return { status: precedence, claimed_at: precedence === 'claimed' ? match.ts : null };
+): Pick<
+  PlanSubtaskHealth,
+  'status' | 'claimed_at' | 'claimed_by_session_id' | 'claimed_by_agent' | 'quota_handoff_pending'
+> {
+  const quota_handoff_pending = rows.some((row) => {
+    if (row.kind !== 'relay') return false;
+    const meta = parseJsonObject(row.metadata);
+    return meta.reason === 'quota' && meta.status === 'pending';
+  });
+  const claimRows = rows
+    .filter((row) => row.kind === 'plan-subtask-claim')
+    .map((row) => ({ row, metadata: parseJsonObject(row.metadata) }))
+    .filter((entry) => isPlanSubtaskStatus(entry.metadata.status))
+    .sort((a, b) => b.row.ts - a.row.ts || b.row.id - a.row.id);
+  const completed = claimRows.find((entry) => entry.metadata.status === 'completed');
+  const resolved = completed ?? claimRows[0];
+  if (resolved) {
+    const status = resolved.metadata.status as PlanSubtaskHealth['status'];
+    return {
+      status,
+      claimed_at: status === 'claimed' ? resolved.row.ts : null,
+      claimed_by_session_id:
+        status === 'claimed' && typeof resolved.metadata.session_id === 'string'
+          ? (resolved.metadata.session_id as string)
+          : null,
+      claimed_by_agent:
+        status === 'claimed' && typeof resolved.metadata.agent === 'string'
+          ? (resolved.metadata.agent as string)
+          : null,
+      quota_handoff_pending,
+    };
   }
   const initialStatus = initialMeta.status;
   if (
@@ -1634,9 +2330,24 @@ function readSubtaskLifecycle(
     return {
       status: initialStatus,
       claimed_at: initialStatus === 'claimed' ? initialTs : null,
+      claimed_by_session_id:
+        initialStatus === 'claimed' && typeof initialMeta.session_id === 'string'
+          ? (initialMeta.session_id as string)
+          : null,
+      claimed_by_agent:
+        initialStatus === 'claimed' && typeof initialMeta.agent === 'string'
+          ? (initialMeta.agent as string)
+          : null,
+      quota_handoff_pending,
     };
   }
-  return { status: 'available', claimed_at: null };
+  return {
+    status: 'available',
+    claimed_at: null,
+    claimed_by_session_id: null,
+    claimed_by_agent: null,
+    quota_handoff_pending,
+  };
 }
 
 function queenWaveHealthPayload(
@@ -1653,6 +2364,7 @@ function queenWaveHealthPayload(
     const currentWaveIndex = Math.min(...incomplete.map((subtask) => subtask.wave_index));
     const currentWave =
       subtasks.find((subtask) => subtask.wave_index === currentWaveIndex)?.wave_name ?? null;
+    const downstreamBlockers = staleDownstreamBlockers(subtasks, options);
 
     plans.push({
       plan_slug: planSlug,
@@ -1661,8 +2373,10 @@ function queenWaveHealthPayload(
       claimed_subtasks: subtasks.filter((subtask) => subtask.status === 'claimed').length,
       blocked_subtasks: subtasks.filter((subtask) => isBlockedPlanSubtask(subtask, subtasks))
         .length,
-      stale_claims_blocking_downstream: subtasks.filter(
-        (subtask) => isStalePlanClaim(subtask, options) && blocksDownstream(subtask, subtasks),
+      stale_claims_blocking_downstream: downstreamBlockers.length,
+      downstream_blockers: downstreamBlockers,
+      quota_handoffs_blocking_downstream: subtasks.filter(
+        (subtask) => subtask.quota_handoff_pending && blocksDownstream(subtask, subtasks),
       ).length,
     });
   }
@@ -1683,7 +2397,144 @@ function queenWaveHealthPayload(
       (sum, plan) => sum + plan.stale_claims_blocking_downstream,
       0,
     ),
+    downstream_blockers: plans
+      .flatMap((plan) => plan.downstream_blockers)
+      .sort(
+        (a, b) =>
+          b.age_minutes - a.age_minutes ||
+          a.plan_slug.localeCompare(b.plan_slug) ||
+          a.subtask_index - b.subtask_index,
+      ),
+    quota_handoffs_blocking_downstream: plans.reduce(
+      (sum, plan) => sum + plan.quota_handoffs_blocking_downstream,
+      0,
+    ),
     plans: plans.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug)),
+  };
+}
+
+function liveContentionPayload(
+  storage: Pick<Storage, 'listClaims' | 'taskObservationsByKind'>,
+  tasks: TaskRow[],
+  options: {
+    since: number;
+    now: number;
+    stale_claim_minutes: number;
+    repo_root?: string;
+    hivemind?: { sessions: HivemindSession[] };
+    dirty_files_by_worktree?: Record<string, string[]>;
+    worktree_contention?: WorktreeContentionReport;
+  },
+): LiveContentionPayload {
+  const sessions =
+    options.hivemind?.sessions ??
+    (options.repo_root
+      ? readHivemind({
+          repoRoot: options.repo_root,
+          includeStale: true,
+          limit: 100,
+          now: options.now,
+        }).sessions
+      : []);
+  const liveSessions = sessions.filter((session) => session.activity !== 'dead');
+  const sessionsById = new Map<string, HivemindSession>();
+  const sessionsByBranch = new Map<string, HivemindSession[]>();
+
+  for (const session of liveSessions) {
+    if (session.session_key) sessionsById.set(session.session_key, session);
+    const bucket = sessionsByBranch.get(session.branch) ?? [];
+    bucket.push(session);
+    sessionsByBranch.set(session.branch, bucket);
+  }
+
+  const dirtyFilesByWorktree = readDirtyFilesForSessions(
+    liveSessions,
+    options.dirty_files_by_worktree,
+  );
+  const claimOwners: Array<{
+    file_path: string;
+    owner_key: string;
+    owner: LiveContentionOwner;
+  }> = [];
+
+  for (const task of tasks) {
+    for (const claim of storage.listClaims(task.id)) {
+      const filePath = normalizeHealthFilePath(claim.file_path);
+      if (!filePath) continue;
+
+      const age = classifyClaimAge(claim, {
+        now: options.now,
+        claim_stale_minutes: options.stale_claim_minutes,
+      });
+      const session = sessionsById.get(claim.session_id) ?? sessionsByBranch.get(task.branch)?.[0];
+      const hasLiveOwner = Boolean(session && session.activity !== 'dead');
+      if (!hasLiveOwner && !isStrongClaimAge(age)) continue;
+
+      const worktreePath = session?.worktree_path ?? '';
+      const dirty = worktreePath
+        ? (dirtyFilesByWorktree.get(worktreePath)?.has(filePath) ?? false)
+        : false;
+
+      claimOwners.push({
+        file_path: filePath,
+        owner_key: `${claim.session_id}\0${task.branch}`,
+        owner: {
+          owner: session?.agent || ownerFromSessionId(claim.session_id),
+          session_id: claim.session_id,
+          branch: task.branch,
+          task_id: task.id,
+          task_status: task.status ?? '',
+          activity: session?.activity ?? (isStrongClaimAge(age) ? 'claim-active' : 'unknown'),
+          worktree_path: worktreePath,
+          claim_age_minutes: age.age_minutes,
+          claim_strength: age.ownership_strength,
+          dirty,
+        },
+      });
+    }
+  }
+
+  const conflicts = Array.from(groupByFilePath(claimOwners).entries())
+    .map(([filePath, owners]) => {
+      const uniqueOwners = uniqueContentionOwners(owners);
+      if (uniqueOwners.length <= 1) return null;
+      const dirtyWorktrees = uniqueOwners
+        .filter((owner) => owner.dirty && owner.worktree_path)
+        .map((owner) => owner.worktree_path);
+      return {
+        file_path: filePath,
+        owner_count: uniqueOwners.length,
+        protected: uniqueOwners.some((owner) => isProtectedBranch(owner.branch)),
+        dirty_worktrees: [...new Set(dirtyWorktrees)].sort(),
+        owners: uniqueOwners.sort(compareContentionOwners),
+      } satisfies LiveContentionConflict;
+    })
+    .filter((conflict): conflict is LiveContentionConflict => conflict !== null)
+    .sort(compareContentionConflicts);
+  const worktreeContention =
+    options.worktree_contention ?? readWorktreeContention(options.repo_root, options.now);
+  const dirtyClaimContentions = conflicts.filter(
+    (conflict) => conflict.dirty_worktrees.length > 0,
+  ).length;
+  const dirtyWorktreeContentions = worktreeContention?.summary.contention_count ?? 0;
+  const competingWorktreesFromDirtyContention = countCompetingWorktrees(worktreeContention);
+
+  return {
+    live_file_contentions: conflicts.length,
+    protected_file_contentions: conflicts.filter((conflict) => conflict.protected).length,
+    paused_lanes: liveSessions.filter(
+      (session) => session.activity === 'idle' || session.activity === 'stalled',
+    ).length,
+    takeover_requests: takeoverRequestCount(storage, tasks, {
+      since: options.since,
+      now: options.now,
+    }),
+    competing_worktrees: Math.max(
+      competingWorktreeBranchCount(liveSessions),
+      competingWorktreesFromDirtyContention,
+    ),
+    dirty_contended_files: Math.max(dirtyClaimContentions, dirtyWorktreeContentions),
+    top_conflicts: conflicts.slice(0, HEALTH_TOOL_LIMIT),
   };
 }
 
@@ -1767,10 +2618,60 @@ function blocksDownstream(subtask: PlanSubtaskHealth, siblings: PlanSubtaskHealt
   );
 }
 
+function staleDownstreamBlockers(
+  subtasks: PlanSubtaskHealth[],
+  options: { now: number; stale_claim_minutes: number },
+): QueenDownstreamBlockerReport[] {
+  const blockers: QueenDownstreamBlockerReport[] = [];
+  for (const subtask of subtasks) {
+    if (!isStalePlanClaim(subtask, options) || !blocksDownstream(subtask, subtasks)) continue;
+    const unlockCandidate = subtasks.find(
+      (candidate) =>
+        candidate.status !== 'completed' && candidate.depends_on.includes(subtask.index),
+    );
+    if (!unlockCandidate || !subtask.claimed_by_session_id || subtask.claimed_at === null) {
+      continue;
+    }
+    blockers.push({
+      plan_slug: subtask.plan_slug,
+      task_id: subtask.task_id,
+      subtask_index: subtask.index,
+      subtask_title: subtask.title,
+      file_path: subtask.file_scope[0] ?? '(unscoped)',
+      owner_session_id: subtask.claimed_by_session_id,
+      owner_agent: subtask.claimed_by_agent,
+      age_minutes: Math.floor((options.now - subtask.claimed_at) / 60_000),
+      unlock_candidate: {
+        task_id: unlockCandidate.task_id,
+        subtask_index: unlockCandidate.index,
+        title: unlockCandidate.title,
+      },
+    });
+  }
+  return blockers.sort(
+    (a, b) =>
+      b.age_minutes - a.age_minutes ||
+      a.plan_slug.localeCompare(b.plan_slug) ||
+      a.subtask_index - b.subtask_index,
+  );
+}
+
 function readNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((item): item is number => typeof item === 'number')
     : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function isPlanSubtaskStatus(value: unknown): value is PlanSubtaskHealth['status'] {
+  return (
+    value === 'available' || value === 'claimed' || value === 'completed' || value === 'blocked'
+  );
 }
 
 function parseJsonObject(raw: string | null): Record<string, unknown> {
@@ -1783,6 +2684,205 @@ function parseJsonObject(raw: string | null): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function groupByFilePath(
+  claims: Array<{ file_path: string; owner_key: string; owner: LiveContentionOwner }>,
+): Map<string, Array<{ owner_key: string; owner: LiveContentionOwner }>> {
+  const byFile = new Map<string, Array<{ owner_key: string; owner: LiveContentionOwner }>>();
+  for (const claim of claims) {
+    const bucket = byFile.get(claim.file_path) ?? [];
+    bucket.push({ owner_key: claim.owner_key, owner: claim.owner });
+    byFile.set(claim.file_path, bucket);
+  }
+  return byFile;
+}
+
+function uniqueContentionOwners(
+  owners: Array<{ owner_key: string; owner: LiveContentionOwner }>,
+): LiveContentionOwner[] {
+  const byOwner = new Map<string, LiveContentionOwner>();
+  for (const entry of owners) {
+    const existing = byOwner.get(entry.owner_key);
+    if (!existing || entry.owner.claim_age_minutes < existing.claim_age_minutes) {
+      byOwner.set(entry.owner_key, entry.owner);
+    }
+  }
+  return [...byOwner.values()];
+}
+
+function compareContentionOwners(left: LiveContentionOwner, right: LiveContentionOwner): number {
+  if (left.dirty !== right.dirty) return left.dirty ? -1 : 1;
+  if (left.claim_strength !== right.claim_strength) {
+    return left.claim_strength === 'strong' ? -1 : 1;
+  }
+  return (
+    left.branch.localeCompare(right.branch) ||
+    left.owner.localeCompare(right.owner) ||
+    left.session_id.localeCompare(right.session_id)
+  );
+}
+
+function compareContentionConflicts(
+  left: LiveContentionConflict,
+  right: LiveContentionConflict,
+): number {
+  if (left.dirty_worktrees.length !== right.dirty_worktrees.length) {
+    return right.dirty_worktrees.length - left.dirty_worktrees.length;
+  }
+  if (left.protected !== right.protected) return left.protected ? -1 : 1;
+  if (left.owner_count !== right.owner_count) return right.owner_count - left.owner_count;
+  return left.file_path.localeCompare(right.file_path);
+}
+
+function readDirtyFilesForSessions(
+  sessions: HivemindSession[],
+  override?: Record<string, string[]>,
+): Map<string, Set<string>> {
+  const paths = new Set(
+    sessions.map((session) => session.worktree_path).filter((path) => path.length > 0),
+  );
+  const result = new Map<string, Set<string>>();
+  for (const worktreePath of paths) {
+    const files =
+      override && Object.prototype.hasOwnProperty.call(override, worktreePath)
+        ? (override[worktreePath] ?? [])
+        : readDirtyFiles(worktreePath);
+    result.set(worktreePath, new Set(files.map(normalizeHealthFilePath).filter(Boolean)));
+  }
+  return result;
+}
+
+function readDirtyFiles(worktreePath: string): string[] {
+  try {
+    const output = execFileSync(
+      'git',
+      ['-C', worktreePath, 'status', '--porcelain', '--untracked-files=no'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    return output
+      .split('\n')
+      .map(parseGitStatusFilePath)
+      .map(normalizeHealthFilePath)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function parseGitStatusFilePath(line: string): string {
+  if (line.length < 4) return '';
+  const raw = line.slice(3).trim();
+  const renameIndex = raw.indexOf(' -> ');
+  return stripGitStatusQuotes(renameIndex >= 0 ? raw.slice(renameIndex + 4) : raw);
+}
+
+function stripGitStatusQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function normalizeHealthFilePath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function ownerFromSessionId(sessionId: string): string {
+  const match = sessionId.match(/^(codex|claude|gemini|cursor|opencode|agent)(?:[@:_-]|$)/i);
+  return match?.[1]?.toLowerCase() ?? 'unknown';
+}
+
+function isProtectedBranch(branch: string): boolean {
+  return PROTECTED_BRANCHES.has(branch);
+}
+
+function competingWorktreeBranchCount(sessions: HivemindSession[]): number {
+  const byBranch = new Map<string, Set<string>>();
+  for (const session of sessions) {
+    if (!session.branch || !session.worktree_path) continue;
+    const bucket = byBranch.get(session.branch) ?? new Set<string>();
+    bucket.add(session.worktree_path);
+    byBranch.set(session.branch, bucket);
+  }
+  return [...byBranch.values()].filter((worktrees) => worktrees.size > 1).length;
+}
+
+function readWorktreeContention(
+  repoRoot: string | undefined,
+  now: number,
+): WorktreeContentionReport | null {
+  if (!repoRoot) return null;
+  try {
+    return readWorktreeContentionReport({ repoRoot, now });
+  } catch {
+    return null;
+  }
+}
+
+function countCompetingWorktrees(report: WorktreeContentionReport | null): number {
+  if (!report) return 0;
+  const paths = new Set<string>();
+  for (const contention of report.contentions) {
+    for (const worktree of contention.worktrees) {
+      paths.add(worktree.path);
+    }
+  }
+  return paths.size;
+}
+
+function takeoverRequestCount(
+  storage: Pick<Storage, 'taskObservationsByKind'>,
+  tasks: TaskRow[],
+  options: { since: number; now: number },
+): number {
+  let count = 0;
+  for (const task of tasks) {
+    for (const kind of ['handoff', 'relay'] as const) {
+      count += storage
+        .taskObservationsByKind(task.id, kind, 1000)
+        .filter((row) => row.ts > options.since)
+        .filter((row) => isPendingTakeoverRequest(row, options.now)).length;
+    }
+  }
+  return count;
+}
+
+function isPendingTakeoverRequest(row: ObservationRow, now: number): boolean {
+  const metadata = parseJsonObject(row.metadata);
+  if (metadata.status && metadata.status !== 'pending') return false;
+  const expiresAt = readNumber(metadata.expires_at);
+  if (expiresAt !== null && now >= expiresAt) return false;
+  const text = [
+    row.content,
+    readStringMetadata(metadata.summary),
+    readStringMetadata(metadata.one_line),
+    readStringMetadata(metadata.reason),
+    readStringArrayMetadata(metadata.blockers).join(' '),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    metadata.auto_takeover === true || /takeover requested|usage limit|rate limit|quota/i.test(text)
+  );
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readStringMetadata(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function readStringArrayMetadata(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }
 
 function parseHours(raw: string): number {

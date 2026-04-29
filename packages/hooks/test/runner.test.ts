@@ -53,25 +53,28 @@ function seedClaimConflict(options: { file_path?: string; ageMinutes?: number } 
   return thread.task_id;
 }
 
-function seedProtectedCrossTaskConflict(
-  filePath = defaultSettings.protected_files[0] ?? 'packages/storage/src/storage.ts',
-): { ownerTaskId: number; editorTaskId: number; filePath: string } {
+function seedProtectedContention(filePath = 'src/shared.ts'): {
+  protectedTaskId: number;
+  agentTaskId: number;
+} {
   store.startSession({ id: 'A', ide: 'claude-code', cwd: '/repo' });
   store.startSession({ id: 'B', ide: 'codex', cwd: '/repo' });
-  const ownerThread = TaskThread.open(store, {
+  const protectedThread = TaskThread.open(store, {
     repo_root: '/repo',
-    branch: 'agent/claude/storage-owner',
+    branch: 'main',
     session_id: 'A',
   });
-  const editorThread = TaskThread.open(store, {
+  protectedThread.join('A', 'claude');
+  protectedThread.claimFile({ session_id: 'A', file_path: filePath });
+
+  const agentThread = TaskThread.open(store, {
     repo_root: '/repo',
-    branch: 'agent/codex/storage-editor',
+    branch: 'agent/codex/protected-contention',
     session_id: 'B',
   });
-  ownerThread.join('A', 'claude');
-  editorThread.join('B', 'codex');
-  ownerThread.claimFile({ session_id: 'A', file_path: filePath });
-  return { ownerTaskId: ownerThread.task_id, editorTaskId: editorThread.task_id, filePath };
+  agentThread.join('B', 'codex');
+
+  return { protectedTaskId: protectedThread.task_id, agentTaskId: agentThread.task_id };
 }
 
 function metadataOf(row: { metadata: string | Record<string, unknown> | null } | undefined) {
@@ -179,7 +182,7 @@ describe('runHook', () => {
     const tl = store.timeline('sess-bash');
     expect(tl.filter((obs) => obs.kind === 'git-op')).toHaveLength(1);
     expect(tl.filter((obs) => obs.kind === 'file-op')).toHaveLength(1);
-    expect(tl.filter((obs) => obs.kind === 'auto-claim')).toHaveLength(1);
+    expect(tl.filter((obs) => obs.kind === 'auto-claim')).toHaveLength(2);
     expect(tl.find((obs) => obs.kind === 'git-op')?.metadata).toMatchObject({
       op: 'checkout',
       source: 'bash-parser',
@@ -189,10 +192,21 @@ describe('runHook', () => {
       file_path: 'old.ts',
       source: 'bash-parser',
     });
-    expect(tl.find((obs) => obs.kind === 'auto-claim')?.metadata).toMatchObject({
+    expect(
+      tl.find((obs) => obs.kind === 'auto-claim' && metadataOf(obs).file_path === 'log.txt')
+        ?.metadata,
+    ).toMatchObject({
       file_path: 'log.txt',
       source: 'post-tool-use',
       tool: 'Write',
+    });
+    expect(
+      tl.find((obs) => obs.kind === 'auto-claim' && metadataOf(obs).file_path === 'old.ts')
+        ?.metadata,
+    ).toMatchObject({
+      file_path: 'old.ts',
+      source: 'post-tool-use',
+      tool: 'Bash',
     });
   });
 
@@ -386,13 +400,74 @@ describe('runHook', () => {
     // Edit + file_path: the handler now records the touched file path in
     // metadata so observe/debrief can correlate edits with claims without
     // re-parsing the content field.
-    expect(toolUse?.metadata).toEqual({ tool: 'Edit', file_path: '/tmp/x.txt' });
+    expect(toolUse?.metadata).toEqual({
+      tool: 'Edit',
+      file_path: '/tmp/x.txt',
+      file_paths: ['/tmp/x.txt'],
+      extracted_paths: ['/tmp/x.txt'],
+    });
     expect(toolUse?.content).toContain('Edit');
     expect(autoClaim?.metadata).toMatchObject({
       source: 'post-tool-use',
       file_path: '/tmp/x.txt',
       tool: 'Edit',
     });
+  });
+
+  it('post-tool-use records repo-relative edit paths', async () => {
+    const repoRoot = join(dir, 'repo');
+    mkdirSync(join(repoRoot, 'src'), { recursive: true });
+    store.startSession({ id: 'sess-paths', ide: 'codex', cwd: repoRoot });
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/paths',
+      session_id: 'sess-paths',
+    });
+    thread.join('sess-paths', 'codex');
+
+    const r = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'sess-paths',
+        cwd: repoRoot,
+        tool_name: 'Edit',
+        tool_input: { file_path: join(repoRoot, 'src/viewer.tsx') },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+
+    expect(r.ok).toBe(true);
+    const toolUse = store.timeline('sess-paths').find((obs) => obs.kind === 'tool_use');
+    const autoClaim = store.timeline('sess-paths').find((obs) => obs.kind === 'auto-claim');
+    expect(toolUse?.metadata).toMatchObject({ tool: 'Edit', file_path: 'src/viewer.tsx' });
+    expect(autoClaim?.metadata).toMatchObject({
+      source: 'post-tool-use',
+      file_path: 'src/viewer.tsx',
+      tool: 'Edit',
+    });
+  });
+
+  it('post-tool-use skips pseudo file paths', async () => {
+    await runHook('session-start', { session_id: 'sess-null', ide: 'codex', cwd: dir }, { store });
+
+    const r = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'sess-null',
+        cwd: dir,
+        tool_name: 'Write',
+        tool_input: { file_path: '/dev/null' },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+
+    expect(r.ok).toBe(true);
+    const timeline = store.timeline('sess-null');
+    const toolUse = timeline.find((obs) => obs.kind === 'tool_use');
+    expect(toolUse?.metadata).toEqual({ tool: 'Write' });
+    expect(timeline.some((obs) => obs.kind === 'auto-claim')).toBe(false);
   });
 
   it('warn policy surfaces strong claim conflicts and continues', async () => {
@@ -420,6 +495,83 @@ describe('runHook', () => {
       owner: 'A',
     });
     expect(store.storage.getClaim(taskId, 'src/viewer.tsx')?.session_id).toBe('B');
+  });
+
+  it('denies protected live contentions even when bridge policy is warn', async () => {
+    const { protectedTaskId, agentTaskId } = seedProtectedContention();
+
+    const result = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/shared.ts' },
+      },
+      { store },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.permissionDecision).toBe('deny');
+    expect(result.permissionDecisionReason).toContain('Protected Colony strong claim');
+    const warning = JSON.parse(result.context ?? '{}') as Record<string, unknown>;
+    expect(warning).toMatchObject({
+      code: 'LIVE_FILE_CONTENTION',
+      policy_mode: 'warn',
+      conflict: true,
+      conflict_strength: 'strong',
+      protected: true,
+      owner: 'A',
+      owner_branch: 'main',
+    });
+    expect(store.storage.getClaim(protectedTaskId, 'src/shared.ts')?.session_id).toBe('A');
+    expect(store.storage.getClaim(agentTaskId, 'src/shared.ts')).toBeUndefined();
+    const telemetry = store.storage.taskObservationsByKind(protectedTaskId, 'claim-before-edit');
+    expect(metadataOf(telemetry[0])).toMatchObject({
+      policy_mode: 'warn',
+      code: 'LIVE_FILE_CONTENTION',
+      conflict: true,
+      conflict_strength: 'strong',
+      protected: true,
+      owner: 'A',
+      owner_branch: 'main',
+    });
+  });
+
+  it('allows protected edits after takeover assigns the protected claim to this session', async () => {
+    const { protectedTaskId, agentTaskId } = seedProtectedContention();
+    store.storage.takeOverLaneClaim({
+      target_session_id: 'A',
+      requester_session_id: 'B',
+      file_path: 'src/shared.ts',
+      reason: 'explicit takeover for protected contention',
+      requester_agent: 'codex',
+    });
+
+    const result = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/shared.ts' },
+      },
+      { store },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.permissionDecision).toBe('allow');
+    expect(result.context).toBe('');
+    expect(store.storage.getClaim(protectedTaskId, 'src/shared.ts')?.session_id).toBe('B');
+    expect(store.storage.getClaim(agentTaskId, 'src/shared.ts')?.session_id).toBe('B');
+    const telemetry = store.storage.taskObservationsByKind(agentTaskId, 'claim-before-edit');
+    expect(metadataOf(telemetry[0])).toMatchObject({
+      outcome: 'auto_claimed_before_edit',
+      file_path: 'src/shared.ts',
+      conflict: false,
+      protected: false,
+      owner: null,
+    });
   });
 
   it('block-on-conflict policy denies only strong active claim conflicts', async () => {
@@ -462,82 +614,6 @@ describe('runHook', () => {
     );
     expect(unclaimed.permissionDecision).toBe('allow');
     expect(store.storage.getClaim(taskId, 'src/new.tsx')?.session_id).toBe('B');
-  });
-
-  it('block-on-conflict policy denies non-integrator edits to protected files claimed by another live session', async () => {
-    useBridgePolicy('block-on-conflict');
-    const { ownerTaskId, editorTaskId, filePath } = seedProtectedCrossTaskConflict();
-
-    const result = await runHook(
-      'pre-tool-use',
-      {
-        session_id: 'B',
-        ide: 'codex',
-        cwd: '/repo',
-        tool_name: 'Edit',
-        tool_input: { file_path: filePath },
-      },
-      { store },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.permissionDecision).toBe('deny');
-    expect(result.permissionDecisionReason).toContain('Protected file');
-    expect(store.storage.getClaim(ownerTaskId, filePath)?.session_id).toBe('A');
-    expect(store.storage.getClaim(editorTaskId, filePath)).toBeUndefined();
-    const warning = JSON.parse(result.context ?? '{}') as Record<string, unknown>;
-    expect(warning).toMatchObject({
-      code: 'PROTECTED_FILE_CONTENTION',
-      policy_mode: 'block-on-conflict',
-      conflict: true,
-      protected_file: true,
-      protected_file_path: filePath,
-      owner: 'A',
-      integrator: false,
-    });
-    expect(warning.contender_sessions).toEqual(expect.arrayContaining(['A', 'B']));
-    const telemetry = store.storage.taskObservationsByKind(editorTaskId, 'claim-before-edit');
-    expect(metadataOf(telemetry[0])).toMatchObject({
-      code: 'PROTECTED_FILE_CONTENTION',
-      protected_file: true,
-      protected_file_path: filePath,
-      owner: 'A',
-      integrator: false,
-    });
-  });
-
-  it('block-on-conflict policy allows integrator edits to protected files while still escalating', async () => {
-    useBridgePolicy('block-on-conflict');
-    const { ownerTaskId, editorTaskId, filePath } = seedProtectedCrossTaskConflict();
-
-    const result = await runHook(
-      'pre-tool-use',
-      {
-        session_id: 'B',
-        ide: 'codex',
-        cwd: '/repo',
-        metadata: { role: 'integrator' },
-        tool_name: 'Edit',
-        tool_input: { file_path: filePath },
-      },
-      { store },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.permissionDecision).toBe('allow');
-    expect(store.storage.getClaim(ownerTaskId, filePath)?.session_id).toBe('A');
-    expect(store.storage.getClaim(editorTaskId, filePath)?.session_id).toBe('B');
-    const warning = JSON.parse(result.context ?? '{}') as Record<string, unknown>;
-    expect(warning).toMatchObject({
-      code: 'PROTECTED_FILE_CONTENTION',
-      policy_mode: 'block-on-conflict',
-      conflict: true,
-      protected_file: true,
-      protected_file_path: filePath,
-      owner: 'A',
-      integrator: true,
-    });
-    expect(warning.contender_sessions).toEqual(expect.arrayContaining(['A', 'B']));
   });
 
   it('block-on-conflict policy allows weak and expired live contention claims', async () => {

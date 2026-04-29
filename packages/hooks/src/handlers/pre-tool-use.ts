@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { resolve } from 'node:path';
 import type { BridgePolicyMode } from '@colony/config';
 import {
   type ClaimAgeClass,
@@ -6,6 +6,8 @@ import {
   type MemoryStore,
   classifyClaimAge,
   detectRepoBranch,
+  isStrongClaimAge,
+  normalizeClaimFilePath,
 } from '@colony/core';
 import {
   type ActiveTaskCandidate,
@@ -19,6 +21,8 @@ import { extractTouchedFiles } from './post-tool-use.js';
 
 const CLAIM_WARNING_DEBOUNCE_MS = 60_000;
 const CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID = 'colony-pre-tool-use-diagnostics';
+const ALL_TASKS_LIMIT = 1_000_000;
+const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 const claimWarningDebounceByStore = new WeakMap<MemoryStore, Map<string, number>>();
 
 export interface ClaimBeforeEditFallbackWarning {
@@ -28,14 +32,12 @@ export interface ClaimBeforeEditFallbackWarning {
   policy_mode?: BridgePolicyMode;
   conflict?: boolean;
   conflict_strength?: ConflictStrength;
+  protected?: boolean;
   owner?: string | null;
+  owner_branch?: string | null;
   next_tool: 'task_claim_file';
   /** Concrete invocation string the agent can copy verbatim. */
   next_call: string;
-  protected_file?: boolean;
-  protected_file_path?: string;
-  contender_sessions?: string[];
-  integrator?: boolean;
   suggested_args: {
     task_id: number | '<task_id>' | '<candidate.task_id>';
     session_id: string;
@@ -50,11 +52,13 @@ export interface ClaimBeforeEditHookResult {
   context: string;
   permissionDecision: 'allow' | 'deny';
   permissionDecisionReason?: string;
+  extracted_paths: string[];
 }
 
 export interface ClaimBeforeEditResult {
   policy_mode: BridgePolicyMode;
   files: string[];
+  extracted_paths: string[];
   edits_with_claim: string[];
   edits_missing_claim: string[];
   auto_claimed_before_edit: string[];
@@ -68,10 +72,7 @@ type PreToolUseInput = Pick<
   'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd' | 'ide' | 'metadata'
 >;
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
-type ClaimBeforeEditWarningCode =
-  | AutoClaimFailureCode
-  | 'LIVE_FILE_CONTENTION'
-  | 'PROTECTED_FILE_CONTENTION';
+type ClaimBeforeEditWarningCode = AutoClaimFailureCode | 'LIVE_FILE_CONTENTION';
 type ConflictStrength = ClaimOwnershipStrength | 'none';
 type CompactCandidate = Pick<
   ActiveTaskCandidate,
@@ -79,20 +80,16 @@ type CompactCandidate = Pick<
 >;
 
 interface ClaimConflictInfo {
-  code: 'LIVE_FILE_CONTENTION' | 'PROTECTED_FILE_CONTENTION';
   file_path: string;
   task_id: number;
-  owner_task_id?: number;
   owner: string;
+  owner_branch?: string;
+  protected?: boolean;
   conflict_strength: ClaimOwnershipStrength;
   claimed_at: number;
   age_minutes: number;
   age_class: ClaimAgeClass;
   warning: string;
-  protected_file?: boolean;
-  protected_file_path?: string;
-  contender_sessions?: string[];
-  integrator?: boolean;
 }
 
 export function preToolUse(store: MemoryStore, input: HookInput): string {
@@ -104,11 +101,16 @@ export function preToolUseResult(store: MemoryStore, input: HookInput): ClaimBef
   try {
     return bridgePolicyResult(claimBeforeEditFromToolUse(store, input));
   } catch {
-    const files = extractTouchedFiles(toolName, input.tool_input);
+    const scope = taskScopeForToolUse(store, input);
+    const files = extractTouchedFiles(toolName, input.tool_input, {
+      cwd: scope.cwd ?? input.cwd,
+      repoRoot: scope.repo_root,
+    });
     const policyMode = bridgePolicyMode(store);
     return bridgePolicyResult({
       policy_mode: policyMode,
       files,
+      extracted_paths: files,
       edits_with_claim: [],
       edits_missing_claim: files,
       auto_claimed_before_edit: [],
@@ -131,11 +133,16 @@ export function claimBeforeEditFromToolUse(
   input: PreToolUseInput,
 ): ClaimBeforeEditResult {
   const toolName = input.tool_name ?? input.tool ?? '';
-  const files = extractTouchedFiles(toolName, input.tool_input);
   const policyMode = bridgePolicyMode(store);
+  const scope = taskScopeForToolUse(store, input);
+  const files = extractTouchedFiles(toolName, input.tool_input, {
+    repoRoot: scope.repo_root,
+    cwd: scope.cwd ?? scope.worktree_path,
+  });
   const result: ClaimBeforeEditResult = {
     policy_mode: policyMode,
     files,
+    extracted_paths: files,
     edits_with_claim: [],
     edits_missing_claim: [],
     auto_claimed_before_edit: [],
@@ -145,29 +152,56 @@ export function claimBeforeEditFromToolUse(
   };
   if (files.length === 0) return result;
 
-  const scope = taskScopeForToolUse(store, input);
-
   for (const file_path of files) {
-    const conflict = currentClaimConflict(store, input, scope, file_path);
+    const protectedConflict = protectedLiveClaimConflict(store, input.session_id, scope, file_path);
+    if (protectedConflict) {
+      result.conflicts.push(protectedConflict);
+      result.edits_missing_claim.push(file_path);
+      result.blocked_conflicts.push(protectedConflict);
+      recordClaimBeforeEditFailure(store, input.session_id, {
+        task_id: protectedConflict.task_id,
+        file_path,
+        tool: toolName,
+        code: 'LIVE_FILE_CONTENTION',
+        error: protectedConflict.warning,
+        candidates: [],
+        policy_mode: policyMode,
+        conflict: protectedConflict,
+        extracted_paths: files,
+      });
+      result.warnings.push(
+        claimWarning(input.session_id, file_path, toolName, policyMode, {
+          ok: false,
+          code: 'LIVE_FILE_CONTENTION',
+          error: protectedConflict.warning,
+          candidates: [],
+          conflict: protectedConflict,
+        }),
+      );
+      continue;
+    }
+
+    const conflict = currentClaimConflict(store, input.session_id, scope, file_path);
     if (conflict) result.conflicts.push(conflict);
 
-    if (policyMode === 'block-on-conflict' && conflict && shouldBlockConflict(conflict)) {
+    if (policyMode === 'block-on-conflict' && conflict?.conflict_strength === 'strong') {
       result.edits_missing_claim.push(file_path);
       result.blocked_conflicts.push(conflict);
       recordClaimBeforeEditFailure(store, input.session_id, {
         task_id: conflict.task_id,
         file_path,
         tool: toolName,
-        code: conflict.code,
+        code: 'LIVE_FILE_CONTENTION',
         error: conflict.warning,
         candidates: [],
         policy_mode: policyMode,
         conflict,
+        extracted_paths: files,
       });
       result.warnings.push(
         claimWarning(input.session_id, file_path, toolName, policyMode, {
           ok: false,
-          code: conflict.code,
+          code: 'LIVE_FILE_CONTENTION',
           error: conflict.warning,
           candidates: [],
           conflict,
@@ -194,6 +228,7 @@ export function claimBeforeEditFromToolUse(
         file_path,
         tool: toolName,
         policy_mode: policyMode,
+        extracted_paths: files,
       });
       continue;
     }
@@ -207,12 +242,13 @@ export function claimBeforeEditFromToolUse(
         policy_mode: policyMode,
         ...(conflict ? { conflict } : {}),
         ...(claim.observation_id !== null ? { claim_observation_id: claim.observation_id } : {}),
+        extracted_paths: files,
       });
       if (conflict) {
         result.warnings.push(
           claimWarning(input.session_id, file_path, toolName, policyMode, {
             ok: false,
-            code: conflict.code,
+            code: 'LIVE_FILE_CONTENTION',
             error: conflict.warning,
             candidates: [],
             conflict,
@@ -231,6 +267,7 @@ export function claimBeforeEditFromToolUse(
       error: claim.error,
       candidates: claim.candidates,
       policy_mode: policyMode,
+      extracted_paths: files,
     });
     if (!warningDebounced)
       result.warnings.push(claimWarning(input.session_id, file_path, toolName, policyMode, claim));
@@ -241,7 +278,8 @@ export function claimBeforeEditFromToolUse(
 
 function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookResult {
   const context = claimBeforeEditWarning(result);
-  const blocked = result.policy_mode === 'block-on-conflict' && result.blocked_conflicts.length > 0;
+  const extracted_paths = result.extracted_paths;
+  const blocked = result.blocked_conflicts.length > 0;
   if (blocked) {
     const reason =
       context ||
@@ -252,10 +290,11 @@ function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookR
     return {
       context,
       permissionDecision: 'deny',
+      extracted_paths,
       ...(reason ? { permissionDecisionReason: reason } : {}),
     };
   }
-  return { context, permissionDecision: 'allow' };
+  return { context, permissionDecision: 'allow', extracted_paths };
 }
 
 function bridgePolicyMode(store: MemoryStore): BridgePolicyMode {
@@ -266,7 +305,7 @@ function bridgePolicyMode(store: MemoryStore): BridgePolicyMode {
 
 function currentClaimConflict(
   store: MemoryStore,
-  input: PreToolUseInput,
+  session_id: string,
   scope: {
     repo_root?: string;
     branch?: string;
@@ -276,26 +315,23 @@ function currentClaimConflict(
   },
   file_path: string,
 ): ClaimConflictInfo | null {
-  const protectedConflict = protectedFileContention(store, input, scope, file_path);
-  if (protectedConflict) return protectedConflict;
-
   try {
-    const session_id = input.session_id;
     const candidates = activeTaskCandidatesForSession(store, { session_id, ...scope });
     if (candidates.length !== 1) return null;
     const candidate = candidates[0];
     if (!candidate) return null;
     const claim = store.storage.getClaim(candidate.task_id, file_path);
     if (!claim || claim.session_id === session_id) return null;
-    const classification = classifyClaimAge(claim.claimed_at, {
+    const classification = classifyClaimAge(claim, {
       claim_stale_minutes: store.settings.claimStaleMinutes,
     });
     const warning = `Colony ${classification.ownership_strength} claim on ${file_path} is held by ${claim.session_id}.`;
     return {
-      code: 'LIVE_FILE_CONTENTION',
       file_path,
       task_id: candidate.task_id,
       owner: claim.session_id,
+      owner_branch: candidate.branch,
+      protected: false,
       conflict_strength: classification.ownership_strength,
       claimed_at: claim.claimed_at,
       age_minutes: classification.age_minutes,
@@ -307,14 +343,9 @@ function currentClaimConflict(
   }
 }
 
-function shouldBlockConflict(conflict: ClaimConflictInfo): boolean {
-  if (conflict.code === 'PROTECTED_FILE_CONTENTION') return conflict.integrator !== true;
-  return conflict.conflict_strength === 'strong';
-}
-
-function protectedFileContention(
+function protectedLiveClaimConflict(
   store: MemoryStore,
-  input: PreToolUseInput,
+  session_id: string,
   scope: {
     repo_root?: string;
     branch?: string;
@@ -325,146 +356,120 @@ function protectedFileContention(
   file_path: string,
 ): ClaimConflictInfo | null {
   try {
-    const protectedPath = matchedProtectedFilePath(store, file_path, scope.repo_root);
-    if (!protectedPath) return null;
+    const normalizedFilePath = normalizeClaimFilePath(file_path);
+    if (!normalizedFilePath) return null;
 
-    const claims = liveClaimsForProtectedFile(store, protectedPath);
-    const otherClaims = claims.filter((claim) => claim.session_id !== input.session_id);
-    if (otherClaims.length === 0) return null;
+    const candidate = singleActiveTaskCandidate(store, session_id, scope);
+    const repoRoot = candidate?.repo_root ?? scope.repo_root;
+    if (!repoRoot) return null;
+    const normalizedRepoRoot = resolve(repoRoot);
+    const tasks = store.storage.listTasks(ALL_TASKS_LIMIT);
+    const conflicts: ClaimConflictInfo[] = [];
 
-    const candidates = activeTaskCandidatesForSession(store, {
-      session_id: input.session_id,
-      ...scope,
-    });
-    const editingTaskId = candidates.length === 1 ? candidates[0]?.task_id : undefined;
-    const primary = strongestProtectedClaim(otherClaims);
-    if (!primary) return null;
+    for (const task of tasks) {
+      if (resolve(task.repo_root) !== normalizedRepoRoot) continue;
+      if (!isProtectedBranch(task.branch)) continue;
+      for (const claim of store.storage.listClaims(task.id)) {
+        if (normalizeClaimFilePath(claim.file_path) !== normalizedFilePath) continue;
+        if (claim.session_id === session_id) continue;
+        if (candidate?.task_id === task.id) continue;
+        if (
+          takeoverAssignsClaimToSession(store, {
+            task_id: task.id,
+            file_path: normalizedFilePath,
+            target_session_id: claim.session_id,
+            assigned_session_id: session_id,
+          })
+        ) {
+          continue;
+        }
 
-    const classification = classifyClaimAge(primary.claimed_at, {
-      claim_stale_minutes: store.settings.claimStaleMinutes,
-    });
-    const contenderSessions = uniqueStrings([
-      input.session_id,
-      ...claims.map((claim) => claim.session_id),
-    ]);
-    const integrator = isIntegratorToolUse(input, scope);
-    const warning = [
-      `Protected file ${protectedPath} has live claim contention.`,
-      `live_sessions=${contenderSessions.join(',')}`,
-      `owner=${primary.session_id}`,
-      `integrator=${integrator ? 'true' : 'false'}`,
-    ].join(' ');
+        const classification = classifyClaimAge(claim, {
+          claim_stale_minutes: store.settings.claimStaleMinutes,
+        });
+        if (!isStrongClaimAge(classification)) continue;
+        conflicts.push({
+          file_path: normalizedFilePath,
+          task_id: task.id,
+          owner: claim.session_id,
+          owner_branch: task.branch,
+          protected: true,
+          conflict_strength: classification.ownership_strength,
+          claimed_at: claim.claimed_at,
+          age_minutes: classification.age_minutes,
+          age_class: classification.age_class,
+          warning: `Protected Colony ${classification.ownership_strength} claim on ${normalizedFilePath} is held by ${claim.session_id} on ${task.branch}. Run colony lane takeover before editing.`,
+        });
+      }
+    }
 
-    return {
-      code: 'PROTECTED_FILE_CONTENTION',
-      file_path,
-      task_id: editingTaskId ?? primary.task_id,
-      owner_task_id: primary.task_id,
-      owner: primary.session_id,
-      conflict_strength: classification.ownership_strength,
-      claimed_at: primary.claimed_at,
-      age_minutes: classification.age_minutes,
-      age_class: classification.age_class,
-      warning,
-      protected_file: true,
-      protected_file_path: protectedPath,
-      contender_sessions: contenderSessions,
-      integrator,
-    };
+    return conflicts.sort(compareClaimConflicts)[0] ?? null;
   } catch {
     return null;
   }
 }
 
-function liveClaimsForProtectedFile(
+function singleActiveTaskCandidate(
   store: MemoryStore,
-  protectedPath: string,
-): Array<{ task_id: number; file_path: string; session_id: string; claimed_at: number }> {
-  const claims: Array<{
+  session_id: string,
+  scope: {
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
+): ActiveTaskCandidate | null {
+  const candidates = activeTaskCandidatesForSession(store, { session_id, ...scope });
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
+}
+
+function takeoverAssignsClaimToSession(
+  store: MemoryStore,
+  args: {
     task_id: number;
     file_path: string;
-    session_id: string;
-    claimed_at: number;
-  }> = [];
-  for (const task of store.storage.listTasks(2000)) {
-    if (!isActiveTaskStatus(task.status)) continue;
-    for (const claim of store.storage.listClaims(task.id)) {
-      if (normalizeRepoFilePath(claim.file_path, task.repo_root) !== protectedPath) continue;
-      const session = store.storage.getSession(claim.session_id);
-      if (!session || session.ended_at !== null) continue;
-      claims.push(claim);
-    }
-  }
-  return claims;
-}
-
-function strongestProtectedClaim(
-  claims: Array<{ task_id: number; file_path: string; session_id: string; claimed_at: number }>,
-): { task_id: number; file_path: string; session_id: string; claimed_at: number } | undefined {
-  return [...claims].sort((left, right) => right.claimed_at - left.claimed_at)[0];
-}
-
-function matchedProtectedFilePath(
-  store: MemoryStore,
-  file_path: string,
-  repoRoot: string | undefined,
-): string | null {
-  const normalized = normalizeRepoFilePath(file_path, repoRoot);
-  const protectedFiles = new Set(
-    ((store as Partial<MemoryStore>).settings?.protected_files ?? []).map((filePath) =>
-      normalizeRepoFilePath(filePath, undefined),
-    ),
-  );
-  return protectedFiles.has(normalized) ? normalized : null;
-}
-
-function normalizeRepoFilePath(filePath: string, repoRoot: string | undefined): string {
-  const trimmed = filePath.trim();
-  if (!trimmed) return '';
-  let normalized = path.normalize(trimmed);
-  if (repoRoot && path.isAbsolute(normalized)) {
-    const relativePath = path.relative(path.resolve(repoRoot), path.resolve(normalized));
-    if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
-      normalized = relativePath;
-    }
-  }
-  return normalizeSlashes(normalized).replace(/^\.\//, '');
-}
-
-function normalizeSlashes(value: string): string {
-  return value.replace(/\\/g, '/');
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)];
-}
-
-function isActiveTaskStatus(status: string): boolean {
-  return !['completed', 'archived', 'auto-archived', 'abandoned'].includes(status.toLowerCase());
-}
-
-function isIntegratorToolUse(
-  input: PreToolUseInput,
-  scope: { branch?: string; agent?: string },
+    target_session_id: string;
+    assigned_session_id: string;
+  },
 ): boolean {
-  const metadata = input.metadata;
-  if (metadata && metadata.integrator === true) return true;
-  const candidates = [
-    input.session_id,
-    input.ide,
-    scope.agent,
-    scope.branch,
-    readString(metadata?.role),
-    readString(metadata?.agent_role),
-    readString(metadata?.agentRole),
-    readString(metadata?.branch),
-  ];
-  return candidates.some((value) => hasIntegratorToken(value));
+  return store.storage.taskObservationsByKind(args.task_id, 'lane-takeover').some((row) => {
+    const metadata = parseObservationMetadata(row.metadata);
+    if (!metadata) return false;
+    return (
+      metadata.target_session_id === args.target_session_id &&
+      metadata.assigned_session_id === args.assigned_session_id &&
+      normalizeClaimFilePath(readString(metadata.file_path) ?? '') === args.file_path
+    );
+  });
 }
 
-function hasIntegratorToken(value: string | undefined): boolean {
-  if (!value) return false;
-  return /(^|[/_\-\s])(integrator|integration)([/_\-\s]|$)/i.test(value);
+function parseObservationMetadata(
+  metadata: string | Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!metadata) return null;
+  if (typeof metadata === 'object') return metadata;
+  try {
+    const parsed = JSON.parse(metadata);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function compareClaimConflicts(left: ClaimConflictInfo, right: ClaimConflictInfo): number {
+  if (left.conflict_strength !== right.conflict_strength) {
+    return left.conflict_strength === 'strong' ? -1 : 1;
+  }
+  if (left.claimed_at !== right.claimed_at) return right.claimed_at - left.claimed_at;
+  if (left.task_id !== right.task_id) return left.task_id - right.task_id;
+  return left.owner.localeCompare(right.owner);
+}
+
+function isProtectedBranch(branch: string): boolean {
+  return PROTECTED_BRANCHES.has(branch);
 }
 
 function taskScopeForToolUse(
@@ -479,19 +484,23 @@ function taskScopeForToolUse(
 } {
   try {
     const session = store.storage.getSession(input.session_id);
+    const activeTaskId = store.storage.findActiveTaskForSession(input.session_id);
+    const activeTask = activeTaskId === undefined ? undefined : store.storage.getTask(activeTaskId);
     const metadataScope = hookMetadataScope(input.metadata);
     const cwd = input.cwd ?? metadataScope.cwd ?? session?.cwd ?? undefined;
-    const detected = cwd ? detectRepoBranch(cwd) : null;
+    const detected = activeTask ? null : cwd ? detectRepoBranch(cwd) : null;
     return {
-      ...(detected
-        ? { repo_root: detected.repo_root, branch: detected.branch }
-        : {
-            ...optionalString(
-              'repo_root',
-              readString(input.metadata?.repo_root) ?? readString(input.metadata?.repoRoot),
-            ),
-            ...optionalString('branch', readString(input.metadata?.branch)),
-          }),
+      ...(activeTask
+        ? { repo_root: activeTask.repo_root, branch: activeTask.branch }
+        : detected
+          ? { repo_root: detected.repo_root, branch: detected.branch }
+          : {
+              ...optionalString(
+                'repo_root',
+                readString(input.metadata?.repo_root) ?? readString(input.metadata?.repoRoot),
+              ),
+              ...optionalString('branch', readString(input.metadata?.branch)),
+            }),
       ...(cwd !== undefined ? { cwd } : {}),
       ...optionalString('worktree_path', metadataScope.worktree_path),
       ...(input.ide !== undefined
@@ -550,6 +559,7 @@ function recordClaimBeforeEditFailure(
     candidates: AutoClaimFailure['candidates'];
     policy_mode: BridgePolicyMode;
     conflict?: ClaimConflictInfo;
+    extracted_paths?: string[];
   },
 ): void {
   if (metadata.code === 'COLONY_UNAVAILABLE') return;
@@ -576,18 +586,16 @@ function recordClaimBeforeEditFailure(
         source: 'pre-tool-use',
         outcome: 'edits_missing_claim',
         file_path: metadata.file_path,
+        extracted_paths: metadata.extracted_paths ?? [metadata.file_path],
         tool: metadata.tool,
         code: metadata.code,
         error: metadata.error,
         policy_mode: metadata.policy_mode,
         conflict: metadata.conflict !== undefined,
         conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
+        protected: metadata.conflict?.protected ?? false,
         owner: metadata.conflict?.owner ?? null,
-        protected_file: metadata.conflict?.protected_file === true,
-        protected_file_path: metadata.conflict?.protected_file_path ?? null,
-        contender_sessions: metadata.conflict?.contender_sessions ?? [],
-        integrator: metadata.conflict?.integrator === true,
-        owner_task_id: metadata.conflict?.owner_task_id ?? null,
+        owner_branch: metadata.conflict?.owner_branch ?? null,
         warning: metadata.conflict?.warning ?? metadata.error,
         ...(sessionBindingMissing
           ? { session_binding_missing: true, original_session_id: session_id }
@@ -632,6 +640,7 @@ function recordClaimBeforeEdit(
     other_session?: string;
     claim_observation_id?: number;
     conflict?: ClaimConflictInfo;
+    extracted_paths?: string[];
   },
 ): void {
   store.addObservation({
@@ -643,14 +652,12 @@ function recordClaimBeforeEdit(
       kind: 'claim-before-edit',
       source: 'pre-tool-use',
       ...metadata,
+      extracted_paths: metadata.extracted_paths ?? [metadata.file_path],
       conflict: metadata.conflict !== undefined,
       conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
+      protected: metadata.conflict?.protected ?? false,
       owner: metadata.conflict?.owner ?? null,
-      protected_file: metadata.conflict?.protected_file === true,
-      protected_file_path: metadata.conflict?.protected_file_path ?? null,
-      contender_sessions: metadata.conflict?.contender_sessions ?? [],
-      integrator: metadata.conflict?.integrator === true,
-      owner_task_id: metadata.conflict?.owner_task_id ?? null,
+      owner_branch: metadata.conflict?.owner_branch ?? null,
       warning: metadata.conflict?.warning ?? null,
     },
   });
@@ -688,31 +695,24 @@ function claimWarning(
   const tool = tool_name || 'edit tool';
   const conflict = claim.conflict;
   const message =
-    claim.code === 'PROTECTED_FILE_CONTENTION' && conflict
+    claim.code === 'LIVE_FILE_CONTENTION' && conflict
       ? [
-          `Protected file contention before ${tool} on ${file_path}.`,
-          `protected_file=${conflict.protected_file_path ?? file_path}`,
-          `live_sessions=${(conflict.contender_sessions ?? []).join(',')}`,
+          `${conflict.protected ? 'Protected Colony' : 'Colony'} ${conflict.conflict_strength} claim conflict before ${tool} on ${file_path}.`,
           `owner=${conflict.owner}`,
-          `integrator=${conflict.integrator === true ? 'true' : 'false'}`,
+          conflict.owner_branch ? `owner_branch=${conflict.owner_branch}` : '',
           `policy=${policyMode}`,
           `warning=${conflict.warning}`,
-        ].join('\n')
-      : claim.code === 'LIVE_FILE_CONTENTION' && conflict
-        ? [
-            `Colony ${conflict.conflict_strength} claim conflict before ${tool} on ${file_path}.`,
-            `owner=${conflict.owner}`,
-            `policy=${policyMode}`,
-            `warning=${conflict.warning}`,
-          ].join('\n')
-        : [
-            `Missing Colony claim before ${tool} on ${file_path}.`,
-            `reason=${claim.code}: ${claim.error}`,
-            `next=${next_call}`,
-            candidates.length > 0 ? `candidates=${JSON.stringify(candidates)}` : '',
-          ]
-            .filter(Boolean)
-            .join('\n');
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : [
+          `Missing Colony claim before ${tool} on ${file_path}.`,
+          `reason=${claim.code}: ${claim.error}`,
+          `next=${next_call}`,
+          candidates.length > 0 ? `candidates=${JSON.stringify(candidates)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
   return {
     code: claim.code,
     message,
@@ -722,11 +722,9 @@ function claimWarning(
           policy_mode: policyMode,
           conflict: true,
           conflict_strength: conflict.conflict_strength,
+          protected: conflict.protected ?? false,
           owner: conflict.owner,
-          protected_file: conflict.protected_file === true,
-          protected_file_path: conflict.protected_file_path,
-          contender_sessions: conflict.contender_sessions,
-          integrator: conflict.integrator,
+          owner_branch: conflict.owner_branch ?? null,
         }
       : {}),
     next_tool: 'task_claim_file',

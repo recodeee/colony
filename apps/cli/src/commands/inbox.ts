@@ -80,7 +80,7 @@ export function registerInboxCommand(program: Command): void {
             kleur.bold(`Inbox for ${agent}@${session.slice(0, 8)} — ${inbox.summary.next_action}`),
           );
           lines.push(
-            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claim signals: ${inbox.stale_claim_signals.stale_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
+            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  paused lanes: ${inbox.summary.paused_lane_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claim signals: ${inbox.stale_claim_signals.stale_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
           );
 
           const blockingMessages = inbox.unread_messages.filter((m) => m.urgency === 'blocking');
@@ -129,6 +129,17 @@ export function registerInboxCommand(program: Command): void {
               if (w.next_step) lines.push(`    next: ${w.next_step}`);
               lines.push(
                 `    respond: task_message(task_id=${w.task_id}, session_id="${session}", agent="${agent}", to_agent="any", to_session_id="${w.from_session_id}", urgency="fyi", content="...")`,
+              );
+            }
+          }
+          if (inbox.paused_lanes.length > 0) {
+            lines.push('');
+            lines.push(kleur.yellow('Paused lanes:'));
+            for (const lane of inbox.paused_lanes) {
+              const branch = lane.branch ?? '<unknown branch>';
+              const reason = lane.reason ? `: ${lane.reason}` : '';
+              lines.push(
+                `  ${lane.session_id} ${branch} paused by ${lane.paused_by_session_id}${reason}`,
               );
             }
           }

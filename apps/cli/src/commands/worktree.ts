@@ -16,7 +16,9 @@ export function registerWorktreeCommand(program: Command): void {
     .option('--repo-root <path>', 'Repository root to inspect')
     .option('--json', 'Emit JSON output')
     .action((options: WorktreeContentionCommandOptions) => {
-      const report = readWorktreeContentionReport({ repoRoot: options.repoRoot });
+      const report = readWorktreeContentionReport(
+        options.repoRoot ? { repoRoot: options.repoRoot } : {},
+      );
       if (options.json) {
         process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
         return;

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -71,6 +71,39 @@ afterEach(async () => {
 });
 
 describe('task threads — file claims', () => {
+  it('normalizes task_claim_file paths before storing claims and observations', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    mkdirSync(join(repoRoot, 'src'), { recursive: true });
+    const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
+
+    const result = await call<{ observation_id: number; file_path: string }>('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: join(repoRoot, './src/viewer.tsx'),
+    });
+
+    expect(result.file_path).toBe('src/viewer.tsx');
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')).toMatchObject({
+      file_path: 'src/viewer.tsx',
+      session_id: sessionA,
+    });
+    const claim = store.storage.taskObservationsByKind(task_id, 'claim', 1)[0];
+    expect(claim?.metadata).toContain('"file_path":"src/viewer.tsx"');
+  });
+
+  it('rejects pseudo task_claim_file paths', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    const result = await callError('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: '/dev/null',
+    });
+
+    expect(result.code).toBe('INVALID_CLAIM_PATH');
+    expect(store.storage.listClaims(task_id)).toEqual([]);
+  });
+
   it('returns weak stale overlap details without deleting the audit claim', async () => {
     const t0 = Date.parse('2026-04-28T12:00:00.000Z');
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -756,14 +789,14 @@ describe('task threads — handoff lifecycle', () => {
   });
 
   // Relay lifecycle. Different from handoff: relays assume the sender is
-  // gone, so claims are *dropped* at emit time and re-claimed by the
-  // receiver on accept (no third agent can grab a file in the gap). The
+  // gone, so claims become handoff_pending at emit time and are re-claimed by
+  // the receiver on accept (no competing strong claim is left in the gap). The
   // sender provides only `reason` + `one_line` + `base_branch`; the rest
   // is auto-synthesized from the task thread so a Stop / SessionEnd hook
   // firing seconds before the process dies still produces a usable
   // packet. These tests exercise that contract through the MCP surface.
 
-  it('task_relay drops sender claims at emit and task_accept_relay re-claims them on the receiver', async () => {
+  it('task_relay weakens sender claims at emit and task_accept_relay re-claims them on the receiver', async () => {
     const { task_id, sessionA, sessionB } = seedTwoSessionTask();
 
     await call('task_claim_file', {
@@ -784,12 +817,13 @@ describe('task threads — handoff lifecycle', () => {
       },
     );
 
-    // Sender claims must be vacant between emit and accept — otherwise a
-    // third agent racing in the gap could grab the file. This is the
-    // load-bearing invariant that makes the primitive safe.
-    expect(store.storage.getClaim(task_id, 'src/auth.ts')).toBeUndefined();
+    expect(store.storage.getClaim(task_id, 'src/auth.ts')).toMatchObject({
+      session_id: sessionA,
+      state: 'handoff_pending',
+      handoff_observation_id: relay_observation_id,
+    });
 
-    // worktree_recipe.inherit_claims captures the dropped claims so the
+    // worktree_recipe.inherit_claims captures the weakened claims so the
     // receiver knows what to re-claim. Read the metadata directly because
     // the MCP surface deliberately doesn't expose it on the emit response.
     const row = store.storage.getObservation(relay_observation_id);
@@ -805,8 +839,12 @@ describe('task threads — handoff lifecycle', () => {
     });
     expect(accepted.status).toBe('accepted');
 
-    // Claim re-installed under B.
-    expect(store.storage.getClaim(task_id, 'src/auth.ts')?.session_id).toBe(sessionB);
+    expect(store.storage.getClaim(task_id, 'src/auth.ts')).toMatchObject({
+      session_id: sessionB,
+      state: 'active',
+      expires_at: null,
+      handoff_observation_id: null,
+    });
 
     // Second accept must fail — already accepted.
     const retry = await callError('task_accept_relay', {

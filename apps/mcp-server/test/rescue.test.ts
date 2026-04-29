@@ -76,8 +76,14 @@ describe('rescue stranded MCP tools', () => {
     expect(outcome.dry_run).toBe(false);
     expect(outcome.stranded).toHaveLength(1);
     expect(outcome.rescued).toHaveLength(1);
-    expect(store.storage.listClaims(taskId)).toHaveLength(0);
-    expect(store.storage.taskObservationsByKind(taskId, 'relay', 10)).toHaveLength(1);
+    const relay = store.storage.taskObservationsByKind(taskId, 'relay', 10)[0];
+    expect(relay).toBeDefined();
+    expect(store.storage.listClaims(taskId)).toEqual([
+      expect.objectContaining({
+        state: 'handoff_pending',
+        handoff_observation_id: relay?.id,
+      }),
+    ]);
   });
 });
 

@@ -43,6 +43,7 @@ export interface ColonyOmxLifecyclePathRef {
 export interface ColonyOmxLifecycleToolInput {
   operation?: 'replace' | 'multi_replace' | 'write' | 'patch' | 'command' | 'unknown';
   paths?: ColonyOmxLifecyclePathRef[];
+  extracted_paths?: string[];
   command?: string;
   command_redacted?: boolean;
   input_summary?: string;

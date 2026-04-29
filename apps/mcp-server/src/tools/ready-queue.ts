@@ -20,6 +20,11 @@ const RELEASE_DENSITY_WINDOW_MS = 60 * 60 * 1000;
 const CURRENT_TASK_SWITCH_MARGIN = 0.2;
 const RECENT_CLAIM_COOLDOWN_MS = 20 * 60 * 1000;
 const RECENT_CLAIM_COOLDOWN_MARGIN = 0.05;
+const RECENT_RUNTIME_SIGNAL_WINDOW_MS = 6 * 60 * 60 * 1000;
+const STALE_BLOCKER_WINDOW_MS = 60 * 60 * 1000;
+const LARGE_TASK_FILE_COUNT = 4;
+const MISSING_CAPABILITY_SCORE = 0.2;
+const CAPABLE_AGENT_SCORE = 0.5;
 const PLAN_SUBTASK_KIND = 'plan-subtask';
 const PLAN_SUBTASK_CLAIM_KIND = 'plan-subtask-claim';
 export const NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE =
@@ -38,13 +43,17 @@ const CAPABILITY_HINT_TEXT: Record<string, string> = {
 export type ReadyReason = 'continue_current_task' | 'urgent_override' | 'ready_high_score';
 
 export interface TaskPlanClaimArgs {
+  repo_root: string;
   plan_slug: string;
   subtask_index: number;
   session_id: string;
   agent: string;
+  file_scope: string[];
 }
 
 export interface ReadySubtask {
+  next_tool?: 'task_plan_claim_subtask';
+  next_action_reason?: string;
   plan_slug: string;
   subtask_index: number;
   wave_index: number;
@@ -56,6 +65,8 @@ export interface ReadySubtask {
   fit_score: number;
   reason: ReadyReason;
   reasoning: string;
+  assigned_agent: string;
+  routing_reason: string;
   claim_args: TaskPlanClaimArgs;
 }
 
@@ -67,12 +78,17 @@ export interface ReadyForAgentResult {
   ready: ReadySubtaskWithWarnings[];
   total_available: number;
   next_action: string;
-  next_tool?: 'task_plan_claim_subtask';
+  next_tool?: 'task_plan_claim_subtask' | 'rescue_stranded_scan';
   plan_slug?: string;
   subtask_index?: number;
   reason?: ReadyReason;
+  assigned_agent?: string;
+  routing_reason?: string;
   claim_args?: TaskPlanClaimArgs;
+  rescue_candidate?: StaleBlockerRescueCandidate;
+  rescue_args?: { stranded_after_minutes: number };
   codex_mcp_call?: string;
+  next_action_reason?: string;
   empty_state?: string;
 }
 
@@ -86,6 +102,23 @@ interface RankedSubtask extends ReadySubtask {
 interface ScopeConflict {
   file_path: string;
   holder: ClaimHolder;
+}
+
+export interface StaleBlockerRescueCandidate {
+  plan_slug: string;
+  task_id: number;
+  subtask_index: number;
+  title: string;
+  file: string | null;
+  owner_session_id: string | null;
+  owner_agent: string | null;
+  age_minutes: number;
+  unlock_candidate: {
+    task_id: number;
+    subtask_index: number;
+    title: string;
+    file_scope: string[];
+  } | null;
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
@@ -132,6 +165,7 @@ export async function buildReadyForAgent(
     plan.next_available.map((subtask) =>
       rankSubtask(store, {
         plan_slug: plan.plan_slug,
+        repo_root: plan.repo_root,
         subtask,
         session_id: args.session_id,
         agent: args.agent,
@@ -152,6 +186,7 @@ export async function buildReadyForAgent(
       .map((subtask) =>
         rankSubtask(store, {
           plan_slug: plan.plan_slug,
+          repo_root: plan.repo_root,
           subtask,
           session_id: args.session_id,
           agent: args.agent,
@@ -173,7 +208,7 @@ export async function buildReadyForAgent(
       urgentTaskIds.has(task.task_id) ? { ...task, reason: 'urgent_override' } : task,
     ),
     currentClaims,
-  );
+  ).map((task) => applyRuntimeRouting(store, task, args.agent, args.repo_root));
 
   const selected = ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
   const claimable = ranked.find((task) => !task.current_claim) ?? null;
@@ -185,10 +220,19 @@ export async function buildReadyForAgent(
         claim_ts: _claimTs,
         current_claim: _currentClaim,
         ...entry
-      }) => ({
-        ...entry,
-        negative_warnings: await readyNegativeWarnings(store, entry),
-      }),
+      }) => {
+        const claimMetadata = _currentClaim
+          ? {}
+          : {
+              next_tool: 'task_plan_claim_subtask' as const,
+              next_action_reason: claimReason(entry),
+            };
+        return {
+          ...entry,
+          ...claimMetadata,
+          negative_warnings: await readyNegativeWarnings(store, entry),
+        };
+      },
     ),
   );
 
@@ -197,6 +241,7 @@ export async function buildReadyForAgent(
     claimable,
     args,
     plans.length > 0,
+    available.length === 0 ? staleBlockerRescueCandidate(plans) : null,
   );
 }
 
@@ -205,12 +250,24 @@ function buildReadyResult(
   claimable: RankedSubtask | null,
   args: { session_id: string; agent: string },
   hasPlans: boolean,
+  rescueCandidate: StaleBlockerRescueCandidate | null,
 ): ReadyForAgentResult {
   if (claimable === null) {
     if (base.ready.length > 0) {
       return {
         ...base,
         next_action: readyNextAction(base.ready, args),
+      };
+    }
+    if (rescueCandidate) {
+      return {
+        ...base,
+        next_action: `Rescue stale blocker ${rescueCandidate.plan_slug}/sub-${rescueCandidate.subtask_index}; it blocks sub-${rescueCandidate.unlock_candidate?.subtask_index ?? 'unknown'}.`,
+        next_tool: 'rescue_stranded_scan',
+        plan_slug: rescueCandidate.plan_slug,
+        subtask_index: rescueCandidate.subtask_index,
+        rescue_candidate: rescueCandidate,
+        rescue_args: { stranded_after_minutes: STALE_BLOCKER_WINDOW_MS / 60_000 },
       };
     }
     return {
@@ -221,6 +278,17 @@ function buildReadyResult(
   }
 
   const claim_args = claimable.claim_args;
+  if (claimable.assigned_agent !== args.agent && claimable.assigned_agent !== 'any') {
+    return {
+      ...base,
+      next_action: `Route ${claimable.plan_slug}/sub-${claimable.subtask_index} to ${claimable.assigned_agent}: ${claimable.routing_reason}.`,
+      plan_slug: claimable.plan_slug,
+      subtask_index: claimable.subtask_index,
+      reason: claimable.reason,
+      assigned_agent: claimable.assigned_agent,
+      routing_reason: claimable.routing_reason,
+    };
+  }
   return {
     ...base,
     next_action: readyNextAction(base.ready, args),
@@ -228,13 +296,16 @@ function buildReadyResult(
     plan_slug: claimable.plan_slug,
     subtask_index: claimable.subtask_index,
     reason: claimable.reason,
+    assigned_agent: claimable.assigned_agent,
+    routing_reason: claimable.routing_reason,
+    next_action_reason: claimReason(claimable),
     claim_args,
     codex_mcp_call: codexMcpCall(claim_args),
   };
 }
 
 function codexMcpCall(args: TaskPlanClaimArgs): string {
-  return `mcp__colony__task_plan_claim_subtask({ agent: ${JSON.stringify(args.agent)}, session_id: ${JSON.stringify(args.session_id)}, plan_slug: ${JSON.stringify(args.plan_slug)}, subtask_index: ${args.subtask_index} })`;
+  return `mcp__colony__task_plan_claim_subtask({ agent: ${JSON.stringify(args.agent)}, session_id: ${JSON.stringify(args.session_id)}, repo_root: ${JSON.stringify(args.repo_root)}, plan_slug: ${JSON.stringify(args.plan_slug)}, subtask_index: ${args.subtask_index}, file_scope: ${JSON.stringify(args.file_scope)} })`;
 }
 
 function readyNextAction(
@@ -249,6 +320,13 @@ function readyNextAction(
     return `Continue claimed sub-task ${top.plan_slug}/sub-${top.subtask_index}; call task_plan_complete_subtask when done. Claim different ready work only when it should override the current task.`;
   }
   return `Call task_plan_claim_subtask with plan_slug="${top.plan_slug}", subtask_index=${top.subtask_index}, session_id="${args.session_id}", agent="${args.agent}".`;
+}
+
+function claimReason(entry: ReadySubtask): string {
+  if (entry.reason === 'urgent_override') {
+    return `Claim ${entry.plan_slug}/sub-${entry.subtask_index}: blocking task message overrides the current task bias.`;
+  }
+  return `Claim ${entry.plan_slug}/sub-${entry.subtask_index}: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.`;
 }
 
 async function readyNegativeWarnings(
@@ -313,6 +391,7 @@ function rankSubtask(
   store: MemoryStore,
   args: {
     plan_slug: string;
+    repo_root: string;
     subtask: SubtaskInfo;
     session_id: string;
     agent: string;
@@ -352,11 +431,15 @@ function rankSubtask(
       recent_claim_density: recentClaimDensity,
       queen_bonus: queenBonus,
     }),
+    assigned_agent: args.agent,
+    routing_reason: 'Current agent remains eligible for this task.',
     claim_args: {
+      repo_root: args.repo_root,
       plan_slug: args.plan_slug,
       subtask_index: args.subtask.subtask_index,
       session_id: args.session_id,
       agent: args.agent,
+      file_scope: args.subtask.file_scope,
     },
     created_at: args.created_at,
     claim_ts: args.current_claim
@@ -456,6 +539,322 @@ function capabilityMatchScore(capabilityHint: string | null, profile: AgentProfi
   if (capabilityHint === null) return 0.5;
   const summary = CAPABILITY_HINT_TEXT[capabilityHint] ?? capabilityHint.replace(/_/g, ' ');
   return clampScore(rankCandidates({ summary }, [profile])[0]?.score ?? 0);
+}
+
+function staleBlockerRescueCandidate(
+  plans: Array<{ plan_slug: string; subtasks: SubtaskInfo[] }>,
+): StaleBlockerRescueCandidate | null {
+  const now = Date.now();
+  const candidates: StaleBlockerRescueCandidate[] = [];
+  for (const plan of plans) {
+    for (const subtask of plan.subtasks.filter((entry) => isStaleClaimedSubtask(entry, now))) {
+      const unlock = unlockCandidateFor(subtask, plan.subtasks);
+      if (!unlock) continue;
+      candidates.push({
+        plan_slug: plan.plan_slug,
+        task_id: subtask.task_id,
+        subtask_index: subtask.subtask_index,
+        title: subtask.title,
+        file: subtask.file_scope[0] ?? null,
+        owner_session_id: subtask.claimed_by_session_id,
+        owner_agent: subtask.claimed_by_agent,
+        age_minutes: Math.floor((now - (subtask.claimed_at ?? now)) / 60_000),
+        unlock_candidate: {
+          task_id: unlock.task_id,
+          subtask_index: unlock.subtask_index,
+          title: unlock.title,
+          file_scope: unlock.file_scope,
+        },
+      });
+    }
+  }
+
+  return (
+    candidates.sort(
+      (a, b) =>
+        b.age_minutes - a.age_minutes ||
+        a.plan_slug.localeCompare(b.plan_slug) ||
+        a.subtask_index - b.subtask_index,
+    )[0] ?? null
+  );
+}
+
+function isStaleClaimedSubtask(subtask: SubtaskInfo, now: number): boolean {
+  return (
+    subtask.status === 'claimed' &&
+    subtask.claimed_at !== null &&
+    now - subtask.claimed_at >= STALE_BLOCKER_WINDOW_MS
+  );
+}
+
+function unlockCandidateFor(blocker: SubtaskInfo, subtasks: SubtaskInfo[]): SubtaskInfo | null {
+  return (
+    subtasks
+      .filter(
+        (subtask) =>
+          subtask.status !== 'completed' &&
+          subtask.subtask_index !== blocker.subtask_index &&
+          subtask.blocked_by.includes(blocker.subtask_index),
+      )
+      .sort((a, b) => a.wave_index - b.wave_index || a.subtask_index - b.subtask_index)[0] ?? null
+  );
+}
+
+function applyRuntimeRouting(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+): RankedSubtask {
+  if (task.current_claim) return task;
+
+  const signal = runtimeRoutingSignal(store, task, requestedAgent, repoRoot);
+  if (!signal.shouldRouteAway) {
+    return { ...task, assigned_agent: requestedAgent, routing_reason: signal.reason };
+  }
+
+  return {
+    ...task,
+    assigned_agent: bestAlternateRuntime(store, task, requestedAgent, repoRoot, signal),
+    routing_reason: signal.reason,
+  };
+}
+
+function runtimeRoutingSignal(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+): { shouldRouteAway: boolean; reason: string; quotaAgents: Set<string> } {
+  const quotaAgents = recentQuotaAgents(store, repoRoot, task.task_id);
+  const requestedQuota = quotaAgents.has(normalizeAgentKey(requestedAgent));
+  const fileCount = task.file_scope.length;
+  const protectedCount = protectedFileCount(task.file_scope);
+  const staleBlockers = staleBlockerCount(store, task.task_id);
+  const requestedCapability = capabilityMatchScore(
+    task.capability_hint,
+    loadProfile(store.storage, requestedAgent),
+  );
+  const missingCapability =
+    task.capability_hint !== null && requestedCapability <= MISSING_CAPABILITY_SCORE;
+  const largeTask = fileCount >= LARGE_TASK_FILE_COUNT;
+  const riskyAfterQuota = requestedQuota && (largeTask || protectedCount > 0 || staleBlockers > 0);
+
+  if (missingCapability) {
+    return {
+      shouldRouteAway: hasCapableAlternate(store, task, requestedAgent, repoRoot, quotaAgents),
+      reason: `${displayAgent(requestedAgent)} lacks known ${task.capability_hint} capability; task requires ${task.capability_hint}.`,
+      quotaAgents,
+    };
+  }
+
+  if (riskyAfterQuota) {
+    return {
+      shouldRouteAway: true,
+      reason: quotaRoutingReason(requestedAgent, fileCount, protectedCount, staleBlockers),
+      quotaAgents,
+    };
+  }
+
+  if (requestedQuota) {
+    return {
+      shouldRouteAway: false,
+      reason:
+        fileCount <= 1 && protectedCount === 0
+          ? `${displayAgent(requestedAgent)} recently hit quota, but this task is tiny and isolated.`
+          : `${displayAgent(requestedAgent)} recently hit quota, but this task stays below routing-away thresholds.`,
+      quotaAgents,
+    };
+  }
+
+  return {
+    shouldRouteAway: false,
+    reason: 'No recent runtime quota or capability signal requires rerouting.',
+    quotaAgents,
+  };
+}
+
+function quotaRoutingReason(
+  agent: string,
+  fileCount: number,
+  protectedCount: number,
+  staleBlockers: number,
+): string {
+  const details: string[] = [];
+  if (fileCount >= LARGE_TASK_FILE_COUNT) details.push(`task spans ${fileCount} files`);
+  if (protectedCount > 0) {
+    details.push(`task touches ${protectedCount} protected file${protectedCount === 1 ? '' : 's'}`);
+  }
+  if (staleBlockers > 0) {
+    details.push(`${staleBlockers} stale blocker${staleBlockers === 1 ? '' : 's'} exist`);
+  }
+  return `${displayAgent(agent)} recently hit quota on this branch; ${details.join('; ')}`;
+}
+
+function bestAlternateRuntime(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+  signal: { quotaAgents: Set<string> },
+): string {
+  const requestedKey = normalizeAgentKey(requestedAgent);
+  const candidates = candidateAgents(store, repoRoot).filter((agent) => {
+    const key = normalizeAgentKey(agent);
+    return key !== requestedKey && !signal.quotaAgents.has(key);
+  });
+  if (candidates.length === 0 && requestedKey === 'codex') {
+    return 'claude-code';
+  }
+  if (candidates.length === 0) return 'any';
+
+  const ranked = candidates
+    .map((agent) => ({
+      agent,
+      score: capabilityMatchScore(task.capability_hint, loadProfile(store.storage, agent)),
+    }))
+    .sort((a, b) => b.score - a.score || a.agent.localeCompare(b.agent));
+  return ranked[0]?.agent ?? 'any';
+}
+
+function hasCapableAlternate(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+  quotaAgents: Set<string>,
+): boolean {
+  const requestedKey = normalizeAgentKey(requestedAgent);
+  return candidateAgents(store, repoRoot).some((agent) => {
+    const key = normalizeAgentKey(agent);
+    if (key === requestedKey || quotaAgents.has(key)) return false;
+    return (
+      capabilityMatchScore(task.capability_hint, loadProfile(store.storage, agent)) >=
+      CAPABLE_AGENT_SCORE
+    );
+  });
+}
+
+function candidateAgents(store: MemoryStore, repoRoot: string | undefined): string[] {
+  const agents = new Set<string>();
+  for (const row of store.storage.listAgentProfiles()) agents.add(row.agent);
+  for (const session of store.storage.listSessions(500)) {
+    const ide = session.ide?.trim();
+    if (ide) agents.add(ide);
+    const prefix = session.id.includes('@') ? session.id.split('@')[0]?.trim() : '';
+    if (prefix) agents.add(prefix);
+  }
+  for (const task of store.storage.listTasks(2000)) {
+    if (repoRoot !== undefined && task.repo_root !== repoRoot) continue;
+    for (const participant of store.storage.listParticipants(task.id)) {
+      agents.add(participant.agent);
+    }
+  }
+  return [...agents].filter((agent) => !isSystemAgent(agent)).sort();
+}
+
+function isSystemAgent(agent: string): boolean {
+  const key = normalizeAgentKey(agent);
+  return key === 'any' || key === 'queen' || key === 'planner';
+}
+
+function recentQuotaAgents(
+  store: MemoryStore,
+  repoRoot: string | undefined,
+  preferredTaskId: number,
+): Set<string> {
+  const since = Date.now() - RECENT_RUNTIME_SIGNAL_WINDOW_MS;
+  const agents = new Set<string>();
+  const tasks = store.storage
+    .listTasks(2000)
+    .filter((task) => repoRoot === undefined || task.repo_root === repoRoot)
+    .sort((a, b) => (a.id === preferredTaskId ? -1 : b.id === preferredTaskId ? 1 : 0));
+
+  for (const task of tasks) {
+    for (const row of store.storage.taskTimeline(task.id, 200)) {
+      if (row.ts < since) continue;
+      const meta = parseMeta(row.metadata);
+      if (!isQuotaObservation(row, meta)) continue;
+      const agent = readRuntimeAgent(store, task.id, row, meta);
+      if (agent) agents.add(normalizeAgentKey(agent));
+    }
+  }
+  return agents;
+}
+
+function readRuntimeAgent(
+  store: MemoryStore,
+  taskId: number,
+  row: ObservationRow,
+  meta: Record<string, unknown>,
+): string | null {
+  for (const key of ['from_agent', 'agent', 'claimed_by_agent']) {
+    const value = meta[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return (
+    store.storage.getParticipantAgent(taskId, row.session_id) ??
+    store.storage.getSession(row.session_id)?.ide ??
+    null
+  );
+}
+
+function isQuotaObservation(row: ObservationRow, meta: Record<string, unknown>): boolean {
+  const text = [
+    row.kind,
+    row.content,
+    ...Object.values(meta).flatMap((value) =>
+      typeof value === 'string'
+        ? [value]
+        : Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === 'string')
+          : [],
+    ),
+  ].join(' ');
+  return /\b(quota(?:[_\s-]*exhausted|[_\s-]*exceeded|[_\s-]*hit)?|usage[_\s-]*limit|rate[_\s-]*limit|RATE_LIMIT_EXCEEDED)\b/i.test(
+    text,
+  );
+}
+
+function protectedFileCount(fileScope: string[]): number {
+  return fileScope.filter((file) => isProtectedFile(file)).length;
+}
+
+function isProtectedFile(file: string): boolean {
+  return (
+    file === 'AGENTS.md' ||
+    file === 'package.json' ||
+    file === 'pnpm-lock.yaml' ||
+    file.startsWith('.github/') ||
+    file.startsWith('.githooks/') ||
+    file.startsWith('openspec/') ||
+    file.startsWith('scripts/') ||
+    file.endsWith('/schema.ts')
+  );
+}
+
+function staleBlockerCount(store: MemoryStore, taskId: number): number {
+  const before = Date.now() - STALE_BLOCKER_WINDOW_MS;
+  return store.storage
+    .taskTimeline(taskId, 200)
+    .filter((row) => row.ts <= before && isBlockerObservation(row, parseMeta(row.metadata))).length;
+}
+
+function isBlockerObservation(row: ObservationRow, meta: Record<string, unknown>): boolean {
+  return (
+    row.kind === 'blocker' || (row.kind === PLAN_SUBTASK_CLAIM_KIND && meta.status === 'blocked')
+  );
+}
+
+function normalizeAgentKey(agent: string): string {
+  return agent.toLowerCase().replace(/[_\s]+/g, '-');
+}
+
+function displayAgent(agent: string): string {
+  const key = normalizeAgentKey(agent);
+  if (key === 'codex') return 'Codex';
+  if (key === 'claude' || key === 'claude-code') return 'Claude';
+  return agent;
 }
 
 function scopeConflicts(

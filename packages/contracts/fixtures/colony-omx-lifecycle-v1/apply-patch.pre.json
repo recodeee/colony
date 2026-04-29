@@ -18,6 +18,7 @@
         "kind": "file"
       }
     ],
+    "extracted_paths": ["packages/contracts/src/index.ts"],
     "input_summary": "Patch one TypeScript export file; patch body omitted.",
     "file_count": 1,
     "added_lines": 8,

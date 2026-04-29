@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { FileHeatRow, TaskClaimRow, TaskRow } from '@colony/storage';
+import type { FileHeatRow, PausedLaneRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import { type ClaimAgeClass, type ClaimOwnershipStrength, classifyClaimAge } from './claim-age.js';
 import {
   type HivemindActivity,
@@ -7,6 +7,10 @@ import {
   type HivemindSession,
   readHivemind,
 } from './hivemind.js';
+import {
+  type LiveFileContentionWarning,
+  liveFileContentionsForSessionClaims,
+} from './live-file-contention.js';
 import type { MemoryStore } from './memory-store.js';
 import {
   type MessageActionSummary,
@@ -20,10 +24,6 @@ import {
   TaskThread,
   type WakeRequestMetadata,
 } from './task-thread.js';
-import {
-  liveFileContentionsForSessionClaims,
-  type LiveFileContentionWarning,
-} from './live-file-contention.js';
 
 /**
  * Pending handoff item reduced to the shape the inbox surfaces: id, sender,
@@ -39,7 +39,12 @@ export interface InboxHandoff {
   to_session_id: string | null;
   summary: string;
   expires_at: number;
+  handoff_ttl_ms?: number;
   ts: number;
+  reason?: string;
+  runtime_status?: string;
+  priority?: 'high';
+  suggested_next_step?: string;
 }
 
 export interface InboxWake {
@@ -93,6 +98,18 @@ export interface InboxLane {
   activity_summary: string;
   worktree_path: string;
   updated_at: string;
+}
+
+export interface InboxPausedLane {
+  session_id: string;
+  task_id: number | null;
+  repo_root: string | null;
+  branch: string | null;
+  task: string | null;
+  reason: string | null;
+  paused_at: number;
+  paused_by_session_id: string;
+  cwd: string | null;
 }
 
 export interface InboxRecentClaim {
@@ -173,8 +190,10 @@ export interface AttentionInbox {
   agent: string;
   summary: {
     pending_handoff_count: number;
+    expired_quota_handoff_count: number;
     pending_wake_count: number;
     unread_message_count: number;
+    paused_lane_count: number;
     stalled_lane_count: number;
     fresh_other_claim_count: number;
     stale_other_claim_count: number;
@@ -194,6 +213,7 @@ export interface AttentionInbox {
     next_action: string;
   };
   pending_handoffs: InboxHandoff[];
+  expired_quota_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
   unread_messages: InboxMessage[];
   /** Same set of unread messages, grouped by (task, sender, urgency). */
@@ -201,6 +221,7 @@ export interface AttentionInbox {
   /** `message_read` siblings for messages this session originally sent
    *  that have not been replied to. Sized by `read_receipt_window_ms`. */
   read_receipts: ReadReceipt[];
+  paused_lanes: InboxPausedLane[];
   stalled_lanes: InboxLane[];
   stalled_lanes_truncated: boolean;
   stale_claim_signals: InboxStaleClaimSignals;
@@ -280,6 +301,7 @@ export function buildAttentionInbox(
   const taskIds = resolveTaskIds(store, opts);
 
   const pending_handoffs: InboxHandoff[] = [];
+  const expired_quota_handoffs: InboxHandoff[] = [];
   const pending_wakes: InboxWake[] = [];
   const scanned_other_claims: InboxRecentClaim[] = [];
   const unread_messages = listMessagesForAgent(store, {
@@ -302,6 +324,9 @@ export function buildAttentionInbox(
     for (const h of thread.pendingHandoffsFor(opts.session_id, opts.agent, now)) {
       pending_handoffs.push(compactHandoff(task_id, h.id, h.ts, h.meta));
     }
+    for (const h of thread.expiredQuotaHandoffsFor(opts.session_id, opts.agent, now)) {
+      expired_quota_handoffs.push(compactHandoff(task_id, h.id, h.ts, h.meta));
+    }
     for (const w of thread.pendingWakesFor(opts.session_id, opts.agent)) {
       pending_wakes.push(compactWake(task_id, w.id, w.ts, w.meta));
     }
@@ -312,6 +337,8 @@ export function buildAttentionInbox(
       );
     }
   }
+  pending_handoffs.sort(compareHandoffPriority);
+  expired_quota_handoffs.sort((a, b) => b.ts - a.ts);
 
   const recent_other_claims = scanned_other_claims.filter((claim) => claim.age_class === 'fresh');
   const live_file_contentions = liveFileContentionsForSessionClaims(store, {
@@ -330,6 +357,7 @@ export function buildAttentionInbox(
   const stalledLaneResult =
     opts.include_stalled_lanes === false ? emptyStalledLaneResult() : collectStalledLanes(opts);
   const stalled_lanes = stalledLaneResult.rows;
+  const paused_lanes = collectPausedLanes(store, opts);
   const file_heat = collectFileHeat(store, opts, taskIds, now);
 
   const read_receipts = collectReadReceipts(store, opts, taskIds, now);
@@ -341,8 +369,10 @@ export function buildAttentionInbox(
 
   const summary = {
     pending_handoff_count: pending_handoffs.length,
+    expired_quota_handoff_count: expired_quota_handoffs.length,
     pending_wake_count: pending_wakes.length,
     unread_message_count: unread_messages.length,
+    paused_lane_count: paused_lanes.length,
     stalled_lane_count: stalledLaneResult.total,
     fresh_other_claim_count: recent_other_claims.length,
     stale_other_claim_count: staleClaims.length,
@@ -354,8 +384,10 @@ export function buildAttentionInbox(
     blocked,
     next_action: deriveNextAction({
       pending_handoffs,
+      expired_quota_handoffs,
       pending_wakes,
       unread_messages,
+      paused_lanes,
       stalled_lanes,
       stale_claim_signals,
       recent_other_claims,
@@ -371,10 +403,12 @@ export function buildAttentionInbox(
     agent: opts.agent,
     summary,
     pending_handoffs,
+    expired_quota_handoffs,
     pending_wakes,
     unread_messages,
     coalesced_messages,
     read_receipts,
+    paused_lanes,
     stalled_lanes,
     stalled_lanes_truncated: stalledLaneResult.truncated,
     stale_claim_signals,
@@ -533,7 +567,7 @@ function compactHandoff(
   ts: number,
   meta: HandoffMetadata,
 ): InboxHandoff {
-  return {
+  const out: InboxHandoff = {
     id,
     task_id,
     from_agent: meta.from_agent,
@@ -542,8 +576,17 @@ function compactHandoff(
     to_session_id: meta.to_session_id,
     summary: meta.summary,
     expires_at: meta.expires_at,
+    handoff_ttl_ms: meta.handoff_ttl_ms,
     ts,
   };
+  if (meta.reason !== undefined) out.reason = meta.reason;
+  if (meta.runtime_status !== undefined) out.runtime_status = meta.runtime_status;
+  if (meta.reason === 'quota_exhausted') {
+    out.priority = 'high';
+    const suggestedNextStep = meta.quota_context?.suggested_next_step ?? meta.next_steps[0];
+    if (suggestedNextStep !== undefined) out.suggested_next_step = suggestedNextStep;
+  }
+  return out;
 }
 
 function compactWake(
@@ -583,7 +626,7 @@ function compactClaim(
   row: TaskClaimRow,
   options: { now: number; claim_stale_minutes: number },
 ): InboxRecentClaim {
-  const classification = classifyClaimAge(row.claimed_at, options);
+  const classification = classifyClaimAge(row, options);
   return {
     task_id: row.task_id,
     file_path: row.file_path,
@@ -621,7 +664,7 @@ function collectStaleClaimSignals(
     }
 
     for (const claim of claims) {
-      const classification = classifyClaimAge(claim.claimed_at, options);
+      const classification = classifyClaimAge(claim, options);
       if (classification.ownership_strength === 'strong') continue;
 
       staleClaimCount += 1;
@@ -731,6 +774,34 @@ function compactFileHeat(row: FileHeatRow): InboxFileHeat {
   };
 }
 
+function collectPausedLanes(store: MemoryStore, opts: AttentionInboxOptions): InboxPausedLane[] {
+  const repoRoots = attentionRepoRoots(opts);
+  return store.storage
+    .listPausedLanes(100)
+    .filter((lane) => pausedLaneMatchesRepo(lane, repoRoots))
+    .map(compactPausedLane);
+}
+
+function pausedLaneMatchesRepo(lane: PausedLaneRow, repoRoots: Set<string>): boolean {
+  if (repoRoots.size === 0) return true;
+  if (!lane.repo_root) return true;
+  return repoRoots.has(resolve(lane.repo_root));
+}
+
+function compactPausedLane(row: PausedLaneRow): InboxPausedLane {
+  return {
+    session_id: row.session_id,
+    task_id: row.task_id,
+    repo_root: row.repo_root,
+    branch: row.branch,
+    task: row.task_title,
+    reason: row.reason,
+    paused_at: row.updated_at,
+    paused_by_session_id: row.updated_by_session_id,
+    cwd: row.cwd,
+  };
+}
+
 function collectStalledLanes(opts: AttentionInboxOptions): {
   rows: InboxLane[];
   total: number;
@@ -781,8 +852,10 @@ function toInboxLane(session: HivemindSession): InboxLane {
 
 function deriveNextAction(parts: {
   pending_handoffs: InboxHandoff[];
+  expired_quota_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
   unread_messages: InboxMessage[];
+  paused_lanes: InboxPausedLane[];
   stalled_lanes: InboxLane[];
   stale_claim_signals: InboxStaleClaimSignals;
   recent_other_claims: InboxRecentClaim[];
@@ -790,6 +863,9 @@ function deriveNextAction(parts: {
   file_heat: InboxFileHeat[];
   read_receipts: ReadReceipt[];
 }): string {
+  if (parts.pending_handoffs.some((h) => h.reason === 'quota_exhausted')) {
+    return 'Accept active quota_exhausted handoff first; sender is blocked_by_runtime_limit.';
+  }
   if (parts.unread_messages.some((m) => m.urgency === 'blocking')) {
     return 'Answer blocking task messages first; another agent is explicitly blocked on you.';
   }
@@ -802,6 +878,9 @@ function deriveNextAction(parts: {
   if (parts.pending_wakes.length > 0) {
     return 'Acknowledge pending wake requests; another session is waiting on you.';
   }
+  if (parts.expired_quota_handoffs.length > 0) {
+    return 'Review expired quota_exhausted handoffs as stale resume context; do not treat them as live baton passes.';
+  }
   if (parts.unread_messages.length > 0) {
     return 'Review unread FYI task messages when context allows.';
   }
@@ -810,6 +889,9 @@ function deriveNextAction(parts: {
   }
   if (parts.live_file_contentions.length > 0) {
     return 'LIVE_FILE_CONTENTION: another live agent owns a file you claimed; coordinate before editing.';
+  }
+  if (parts.paused_lanes.length > 0) {
+    return 'Review paused lanes — resume them or request takeover for contended files.';
   }
   if (parts.stalled_lanes.length > 0) {
     return 'Review stalled lanes — takeover may be safer than waiting for the owner to return.';
@@ -821,4 +903,13 @@ function deriveNextAction(parts: {
     return 'Other sessions have recent file claims nearby; coordinate before editing the same files.';
   }
   return 'Inbox is quiet; no immediate attention items.';
+}
+
+function compareHandoffPriority(a: InboxHandoff, b: InboxHandoff): number {
+  const priorityDelta = handoffPriority(b) - handoffPriority(a);
+  return priorityDelta === 0 ? b.ts - a.ts : priorityDelta;
+}
+
+function handoffPriority(handoff: InboxHandoff): number {
+  return handoff.reason === 'quota_exhausted' ? 1 : 0;
 }

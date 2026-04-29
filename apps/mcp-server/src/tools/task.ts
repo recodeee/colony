@@ -1,12 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import {
-  TaskThread,
-  classifyClaimAge,
-  listPlans,
-  liveFileContentionsForClaim,
-  normalizeClaimFilePath,
-} from '@colony/core';
+import { TaskThread, classifyClaimAge, listPlans, liveFileContentionsForClaim } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
@@ -309,7 +303,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
       note: z.string().optional(),
     },
     wrapHandler('task_claim_file', async ({ task_id, session_id, file_path, note }) => {
-      const normalizedFilePath = normalizeClaimFilePath(file_path) || file_path;
+      const normalizedFilePath = store.storage.normalizeTaskFilePath(task_id, file_path);
+      if (normalizedFilePath === null) {
+        return mcpErrorResponse('INVALID_CLAIM_PATH', `file path is not claimable: ${file_path}`);
+      }
       const previous = store.storage.getClaim(task_id, normalizedFilePath);
       const liveContentions = liveFileContentionsForClaim(store, {
         task_id,
@@ -328,6 +325,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         : null;
       return jsonReply({
         observation_id: id,
+        file_path: normalizedFilePath,
         warning: liveContentions[0] ?? null,
         live_file_contentions: liveContentions,
         overlap: previousClaim?.overlap ?? 'none',
@@ -498,7 +496,7 @@ function compactPreviousClaim(
   ownership_strength: string;
   overlap: 'same_session' | 'strong_active' | 'weak_stale';
 } {
-  const age = classifyClaimAge(claim.claimed_at, { claim_stale_minutes: claimStaleMinutes });
+  const age = classifyClaimAge(claim, { claim_stale_minutes: claimStaleMinutes });
   const sameSession = claim.session_id === currentSessionId;
   return {
     task_id: claim.task_id,

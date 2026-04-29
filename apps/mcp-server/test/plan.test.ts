@@ -642,7 +642,9 @@ describe('task_plan_complete_subtask', () => {
     expect(plans[0]?.subtask_counts.completed).toBe(1);
     expect(
       readFileSync(join(repoRoot, 'openspec/plans/add-widget-page/checkpoints.md'), 'utf8'),
-    ).toContain('- [x] sub-0 Build widget API [completed] (codex)');
+    ).toContain(
+      '- [x] sub-0 Build widget API [completed] - Widget API landed: GET /api/widgets serving rows.',
+    );
   });
 
   it('rejects completion when called by a non-owning session', async () => {

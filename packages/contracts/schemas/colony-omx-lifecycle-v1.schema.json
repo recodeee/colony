@@ -110,6 +110,14 @@
             "$ref": "#/$defs/path_ref"
           }
         },
+        "extracted_paths": {
+          "type": "array",
+          "description": "Claimable file paths extracted from command or patch text before tool execution. Pseudo paths and redacted/code fragments must be omitted.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "command": {
           "type": "string",
           "minLength": 1,

@@ -113,19 +113,29 @@ describe('colony coordination CLI', () => {
       decayed_proposals: Array<{ summary: string; strength: number; noise_floor: number }>;
       stale_hot_files: Array<{ file_path: string; current_strength: number }>;
       blocked_downstream_tasks: Array<{ plan_slug: string; blocked_by_count: number }>;
+      stale_downstream_blockers: Array<{
+        plan_slug: string;
+        file_path: string;
+        owner_session_id: string;
+        unlock_candidate: { subtask_index: number };
+      }>;
+      released_stale_downstream_blockers: Array<{ task_id: number }>;
     };
 
     expect(json.dry_run).toBe(true);
     expect(json.summary).toMatchObject({
       active_claim_count: 1,
       fresh_claim_count: 1,
-      stale_claim_count: 3,
+      stale_claim_count: 4,
       expired_weak_claim_count: 1,
       expired_handoff_count: 1,
       expired_message_count: 1,
       decayed_proposal_count: 1,
       stale_hot_file_count: 1,
       blocked_downstream_task_count: 1,
+      stale_downstream_blocker_count: 1,
+      released_stale_blocker_claim_count: 0,
+      requeued_stale_blocker_count: 0,
     });
     expect(json.active_claims[0]).toMatchObject({
       file_path: 'src/fresh.ts',
@@ -154,7 +164,14 @@ describe('colony coordination CLI', () => {
       stale_claim_count: 3,
       expired_weak_claim_count: 1,
     });
-    expect(json.suggested_cleanup_action).toContain('release 1 expired/weak advisory claim');
+    expect(json.stale_downstream_blockers[0]).toMatchObject({
+      plan_slug: 'blocked-plan',
+      file_path: 'src/blocked-0.ts',
+      owner_session_id: 'codex@stale',
+      unlock_candidate: { subtask_index: 1 },
+    });
+    expect(json.released_stale_downstream_blockers).toHaveLength(0);
+    expect(json.suggested_cleanup_action).toContain('release/requeue 1 stale downstream blocker');
     expect(json.recommended_action).toBe(json.suggested_cleanup_action);
     expect(json.expired_handoffs[0]).toMatchObject({ summary: 'expired handoff' });
     expect(json.expired_messages[0]).toMatchObject({
@@ -180,11 +197,14 @@ describe('colony coordination CLI', () => {
       { from: 'node' },
     );
 
-    expect(output).toContain('Coordination sweep: 8 stale biological signal(s)');
+    expect(output).toContain('Coordination sweep: 10 stale biological signal(s)');
     expect(output).toContain('mode: dry-run, read-only');
     expect(output).toContain('audit: observations retained; advisory claims only');
-    expect(output).toContain('active claims: 1  stale claims: 3  expired/weak claims: 1');
-    expect(output).toContain('recommended action: dry-run: release 1 expired/weak advisory claim');
+    expect(output).toContain('active claims: 1  stale claims: 4  expired/weak claims: 1');
+    expect(output).toContain(
+      'recommended action: dry-run: release/requeue 1 stale downstream blocker',
+    );
+    expect(output).toContain('stale downstream blockers: 1');
     expect(output).toContain('Active claims:');
     expect(output).toContain('Stale claims:');
     expect(output).toContain('review owner activity, then release or hand off if inactive');
@@ -200,6 +220,8 @@ describe('colony coordination CLI', () => {
     expect(output).toContain('reinforce or let fade');
     expect(output).toContain('Blocked downstream tasks:');
     expect(output).toContain('finish blocker or replan');
+    expect(output).toContain('Stale downstream blockers:');
+    expect(output).toContain('src/blocked-0.ts held by codex@stale');
 
     const settings = loadSettings();
     await withStore(settings, (store) => {
@@ -208,6 +230,80 @@ describe('colony coordination CLI', () => {
       expect(store.storage.listClaims(mainTaskId)).toHaveLength(4);
       expect(store.storage.taskObservationsByKind(mainTaskId, 'handoff')).toHaveLength(1);
       expect(store.storage.taskObservationsByKind(mainTaskId, 'message')).toHaveLength(1);
+    });
+  });
+
+  it('releases and requeues stale downstream blockers without deleting history', async () => {
+    await seedSweepSignals();
+
+    await createProgram().parseAsync(
+      [
+        'node',
+        'test',
+        'coordination',
+        'sweep',
+        '--repo-root',
+        repoRoot,
+        '--json',
+        '--release-stale-blockers',
+      ],
+      { from: 'node' },
+    );
+
+    const applied = JSON.parse(output) as {
+      dry_run: boolean;
+      summary: {
+        stale_downstream_blocker_count: number;
+        released_stale_blocker_claim_count: number;
+        requeued_stale_blocker_count: number;
+      };
+      released_stale_downstream_blockers: Array<{
+        released_claim_count: number;
+        audit_observation_id: number;
+        requeue_observation_id: number;
+      }>;
+    };
+
+    expect(applied.dry_run).toBe(false);
+    expect(applied.summary).toMatchObject({
+      stale_downstream_blocker_count: 1,
+      released_stale_blocker_claim_count: 1,
+      requeued_stale_blocker_count: 1,
+    });
+    expect(applied.released_stale_downstream_blockers[0]).toMatchObject({
+      released_claim_count: 1,
+    });
+
+    output = '';
+    await createProgram().parseAsync(
+      ['node', 'test', 'coordination', 'sweep', '--repo-root', repoRoot, '--json'],
+      { from: 'node' },
+    );
+    const after = JSON.parse(output) as {
+      summary: {
+        stale_downstream_blocker_count: number;
+        released_stale_blocker_claim_count: number;
+        requeued_stale_blocker_count: number;
+      };
+      stale_downstream_blockers: unknown[];
+    };
+    expect(after.summary).toMatchObject({
+      stale_downstream_blocker_count: 0,
+      released_stale_blocker_claim_count: 0,
+      requeued_stale_blocker_count: 0,
+    });
+    expect(after.stale_downstream_blockers).toHaveLength(0);
+
+    const settings = loadSettings();
+    await withStore(settings, (store) => {
+      const blockerTaskId = taskIdByBranch(store, 'spec/blocked-plan/sub-0');
+      expect(store.storage.listClaims(blockerTaskId)).toHaveLength(0);
+      expect(
+        store.storage.taskObservationsByKind(blockerTaskId, 'coordination-sweep'),
+      ).toHaveLength(1);
+      const planRows = store.storage.taskObservationsByKind(blockerTaskId, 'plan-subtask-claim');
+      expect(planRows[0]?.metadata).toContain('"status":"available"');
+      expect(planRows.some((row) => row.metadata?.includes('"status":"claimed"'))).toBe(true);
     });
   });
 });
@@ -287,7 +383,7 @@ async function seedSweepSignals(): Promise<void> {
 }
 
 function seedBlockedPlan(store: MemoryStore): void {
-  setMinutesAgo(120);
+  setMinutesAgo(300);
   const parent = TaskThread.open(store, {
     repo_root: storedRepoRoot,
     branch: 'spec/blocked-plan',
@@ -325,6 +421,23 @@ function seedBlockedPlan(store: MemoryStore): void {
         status: 'available',
       },
     });
+    if (i === 0) {
+      thread.join('codex@stale', 'codex');
+      thread.claimFile({ session_id: 'codex@stale', file_path: 'src/blocked-0.ts' });
+      store.addObservation({
+        session_id: 'codex@stale',
+        task_id: thread.task_id,
+        kind: 'plan-subtask-claim',
+        content: 'claimed blocked plan subtask 0',
+        metadata: {
+          kind: 'plan-subtask-claim',
+          subtask_index: 0,
+          status: 'claimed',
+          session_id: 'codex@stale',
+          agent: 'codex',
+        },
+      });
+    }
   }
 }
 

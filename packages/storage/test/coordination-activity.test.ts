@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,16 +18,18 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function session(id: string, started_at = 1): void {
-  storage.createSession({ id, ide: 'codex', cwd: '/repo', started_at, metadata: null });
-}
-
-function scopedSession(
+function session(
   id: string,
-  cwd: string | null,
-  metadata: Record<string, unknown> | null = null,
+  started_at = 1,
+  options: { cwd?: string | null; metadata?: Record<string, unknown> | null } = {},
 ): void {
-  storage.createSession({ id, ide: 'codex', cwd, started_at: 1, metadata });
+  storage.createSession({
+    id,
+    ide: 'codex',
+    cwd: options.cwd === undefined ? '/repo' : options.cwd,
+    started_at,
+    metadata: options.metadata === undefined ? null : JSON.stringify(options.metadata),
+  });
 }
 
 function toolUse(
@@ -52,8 +54,7 @@ function claim(
   session_id: string,
   file_path: string,
   ts: number,
-  task_id?: number,
-  metadata: Record<string, unknown> = {},
+  options: { task_id?: number; metadata?: Record<string, unknown> } = {},
 ): void {
   storage.insertObservation({
     session_id,
@@ -62,20 +63,32 @@ function claim(
     compressed: false,
     intensity: null,
     ts,
-    task_id,
-    metadata: { kind: 'claim', file_path, ...metadata },
+    task_id: options.task_id,
+    metadata: { kind: 'claim', file_path, ...options.metadata },
   });
 }
 
-function task(repo_root: string, branch: string, session_id: string, agent = 'codex'): number {
-  const row = storage.findOrCreateTask({
-    title: `${branch} lane`,
-    repo_root,
-    branch,
-    created_by: session_id,
+function preToolUseSignal(
+  session_id: string,
+  file_path: string,
+  ts: number,
+  metadata: Record<string, unknown> = {},
+): void {
+  storage.insertObservation({
+    session_id,
+    kind: 'claim-before-edit',
+    content: `edits_missing_claim: ${file_path}`,
+    compressed: false,
+    intensity: null,
+    ts,
+    metadata: {
+      kind: 'claim-before-edit',
+      source: 'pre-tool-use',
+      outcome: 'edits_missing_claim',
+      file_path,
+      ...metadata,
+    },
   });
-  storage.addTaskParticipant({ task_id: row.id, session_id, agent });
-  return row.id;
 }
 
 describe('tool classification', () => {
@@ -192,7 +205,8 @@ describe('colony health read queries', () => {
       'Edit',
       'Edit',
     ]);
-    expect(storage.claimBeforeEditStats(0)).toEqual({
+    const stats = storage.claimBeforeEditStats(0);
+    expect(stats).toMatchObject({
       edit_tool_calls: 3,
       edits_with_file_path: 2,
       edits_claimed_before: 1,
@@ -203,76 +217,213 @@ describe('colony health read queries', () => {
         worktree: 0,
         agent_lane: 0,
       },
+      claim_miss_reasons: {
+        no_claim_for_file: 0,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 0,
+        path_mismatch: 1,
+        worktree_path_mismatch: 0,
+        pseudo_path_skipped: 0,
+        pre_tool_use_missing: 0,
+      },
+      nearest_claim_examples: [
+        expect.objectContaining({
+          reason: 'path_mismatch',
+          edit_file_path: 'src/unclaimed.ts',
+        }),
+      ],
       auto_claimed_before_edit: 0,
       session_binding_missing: 1,
       pre_tool_use_signals: 1,
     });
   });
 
-  it('counts same repo and branch claims before edits when Codex and OMX session ids differ', () => {
-    scopedSession('mcp-claim-session', '/repo');
-    scopedSession('omx-runtime-session', '/repo');
-    const taskId = task('/repo', 'agent/codex/session-lane', 'mcp-claim-session');
-    claim('mcp-claim-session', 'src/lane.ts', 1_000, taskId);
-    toolUse('omx-runtime-session', 'Edit', 2_000, '/repo/src/lane.ts', {
-      repo_root: '/repo',
-      branch: 'agent/codex/session-lane',
+  it('matches same-lane claims before edits when session ids change', () => {
+    const repoRoot = '/repo';
+    const branch = 'agent/codex/lane';
+    const worktree = '/repo/.omx/agent-worktrees/lane';
+    session('codex@lane', 1_000, { cwd: worktree, metadata: { repo_root: repoRoot, branch } });
+    session('mcp-lane', 1_000, { cwd: worktree, metadata: { repo_root: repoRoot, branch } });
+    session('omx-lane', 1_000, { cwd: worktree });
+    const task = storage.findOrCreateTask({
+      title: 'lane',
+      repo_root: repoRoot,
+      branch,
+      created_by: 'codex@lane',
     });
+    storage.addTaskParticipant({ task_id: task.id, session_id: 'codex@lane', agent: 'codex' });
+    storage.addTaskParticipant({ task_id: task.id, session_id: 'mcp-lane', agent: 'codex' });
 
-    expect(storage.claimBeforeEditStats(0)).toMatchObject({
-      edit_tool_calls: 1,
-      edits_with_file_path: 1,
-      edits_claimed_before: 1,
+    claim('codex@lane', 'src/exact.ts', 2_000, { task_id: task.id });
+    toolUse('codex@lane', 'Edit', 3_000, 'src/exact.ts');
+
+    claim('mcp-lane', 'src/repo.ts', 4_000, { task_id: task.id });
+    toolUse('codex@lane', 'Edit', 5_000, '/repo/src/repo.ts', { repo_root: repoRoot, branch });
+
+    claim('omx-lane', '/repo/src/worktree.ts', 6_000, {
+      metadata: { cwd: worktree },
+    });
+    toolUse('codex@lane', 'Edit', 7_000, 'src/worktree.ts', { cwd: worktree });
+
+    claim('mcp-lane', 'src/stale.ts', 8_000, { task_id: task.id });
+    toolUse('codex@lane', 'Edit', 15 * 60_000, 'src/stale.ts', { repo_root: repoRoot, branch });
+
+    const stats = storage.claimBeforeEditStats(0);
+    expect(stats).toMatchObject({
+      edit_tool_calls: 4,
+      edits_with_file_path: 4,
+      edits_claimed_before: 3,
+      claim_match_window_ms: 5 * 60_000,
       claim_match_sources: {
-        exact_session: 0,
+        exact_session: 1,
         repo_branch: 1,
-        worktree: 0,
-        agent_lane: 0,
-      },
-    });
-  });
-
-  it('counts same worktree claims before edits when branch metadata is absent', () => {
-    scopedSession('mcp-worktree-claim', '/repo/worktree');
-    scopedSession('mcp-runtime-worktree', '/repo/worktree');
-    const taskId = task('/repo/worktree', 'agent/codex/worktree-lane', 'mcp-worktree-claim');
-    claim('mcp-worktree-claim', 'src/worktree.ts', 1_000, taskId);
-    toolUse('mcp-runtime-worktree', 'Edit', 2_000, '/repo/worktree/src/worktree.ts');
-
-    expect(storage.claimBeforeEditStats(0)).toMatchObject({
-      edits_claimed_before: 1,
-      claim_match_sources: {
-        exact_session: 0,
-        repo_branch: 0,
         worktree: 1,
         agent_lane: 0,
       },
+      claim_miss_reasons: {
+        no_claim_for_file: 0,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 0,
+        path_mismatch: 0,
+        worktree_path_mismatch: 0,
+        pseudo_path_skipped: 0,
+        pre_tool_use_missing: 1,
+      },
+      nearest_claim_examples: [
+        expect.objectContaining({
+          reason: 'pre_tool_use_missing',
+          edit_file_path: 'src/stale.ts',
+        }),
+      ],
+      auto_claimed_before_edit: 0,
+      session_binding_missing: 0,
+      pre_tool_use_signals: 0,
+    });
+    expect(stats.claim_miss_reasons).toMatchObject({ pre_tool_use_missing: 1 });
+    expect(stats.nearest_claim_examples?.[0]).toMatchObject({
+      reason: 'pre_tool_use_missing',
+      edit_file_path: 'src/stale.ts',
+      nearest_claim_id: expect.any(Number),
     });
   });
 
-  it('uses agent lane fallback only when repo and branch claims are unambiguous by agent', () => {
-    scopedSession('codex-claim', null);
-    scopedSession('claude-claim', null);
-    scopedSession('mcp-edit', null);
-    const taskId = task('/repo', 'agent/shared/lane', 'codex-claim', 'codex');
-    storage.addTaskParticipant({ task_id: taskId, session_id: 'claude-claim', agent: 'claude' });
-    claim('codex-claim', 'src/shared.ts', 1_000, taskId);
-    claim('claude-claim', 'src/shared.ts', 1_100, taskId);
-    toolUse('mcp-edit', 'Edit', 2_000, 'src/shared.ts', {
+  it('classifies each claim-before-edit miss reason with nearest claim context', () => {
+    for (const id of [
+      'no-claim',
+      'claim-after',
+      'repo-mismatch',
+      'branch-mismatch',
+      'path-mismatch',
+      'worktree-mismatch',
+      'pseudo',
+    ]) {
+      session(id);
+    }
+    session('session-claim', 1, { cwd: null });
+    session('session-edit', 1, { cwd: null });
+    session('pre-missing', 1, { cwd: '/repo/worktrees/pre-missing' });
+
+    toolUse('no-claim', 'Edit', 10_000, 'src/no-claim.ts', {
       repo_root: '/repo',
-      branch: 'agent/shared/lane',
-      agent: 'codex',
+      branch: 'main',
+      worktree_path: '/repo/worktrees/main',
+    });
+    preToolUseSignal('no-claim', 'src/no-claim.ts', 9_900, {
+      repo_root: '/repo',
+      branch: 'main',
+      worktree_path: '/repo/worktrees/main',
     });
 
-    expect(storage.claimBeforeEditStats(0)).toMatchObject({
-      edits_claimed_before: 1,
-      claim_match_sources: {
-        exact_session: 0,
-        repo_branch: 0,
-        worktree: 0,
-        agent_lane: 1,
+    toolUse('claim-after', 'Edit', 20_000, 'src/after.ts', {
+      repo_root: '/repo',
+      branch: 'main',
+    });
+    claim('claim-after', 'src/after.ts', 21_000, {
+      metadata: { repo_root: '/repo', branch: 'main' },
+    });
+
+    claim('session-claim', 'src/session.ts', 29_000);
+    toolUse('session-edit', 'Edit', 30_000, 'src/session.ts');
+
+    claim('repo-mismatch', 'src/repo.ts', 39_000, {
+      metadata: { repo_root: '/other-repo', branch: 'main' },
+    });
+    toolUse('repo-mismatch', 'Edit', 40_000, 'src/repo.ts', {
+      repo_root: '/repo',
+      branch: 'main',
+    });
+
+    claim('branch-mismatch', 'src/branch.ts', 49_000, {
+      metadata: { repo_root: '/repo', branch: 'old-branch' },
+    });
+    toolUse('branch-mismatch', 'Edit', 50_000, 'src/branch.ts', {
+      repo_root: '/repo',
+      branch: 'new-branch',
+    });
+
+    claim('path-mismatch', 'src/other.ts', 59_000, {
+      metadata: { repo_root: '/repo', branch: 'main' },
+    });
+    toolUse('path-mismatch', 'Edit', 60_000, 'src/path.ts', {
+      repo_root: '/repo',
+      branch: 'main',
+    });
+
+    claim('worktree-mismatch', 'src/worktree.ts', 69_000, {
+      metadata: { worktree_path: '/repo/worktrees/a' },
+    });
+    toolUse('worktree-mismatch', 'Edit', 70_000, 'src/worktree.ts', {
+      worktree_path: '/repo/worktrees/b',
+    });
+
+    toolUse('pseudo', 'Edit', 80_000, '/dev/null');
+    toolUse('pre-missing', 'Edit', 90_000, 'src/pre-missing.ts');
+
+    const stats = storage.claimBeforeEditStats(0);
+
+    expect(stats).toMatchObject({
+      edit_tool_calls: 9,
+      edits_with_file_path: 9,
+      edits_claimed_before: 0,
+      claim_miss_reasons: {
+        no_claim_for_file: 1,
+        claim_after_edit: 1,
+        session_id_mismatch: 1,
+        repo_root_mismatch: 1,
+        branch_mismatch: 1,
+        path_mismatch: 1,
+        worktree_path_mismatch: 1,
+        pseudo_path_skipped: 1,
+        pre_tool_use_missing: 1,
       },
     });
+    expect(stats.nearest_claim_examples?.map((entry) => entry.reason)).toEqual([
+      'pseudo_path_skipped',
+      'no_claim_for_file',
+      'claim_after_edit',
+      'session_id_mismatch',
+      'repo_root_mismatch',
+      'branch_mismatch',
+      'path_mismatch',
+      'worktree_path_mismatch',
+      'pre_tool_use_missing',
+    ]);
+    expect(stats.nearest_claim_examples).toContainEqual(
+      expect.objectContaining({
+        reason: 'session_id_mismatch',
+        edit_file_path: 'src/session.ts',
+        claim_file_path: 'src/session.ts',
+        relation: expect.objectContaining({
+          same_file_path: true,
+          same_session_id: false,
+          claim_before_edit: true,
+        }),
+      }),
+    );
   });
 });
 

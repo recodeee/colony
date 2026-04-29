@@ -86,7 +86,7 @@ export function liveFileContentionsForSessionClaims(
   for (const task of tasks) {
     for (const claim of store.storage.listClaims(task.id)) {
       if (claim.session_id !== args.session_id) continue;
-      const age = classifyClaimAge(claim.claimed_at, {
+      const age = classifyClaimAge(claim, {
         now,
         claim_stale_minutes: args.claim_stale_minutes ?? store.settings.claimStaleMinutes,
       });
@@ -125,7 +125,7 @@ function warningForClaim(
   options: LiveFileContentionOptions,
 ): LiveFileContentionWarning | null {
   const now = options.now ?? Date.now();
-  const age = classifyClaimAge(claim.claimed_at, {
+  const age = classifyClaimAge(claim, {
     now,
     claim_stale_minutes: options.claim_stale_minutes ?? store.settings.claimStaleMinutes,
   });
@@ -151,12 +151,18 @@ function warningForClaim(
 }
 
 function scopedTasks(store: MemoryStore, options: LiveFileContentionOptions): TaskRow[] {
-  const allTasks = store.storage.listTasks(ALL_TASKS_LIMIT);
+  let allTasks: TaskRow[];
+  try {
+    allTasks = store.storage.listTasks(ALL_TASKS_LIMIT);
+  } catch {
+    return [];
+  }
   const taskIdSet =
     options.task_ids && options.task_ids.length > 0 ? new Set(options.task_ids) : null;
   const requestedRoots = requestedRepoRoots(options);
   const rootTaskId =
-    options.task_id ?? (options.task_ids && options.task_ids.length === 1 ? options.task_ids[0] : undefined);
+    options.task_id ??
+    (options.task_ids && options.task_ids.length === 1 ? options.task_ids[0] : undefined);
   const taskScopedRoot = allTasks.find((task) => task.id === rootTaskId)?.repo_root;
   const roots =
     requestedRoots.size > 0
@@ -186,7 +192,10 @@ function repoRootsForTasks(tasks: TaskRow[], options: LiveFileContentionOptions)
   return [...roots].map(normalizeRepoRoot);
 }
 
-function liveSessionMap(repoRoots: string[], now: number | undefined): Map<string, HivemindSession> {
+function liveSessionMap(
+  repoRoots: string[],
+  now: number | undefined,
+): Map<string, HivemindSession> {
   const sessions = readActiveOmxSessions({
     repoRoots,
     ...(now !== undefined ? { now } : {}),
@@ -207,7 +216,10 @@ function concreteAgent(agent: string): string | undefined {
   return agent && agent !== 'agent' && agent !== 'unknown' ? agent : undefined;
 }
 
-function compareWarnings(left: LiveFileContentionWarning, right: LiveFileContentionWarning): number {
+function compareWarnings(
+  left: LiveFileContentionWarning,
+  right: LiveFileContentionWarning,
+): number {
   const rightSeen = Date.parse(right.last_seen);
   const leftSeen = Date.parse(left.last_seen);
   if (Number.isFinite(rightSeen) && Number.isFinite(leftSeen) && rightSeen !== leftSeen) {

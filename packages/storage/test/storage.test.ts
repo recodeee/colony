@@ -88,6 +88,102 @@ describe('Storage', () => {
     expect(rows[0]?.compressed).toBe(1);
   });
 
+  it('stores lane pause and resume state', () => {
+    storage.setLaneState({
+      session_id: 'codex@lane',
+      state: 'paused',
+      updated_by_session_id: 'human:ops',
+      reason: 'manual contention check',
+      updated_at: 1000,
+    });
+
+    expect(storage.getLaneState('codex@lane')).toMatchObject({
+      session_id: 'codex@lane',
+      state: 'paused',
+      reason: 'manual contention check',
+      updated_at: 1000,
+      updated_by_session_id: 'human:ops',
+    });
+    expect(storage.listPausedLanes()).toEqual([
+      expect.objectContaining({
+        session_id: 'codex@lane',
+        state: 'paused',
+        reason: 'manual contention check',
+      }),
+    ]);
+
+    storage.setLaneState({
+      session_id: 'codex@lane',
+      state: 'active',
+      updated_by_session_id: 'human:ops',
+      reason: 'owner returned',
+      updated_at: 2000,
+    });
+
+    expect(storage.getLaneState('codex@lane')).toMatchObject({
+      state: 'active',
+      reason: 'owner returned',
+      updated_at: 2000,
+    });
+    expect(storage.listPausedLanes()).toHaveLength(0);
+  });
+
+  it('takes over a contended lane claim with weak-old-claim audit', () => {
+    storage.createSession({
+      id: 'codex@old',
+      ide: 'codex',
+      cwd: '/repo',
+      started_at: 100,
+      metadata: null,
+    });
+    storage.createSession({
+      id: 'codex@new',
+      ide: 'codex',
+      cwd: '/repo',
+      started_at: 100,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'contended lane',
+      repo_root: '/repo',
+      branch: 'agent/codex/contention',
+      created_by: 'codex@old',
+    });
+    storage.addTaskParticipant({ task_id: task.id, session_id: 'codex@old', agent: 'codex' });
+    storage.claimFile({ task_id: task.id, file_path: 'src/shared.ts', session_id: 'codex@old' });
+
+    const result = storage.takeOverLaneClaim({
+      target_session_id: 'codex@old',
+      requester_session_id: 'codex@new',
+      requester_agent: 'codex',
+      file_path: 'src/shared.ts',
+      reason: 'old lane paused by human',
+      now: 2000,
+    });
+
+    expect(result).toMatchObject({
+      task_id: task.id,
+      file_path: 'src/shared.ts',
+      previous_session_id: 'codex@old',
+      assigned_session_id: 'codex@new',
+    });
+    expect(storage.getClaim(task.id, 'src/shared.ts')?.session_id).toBe('codex@new');
+    const weakened = storage.taskObservationsByKind(task.id, 'claim-weakened');
+    expect(weakened[0]?.session_id).toBe('codex@old');
+    expect(JSON.parse(weakened[0]?.metadata ?? '{}')).toMatchObject({
+      ownership_strength: 'weak',
+      assigned_session_id: 'codex@new',
+      reason: 'old lane paused by human',
+    });
+    const takeover = storage.taskObservationsByKind(task.id, 'lane-takeover');
+    expect(takeover[0]?.id).toBe(result.takeover_observation_id);
+    expect(JSON.parse(takeover[0]?.metadata ?? '{}')).toMatchObject({
+      target_session_id: 'codex@old',
+      file_path: 'src/shared.ts',
+      weakened_observation_id: result.weakened_observation_id,
+    });
+  });
+
   it('returns recent observations across sessions in descending order', () => {
     storage.createSession({
       id: 'sess-a',

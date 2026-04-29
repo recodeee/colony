@@ -193,6 +193,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
       subtask_index: z.number().int().nonnegative(),
       session_id: z.string().min(1),
       agent: z.string().min(1),
+      repo_root: z.string().min(1).optional(),
+      file_scope: z.array(z.string().min(1)).optional(),
     },
     wrapHandler('task_plan_claim_subtask', async (args) => {
       const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
@@ -224,27 +226,27 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
       // Race-safe claim. Re-scan the claim observations inside a transaction
       // so two concurrent claims serialize through SQLite's write lock; the
-      // first commit wins, the second reads its claim row and rejects.
+      // first commit wins, the second reads its current lifecycle and rejects.
       try {
         store.storage.transaction(() => {
-          const claimRows = store.storage.taskObservationsByKind(
-            located.task_id,
-            'plan-subtask-claim',
-            500,
-          );
-          for (const row of claimRows) {
-            const meta = parseRowMeta(row.metadata);
-            if (meta.status === 'claimed' || meta.status === 'completed') {
-              const err: CodedError = new Error(
-                `sub-task is ${meta.status}${meta.session_id ? ` by ${meta.session_id}` : ''}`,
-              );
-              err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
-              throw err;
-            }
+          const fresh = readSubtaskByBranch(store, branch);
+          if (!fresh) {
+            const err: CodedError = new Error(`no sub-task at ${branch}`);
+            err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+            throw err;
+          }
+          if (fresh.info.status !== 'available') {
+            const err: CodedError = new Error(
+              `sub-task is ${fresh.info.status}${
+                fresh.info.claimed_by_session_id ? ` by ${fresh.info.claimed_by_session_id}` : ''
+              }`,
+            );
+            err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+            throw err;
           }
           store.addObservation({
             session_id: args.session_id,
-            task_id: located.task_id,
+            task_id: fresh.task_id,
             kind: 'plan-subtask-claim',
             content: `${args.agent} claimed sub-task ${args.subtask_index} of plan ${args.plan_slug}`,
             metadata: {
@@ -255,11 +257,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
               subtask_index: args.subtask_index,
             },
           });
-          const thread = new TaskThread(store, located.task_id);
+          const thread = new TaskThread(store, fresh.task_id);
           thread.join(args.session_id, args.agent);
-          for (const file of located.info.file_scope) {
+          for (const file of fresh.info.file_scope) {
             store.storage.claimFile({
-              task_id: located.task_id,
+              task_id: fresh.task_id,
               file_path: file,
               session_id: args.session_id,
             });
@@ -880,16 +882,6 @@ function readPlanConfig(
     return { auto_archive: Boolean(parsed.auto_archive) };
   } catch {
     return null;
-  }
-}
-
-function parseRowMeta(raw: string | null): Record<string, unknown> {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
   }
 }
 

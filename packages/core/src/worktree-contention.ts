@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 
 const MANAGED_WORKTREE_ROOTS = [
@@ -221,9 +222,7 @@ function readDirtyFiles(worktreePath: string): WorktreeDirtyFile[] {
   return [...seen.values()].sort(compareDirtyFiles);
 }
 
-function detectDirtyContentions(
-  worktrees: ManagedWorktreeInspection[],
-): WorktreeDirtyContention[] {
+function detectDirtyContentions(worktrees: ManagedWorktreeInspection[]): WorktreeDirtyContention[] {
   const byPath = new Map<string, WorktreeContentionParticipant[]>();
 
   for (const worktree of worktrees) {
@@ -280,7 +279,8 @@ function readActiveSessions(repoRoot: string): WorktreeActiveSession[] {
         readString(input.lastHeartbeatAt) || readString(input.last_heartbeat_at),
       );
       const updatedAt =
-        lastHeartbeatAt || normalizeIso(readString(input.updatedAt) || readString(input.updated_at));
+        lastHeartbeatAt ||
+        normalizeIso(readString(input.updatedAt) || readString(input.updated_at));
 
       sessions.push({
         session_key: sessionKey,
@@ -288,7 +288,8 @@ function readActiveSessions(repoRoot: string): WorktreeActiveSession[] {
         branch: readString(input.branch),
         worktree_path: resolve(worktreePath),
         task,
-        agent: readString(input.agentName) || readString(input.agent_name) || readString(input.agent),
+        agent:
+          readString(input.agentName) || readString(input.agent_name) || readString(input.agent),
         state: readString(input.state),
         started_at: startedAt,
         last_heartbeat_at: lastHeartbeatAt,
@@ -340,7 +341,7 @@ function findActiveSession(
   );
 }
 
-function safeReadDir(path: string): ReturnType<typeof readdirSync> {
+function safeReadDir(path: string): Dirent<string>[] {
   try {
     return readdirSync(path, { withFileTypes: true });
   } catch {

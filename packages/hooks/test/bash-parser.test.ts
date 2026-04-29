@@ -104,6 +104,11 @@ describe('parseBashCoordinationEvents', () => {
       expected: [{ kind: 'auto-claim', operator: '>>', file_path: 'logs/out.txt' }],
     },
     {
+      name: 'cat stdout redirect',
+      command: 'cat README.md > src/generated.ts',
+      expected: [{ kind: 'auto-claim', operator: '>', file_path: 'src/generated.ts' }],
+    },
+    {
       name: 'adjacent redirect',
       command: 'printf x>src/out.ts',
       expected: [{ kind: 'auto-claim', operator: '>', file_path: 'src/out.ts' }],
@@ -162,6 +167,46 @@ describe('parseBashCoordinationEvents', () => {
       name: 'parent-relative path stays relative',
       command: 'rm ../outside.ts',
       expected: [{ kind: 'file-op', op: 'rm', file_paths: ['../outside.ts'] }],
+    },
+    {
+      name: 'sed in-place file target',
+      command: 'sed -i "s/a/b/" src/edit.ts',
+      expected: [{ kind: 'file-op', op: 'sed', file_paths: ['src/edit.ts'] }],
+    },
+    {
+      name: 'sed in-place with expression option and multiple files',
+      command: 'sed -i.bak -e "s/a/b/" src/a.ts src/b.ts',
+      expected: [{ kind: 'file-op', op: 'sed', file_paths: ['src/a.ts', 'src/b.ts'] }],
+    },
+    {
+      name: 'sed without in-place is read-only',
+      command: 'sed "s/a/b/" src/edit.ts',
+      expected: [],
+    },
+    {
+      name: 'perl in-place file target',
+      command: 'perl -pi -e "s/a/b/" src/perl.ts',
+      expected: [{ kind: 'file-op', op: 'perl', file_paths: ['src/perl.ts'] }],
+    },
+    {
+      name: 'perl in-place with backup and multiple files',
+      command: 'perl -i.bak -pe "s/a/b/" src/a.ts src/b.ts',
+      expected: [{ kind: 'file-op', op: 'perl', file_paths: ['src/a.ts', 'src/b.ts'] }],
+    },
+    {
+      name: 'tee output target',
+      command: 'tee -a src/tee.ts',
+      expected: [{ kind: 'file-op', op: 'tee', file_paths: ['src/tee.ts'] }],
+    },
+    {
+      name: 'pipeline tee output target',
+      command: 'printf x | tee src/pipe.ts > /dev/null',
+      expected: [{ kind: 'file-op', op: 'tee', file_paths: ['src/pipe.ts'] }],
+    },
+    {
+      name: 'pseudo redirect target is ignored',
+      command: 'printf x > stdout',
+      expected: [],
     },
   ];
 

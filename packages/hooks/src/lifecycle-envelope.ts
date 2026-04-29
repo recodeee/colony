@@ -2,6 +2,7 @@ import path, { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
 import { MemoryStore, TaskThread, inferIdeFromSessionId } from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
+import { extractTouchedFiles } from './handlers/post-tool-use.js';
 import { runHook } from './runner.js';
 import type { HookInput, HookName } from './types.js';
 
@@ -55,6 +56,7 @@ export interface OmxLifecycleRunResult {
   route?: string;
   duplicate?: boolean;
   context?: string;
+  extracted_paths?: string[];
   error?: string;
 }
 
@@ -91,6 +93,7 @@ export function parseOmxLifecycleEnvelope(
 
     const eventId = readString(root.event_id);
     if (!eventId) return { ok: false, error: 'missing event_id' };
+    const parentEventId = readString(root.parent_event_id);
 
     const eventType = root.event_name as OmxLifecycleEventType;
     const sessionId = readString(root.session_id);
@@ -121,6 +124,7 @@ export function parseOmxLifecycleEnvelope(
       schema: OMX_LIFECYCLE_SCHEMA,
       schema_id: OMX_LIFECYCLE_SCHEMA_ID,
       event_id: eventId,
+      ...optionalString('parent_event_id', parentEventId),
       event_type: eventType,
       event_name: eventType,
       source,
@@ -136,7 +140,7 @@ export function parseOmxLifecycleEnvelope(
       event: {
         schema: OMX_LIFECYCLE_SCHEMA,
         event_id: eventId,
-        ...optionalString('parent_event_id', readString(root.parent_event_id)),
+        ...optionalString('parent_event_id', parentEventId),
         event_type: eventType,
         session_id: sessionId,
         agent,
@@ -216,6 +220,7 @@ export async function runOmxLifecycleEnvelope(
       route: routed.route,
     };
     if (routed.context !== undefined) result.context = routed.context;
+    if (routed.extracted_paths !== undefined) result.extracted_paths = routed.extracted_paths;
     if (routed.error !== undefined) result.error = routed.error;
     return result;
   } catch (err) {
@@ -234,7 +239,13 @@ export async function runOmxLifecycleEnvelope(
 async function routeLifecycleEvent(
   store: MemoryStore,
   event: NormalizedOmxLifecycleEvent,
-): Promise<{ ok: boolean; route: string; context?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  route: string;
+  context?: string;
+  extracted_paths?: string[];
+  error?: string;
+}> {
   if (event.event_type === 'task_bind') return bindTaskFromLifecycle(store, event);
   if (event.event_type === 'claim_result') {
     bindTaskFromLifecycle(store, event);
@@ -259,6 +270,8 @@ async function routeLifecycleEvent(
   }
 
   if (event.event_type === 'post_tool_use') {
+    const preToolUse = await ensurePreToolUseBeforePostToolUse(store, event);
+    if (!preToolUse.ok) return preToolUse;
     return hookRouteResult(
       'post-tool-use',
       await runHook('post-tool-use', hookInputFromLifecycle(event), { store }),
@@ -269,14 +282,103 @@ async function routeLifecycleEvent(
   return hookRouteResult('stop', await runHook('stop', hookInputFromLifecycle(event), { store }));
 }
 
+async function ensurePreToolUseBeforePostToolUse(
+  store: MemoryStore,
+  event: NormalizedOmxLifecycleEvent,
+): Promise<{
+  ok: boolean;
+  route: string;
+  context?: string;
+  extracted_paths?: string[];
+  error?: string;
+}> {
+  const touchedFiles = extractTouchedFiles(event.tool_name ?? '', toolInputForHook(event), {
+    cwd: event.cwd,
+    repoRoot: event.repo_root,
+  });
+  if (touchedFiles.length === 0) return { ok: true, route: 'pre-tool-use-not-needed' };
+
+  const parentEventId =
+    event.parent_event_id ??
+    findMatchingPreToolUseEventId(store, event, touchedFiles) ??
+    syntheticPreToolUseEventId(event);
+  event.parent_event_id = parentEventId;
+  event.metadata = { ...event.metadata, parent_event_id: parentEventId };
+
+  if (hasProcessedLifecycleEvent(store, parentEventId, event.session_id)) {
+    return { ok: true, route: 'pre-tool-use-existing', extracted_paths: touchedFiles };
+  }
+
+  const preEvent = preToolUseEventFromPost(event, parentEventId);
+  const routed = hookRouteResult(
+    'pre-tool-use',
+    await runHook('pre-tool-use', hookInputFromLifecycle(preEvent), { store }),
+  );
+  recordLifecycleAudit(store, preEvent, routed);
+  if (!routed.ok) return routed;
+  return { ok: true, route: 'pre-tool-use-synthesized', extracted_paths: touchedFiles };
+}
+
+function findMatchingPreToolUseEventId(
+  store: MemoryStore,
+  event: NormalizedOmxLifecycleEvent,
+  touchedFiles: string[],
+): string | undefined {
+  const rows = store.storage.timeline(event.session_id, undefined, 250);
+  for (const row of rows.slice().reverse()) {
+    if (row.kind !== 'omx-lifecycle') continue;
+    const metadata = parseMetadata(row.metadata);
+    if (!metadata || metadata.event_type !== 'pre_tool_use') continue;
+    if (metadata.tool_name !== event.tool_name) continue;
+    const paths = stringArray(metadata.extracted_paths);
+    if (paths.length > 0 && !paths.some((filePath) => touchedFiles.includes(filePath))) continue;
+    return readString(metadata.event_id);
+  }
+  return undefined;
+}
+
+function syntheticPreToolUseEventId(event: NormalizedOmxLifecycleEvent): string {
+  return `${event.event_id}:pre_tool_use`;
+}
+
+function preToolUseEventFromPost(
+  event: NormalizedOmxLifecycleEvent,
+  eventId: string,
+): NormalizedOmxLifecycleEvent {
+  return {
+    schema: event.schema,
+    event_id: eventId,
+    event_type: 'pre_tool_use',
+    session_id: event.session_id,
+    agent: event.agent,
+    ide: event.ide,
+    cwd: event.cwd,
+    repo_root: event.repo_root,
+    branch: event.branch,
+    timestamp: event.timestamp,
+    ...optionalString('tool_name', event.tool_name),
+    ...('tool_input' in event ? { tool_input: event.tool_input } : {}),
+    source: event.source,
+    metadata: {
+      ...event.metadata,
+      event_id: eventId,
+      event_type: 'pre_tool_use',
+      event_name: 'pre_tool_use',
+      synthesized_from_event_id: event.event_id,
+      synthesized_from_event_type: 'post_tool_use',
+    },
+  };
+}
+
 function hookRouteResult(
   route: HookName,
-  result: { ok: boolean; context?: string; error?: string },
-): { ok: boolean; route: string; context?: string; error?: string } {
+  result: { ok: boolean; context?: string; extracted_paths?: string[]; error?: string },
+): { ok: boolean; route: string; context?: string; extracted_paths?: string[]; error?: string } {
   return {
     ok: result.ok,
     route,
     ...(result.context !== undefined ? { context: result.context } : {}),
+    ...(result.extracted_paths !== undefined ? { extracted_paths: result.extracted_paths } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
   };
 }
@@ -327,12 +429,19 @@ function toolInputForHook(event: NormalizedOmxLifecycleEvent): unknown {
 }
 
 function targetPathFromLifecycleToolInput(input: JsonRecord): string | undefined {
+  const extractedPaths = stringArray(input.extracted_paths);
+  if (extractedPaths.length > 0) return extractedPaths[0];
   const paths = Array.isArray(input.paths) ? input.paths.filter(isPathRef) : [];
   const target =
     paths.find((p) => p.kind === 'file' && p.role === 'target') ??
     paths.find((p) => p.kind === 'file' && p.role === 'destination') ??
     paths.find((p) => p.kind === 'file');
   return target?.path;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
 }
 
 function hasProcessedLifecycleEvent(
@@ -357,7 +466,7 @@ function hasProcessedLifecycleEvent(
 function recordLifecycleAudit(
   store: MemoryStore,
   event: NormalizedOmxLifecycleEvent,
-  routed: { ok: boolean; route: string; error?: string },
+  routed: { ok: boolean; route: string; error?: string; extracted_paths?: string[] },
 ): void {
   const taskId = activeTaskIdForLifecycle(store, event);
   store.storage.insertObservation({
@@ -383,6 +492,7 @@ function recordLifecycleAudit(
       tool_name: event.tool_name ?? null,
       route: routed.route,
       ok: routed.ok,
+      ...(routed.extracted_paths?.length ? { extracted_paths: routed.extracted_paths } : {}),
       ...(routed.error ? { error: routed.error } : {}),
     },
     task_id: taskId ?? null,

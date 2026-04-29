@@ -29,7 +29,8 @@ const HOOK_NAMES: Array<[string, string]> = [
 // Codex hooks support the same matcher grammar as Claude Code for tool-use
 // events. Keep this aligned with the Claude installer so claim-before-edit
 // telemetry covers the same write-family tools.
-const FILE_WRITE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash';
+const FILE_WRITE_TOOL_MATCHER =
+  'Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|ApplyPatch|Patch';
 
 function configFile(): string {
   return join(homedir(), '.codex', 'config.json');

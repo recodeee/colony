@@ -95,12 +95,17 @@ describe('rescueStrandedSessions', () => {
         rescue_reason: 'silent-stranded',
       },
     ]);
-    expect(store.storage.getClaim(thread.task_id, 'src/a.ts')).toBeUndefined();
-    expect(store.storage.getClaim(thread.task_id, 'src/b.ts')).toBeUndefined();
-
     const rows = store.storage.taskTimeline(thread.task_id, 10);
     const relay = rows.find((row) => row.kind === 'relay');
     expect(relay?.id).toBe(outcome.rescued[0]?.relay_observation_id);
+    expect(store.storage.getClaim(thread.task_id, 'src/a.ts')).toMatchObject({
+      state: 'handoff_pending',
+      handoff_observation_id: relay?.id,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/b.ts')).toMatchObject({
+      state: 'handoff_pending',
+      handoff_observation_id: relay?.id,
+    });
     const rescue = rows.find((row) => row.kind === 'rescue-relay');
     expect(JSON.parse(rescue?.metadata ?? '{}')).toMatchObject({
       stranded_session_id: session_id,
@@ -124,8 +129,12 @@ describe('rescueStrandedSessions', () => {
     expect(outcome.rescued.map((entry) => entry.task_id).sort()).toEqual(
       [first.thread.task_id, second.thread.task_id].sort(),
     );
-    expect(store.storage.getClaim(first.thread.task_id, 'src/one.ts')).toBeUndefined();
-    expect(store.storage.getClaim(second.thread.task_id, 'src/two.ts')).toBeUndefined();
+    expect(store.storage.getClaim(first.thread.task_id, 'src/one.ts')).toMatchObject({
+      state: 'handoff_pending',
+    });
+    expect(store.storage.getClaim(second.thread.task_id, 'src/two.ts')).toMatchObject({
+      state: 'handoff_pending',
+    });
   });
 
   it('uses quota relay reason when the latest tool error matches quota', () => {

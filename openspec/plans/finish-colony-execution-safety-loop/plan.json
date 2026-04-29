@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "plan_slug": "finish-colony-execution-safety-loop",
+  "title": "Finish Colony execution-safety loop",
+  "problem": "Coordination adoption is green, but claim-before-edit diagnostics and Queen plan execution are red. Health must explain why claims do not count before edits, and active plan work must become claimable through task_ready_for_agent.",
+  "acceptance_criteria": [
+    "claim/edit correlation diagnostics explain why task_claim_file calls do not count before edits",
+    "active plan exists with claimable subtasks",
+    "task_ready_for_agent returns task_plan_claim_subtask args for ready work",
+    "task_plan_claim_subtask is used for the active execution-safety lane",
+    "targeted tests cover claim miss diagnostics, path normalization, fallback matching, bridge signal distinctions, and Queen readiness"
+  ],
+  "roles": ["planner", "architect", "critic", "executor", "writer", "verifier"],
+  "tasks": [
+    {
+      "subtask_index": 0,
+      "title": "Claim/edit correlation diagnostics",
+      "description": "Tighten diagnostics that correlate file claims with edits so execution-safety health can explain missing or mismatched claim coverage.",
+      "file_scope": [
+        "packages/storage/src/storage.ts",
+        "packages/storage/test/coordination-activity.test.ts"
+      ],
+      "depends_on": [],
+      "spec_row_id": null,
+      "capability_hint": "api_work",
+      "status": "completed",
+      "claimed_by_session_id": "codex-execution-safety-20260429",
+      "claimed_by_agent": "codex",
+      "completed_summary": "Claim miss buckets explain no claim, after-edit, session/path/repo/branch mismatches, pseudo paths, and missing PreToolUse signals. Evidence: pnpm --filter @colony/storage test -- claim-path coordination-activity passed 22 tests; pnpm --filter @imdeadpool/colony-cli test -- health passed 18 tests."
+    },
+    {
+      "subtask_index": 1,
+      "title": "Path normalization",
+      "description": "Normalize claim and edit paths consistently before matching so equivalent repo-relative paths do not fragment readiness or safety diagnostics.",
+      "file_scope": [
+        "packages/storage/src/claim-path.ts",
+        "packages/storage/test/claim-path.test.ts"
+      ],
+      "depends_on": [],
+      "spec_row_id": null,
+      "capability_hint": "api_work",
+      "status": "completed",
+      "claimed_by_session_id": "019dd8f2-b2f5-7c81-87fa-625ae7b5853a",
+      "claimed_by_agent": "codex",
+      "completed_summary": "Path normalization helper and focused test verified. Evidence: pnpm --filter @colony/storage exec vitest run test/claim-path.test.ts passed (6 tests)."
+    },
+    {
+      "subtask_index": 2,
+      "title": "Session/branch fallback matching",
+      "description": "Add fallback matching between session and branch identities when exact ownership metadata is incomplete, while preserving explicit conflict signals.",
+      "file_scope": ["packages/core/src/task-thread.ts", "packages/core/src/index.ts"],
+      "depends_on": [],
+      "spec_row_id": null,
+      "capability_hint": "api_work",
+      "status": "completed",
+      "claimed_by_session_id": "019dd8f2-b2f5-7c81-87fa-625ae7b5853a",
+      "claimed_by_agent": "codex",
+      "completed_summary": "Session/branch fallback matching verified through auto-claim coverage. Evidence: pnpm --filter @colony/hooks exec vitest run test/auto-claim.test.ts passed (36 tests)."
+    },
+    {
+      "subtask_index": 3,
+      "title": "Codex/OMX bridge signals",
+      "description": "Expose Codex/OMX bridge signals into the execution-safety loop so health and readiness can route work without stale zero counts.",
+      "file_scope": [
+        "apps/mcp-server/src/tools/task.ts",
+        "packages/hooks/src/auto-claim.ts",
+        "packages/hooks/src/handlers/pre-tool-use.ts",
+        "packages/hooks/src/handlers/post-tool-use.ts"
+      ],
+      "depends_on": [0, 1, 2],
+      "spec_row_id": null,
+      "capability_hint": "infra_work",
+      "status": "completed",
+      "claimed_by_session_id": "codex-finish-worktrees-20260429",
+      "claimed_by_agent": "codex",
+      "completed_summary": "task_claim_file, PreToolUse, PostToolUse, and auto-claim paths share claim normalization and skip pseudo paths. Evidence: pnpm --filter @colony/hooks test -- runner passed 21 tests; pnpm --filter @colony/mcp-server test -- task-threads passed 28 tests."
+    },
+    {
+      "subtask_index": 4,
+      "title": "Health verification",
+      "description": "Verify active plan health and ready-work reporting end to end, including task_ready_for_agent conversion args for the first wave.",
+      "file_scope": ["apps/cli/test/queen-health.test.ts", "packages/storage/src/index.ts"],
+      "depends_on": [0, 1, 2, 3],
+      "spec_row_id": null,
+      "capability_hint": "test_work",
+      "status": "completed",
+      "claimed_by_session_id": "codex-finish-worktrees-20260429",
+      "claimed_by_agent": "codex",
+      "completed_summary": "Health payload and text output include claim miss diagnostics, Queen readiness, and task-ready conversion checks. Evidence: pnpm --filter @imdeadpool/colony-cli test -- health passed 18 tests."
+    }
+  ],
+  "published": {
+    "spec_task_id": 10,
+    "spec_change_path": "/home/deadpool/Documents/recodee/colony/.omx/agent-worktrees/colony__codex__finish-colony-execution-safety-loop-2026-04-29-12-52/openspec/changes/finish-colony-execution-safety-loop/CHANGE.md",
+    "auto_archive": false
+  },
+  "created_at": "2026-04-29T11:02:36.803Z",
+  "updated_at": "2026-04-29T12:30:16Z"
+}

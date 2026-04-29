@@ -96,9 +96,21 @@ CREATE TABLE IF NOT EXISTS task_claims (
   file_path TEXT NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   claimed_at INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending')),
+  expires_at INTEGER,
+  handoff_observation_id INTEGER REFERENCES observations(id) ON DELETE SET NULL,
   PRIMARY KEY (task_id, file_path)
 );
 CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
+
+CREATE TABLE IF NOT EXISTS lane_states (
+  session_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK(state IN ('active','paused')),
+  reason TEXT,
+  updated_at INTEGER NOT NULL,
+  updated_by_session_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lane_states_state ON lane_states(state, updated_at DESC);
 
 -- Pheromone trails: ambient, decaying "activity intensity" left on files by
 -- tool use. One row per (task_id, file_path, session_id) — different agents
@@ -241,6 +253,21 @@ export const COLUMN_MIGRATIONS: ReadonlyArray<{ table: string; column: string; s
     table: 'observations',
     column: 'reply_to',
     sql: 'ALTER TABLE observations ADD COLUMN reply_to INTEGER REFERENCES observations(id)',
+  },
+  {
+    table: 'task_claims',
+    column: 'state',
+    sql: "ALTER TABLE task_claims ADD COLUMN state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending'))",
+  },
+  {
+    table: 'task_claims',
+    column: 'expires_at',
+    sql: 'ALTER TABLE task_claims ADD COLUMN expires_at INTEGER',
+  },
+  {
+    table: 'task_claims',
+    column: 'handoff_observation_id',
+    sql: 'ALTER TABLE task_claims ADD COLUMN handoff_observation_id INTEGER REFERENCES observations(id) ON DELETE SET NULL',
   },
 ];
 

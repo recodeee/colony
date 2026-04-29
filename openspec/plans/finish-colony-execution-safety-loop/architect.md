@@ -1,0 +1,13 @@
+# Architect
+
+Plan: `finish-colony-execution-safety-loop`
+
+## Responsibility
+
+Check boundaries, data flow, interfaces, and rollback shape.
+
+## Checkpoints
+
+- [ ] Read `plan.md`, `tasks.md`, and `checkpoints.md`.
+- [ ] Record decisions or blockers in the plan workspace before handoff.
+- [ ] Keep task-thread status aligned with local files.

@@ -53,6 +53,7 @@ export async function runHook(
     }
 
     let context: string | undefined;
+    let extractedPaths: string[] | undefined;
     switch (name) {
       case 'session-start':
         upsertActiveSession(input, name);
@@ -81,6 +82,7 @@ export async function runHook(
           context = preToolUse.context;
           permissionDecision = preToolUse.permissionDecision;
           permissionDecisionReason = preToolUse.permissionDecisionReason;
+          extractedPaths = preToolUse.extracted_paths;
         }
         break;
       case 'post-tool-use':
@@ -107,6 +109,7 @@ export async function runHook(
     if (permissionDecision !== undefined) result.permissionDecision = permissionDecision;
     if (permissionDecisionReason !== undefined)
       result.permissionDecisionReason = permissionDecisionReason;
+    if (extractedPaths !== undefined) result.extracted_paths = extractedPaths;
     return result;
   } catch (err) {
     return {

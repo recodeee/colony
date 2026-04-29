@@ -107,16 +107,19 @@ Requirements:
 
 ```bash
 colony health
+colony health --fix-plan
 colony status
 colony search "error or decision"
 colony coordination sweep --json
 colony queen sweep
 colony viewer
+pnpm smoke:codex-omx-pretool
 ```
 
 | Command | Purpose |
 | --- | --- |
 | `colony health` | Show readiness, adoption, stale signals, note migration, and claim-before-edit coverage. |
+| `colony health --fix-plan` | Print the guided recovery sequence for execution-safety states such as `pre_tool_use_missing`, stale claims, and live contentions. Add `--apply` to run coordination and queen sweeps; it still does not release claims or install hooks. |
 | `colony status` | Show storage, installed IDEs, worker state, memory counts, and embedding status. |
 | `colony search "<query>"` | Search prior observations and session memory. |
 | `colony timeline <session-id>` | Inspect one session chronologically. |
@@ -126,6 +129,9 @@ colony viewer
 | `colony viewer` | Open the local read-only web viewer. |
 | `colony install --ide <name>` | Register hooks and MCP config for one runtime. |
 | `colony uninstall --ide <name>` | Remove installed hooks and MCP config. |
+| `pnpm smoke:codex-omx-pretool` | Run a fresh Codex/OMX lifecycle smoke that binds a task, claims a real file, emits `pre_tool_use`, performs one edit, emits `post_tool_use`, and asserts claim-before-edit coverage. |
+
+Installed Codex and Claude SessionStart hooks also inject the quota-safe operating contract: start with `hivemind_context`, then `attention_inbox`, then `task_ready_for_agent`; accept handoffs, claim subtasks/files before edits, keep `task_note_working` current, run focused verification, and emit a `quota_exhausted` handoff before quota/session stop with claimed files, dirty files, branch, last verification, and next step. Colony remains the coordination truth, OMX keeps runtime memory summaries, and available MCP servers provide repo/GitHub/CI/docs context.
 
 ---
 
@@ -159,6 +165,16 @@ Readiness pillars:
 | Signal evaporation | Stale claims/proposals/handoffs decay instead of clogging work. |
 
 ---
+
+### Codex/OMX pre-tool smoke
+
+Run this when `pre_tool_use_missing` rises or when validating a Codex/OMX hook install:
+
+```bash
+pnpm smoke:codex-omx-pretool
+```
+
+The smoke uses an isolated temp git repo and Colony store. It starts a fresh Codex/OMX lifecycle session, binds an active task, records a manual claim for a real file path, emits `pre_tool_use`, mutates the file, emits `post_tool_use`, then asserts lifecycle order, claim-before-edit observation order, `pre_tool_use_signals > 0`, `edits_claimed_before > 0`, and no `pre_tool_use_missing` inside the same health window that `colony health` reads.
 
 ---
 
@@ -217,8 +233,9 @@ Use `task_list` for browsing/debugging. Use `task_ready_for_agent` for work sele
 When plan work is claimable, `task_ready_for_agent` returns:
 
 - `next_tool: "task_plan_claim_subtask"`
-- exact `claim_args`
+- exact copy-paste `claim_args` with `session_id`, `agent`, `repo_root`, `plan_slug`, `subtask_index`, and `file_scope`
 - `reason`
+- `next_action_reason`
 - copy-paste MCP call
 
 When nothing is claimable, it returns an empty state that tells the agent to publish a Queen/task plan for multi-agent work.

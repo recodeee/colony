@@ -74,6 +74,8 @@ export {
   type CoordinationKind,
   type HandoffMetadata,
   type HandoffObservation,
+  type HandoffReason,
+  type HandoffRuntimeStatus,
   type HandoffStatus,
   type HandoffTarget,
   type HandOffArgs,
@@ -84,6 +86,7 @@ export {
   type MessageUrgency,
   type NegativeCoordinationKind,
   type PostMessageArgs,
+  type QuotaExhaustedHandoffContext,
   type RelayArgs,
   type RelayMetadata,
   type RelayObservation,
@@ -117,6 +120,7 @@ export {
   type InboxFileHeat,
   type InboxLane,
   type InboxMessage,
+  type InboxPausedLane,
   type InboxRecentClaim,
   type InboxStaleClaimBranch,
   type InboxStaleClaimSignals,
@@ -208,6 +212,8 @@ export {
   type TaskStatus,
 } from './suggestion-payload.js';
 export { buildDiscrepancyReport, type DiscrepancyReport } from './discrepancy.js';
+export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from '@colony/storage';
+export type { ClaimPathContext, RepoFilePathContext } from '@colony/storage';
 export {
   buildCoordinationSweep,
   type BlockedDownstreamTaskSignal,
@@ -223,7 +229,9 @@ export {
   type FreshClaimSignal,
   type StaleClaimBranchSummary,
   type StaleClaimSignal,
+  type StaleDownstreamBlockerSignal,
   type StaleHotFileSignal,
+  type ReleasedStaleDownstreamBlocker,
 } from './coordination-sweep.js';
 export {
   ABANDONED_TASK_DAYS,

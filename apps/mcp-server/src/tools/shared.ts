@@ -196,6 +196,7 @@ export interface HivemindContextAttention {
   stale_claims: number;
   expired_claims: number;
   weak_claims: number;
+  paused_lanes: number;
   stalled_lanes: number;
   counts: HivemindContextAttentionCounts;
   observation_ids: number[];
@@ -210,6 +211,7 @@ export interface HivemindContextAttentionCounts {
   pending_handoff_count: number;
   pending_wake_count: number;
   unread_message_count: number;
+  paused_lane_count: number;
   stalled_lane_count: number;
   recent_other_claim_count: number;
   fresh_other_claim_count: number;
@@ -423,7 +425,7 @@ function findFileScopedLocalTask(
       return files.some((file) => {
         const claim = store.storage.getClaim(candidate.id, file);
         if (!claim) return false;
-        const age = classifyClaimAge(claim.claimed_at, {
+        const age = classifyClaimAge(claim, {
           claim_stale_minutes: store.settings.claimStaleMinutes,
         });
         return isStrongClaimAge(age);
@@ -559,7 +561,7 @@ function localClaims(
         })
       : store.storage.listClaims(input.taskId);
   const classified = claims.map((claim) => {
-    const age = classifyClaimAge(claim.claimed_at, {
+    const age = classifyClaimAge(claim, {
       claim_stale_minutes: store.settings.claimStaleMinutes,
     });
     return { claim, age };
@@ -757,6 +759,7 @@ function buildAttention(
     pending_handoff_count: input?.summary.pending_handoff_count ?? 0,
     pending_wake_count: input?.summary.pending_wake_count ?? 0,
     unread_message_count: input?.summary.unread_message_count ?? 0,
+    paused_lane_count: input?.summary.paused_lane_count ?? 0,
     stalled_lane_count: Math.max(input?.summary.stalled_lane_count ?? 0, laneNeedsAttentionCount),
     recent_other_claim_count: input?.summary.recent_other_claim_count ?? 0,
     fresh_other_claim_count: input?.summary.fresh_other_claim_count ?? 0,
@@ -776,6 +779,7 @@ function buildAttention(
     stale_claims: counts.stale_other_claim_count,
     expired_claims: counts.expired_other_claim_count,
     weak_claims: counts.weak_other_claim_count,
+    paused_lanes: counts.paused_lane_count,
     stalled_lanes: counts.stalled_lane_count,
     counts,
     observation_ids: input?.observation_ids ?? [],

@@ -103,6 +103,13 @@ task_post kind=note
 content="branch=<branch>; task=<task>; blocker=<blocker>; next=<next>; evidence=<path|command|PR|spec>"
 ```
 
+Use `task_note_working` first for current working state when no active task id is known.
+Only write the optional tiny OMX pointer bridge when `bridge.writeOmxNotepadPointer=true`, and keep the pointer compact:
+
+```text
+colony_observation_id=<id>
+```
+
 Use exactly these fields for handoff-style notes:
 
 - `branch`

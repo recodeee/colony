@@ -18,6 +18,7 @@ describe('Colony CLI program', () => {
       'hook',
       'inbox',
       'install',
+      'lane',
       'mcp',
       'note',
       'observe',
@@ -51,6 +52,8 @@ describe('Colony CLI program', () => {
 
       Commands:
         install [options]                   Register hooks + MCP server for an IDE
+        lane                                Pause, resume, and take over contended
+                                            lanes
         uninstall [options]                 Remove IDE integration
         status                              Show colony wiring, data, and worker
                                             state
@@ -153,6 +156,9 @@ describe('Colony CLI program', () => {
     expect(health).toBeDefined();
     expect(health?.options.find((o) => o.long === '--json')).toBeDefined();
     expect(health?.options.find((o) => o.long === '--prompts')).toBeDefined();
+    expect(health?.options.find((o) => o.long === '--fix-plan')).toBeDefined();
+    expect(health?.options.find((o) => o.long === '--apply')).toBeDefined();
+    expect(health?.options.find((o) => o.long === '--repo-root')).toBeDefined();
   });
 
   it('advertises a semantic version', () => {

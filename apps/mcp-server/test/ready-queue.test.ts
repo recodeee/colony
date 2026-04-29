@@ -15,6 +15,8 @@ let store: MemoryStore;
 let client: Client;
 
 interface ReadyEntry {
+  next_tool?: 'task_plan_claim_subtask';
+  next_action_reason?: string;
   plan_slug: string;
   subtask_index: number;
   wave_index: number;
@@ -26,11 +28,15 @@ interface ReadyEntry {
   fit_score: number;
   reason: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
   reasoning: string;
+  assigned_agent?: string;
+  routing_reason?: string;
   claim_args: {
+    repo_root: string;
     plan_slug: string;
     subtask_index: number;
     session_id: string;
     agent: string;
+    file_scope: string[];
   };
 }
 
@@ -68,17 +74,39 @@ interface ReadyResult {
   ready: ReadyEntry[];
   total_available: number;
   next_action: string;
-  next_tool?: 'task_plan_claim_subtask';
+  next_tool?: 'task_plan_claim_subtask' | 'rescue_stranded_scan';
   plan_slug?: string;
   subtask_index?: number;
   reason?: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
+  assigned_agent?: string;
+  routing_reason?: string;
   claim_args?: {
+    repo_root: string;
     plan_slug: string;
     subtask_index: number;
     session_id: string;
     agent: string;
+    file_scope: string[];
   };
+  rescue_candidate?: {
+    plan_slug: string;
+    task_id: number;
+    subtask_index: number;
+    title: string;
+    file: string | null;
+    owner_session_id: string | null;
+    owner_agent: string | null;
+    age_minutes: number;
+    unlock_candidate: {
+      task_id: number;
+      subtask_index: number;
+      title: string;
+      file_scope: string[];
+    } | null;
+  };
+  rescue_args?: { stranded_after_minutes: number };
   codex_mcp_call?: string;
+  next_action_reason?: string;
   empty_state?: string;
 }
 
@@ -88,6 +116,9 @@ const EMPTY_READY_STATE =
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const res = await client.callTool({ name, arguments: args });
   const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+  if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
+    throw new Error(text);
+  }
   return JSON.parse(text) as T;
 }
 
@@ -132,6 +163,62 @@ function blockSubtask(planSlug: string, subtaskIndex: number, taskId: number): v
       agent: 'codex',
       plan_slug: planSlug,
       subtask_index: subtaskIndex,
+    },
+  });
+}
+
+function recordQuotaHandoff(taskId: number, agent = 'codex'): void {
+  store.addObservation({
+    session_id: 'agent-session',
+    task_id: taskId,
+    kind: 'handoff',
+    content: 'quota_exhausted handoff',
+    metadata: {
+      kind: 'handoff',
+      from_session_id: 'agent-session',
+      from_agent: agent,
+      to_agent: 'any',
+      to_session_id: null,
+      summary: 'Session hit usage limit; takeover requested.',
+      next_steps: ['Continue from ready queue.'],
+      blockers: ['quota_exhausted'],
+      released_files: [],
+      transferred_files: [],
+      status: 'pending',
+      accepted_by_session_id: null,
+      accepted_at: null,
+      expires_at: Date.now() + 60_000,
+    },
+  });
+}
+
+function releaseSubtaskClaim(
+  planSlug: string,
+  subtaskIndex: number,
+  taskId: number,
+  sessionId = 'agent-session',
+  agent = 'codex',
+): void {
+  const claims = store.storage.listClaims(taskId).filter((claim) => claim.session_id === sessionId);
+  for (const claim of claims) {
+    store.storage.releaseClaim({
+      task_id: taskId,
+      file_path: claim.file_path,
+      session_id: sessionId,
+    });
+  }
+  store.addObservation({
+    session_id: sessionId,
+    task_id: taskId,
+    kind: 'plan-subtask-claim',
+    content: `sub-${subtaskIndex} released and requeued`,
+    metadata: {
+      status: 'available',
+      session_id: sessionId,
+      agent,
+      plan_slug: planSlug,
+      subtask_index: subtaskIndex,
+      released_files: claims.map((claim) => claim.file_path),
     },
   });
 }
@@ -204,21 +291,85 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0]);
     expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.rescue_candidate).toBeUndefined();
     expect(result.plan_slug).toBe('claimable-plan');
     expect(result.subtask_index).toBe(0);
     expect(result.reason).toBe('ready_high_score');
+    expect(result.next_action_reason).toBe(
+      'Claim claimable-plan/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.',
+    );
     expect(result.next_action).toContain('task_plan_claim_subtask');
     expect(result.next_action).toContain('plan_slug="claimable-plan"');
+    expect(result.ready[0]).toMatchObject({
+      next_tool: 'task_plan_claim_subtask',
+      next_action_reason:
+        'Claim claimable-plan/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.',
+    });
     expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
       plan_slug: 'claimable-plan',
       subtask_index: 0,
       session_id: 'agent-session',
       agent: 'codex',
+      file_scope: ['apps/api/claimable.ts'],
     });
     expect(result.codex_mcp_call).toBe(
-      'mcp__colony__task_plan_claim_subtask({ agent: "codex", session_id: "agent-session", plan_slug: "claimable-plan", subtask_index: 0 })',
+      `mcp__colony__task_plan_claim_subtask({ agent: "codex", session_id: "agent-session", repo_root: ${JSON.stringify(repoRoot)}, plan_slug: "claimable-plan", subtask_index: 0, file_scope: ["apps/api/claimable.ts"] })`,
     );
     expect(result.empty_state).toBeUndefined();
+  });
+
+  it('makes ready output directly claimable so agents do not stop at discovery', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Claim from ready output',
+            description: 'Agent should claim this directly from ready queue metadata.',
+            file_scope: ['apps/api/direct-claim.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Follow after ready claim',
+            description: 'Dependent work stays blocked until the claimable item finishes.',
+            file_scope: ['docs/direct-claim.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'direct-ready-claim' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready).toHaveLength(1);
+    expect(result.ready[0]).toMatchObject({
+      next_tool: 'task_plan_claim_subtask',
+      next_action_reason:
+        'Claim direct-ready-claim/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.',
+      claim_args: {
+        repo_root: repoRoot,
+        plan_slug: 'direct-ready-claim',
+        subtask_index: 0,
+        session_id: 'agent-session',
+        agent: 'codex',
+        file_scope: ['apps/api/direct-claim.ts'],
+      },
+    });
+
+    const claimed = await call<ClaimResult>(
+      result.ready[0]?.next_tool ?? 'missing_next_tool',
+      result.ready[0]?.claim_args ?? {},
+    );
+    expect(claimed).toMatchObject({
+      branch: 'spec/direct-ready-claim/sub-0',
+      file_scope: ['apps/api/direct-claim.ts'],
+    });
   });
 
   it('returns the empty state when all future sub-tasks are blocked', async () => {
@@ -255,10 +406,134 @@ describe('task_ready_for_agent', () => {
     expect(result.total_available).toBe(0);
     expect(result.empty_state).toBe(EMPTY_READY_STATE);
     expect(result.next_tool).toBeUndefined();
+    expect(result.rescue_candidate).toBeUndefined();
     expect(result.codex_mcp_call).toBeUndefined();
     expect(result.next_action).toBe(
       'Complete upstream dependencies or unblock current plan waves before claiming more work.',
     );
+  });
+
+  it('makes a stale blocked wave claimable again after rescue release', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    store.startSession({ id: 'stale-session', ide: 'codex', cwd: repoRoot });
+
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Stale claimed blocker',
+            description: 'This stale claim blocks later waves until release.',
+            file_scope: ['apps/api/stale-blocker.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave two API',
+            description: 'Unlocks after the stale blocker completes.',
+            file_scope: ['apps/api/wave-two.ts'],
+            depends_on: [0],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave three finalizer',
+            description: 'Unlocks after wave two completes.',
+            file_scope: ['apps/mcp-server/test/stale-blocker.test.ts'],
+            depends_on: [1],
+            capability_hint: 'test_work',
+          },
+        ],
+        { slug: 'stale-release-plan', session_id: 'queen', agent: 'queen' },
+      ),
+    });
+    const staleClaim = await claimSubtask('stale-release-plan', 0, 'stale-session');
+
+    vi.setSystemTime(t0 + 5 * 60 * 60_000);
+    let result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.total_available).toBe(0);
+    expect(result.next_tool).toBe('rescue_stranded_scan');
+    expect(result.empty_state).toBeUndefined();
+    expect(result.rescue_args).toEqual({ stranded_after_minutes: 60 });
+    expect(result.rescue_candidate).toMatchObject({
+      plan_slug: 'stale-release-plan',
+      task_id: staleClaim.task_id,
+      subtask_index: 0,
+      title: 'Stale claimed blocker',
+      file: 'apps/api/stale-blocker.ts',
+      owner_session_id: 'stale-session',
+      owner_agent: 'codex',
+      age_minutes: 300,
+      unlock_candidate: {
+        task_id: taskIdForSubtask('stale-release-plan', 1),
+        subtask_index: 1,
+        title: 'Wave two API',
+        file_scope: ['apps/api/wave-two.ts'],
+      },
+    });
+    expect(result.next_action).toBe('Rescue stale blocker stale-release-plan/sub-0; it blocks sub-1.');
+
+    releaseSubtaskClaim('stale-release-plan', 0, staleClaim.task_id, 'stale-session');
+    result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0]);
+    expect(result.ready[0]).toMatchObject({
+      plan_slug: 'stale-release-plan',
+      wave_index: 0,
+      wave_name: 'Wave 1',
+      blocked_by_count: 0,
+      claim_args: {
+        repo_root: repoRoot,
+        plan_slug: 'stale-release-plan',
+        subtask_index: 0,
+        session_id: 'agent-session',
+        agent: 'codex',
+        file_scope: ['apps/api/stale-blocker.ts'],
+      },
+    });
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
+      plan_slug: 'stale-release-plan',
+      subtask_index: 0,
+      session_id: 'agent-session',
+      agent: 'codex',
+      file_scope: ['apps/api/stale-blocker.ts'],
+    });
+
+    await claimAndComplete('stale-release-plan', 0);
+    result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([1]);
+    expect(result.ready[0]).toMatchObject({
+      wave_index: 1,
+      wave_name: 'Wave 2',
+      blocked_by_count: 0,
+      claim_args: {
+        repo_root: repoRoot,
+        plan_slug: 'stale-release-plan',
+        subtask_index: 1,
+        session_id: 'agent-session',
+        agent: 'codex',
+        file_scope: ['apps/api/wave-two.ts'],
+      },
+    });
   });
 
   it('continues an already claimed sub-task without fabricating a new claim call', async () => {
@@ -338,11 +613,17 @@ describe('task_ready_for_agent', () => {
     );
     for (const entry of result.ready) {
       expect(entry.claim_args).toEqual({
+        repo_root: repoRoot,
         plan_slug: colonyAdoptionFixesPlan.slug,
         subtask_index: entry.subtask_index,
         session_id: 'agent-session',
         agent: 'codex',
+        file_scope: entry.file_scope,
       });
+      expect(entry.next_tool).toBe('task_plan_claim_subtask');
+      expect(entry.next_action_reason).toContain(
+        `Claim ${colonyAdoptionFixesPlan.slug}/sub-${entry.subtask_index}:`,
+      );
     }
     expect(result.ready.map((entry) => entry.subtask_index)).not.toContain(3);
     expect(result.ready.map((entry) => entry.subtask_index)).not.toContain(6);
@@ -352,10 +633,12 @@ describe('task_ready_for_agent', () => {
     expect(result.plan_slug).toBe(colonyAdoptionFixesPlan.slug);
     expect(result.subtask_index).toBe(result.ready[0]?.subtask_index);
     expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
       plan_slug: colonyAdoptionFixesPlan.slug,
       subtask_index: result.ready[0]?.subtask_index,
       session_id: 'agent-session',
       agent: 'codex',
+      file_scope: result.ready[0]?.file_scope,
     });
 
     const claimed = await claimSubtask(
@@ -407,10 +690,18 @@ describe('task_ready_for_agent', () => {
       blocked_by_count: 0,
       title: 'Finalize docs, tests, and health',
       claim_args: {
+        repo_root: repoRoot,
         plan_slug: colonyAdoptionFixesPlan.slug,
         subtask_index: 6,
         session_id: 'agent-session',
         agent: 'codex',
+        file_scope: [
+          'docs/QUEEN.md',
+          'apps/cli/src/commands/health.ts',
+          'apps/cli/test/queen-health.test.ts',
+          'apps/mcp-server/test/coordination-loop.test.ts',
+          'packages/queen/test/decompose.test.ts',
+        ],
       },
     });
   });
@@ -445,6 +736,178 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready.map((entry) => entry.title)).toEqual(['Build API', 'Build page']);
     expect(result.ready[0]?.fit_score).toBeGreaterThan(result.ready[1]?.fit_score ?? 0);
+  });
+
+  it('routes large ready work away from Codex after recent Codex quota history', async () => {
+    await call('agent_upsert_profile', {
+      agent: 'claude-code',
+      capabilities: { api_work: 0.8 },
+    });
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Large API migration',
+            description: 'Touch several tool files after quota handoff.',
+            file_scope: [
+              'apps/mcp-server/src/tools/one.ts',
+              'apps/mcp-server/src/tools/two.ts',
+              'apps/mcp-server/src/tools/three.ts',
+              'apps/mcp-server/src/tools/four.ts',
+              'apps/mcp-server/src/tools/five.ts',
+              'apps/mcp-server/src/tools/six.ts',
+            ],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Large API docs',
+            description: 'Dependent docs stay blocked while routing the large task.',
+            file_scope: ['docs/large-api.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'quota-large-plan' },
+      ),
+    });
+    const largeTaskId = taskIdForSubtask('quota-large-plan', 0);
+    new TaskThread(store, largeTaskId).join('other-session', 'claude-code');
+    recordQuotaHandoff(largeTaskId, 'codex');
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready[0]).toMatchObject({
+      assigned_agent: 'claude-code',
+      routing_reason: 'Codex recently hit quota on this branch; task spans 6 files',
+    });
+    expect(result.assigned_agent).toBe('claude-code');
+    expect(result.routing_reason).toBe(
+      'Codex recently hit quota on this branch; task spans 6 files',
+    );
+    expect(result.next_tool).toBeUndefined();
+    expect(result.next_action).toContain('Route quota-large-plan/sub-0 to claude-code');
+  });
+
+  it('keeps tiny isolated ready work eligible for Codex after recent Codex quota history', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Tiny API follow-up',
+            description: 'Small isolated task remains safe for Codex.',
+            file_scope: ['apps/mcp-server/src/tools/tiny.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Tiny API docs',
+            description: 'Dependent docs stay blocked while routing the tiny task.',
+            file_scope: ['docs/tiny-api.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'quota-tiny-plan' },
+      ),
+    });
+    recordQuotaHandoff(taskIdForSubtask('quota-tiny-plan', 0), 'codex');
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(['codex', 'any']).toContain(result.assigned_agent);
+    expect(result.ready[0]?.assigned_agent).toBe('codex');
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.routing_reason).toContain('tiny and isolated');
+  });
+
+  it('preserves existing routing behavior when there is no quota history', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Normal API task',
+            description: 'No runtime routing signal exists.',
+            file_scope: [
+              'apps/mcp-server/src/tools/normal-one.ts',
+              'apps/mcp-server/src/tools/normal-two.ts',
+              'apps/mcp-server/src/tools/normal-three.ts',
+              'apps/mcp-server/src/tools/normal-four.ts',
+            ],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Normal API docs',
+            description: 'Dependent docs stay blocked while preserving routing.',
+            file_scope: ['docs/normal-api.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'no-quota-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.assigned_agent).toBe('codex');
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.claim_args?.agent).toBe('codex');
+    expect(result.ready[0]?.assigned_agent).toBe('codex');
+  });
+
+  it('routes away from a runtime missing the required capability when another runtime is known capable', async () => {
+    await call('agent_upsert_profile', {
+      agent: 'codex',
+      capabilities: { api_work: 0 },
+    });
+    await call('agent_upsert_profile', {
+      agent: 'claude-code',
+      capabilities: { api_work: 0.9 },
+    });
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'MCP API tool work',
+            description: 'Requires API/MCP tool capability.',
+            file_scope: ['apps/mcp-server/src/tools/capability.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'MCP API docs',
+            description: 'Dependent docs stay blocked while routing by capability.',
+            file_scope: ['docs/capability.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'missing-capability-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.assigned_agent).toBe('claude-code');
+    expect(result.routing_reason).toBe(
+      'Codex lacks known api_work capability; task requires api_work.',
+    );
+    expect(result.next_tool).toBeUndefined();
+    expect(result.ready[0]?.assigned_agent).toBe('claude-code');
   });
 
   it('boosts queen-published plan sub-tasks ahead of equal manual plan sub-tasks', async () => {

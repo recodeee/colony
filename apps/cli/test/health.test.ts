@@ -1,9 +1,22 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  type ClaimMatchSources,
+  type ClaimMissReasons,
+  type NearestClaimExample,
+  Storage,
+} from '@colony/storage';
+import Database from 'better-sqlite3';
 import kleur from 'kleur';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildColonyHealthPayload, formatColonyHealthOutput } from '../src/commands/health.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  buildColonyHealthPayload,
+  buildHealthFixPlan,
+  formatColonyHealthOutput,
+  formatHealthFixPlanOutput,
+} from '../src/commands/health.js';
+import { createProgram } from '../src/index.js';
 
 const NOW = 1_800_000_000_000;
 const SINCE = NOW - 24 * 3_600_000;
@@ -70,6 +83,33 @@ afterEach(() => {
 });
 
 describe('colony health payload', () => {
+  it('does not crash on an old database whose task_claims table has no state column', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-old-claims-'));
+    const originalColonyHome = process.env.COLONY_HOME;
+    let output = '';
+    try {
+      process.env.COLONY_HOME = dataDir;
+      seedOldClaimSchemaDatabase(path.join(dataDir, 'data.db'));
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        output += String(chunk);
+        return true;
+      });
+
+      await createProgram().parseAsync(
+        ['node', 'test', 'health', '--json', '--repo-root', dataDir],
+        { from: 'node' },
+      );
+
+      const payload = JSON.parse(output) as { signal_health: { total_claims: number } };
+      expect(payload.signal_health.total_claims).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+      if (originalColonyHome === undefined) delete process.env.COLONY_HOME;
+      else process.env.COLONY_HOME = originalColonyHome;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports adoption ratios and renders a stable human-readable shape', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
@@ -78,6 +118,32 @@ describe('colony health payload', () => {
           edit_tool_calls: 2,
           edits_with_file_path: 2,
           edits_claimed_before: 1,
+          claim_match_window_ms: 300_000,
+          claim_match_sources: {
+            exact_session: 0,
+            repo_branch: 1,
+            worktree: 0,
+            agent_lane: 0,
+          },
+          claim_miss_reasons: {
+            no_claim_for_file: 1,
+            claim_after_edit: 0,
+            session_id_mismatch: 0,
+            repo_root_mismatch: 0,
+            branch_mismatch: 0,
+            path_mismatch: 0,
+            worktree_path_mismatch: 0,
+            pseudo_path_skipped: 0,
+            pre_tool_use_missing: 0,
+          },
+          nearest_claim_examples: [
+            nearestClaimExample({
+              reason: 'no_claim_for_file',
+              edit_id: 9,
+              edit_session_id: 'codex-alpha-session',
+              edit_file_path: 'src/missing.ts',
+            }),
+          ],
         },
       }),
       {
@@ -147,6 +213,31 @@ describe('colony health payload', () => {
       edits_claimed_before: 1,
       edits_without_claim_before: 1,
       claim_before_edit_ratio: 1 / 2,
+      claim_match_window_ms: 300_000,
+      claim_match_sources: {
+        exact_session: 0,
+        repo_branch: 1,
+        worktree: 0,
+        agent_lane: 0,
+      },
+      claim_miss_reasons: {
+        no_claim_for_file: 1,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 0,
+        path_mismatch: 0,
+        worktree_path_mismatch: 0,
+        pseudo_path_skipped: 0,
+        pre_tool_use_missing: 0,
+      },
+      nearest_claim_examples: [
+        expect.objectContaining({
+          reason: 'no_claim_for_file',
+          edit_file_path: 'src/missing.ts',
+        }),
+      ],
+      root_cause: null,
     });
     expect(payload.signal_health).toMatchObject({
       total_claims: 2,
@@ -209,7 +300,9 @@ describe('colony health payload', () => {
       },
       signal_evaporation: {
         status: 'bad',
-        evidence: expect.stringContaining('1 stale claim(s); 0 downstream blocker(s)'),
+        evidence: expect.stringContaining(
+          '1 stale claim(s); 0 quota-pending claim(s); 0 stale downstream blocker(s); 0 quota downstream blocker(s)',
+        ),
       },
     });
     expect(payload.adoption_thresholds.good).toContainEqual(
@@ -244,6 +337,15 @@ describe('colony health payload', () => {
     expect(text).toContain('task_post vs OMX notepad');
     expect(text).toContain('Search calls per session');
     expect(text).toContain('1 / 2 edits had a claim before edit (50%)');
+    expect(text).toContain(
+      'claim_match_sources: exact_session=0, repo_branch=1, worktree=0, agent_lane=0, window_ms=300000 (health-only fallback)',
+    );
+    expect(text).toContain('why claims did not match edits:');
+    expect(text).toContain('no_claim_for_file: 1');
+    expect(text).toContain('nearest claim examples:');
+    expect(text).toContain(
+      'no_claim_for_file: edit#9 src/missing.ts by codex-alpha-session; no nearby claim',
+    );
     expect(text).toContain('Signal health');
     expect(text).toContain('Proposal decay/promotions');
     expect(text).toContain('Ready-to-claim vs claimed');
@@ -256,6 +358,163 @@ describe('colony health payload', () => {
     expect(text).toContain('task_list > task_ready_for_agent');
     expect(text).not.toContain('\n  Good\n');
     expect(text).not.toContain('\n  Bad\n');
+  });
+
+  it('renders claim miss reason diagnostics in text and JSON payloads', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [call(1, 'codex-alpha-session', 'Edit', NOW - 1_000)],
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 0,
+          claim_miss_reasons: {
+            no_claim_for_file: 0,
+            claim_after_edit: 1,
+            session_id_mismatch: 2,
+            path_mismatch: 3,
+            repo_root_mismatch: 4,
+            branch_mismatch: 5,
+            worktree_path_mismatch: 0,
+            pseudo_path_skipped: 6,
+            pre_tool_use_missing: 7,
+          },
+        },
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.task_claim_file_before_edits.claim_miss_reasons).toMatchObject({
+      claim_after_edit: 1,
+      session_id_mismatch: 2,
+      path_mismatch: 3,
+      repo_root_mismatch: 4,
+      branch_mismatch: 5,
+      pseudo_path_skipped: 6,
+      pre_tool_use_missing: 7,
+    });
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('why claims did not match edits:');
+    expect(text).toContain('claim_after_edit: 1');
+    expect(text).toContain('session_id_mismatch: 2');
+    expect(text).toContain('repo_root_mismatch: 4');
+    expect(text).toContain('branch_mismatch: 5');
+  });
+
+  it('builds a dry-run execution-safety recovery plan without running sweeps', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [call(1, 'codex-alpha-session', 'Edit', NOW - 1_000)],
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 0,
+          claim_miss_reasons: {
+            pre_tool_use_missing: 4,
+            no_claim_for_file: 1,
+          },
+        },
+        tasks: [{ id: 1, repo_root: '/repo', branch: 'main' }],
+        observationsByTask: { 1: [] },
+        claimsByTask: {
+          1: [
+            {
+              task_id: 1,
+              file_path: 'src/stale.ts',
+              session_id: 'codex-stale',
+              claimed_at: NOW - 5 * 3_600_000,
+            },
+          ],
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+        repo_root: '/repo',
+      },
+    );
+
+    const plan = buildHealthFixPlan(payload, {
+      repo_root: '/repo',
+      apply: false,
+    });
+    const text = formatHealthFixPlanOutput(plan);
+
+    expect(plan.mode).toBe('dry-run');
+    expect(plan.safety).toMatchObject({
+      mutates_claims: false,
+      installs_hooks: false,
+      ran_coordination_sweep: false,
+      ran_queen_sweep: false,
+    });
+    expect(plan.current).toMatchObject({
+      pre_tool_use_missing: 4,
+      pre_tool_use_missing_dominates: true,
+      stale_claims: 1,
+    });
+    expect(text).toContain('mode: dry-run (no sweeps run)');
+    expect(text).toContain('[suggested] Reinstall/restart lifecycle hooks');
+    expect(text).toContain('colony install --ide codex  # then restart Codex/OMX');
+    expect(text).toContain('[planned] Run coordination sweep');
+    expect(text).toContain('[planned] Run queen sweep');
+    expect(text).toContain('colony coordination sweep --repo-root /repo --json');
+    expect(text).toContain('pnpm smoke:codex-omx-pretool');
+    expect(plan.coordination_sweep).toBeUndefined();
+    expect(plan.queen_sweep).toBeUndefined();
+  });
+
+  it('marks sweeps as run only when fix-plan apply data is present', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+        repo_root: '/repo',
+      },
+    );
+
+    const plan = buildHealthFixPlan(payload, {
+      repo_root: '/repo with space',
+      apply: true,
+      coordination_sweep: {
+        summary: {
+          stale_claim_count: 2,
+          expired_weak_claim_count: 1,
+        },
+        recommended_action: 'dry-run: release 1 expired/weak advisory claim',
+      } as never,
+      queen_sweep: [
+        {
+          items: [{ reason: 'stalled' }, { reason: 'unclaimed' }, { reason: 'ready-to-archive' }],
+        },
+      ] as never,
+    });
+    const text = formatHealthFixPlanOutput(plan);
+
+    expect(plan.mode).toBe('apply');
+    expect(plan.safety).toMatchObject({
+      mutates_claims: false,
+      installs_hooks: false,
+      ran_coordination_sweep: true,
+      ran_queen_sweep: true,
+    });
+    expect(text).toContain('mode: apply (sweeps run)');
+    expect(text).toContain('[ran] Run coordination sweep');
+    expect(text).toContain('stale=2, expired/weak=1');
+    expect(text).toContain('[ran] Run queen sweep');
+    expect(text).toContain('stalled=1, unclaimed=1, ready-to-archive=1');
+    expect(text).toContain("colony queen sweep --repo-root '/repo with space' --json");
   });
 
   it('keeps expired claims out of stale and active health counts', () => {
@@ -310,6 +569,63 @@ describe('colony health payload', () => {
     });
   });
 
+  it('reports quota-pending claims separately from ordinary stale claims', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+        tasks: [{ id: 1, repo_root: '/r', branch: 'b' }],
+        observationsByTask: { 1: [] },
+        claimsByTask: {
+          1: [
+            {
+              task_id: 1,
+              file_path: 'src/quota.ts',
+              session_id: 'quota',
+              claimed_at: NOW - 60_000,
+              state: 'handoff_pending',
+              expires_at: NOW + 5 * 60_000,
+              handoff_observation_id: 7,
+            },
+            {
+              task_id: 1,
+              file_path: 'src/quota-expired.ts',
+              session_id: 'quota-old',
+              claimed_at: NOW - 60_000,
+              state: 'handoff_pending',
+              expires_at: NOW - 60_000,
+              handoff_observation_id: 8,
+            },
+          ],
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.signal_health).toMatchObject({
+      total_claims: 2,
+      active_claims: 0,
+      stale_claims: 0,
+      expired_claims: 0,
+      weak_claims: 2,
+      quota_pending_claims: 2,
+      expired_quota_pending_claims: 1,
+    });
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('quota pending:    2');
+    expect(text).toContain('quota expired:    1');
+  });
+
   it('emits parseable JSON with the same top-level sections', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
@@ -343,14 +659,264 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('task_post_vs_omx_notepad');
     expect(json).toHaveProperty('search_calls_per_session');
     expect(json).toHaveProperty('task_claim_file_before_edits');
+    expect(json.task_claim_file_before_edits).toHaveProperty('claim_miss_reasons');
+    expect(json.task_claim_file_before_edits).toHaveProperty('nearest_claim_examples');
+    expect(json.task_claim_file_before_edits).toHaveProperty('root_cause');
     expect(json).toHaveProperty('signal_health');
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
     expect(json).toHaveProperty('queen_wave_health');
+    expect(json).toHaveProperty('live_contention_health');
     expect(json).toHaveProperty('adoption_thresholds');
     expect(json).toHaveProperty('action_hints');
     expect(json.action_hints[0]).toHaveProperty('tool_call');
     expect(json.action_hints[0]).toHaveProperty('prompt');
+  });
+
+  it('reports live same-file contentions with owners, branches, dirty files, and takeover signals', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 2,
+          edits_with_file_path: 2,
+          edits_claimed_before: 2,
+        },
+        tasks: [
+          { id: 10, repo_root: '/repo', branch: 'agent/codex/left' },
+          { id: 11, repo_root: '/repo', branch: 'agent/claude/right' },
+          { id: 12, repo_root: '/repo', branch: 'main' },
+        ],
+        claimsByTask: {
+          10: [
+            {
+              task_id: 10,
+              file_path: 'src/shared.ts',
+              session_id: 'codex-left-session',
+              claimed_at: NOW - 60_000,
+            },
+          ],
+          11: [
+            {
+              task_id: 11,
+              file_path: 'src/shared.ts',
+              session_id: 'claude-right-session',
+              claimed_at: NOW - 90_000,
+            },
+          ],
+          12: [
+            {
+              task_id: 12,
+              file_path: 'src/shared.ts',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 30_000,
+            },
+          ],
+        },
+        observationsByTask: {
+          10: [
+            observation(100, 'handoff', NOW - 10_000, {
+              kind: 'handoff',
+              status: 'pending',
+              summary: 'Session hit usage limit; takeover requested.',
+              expires_at: NOW + 60_000,
+            }),
+          ],
+          11: [],
+          12: [],
+        },
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+        hivemind: {
+          sessions: [
+            hivemindSession({
+              agent: 'codex',
+              branch: 'agent/codex/left',
+              session_key: 'codex-left-session',
+              worktree_path: '/wt/codex-left',
+              activity: 'working',
+            }),
+            hivemindSession({
+              agent: 'codex',
+              branch: 'agent/codex/left',
+              session_key: 'codex-left-other',
+              worktree_path: '/wt/codex-left-other',
+              activity: 'idle',
+            }),
+            hivemindSession({
+              agent: 'claude',
+              branch: 'agent/claude/right',
+              session_key: 'claude-right-session',
+              worktree_path: '/wt/claude-right',
+              activity: 'stalled',
+            }),
+            hivemindSession({
+              agent: 'codex',
+              branch: 'main',
+              session_key: 'codex-main-session',
+              worktree_path: '/repo',
+              activity: 'working',
+            }),
+          ],
+        },
+        dirty_files_by_worktree: {
+          '/wt/codex-left': ['src/shared.ts'],
+          '/wt/codex-left-other': [],
+          '/wt/claude-right': ['src/other.ts'],
+          '/repo': [],
+        },
+        worktree_contention: fakeWorktreeContention(),
+      },
+    );
+
+    expect(payload.live_contention_health).toMatchObject({
+      live_file_contentions: 1,
+      protected_file_contentions: 1,
+      paused_lanes: 2,
+      takeover_requests: 1,
+      competing_worktrees: 2,
+      dirty_contended_files: 1,
+      top_conflicts: [
+        {
+          file_path: 'src/shared.ts',
+          owner_count: 3,
+          protected: true,
+          dirty_worktrees: ['/wt/codex-left'],
+          owners: expect.arrayContaining([
+            expect.objectContaining({
+              owner: 'codex',
+              session_id: 'codex-left-session',
+              branch: 'agent/codex/left',
+              dirty: true,
+            }),
+            expect.objectContaining({
+              owner: 'claude',
+              session_id: 'claude-right-session',
+              branch: 'agent/claude/right',
+            }),
+            expect.objectContaining({
+              owner: 'codex',
+              session_id: 'codex-main-session',
+              branch: 'main',
+            }),
+          ]),
+        },
+      ],
+    });
+
+    expect(payload.readiness_summary.execution_safety).toMatchObject({
+      status: 'bad',
+      evidence: expect.stringContaining('live contentions 1, dirty 1'),
+    });
+    expect(payload.action_hints[0]).toMatchObject({
+      metric: 'live file contentions',
+      current: '1 conflict(s), 1 dirty',
+      command: 'colony health --json',
+    });
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('Live contention health');
+    expect(text).toContain('live_file_contentions:      1');
+    expect(text).toContain('protected_file_contentions: 1');
+    expect(text).toContain('paused_lanes:               2');
+    expect(text).toContain('takeover_requests:          1');
+    expect(text).toContain('competing_worktrees:        2');
+    expect(text).toContain('dirty_contended_files:      1');
+    expect(text).toContain('src/shared.ts (3 owners; protected, dirty)');
+    expect(text).toContain(
+      'owner=codex session=codex-left-... branch=agent/codex/left activity=working',
+    );
+    expect(text).toContain(
+      'owner=claude session=claude-righ... branch=agent/claude/right activity=stalled',
+    );
+    expect(text).toContain('owner=codex session=codex-main-... branch=main activity=working');
+  });
+
+  it('renders claim miss reasons and nearest claim examples in text and JSON output', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 9,
+          edits_with_file_path: 9,
+          edits_claimed_before: 0,
+          claim_miss_reasons: {
+            no_claim_for_file: 1,
+            claim_after_edit: 1,
+            session_id_mismatch: 1,
+            repo_root_mismatch: 1,
+            branch_mismatch: 1,
+            path_mismatch: 1,
+            worktree_path_mismatch: 1,
+            pseudo_path_skipped: 1,
+            pre_tool_use_missing: 1,
+          },
+          nearest_claim_examples: [
+            nearestClaimExample({
+              reason: 'session_id_mismatch',
+              edit_id: 31,
+              edit_session_id: 'edit-session',
+              edit_file_path: 'src/session.ts',
+              nearest_claim_id: 30,
+              claim_session_id: 'claim-session',
+              claim_file_path: 'src/session.ts',
+              distance_ms: 1_000,
+            }),
+          ],
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits.claim_miss_reasons).toMatchObject({
+      no_claim_for_file: 1,
+      claim_after_edit: 1,
+      session_id_mismatch: 1,
+      repo_root_mismatch: 1,
+      branch_mismatch: 1,
+      path_mismatch: 1,
+      worktree_path_mismatch: 1,
+      pseudo_path_skipped: 1,
+      pre_tool_use_missing: 1,
+    });
+    expect(payload.task_claim_file_before_edits.nearest_claim_examples).toContainEqual(
+      expect.objectContaining({
+        reason: 'session_id_mismatch',
+        edit_file_path: 'src/session.ts',
+        claim_file_path: 'src/session.ts',
+      }),
+    );
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('why claims did not match edits:');
+    expect(text).toContain('session_id_mismatch: 1');
+    expect(text).toContain('worktree_path_mismatch: 1');
+    expect(text).toContain('nearest claim examples:');
+    expect(text).toContain(
+      'session_id_mismatch: edit#31 src/session.ts by edit-session; claim#30 src/session.ts by claim-session 1000ms away',
+    );
+
+    const json = JSON.parse(formatColonyHealthOutput(payload, { json: true }));
+    expect(json.task_claim_file_before_edits.claim_miss_reasons).toMatchObject({
+      path_mismatch: 1,
+      pre_tool_use_missing: 1,
+    });
+    expect(json.task_claim_file_before_edits.nearest_claim_examples[0]).toMatchObject({
+      reason: 'session_id_mismatch',
+      nearest_claim_id: 30,
+    });
   });
 
   it('reports stale claimed subtasks that block later Queen waves', () => {
@@ -373,22 +939,32 @@ describe('colony health payload', () => {
             observation(10, 'plan-subtask-claim', NOW - 3 * 3_600_000, {
               status: 'claimed',
               session_id: 'stale-session',
+              agent: 'codex',
             }),
             observation(11, 'plan-subtask', NOW - 4 * 3_600_000, {
               status: 'available',
               depends_on: [],
+              file_scope: ['src/foundation.ts'],
+            }),
+            observation(16, 'relay', NOW - 30_000, {
+              kind: 'relay',
+              reason: 'quota',
+              status: 'pending',
+              expires_at: NOW + 15 * 60_000,
             }),
           ],
           11: [
             observation(12, 'plan-subtask', NOW - 3_000, {
               status: 'available',
               depends_on: [0],
+              file_scope: ['src/downstream-a.ts'],
             }),
           ],
           12: [
             observation(13, 'plan-subtask', NOW - 3_000, {
               status: 'available',
               depends_on: [0],
+              file_scope: ['src/downstream-b.ts'],
             }),
           ],
           13: [
@@ -421,6 +997,7 @@ describe('colony health payload', () => {
       claimed_subtasks: 1,
       blocked_subtasks: 2,
       stale_claims_blocking_downstream: 1,
+      quota_handoffs_blocking_downstream: 1,
       plans: [
         {
           plan_slug: 'waves',
@@ -429,7 +1006,30 @@ describe('colony health payload', () => {
           claimed_subtasks: 1,
           blocked_subtasks: 2,
           stale_claims_blocking_downstream: 1,
+          quota_handoffs_blocking_downstream: 1,
+          downstream_blockers: [
+            expect.objectContaining({
+              task_id: 10,
+              subtask_index: 0,
+              file_path: 'src/foundation.ts',
+              owner_session_id: 'stale-session',
+              owner_agent: 'codex',
+              age_minutes: 180,
+              unlock_candidate: expect.objectContaining({
+                task_id: 11,
+                subtask_index: 1,
+              }),
+            }),
+          ],
         },
+      ],
+      downstream_blockers: [
+        expect.objectContaining({
+          task_id: 10,
+          file_path: 'src/foundation.ts',
+          owner_session_id: 'stale-session',
+          unlock_candidate: expect.objectContaining({ subtask_index: 1 }),
+        }),
       ],
     });
     expect(payload.action_hints).toContainEqual(
@@ -442,8 +1042,13 @@ describe('colony health payload', () => {
 
     const text = formatColonyHealthOutput(payload);
     expect(text).toContain('stale claims blocking downstream:   1');
+    expect(text).toContain('quota handoffs blocking downstream: 1');
     expect(text).toContain(
-      'waves: current Wave 1; ready 0, claimed 1, blocked 2, stale blockers 1',
+      'waves: current Wave 1; ready 0, claimed 1, blocked 2, stale blockers 1, quota blockers 1',
+    );
+    expect(text).toContain('stale downstream blockers:');
+    expect(text).toContain(
+      'waves/sub-0 task #10 src/foundation.ts owner=stale-session age=180m -> unlock candidate sub-1',
     );
   });
 
@@ -976,12 +1581,92 @@ function codexFunctionCallLine(tsMs: number, name: string): string {
   });
 }
 
+function hivemindSession(args: {
+  agent: string;
+  branch: string;
+  session_key: string;
+  worktree_path: string;
+  activity: 'working' | 'thinking' | 'idle' | 'stalled' | 'dead' | 'unknown';
+}): never {
+  return {
+    repo_root: '/repo',
+    source: 'active-session',
+    branch: args.branch,
+    task: 'task',
+    task_name: 'task',
+    latest_task_preview: 'task',
+    agent: args.agent,
+    cli: args.agent,
+    state: args.activity === 'working' || args.activity === 'idle' ? args.activity : '',
+    activity: args.activity,
+    activity_summary: args.activity,
+    worktree_path: args.worktree_path,
+    pid: null,
+    pid_alive: null,
+    started_at: new Date(NOW - 60_000).toISOString(),
+    last_heartbeat_at: new Date(NOW - 1_000).toISOString(),
+    updated_at: new Date(NOW - 1_000).toISOString(),
+    elapsed_seconds: 60,
+    task_mode: '',
+    openspec_tier: '',
+    routing_reason: '',
+    snapshot_name: '',
+    project_name: '',
+    session_key: args.session_key,
+    locked_file_count: 0,
+    locked_file_preview: [],
+    file_path: '',
+  } as never;
+}
+
+function fakeWorktreeContention(): never {
+  return {
+    generated_at: new Date(NOW).toISOString(),
+    repo_root: '/repo',
+    summary: {
+      worktree_count: 2,
+      dirty_worktree_count: 2,
+      dirty_file_count: 2,
+      contention_count: 1,
+    },
+    inspected_roots: [],
+    worktrees: [],
+    contentions: [
+      {
+        file_path: 'src/shared.ts',
+        worktrees: [
+          {
+            branch: 'agent/codex/left',
+            path: '/wt/codex-left',
+            managed_root: '.omx/agent-worktrees',
+            dirty_status: ' M',
+            claimed: true,
+            active_session_key: 'codex-left-session',
+          },
+          {
+            branch: 'agent/claude/right',
+            path: '/wt/claude-right',
+            managed_root: '.omx/agent-worktrees',
+            dirty_status: ' M',
+            claimed: true,
+            active_session_key: 'claude-right-session',
+          },
+        ],
+      },
+    ],
+  } as never;
+}
+
 function fakeStorage(args: {
   calls: TestToolCall[];
   claimBeforeEdit: {
     edit_tool_calls: number;
     edits_with_file_path: number;
     edits_claimed_before: number;
+    claim_match_window_ms?: number;
+    claim_match_sources?: Partial<ClaimMatchSources>;
+    claim_miss_reasons?: Partial<ClaimMissReasons>;
+    nearest_claim_examples?: NearestClaimExample[];
     auto_claimed_before_edit?: number;
     session_binding_missing?: number;
     pre_tool_use_signals?: number;
@@ -990,7 +1675,15 @@ function fakeStorage(args: {
   observationsByTask?: Record<number, TestObservation[]>;
   claimsByTask?: Record<
     number,
-    Array<{ task_id: number; file_path: string; session_id: string; claimed_at: number }>
+    Array<{
+      task_id: number;
+      file_path: string;
+      session_id: string;
+      claimed_at: number;
+      state?: 'active' | 'handoff_pending';
+      expires_at?: number | null;
+      handoff_observation_id?: number | null;
+    }>
   >;
   proposals?: TestProposal[];
   reinforcements?: Record<number, TestReinforcement[]>;
@@ -1012,6 +1705,57 @@ function fakeStorage(args: {
       proposals.filter((proposal) => proposal.repo_root === repoRoot && proposal.branch === branch),
     listReinforcements: (proposalId: number) => reinforcements[proposalId] ?? [],
   } as never;
+}
+
+function seedOldClaimSchemaDatabase(dbPath: string): void {
+  const storage = new Storage(dbPath);
+  try {
+    storage.createSession({
+      id: 'old-owner',
+      ide: 'codex',
+      cwd: '/repo',
+      started_at: NOW - 60_000,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'old task',
+      repo_root: '/repo',
+      branch: 'main',
+      created_by: 'old-owner',
+    });
+    storage.claimFile({
+      task_id: task.id,
+      file_path: 'src/claimed.ts',
+      session_id: 'old-owner',
+    });
+  } finally {
+    storage.close();
+  }
+
+  rewriteTaskClaimsAsOldSchema(dbPath);
+}
+
+function rewriteTaskClaimsAsOldSchema(dbPath: string): void {
+  const db = new Database(dbPath);
+  try {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      ALTER TABLE task_claims RENAME TO task_claims_new;
+      CREATE TABLE task_claims (
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        file_path TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        claimed_at INTEGER NOT NULL,
+        PRIMARY KEY (task_id, file_path)
+      );
+      INSERT INTO task_claims(task_id, file_path, session_id, claimed_at)
+        SELECT task_id, file_path, session_id, claimed_at FROM task_claims_new;
+      DROP TABLE task_claims_new;
+      CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
+    `);
+  } finally {
+    db.close();
+  }
 }
 
 function healthyWindowCalls(): TestToolCall[] {
@@ -1038,6 +1782,37 @@ function healthyWindowCalls(): TestToolCall[] {
 
 function call(id: number, sessionId: string, tool: string, ts: number): TestToolCall {
   return { id, session_id: sessionId, tool, ts };
+}
+
+function nearestClaimExample(
+  overrides: Partial<NearestClaimExample> & Pick<NearestClaimExample, 'reason'>,
+): NearestClaimExample {
+  return {
+    reason: overrides.reason,
+    edit_id: overrides.edit_id ?? 1,
+    edit_session_id: overrides.edit_session_id ?? 'edit-session',
+    edit_file_path: overrides.edit_file_path ?? 'src/edit.ts',
+    edit_repo_root: overrides.edit_repo_root ?? null,
+    edit_branch: overrides.edit_branch ?? null,
+    edit_worktree_path: overrides.edit_worktree_path ?? null,
+    edit_ts: overrides.edit_ts ?? NOW - 1_000,
+    nearest_claim_id: overrides.nearest_claim_id ?? null,
+    claim_session_id: overrides.claim_session_id ?? null,
+    claim_file_path: overrides.claim_file_path ?? null,
+    claim_repo_root: overrides.claim_repo_root ?? null,
+    claim_branch: overrides.claim_branch ?? null,
+    claim_worktree_path: overrides.claim_worktree_path ?? null,
+    claim_ts: overrides.claim_ts ?? null,
+    distance_ms: overrides.distance_ms ?? null,
+    relation: overrides.relation ?? {
+      same_file_path: false,
+      same_session_id: false,
+      same_repo_root: null,
+      same_branch: null,
+      same_worktree_path: null,
+      claim_before_edit: null,
+    },
+  };
 }
 
 function healthyTasks(): TestTask[] {

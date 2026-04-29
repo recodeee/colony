@@ -74,15 +74,62 @@ describe('extractTouchedFiles', () => {
 
   it('ignores non-write tools and malformed input', () => {
     expect(extractTouchedFiles('Read', { file_path: 'src/x.ts' })).toEqual([]);
-    expect(extractTouchedFiles('Bash', { command: 'rm foo' })).toEqual([]);
     expect(extractTouchedFiles('Edit', null)).toEqual([]);
     expect(extractTouchedFiles('Edit', {})).toEqual([]);
     expect(extractTouchedFiles('Edit', { file_path: '' })).toEqual([]);
   });
 
+  it('extracts normalized Bash write targets from sed and redirects', () => {
+    expect(
+      extractTouchedFiles(
+        'Bash',
+        {
+          command:
+            'sed -i "s/a/b/" src/edit.ts && perl -pi -e "s/a/b/" src/perl.ts && printf x | tee src/tee.ts > /dev/null && cat README.md > ../generated.ts',
+        },
+        { cwd: '/repo/packages/hooks', repoRoot: '/repo' },
+      ),
+    ).toEqual([
+      'packages/hooks/src/edit.ts',
+      'packages/hooks/src/perl.ts',
+      'packages/hooks/src/tee.ts',
+      'packages/generated.ts',
+    ]);
+  });
+
+  it('extracts normalized apply_patch file headers', () => {
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/edit.ts',
+      '*** Add File: /repo/packages/hooks/src/new.ts',
+      '*** Delete File: /dev/null',
+      '*** End Patch',
+    ].join('\n');
+
+    expect(extractTouchedFiles('apply_patch', { command: patch }, { repoRoot: '/repo' })).toEqual([
+      'src/edit.ts',
+      'packages/hooks/src/new.ts',
+    ]);
+    expect(
+      extractTouchedFiles(
+        'apply_patch',
+        {
+          paths: [{ path: 'src/from-payload.ts', role: 'target', kind: 'file' }],
+          extracted_paths: ['src/from-extracted.ts'],
+        },
+        { repoRoot: '/repo' },
+      ),
+    ).toEqual(['src/from-extracted.ts', 'src/from-payload.ts']);
+  });
+
   it('ignores pseudo device paths', () => {
     expect(extractTouchedFiles('Edit', { file_path: '/dev/null' })).toEqual([]);
     expect(extractTouchedFiles('Write', { file_path: '/dev/stdout' })).toEqual([]);
+    expect(
+      extractTouchedFiles('apply_patch', {
+        command: ['*** Begin Patch', '*** Update File: NUL', '*** End Patch'].join('\n'),
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -247,6 +294,143 @@ describe('autoClaimFileBeforeEdit', () => {
       'codex@019dd6c0',
     );
     expect(store.storage.getParticipantAgent(thread.task_id, 'codex@019dd6c0')).toBe('codex');
+  });
+
+  it('resolves exact session before repo_root and branch fallbacks', () => {
+    store.startSession({ id: 'codex@exact', ide: 'codex', cwd: '/repo/exact' });
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo/scoped' });
+    const exactThread = TaskThread.open(store, {
+      repo_root: '/repo/exact',
+      branch: 'agent/codex/exact',
+      session_id: 'codex@exact',
+    });
+    exactThread.join('codex@exact', 'codex');
+    const scopedThread = TaskThread.open(store, {
+      repo_root: '/repo/scoped',
+      branch: 'agent/codex/scoped',
+      session_id: 'owner',
+    });
+    scopedThread.join('owner', 'claude');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex@exact',
+      repo_root: '/repo/scoped',
+      branch: 'agent/codex/scoped',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'session_id',
+      task_id: exactThread.task_id,
+    });
+    expect(store.storage.getClaim(exactThread.task_id, 'src/viewer.tsx')?.session_id).toBe(
+      'codex@exact',
+    );
+    expect(store.storage.getClaim(scopedThread.task_id, 'src/viewer.tsx')).toBeUndefined();
+  });
+
+  it('resolves a missing Codex edit session by repo_root and branch', () => {
+    const lifecycleSession = 'codex-lifecycle-session';
+    const editSession = 'mcp-edit-telemetry-session';
+    store.startSession({ id: lifecycleSession, ide: 'codex', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/lifecycle',
+      session_id: lifecycleSession,
+    });
+    thread.join(lifecycleSession, 'codex');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: editSession,
+      agent: 'codex',
+      repo_root: '/repo',
+      branch: 'agent/codex/lifecycle',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'branch_repo_root',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getSession(editSession)).toMatchObject({ id: editSession, ide: 'codex' });
+    expect(store.storage.getParticipantAgent(thread.task_id, editSession)).toBe('codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(editSession);
+  });
+
+  it('resolves a missing OMX edit session by worktree path', () => {
+    const worktreePath = join(dir, 'repo', '.omx', 'agent-worktrees', 'lane');
+    const lifecycleSession = 'codex-worktree-lifecycle';
+    const editSession = 'omx-edit-telemetry-session';
+    store.startSession({ id: lifecycleSession, ide: 'codex', cwd: worktreePath });
+    const thread = TaskThread.open(store, {
+      repo_root: worktreePath,
+      branch: 'agent/codex/worktree',
+      session_id: lifecycleSession,
+    });
+    thread.join(lifecycleSession, 'codex');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: editSession,
+      agent: 'codex',
+      worktree_path: join(worktreePath, 'packages/hooks'),
+      file_path: 'packages/hooks/src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'worktree',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getSession(editSession)).toMatchObject({ id: editSession, ide: 'codex' });
+    expect(store.storage.getParticipantAgent(thread.task_id, editSession)).toBe('codex');
+    expect(
+      store.storage.getClaim(thread.task_id, 'packages/hooks/src/viewer.tsx')?.session_id,
+    ).toBe(editSession);
+  });
+
+  it('records conflict telemetry when fallback binding finds a different owner', () => {
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/conflict',
+      session_id: 'owner',
+    });
+    thread.join('owner', 'claude');
+    thread.claimFile({ session_id: 'owner', file_path: 'src/viewer.tsx' });
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex-edit-session',
+      agent: 'codex',
+      repo_root: '/repo',
+      branch: 'agent/codex/conflict',
+      file_path: 'src/viewer.tsx',
+      record_conflict: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      previous_claim_session: 'owner',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
+      'codex-edit-session',
+    );
+    const conflicts = store.storage.taskObservationsByKind(thread.task_id, 'claim-conflict');
+    expect(conflicts).toHaveLength(1);
+    expect(metadataOf(conflicts[0])).toMatchObject({
+      source: 'autoClaimFileBeforeEdit',
+      file_path: 'src/viewer.tsx',
+      other_session: 'owner',
+    });
   });
 
   it('resolves the only active task for the same agent when no branch scope exists', () => {
@@ -910,6 +1094,70 @@ describe('runHook integration: A edits -> B sees warning', () => {
     });
   });
 
+  it('PreToolUse extracts Bash and apply_patch paths before the write runs', async () => {
+    const task_id = seedTwoSessionTask();
+
+    const bash = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'A',
+        ide: 'codex',
+        cwd: '/repo/packages/hooks',
+        tool_name: 'Bash',
+        tool_input: {
+          command: 'perl -pi -e "s/a/b/" src/perl.ts && printf x | tee src/tee.ts > /dev/null',
+        },
+      },
+      { store },
+    );
+
+    expect(bash).toMatchObject({
+      ok: true,
+      extracted_paths: ['packages/hooks/src/perl.ts', 'packages/hooks/src/tee.ts'],
+    });
+    expect(store.storage.getClaim(task_id, 'packages/hooks/src/perl.ts')?.session_id).toBe('A');
+    expect(store.storage.getClaim(task_id, 'packages/hooks/src/tee.ts')?.session_id).toBe('A');
+    expect(store.timeline('A').filter((row) => row.kind === 'tool_use')).toHaveLength(0);
+    expect(
+      metadataOf(
+        store.storage
+          .taskObservationsByKind(task_id, 'claim-before-edit')
+          .find((row) => metadataOf(row).file_path === 'packages/hooks/src/perl.ts'),
+      ),
+    ).toMatchObject({
+      tool: 'Bash',
+      extracted_paths: ['packages/hooks/src/perl.ts', 'packages/hooks/src/tee.ts'],
+    });
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/viewer.tsx',
+      '*** Add File: src/generated.ts',
+      '*** Update File: stdout',
+      '*** End Patch',
+    ].join('\n');
+
+    const applyPatch = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        cwd: '/repo',
+        tool_name: 'apply_patch',
+        tool_input: { command: patch },
+      },
+      { store },
+    );
+
+    expect(applyPatch).toMatchObject({
+      ok: true,
+      extracted_paths: ['src/viewer.tsx', 'src/generated.ts'],
+    });
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    expect(store.storage.getClaim(task_id, 'src/generated.ts')?.session_id).toBe('B');
+    expect(store.storage.getClaim(task_id, 'stdout')).toBeUndefined();
+  });
+
   it('PostToolUse auto-claims, and the next UserPromptSubmit warns the other session', async () => {
     const task_id = seedTwoSessionTask();
 
@@ -1020,6 +1268,12 @@ describe('runHook integration: A edits -> B sees warning', () => {
       file_path: 'packages/hooks/src/generated.ts',
       tool: 'Write',
     });
+    expect(metadataOf(store.timeline('A').find((row) => row.kind === 'tool_use'))).toMatchObject({
+      tool: 'Bash',
+      file_path: 'packages/hooks/src/generated.ts',
+      file_paths: ['packages/hooks/src/generated.ts'],
+      extracted_paths: ['packages/hooks/src/generated.ts'],
+    });
 
     const nextTurn = await runHook(
       'user-prompt-submit',
@@ -1028,6 +1282,80 @@ describe('runHook integration: A edits -> B sees warning', () => {
     );
     expect(nextTurn.ok).toBe(true);
     expect(nextTurn.context).toContain('packages/hooks/src/generated.ts');
+  });
+
+  it('Bash sed and cat redirects record extracted paths for all touched files', async () => {
+    const task_id = seedTwoSessionTask();
+
+    const bash = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'A',
+        ide: 'codex',
+        cwd: '/repo/packages/hooks',
+        tool_name: 'Bash',
+        tool_input: {
+          command: 'sed -i "s/a/b/" src/edit.ts && cat README.md > src/generated.ts',
+        },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+
+    expect(bash.ok).toBe(true);
+    expect(store.storage.getClaim(task_id, 'packages/hooks/src/edit.ts')?.session_id).toBe('A');
+    expect(store.storage.getClaim(task_id, 'packages/hooks/src/generated.ts')?.session_id).toBe(
+      'A',
+    );
+    const autoClaims = store.storage.taskObservationsByKind(task_id, 'auto-claim');
+    expect(autoClaims).toHaveLength(2);
+    expect(metadataOf(store.timeline('A').find((row) => row.kind === 'tool_use'))).toMatchObject({
+      tool: 'Bash',
+      file_path: 'packages/hooks/src/edit.ts',
+      file_paths: ['packages/hooks/src/edit.ts', 'packages/hooks/src/generated.ts'],
+      extracted_paths: ['packages/hooks/src/edit.ts', 'packages/hooks/src/generated.ts'],
+    });
+  });
+
+  it('apply_patch records extracted paths and auto-claims every patch file', async () => {
+    const task_id = seedTwoSessionTask();
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/viewer.tsx',
+      '@@',
+      '-old',
+      '+new',
+      '*** Add File: src/generated.ts',
+      '+export const generated = true;',
+      '*** Update File: /dev/null',
+      '*** End Patch',
+    ].join('\n');
+
+    const result = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'A',
+        ide: 'codex',
+        cwd: '/repo',
+        tool_name: 'apply_patch',
+        tool_input: { command: patch },
+        tool_response: { success: true },
+      },
+      { store },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
+    expect(store.storage.getClaim(task_id, 'src/generated.ts')?.session_id).toBe('A');
+    expect(store.storage.getClaim(task_id, '/dev/null')).toBeUndefined();
+    const autoClaims = store.storage.taskObservationsByKind(task_id, 'auto-claim');
+    expect(autoClaims).toHaveLength(2);
+    expect(metadataOf(store.timeline('A').find((row) => row.kind === 'tool_use'))).toMatchObject({
+      tool: 'apply_patch',
+      file_path: 'src/viewer.tsx',
+      file_paths: ['src/viewer.tsx', 'src/generated.ts'],
+      extracted_paths: ['src/viewer.tsx', 'src/generated.ts'],
+    });
   });
 
   it('does not auto-claim pseudo paths from Bash redirects', async () => {

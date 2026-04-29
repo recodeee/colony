@@ -90,7 +90,12 @@ function createRepo(): string {
   return root;
 }
 
-function addWorktree(repoRoot: string, root: '.omx' | '.omc', name: string, branch: string): string {
+function addWorktree(
+  repoRoot: string,
+  root: '.omx' | '.omc',
+  name: string,
+  branch: string,
+): string {
   const worktreeRoot = join(repoRoot, root, 'agent-worktrees');
   mkdirSync(worktreeRoot, { recursive: true });
   const worktreePath = join(worktreeRoot, name);

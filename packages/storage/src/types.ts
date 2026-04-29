@@ -68,11 +68,45 @@ export interface TaskParticipantRow {
   left_at: number | null;
 }
 
+export type TaskClaimState = 'active' | 'handoff_pending';
+
 export interface TaskClaimRow {
   task_id: number;
   file_path: string;
   session_id: string;
   claimed_at: number;
+  state: TaskClaimState;
+  expires_at: number | null;
+  handoff_observation_id: number | null;
+}
+
+export type LaneRunState = 'active' | 'paused';
+
+export interface LaneStateRow {
+  session_id: string;
+  state: LaneRunState;
+  reason: string | null;
+  updated_at: number;
+  updated_by_session_id: string;
+}
+
+export interface PausedLaneRow extends LaneStateRow {
+  task_id: number | null;
+  repo_root: string | null;
+  branch: string | null;
+  task_title: string | null;
+  ide: string | null;
+  cwd: string | null;
+}
+
+export interface LaneTakeoverResult {
+  task_id: number;
+  file_path: string;
+  previous_session_id: string;
+  assigned_session_id: string;
+  previous_claimed_at: number;
+  weakened_observation_id: number;
+  takeover_observation_id: number;
 }
 
 export interface TaskLinkRow {

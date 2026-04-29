@@ -1,3 +1,4 @@
+import type { ObservationRow } from '@colony/storage';
 import type { MemoryStore } from './memory-store.js';
 import { TaskThread } from './task-thread.js';
 
@@ -9,6 +10,7 @@ export interface SubtaskInfo {
   title: string;
   description: string;
   status: SubtaskStatus;
+  claimed_at: number | null;
   file_scope: string[];
   depends_on: number[];
   wave_index: number;
@@ -67,27 +69,7 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
   if (!initial) return null;
   const meta = parseMeta(initial.metadata);
 
-  // Lifecycle resolution. taskTimeline orders by `ts DESC`, but two
-  // observations stamped within the same millisecond have undefined
-  // tie-breaker order in SQLite, so the latest-by-ts row can flicker
-  // between `claimed` and `completed` for a sub-task that was just
-  // finished. Resolve with terminal-state-wins precedence so a
-  // `completed` row is authoritative once it exists; the attribution
-  // metadata (session_id, agent) is read from the same row that
-  // decided the status.
-  const claimRows = rows.filter((r) => r.kind === 'plan-subtask-claim');
-  let claimMeta: Record<string, unknown> = {};
-  let resolvedStatus: SubtaskStatus | undefined;
-  for (const precedence of ['completed', 'blocked', 'claimed'] as const) {
-    const match = claimRows.find((r) => parseMeta(r.metadata).status === precedence);
-    if (match) {
-      claimMeta = parseMeta(match.metadata);
-      resolvedStatus = precedence;
-      break;
-    }
-  }
-
-  const status = resolvedStatus ?? (meta.status as SubtaskStatus | undefined) ?? 'available';
+  const lifecycle = readSubtaskLifecycle(rows, meta);
 
   const [titleLine, ...rest] = initial.content.split('\n\n');
   const metaTitle = typeof meta.title === 'string' ? meta.title : null;
@@ -99,25 +81,60 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
     subtask_index: typeof meta.subtask_index === 'number' ? meta.subtask_index : -1,
     title: metaTitle ?? titleLine ?? '(untitled)',
     description: metaDescription ?? rest.join('\n\n').trim(),
-    status,
+    status: lifecycle.status,
+    claimed_at: lifecycle.claimed_at,
     file_scope: Array.isArray(meta.file_scope) ? (meta.file_scope as string[]) : [],
     depends_on: dependsOn,
     wave_index: 0,
     wave_name: 'Wave 1',
-    blocked_by_count: status === 'completed' ? 0 : dependsOn.length,
-    blocked_by: status === 'completed' ? [] : dependsOn,
+    blocked_by_count: lifecycle.status === 'completed' ? 0 : dependsOn.length,
+    blocked_by: lifecycle.status === 'completed' ? [] : dependsOn,
     spec_row_id: typeof meta.spec_row_id === 'string' ? (meta.spec_row_id as string) : null,
     capability_hint:
       typeof meta.capability_hint === 'string' ? (meta.capability_hint as string) : null,
     claimed_by_session_id:
-      typeof claimMeta.session_id === 'string' ? (claimMeta.session_id as string) : null,
-    claimed_by_agent: typeof claimMeta.agent === 'string' ? (claimMeta.agent as string) : null,
+      lifecycle.status === 'claimed' && typeof lifecycle.metadata.session_id === 'string'
+        ? (lifecycle.metadata.session_id as string)
+        : null,
+    claimed_by_agent:
+      lifecycle.status === 'claimed' && typeof lifecycle.metadata.agent === 'string'
+        ? (lifecycle.metadata.agent as string)
+        : null,
     parent_plan_slug: plan_slug,
     parent_plan_title:
       typeof meta.parent_plan_title === 'string' ? (meta.parent_plan_title as string) : null,
     parent_spec_task_id:
       typeof meta.parent_spec_task_id === 'number' ? (meta.parent_spec_task_id as number) : null,
   };
+}
+
+function readSubtaskLifecycle(
+  rows: ObservationRow[],
+  initialMeta: Record<string, unknown>,
+): { status: SubtaskStatus; claimed_at: number | null; metadata: Record<string, unknown> } {
+  const initialStatus = isSubtaskStatus(initialMeta.status) ? initialMeta.status : 'available';
+  const claimRows = rows
+    .filter((r) => r.kind === 'plan-subtask-claim')
+    .map((row) => ({ row, metadata: parseMeta(row.metadata) }))
+    .filter((entry) => isSubtaskStatus(entry.metadata.status))
+    .sort((a, b) => b.row.ts - a.row.ts || b.row.id - a.row.id);
+
+  // Completion is terminal. `available` is still allowed as a later sweep
+  // marker so stale claimed work can be re-queued without deleting history.
+  const completed = claimRows.find((entry) => entry.metadata.status === 'completed');
+  const resolved = completed ?? claimRows[0];
+  const status = (resolved?.metadata.status as SubtaskStatus | undefined) ?? initialStatus;
+  return {
+    status,
+    claimed_at: status === 'claimed' ? (resolved?.row.ts ?? null) : null,
+    metadata: resolved?.metadata ?? {},
+  };
+}
+
+function isSubtaskStatus(value: unknown): value is SubtaskStatus {
+  return (
+    value === 'available' || value === 'claimed' || value === 'completed' || value === 'blocked'
+  );
 }
 
 export function readSubtaskByBranch(store: MemoryStore, branch: string): SubtaskLookup | null {

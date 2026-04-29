@@ -48,6 +48,8 @@ export function isNegativeCoordinationKind(kind: string): kind is NegativeCoordi
 
 export type HandoffStatus = 'pending' | 'accepted' | 'expired' | 'cancelled';
 export type HandoffTarget = 'claude' | 'codex' | 'any';
+export type HandoffReason = 'quota_exhausted' | string;
+export type HandoffRuntimeStatus = 'blocked_by_runtime_limit' | string;
 
 export type WakeStatus = 'pending' | 'acknowledged' | 'expired' | 'cancelled';
 export type WakeTarget = 'claude' | 'codex' | 'any';
@@ -83,6 +85,7 @@ export const TASK_THREAD_ERROR_CODES = {
   NOT_PARTICIPANT: 'NOT_PARTICIPANT',
   NOT_TARGET_AGENT: 'NOT_TARGET_AGENT',
   NOT_RELAY: 'NOT_RELAY',
+  INVALID_CLAIM_PATH: 'INVALID_CLAIM_PATH',
 } as const;
 
 export type TaskThreadErrorCode =
@@ -176,6 +179,10 @@ export interface HandoffMetadata {
   accepted_by_session_id: string | null;
   accepted_at: number | null;
   expires_at: number;
+  handoff_ttl_ms: number;
+  reason?: HandoffReason;
+  runtime_status?: HandoffRuntimeStatus;
+  quota_context?: QuotaExhaustedHandoffContext;
   /**
    * Ranking of candidate agents by capability fit against this handoff,
    * snapshotted at send time. Only populated when `to_agent === 'any'`;
@@ -184,6 +191,25 @@ export interface HandoffMetadata {
    * they are the best fit even though anyone could accept.
    */
   suggested_candidates?: CandidateScore[];
+}
+
+export interface QuotaExhaustedHandoffContext {
+  agent: string;
+  session_id: string;
+  repo_root: string | null;
+  branch: string | null;
+  worktree_path: string | null;
+  task_id: number | null;
+  claimed_files: string[];
+  dirty_files: string[];
+  last_command: string | null;
+  last_tool: string | null;
+  last_verification: {
+    command: string | null;
+    result: string | null;
+  } | null;
+  suggested_next_step: string;
+  handoff_ttl_ms: number;
 }
 
 export interface HandoffObservation {
@@ -203,6 +229,9 @@ export interface HandOffArgs {
   released_files?: string[];
   transferred_files?: string[];
   expires_in_ms?: number;
+  reason?: HandoffReason;
+  runtime_status?: HandoffRuntimeStatus;
+  quota_context?: QuotaExhaustedHandoffContext;
 }
 
 /**
@@ -306,9 +335,9 @@ export function isMessageAddressedTo(
  * resumable packet.
  *
  * Difference from HandoffMetadata: handoffs assume the sender can write
- * `next_steps`; relays assume the sender is gone, drop their claims rather
- * than transferring (no recipient is bound at emit time), and bundle a
- * `worktree_recipe` so a receiver in a different worktree knows how to set
+ * `next_steps`; relays assume the sender is gone, weaken their claims into
+ * handoff-pending ownership (no recipient is bound at emit time), and bundle
+ * a `worktree_recipe` so a receiver in a different worktree knows how to set
  * up their tree before editing.
  */
 export interface RelayMetadata {
@@ -501,18 +530,21 @@ export class TaskThread {
     note?: string;
     metadata?: Record<string, unknown>;
   }): number {
+    const filePath = this.store.storage.normalizeTaskFilePath(this.task_id, p.file_path);
+    if (filePath === null)
+      throw taskError(TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH, 'claim path is not claimable');
     return this.store.storage.transaction(() => {
       this.store.storage.claimFile({
         task_id: this.task_id,
-        file_path: p.file_path,
+        file_path: filePath,
         session_id: p.session_id,
       });
       return this.store.addObservation({
         session_id: p.session_id,
         kind: 'claim',
-        content: p.note ? `claim ${p.file_path} — ${p.note}` : `claim ${p.file_path}`,
+        content: p.note ? `claim ${filePath} — ${p.note}` : `claim ${filePath}`,
         task_id: this.task_id,
-        metadata: { kind: 'claim', file_path: p.file_path, ...(p.metadata ?? {}) },
+        metadata: { kind: 'claim', file_path: filePath, ...(p.metadata ?? {}) },
       });
     });
   }
@@ -527,6 +559,7 @@ export class TaskThread {
    */
   handOff(args: HandOffArgs): number {
     const now = Date.now();
+    const handoff_ttl_ms = args.expires_in_ms ?? DEFAULT_HANDOFF_TTL_MS;
     const meta: HandoffMetadata = {
       kind: 'handoff',
       from_session_id: args.from_session_id,
@@ -541,7 +574,11 @@ export class TaskThread {
       status: 'pending',
       accepted_by_session_id: null,
       accepted_at: null,
-      expires_at: now + (args.expires_in_ms ?? DEFAULT_HANDOFF_TTL_MS),
+      expires_at: now + handoff_ttl_ms,
+      handoff_ttl_ms,
+      ...(args.reason !== undefined ? { reason: args.reason } : {}),
+      ...(args.runtime_status !== undefined ? { runtime_status: args.runtime_status } : {}),
+      ...(args.quota_context !== undefined ? { quota_context: args.quota_context } : {}),
     };
     // For broadcast handoffs, rank candidate agents by capability fit so
     // the preface can surface "best match" hints without each receiver
@@ -717,6 +754,28 @@ export class TaskThread {
         ({ meta }) =>
           meta.status === 'pending' &&
           now < meta.expires_at &&
+          meta.from_session_id !== session_id &&
+          (meta.to_session_id === session_id || meta.to_agent === 'any' || meta.to_agent === agent),
+      );
+  }
+
+  expiredQuotaHandoffsFor(
+    session_id: string,
+    agent: string,
+    now = Date.now(),
+  ): HandoffObservation[] {
+    return this.store.storage
+      .taskObservationsByKind(this.task_id, 'handoff')
+      .map((row) => {
+        const meta = parseHandoff(row.metadata, row.ts);
+        return meta ? { id: row.id, ts: row.ts, meta } : null;
+      })
+      .filter((x): x is HandoffObservation => x !== null)
+      .filter(
+        ({ meta }) =>
+          meta.reason === 'quota_exhausted' &&
+          meta.status === 'pending' &&
+          now >= meta.expires_at &&
           meta.from_session_id !== session_id &&
           (meta.to_session_id === session_id || meta.to_agent === 'any' || meta.to_agent === agent),
       );
@@ -1226,11 +1285,10 @@ export class TaskThread {
    * basics; everything else is synthesized from the last 30 minutes of task
    * activity so a Stop / SessionEnd hook firing seconds before the process
    * dies still produces something the receiver can resume from. Sender's
-   * existing fresh claims are *dropped* (not transferred) — relays assume the
-   * sender is gone, and the receiver re-claims via
-   * `worktree_recipe.inherit_claims` on accept. This mirrors the
-   * `transferred_files` invariant of handoffs and prevents a third agent
-   * from grabbing files in the gap.
+   * existing fresh claims become `handoff_pending` with the relay TTL instead
+   * of staying strong forever. The receiver re-claims via
+   * `worktree_recipe.inherit_claims` on accept, which replaces the pending row
+   * without leaving a competing strong owner.
    */
   relay(args: RelayArgs): number {
     const now = Date.now();
@@ -1253,15 +1311,6 @@ export class TaskThread {
       expires_at: now + (args.expires_in_ms ?? DEFAULT_RELAY_TTL_MS),
     };
     return this.store.storage.transaction(() => {
-      for (const claim of resumable_state.active_claims) {
-        if (claim.held_by === args.from_session_id) {
-          this.store.storage.releaseClaim({
-            task_id: this.task_id,
-            file_path: claim.file_path,
-            session_id: args.from_session_id,
-          });
-        }
-      }
       const id = this.store.addObservation({
         session_id: args.from_session_id,
         kind: 'relay',
@@ -1269,6 +1318,32 @@ export class TaskThread {
         task_id: this.task_id,
         metadata: meta as unknown as Record<string, unknown>,
       });
+      for (const claim of resumable_state.active_claims) {
+        if (claim.held_by !== args.from_session_id) continue;
+        this.store.storage.markClaimHandoffPending({
+          task_id: this.task_id,
+          file_path: claim.file_path,
+          session_id: args.from_session_id,
+          expires_at: meta.expires_at,
+          handoff_observation_id: id,
+        });
+        this.store.addObservation({
+          session_id: args.from_session_id,
+          kind: 'claim-weakened',
+          content: `claim ${claim.file_path} weakened to handoff_pending by relay #${id}`,
+          task_id: this.task_id,
+          reply_to: id,
+          metadata: {
+            kind: 'claim-weakened',
+            file_path: claim.file_path,
+            ownership_strength: 'weak',
+            state: 'handoff_pending',
+            reason: args.reason,
+            relay_observation_id: id,
+            expires_at: meta.expires_at,
+          },
+        });
+      }
       this.store.storage.touchTask(this.task_id, now);
       return id;
     });
@@ -1423,7 +1498,7 @@ export class TaskThread {
       .listClaims(this.task_id)
       .filter((c) =>
         isStrongClaimAge(
-          classifyClaimAge(c.claimed_at, {
+          classifyClaimAge(c, {
             now,
             claim_stale_minutes: this.store.settings.claimStaleMinutes,
           }),
@@ -1499,6 +1574,9 @@ function parseHandoff(metadata: string | null, rowTs = Date.now()): HandoffMetad
     const meta = parsed as HandoffMetadata;
     if (typeof meta.expires_at !== 'number' || !Number.isFinite(meta.expires_at)) {
       meta.expires_at = rowTs + DEFAULT_HANDOFF_TTL_MS;
+    }
+    if (typeof meta.handoff_ttl_ms !== 'number' || !Number.isFinite(meta.handoff_ttl_ms)) {
+      meta.handoff_ttl_ms = Math.max(0, meta.expires_at - rowTs);
     }
     return meta;
   } catch {

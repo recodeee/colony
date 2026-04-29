@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
-import { dirname, posix } from 'node:path';
+import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
 import Database from 'better-sqlite3';
+import { normalizeClaimPath } from './claim-path.js';
 import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import {
   COORDINATION_COMMIT_TOOLS,
@@ -10,6 +11,9 @@ import {
 import type {
   AgentProfileRow,
   ExampleRow,
+  LaneRunState,
+  LaneStateRow,
+  LaneTakeoverResult,
   LinkedTask,
   NewAgentProfile,
   NewExample,
@@ -22,6 +26,7 @@ import type {
   NewTaskEmbedding,
   NewTaskLink,
   ObservationRow,
+  PausedLaneRow,
   PheromoneRow,
   ProposalRow,
   ProposalStatus,
@@ -129,7 +134,9 @@ export interface ClaimBeforeEditStats {
   edits_with_file_path: number;
   edits_claimed_before: number;
   claim_match_window_ms?: number;
-  claim_match_sources?: ClaimBeforeEditMatchSources;
+  claim_match_sources?: Partial<ClaimMatchSources>;
+  claim_miss_reasons?: Partial<ClaimMissReasons>;
+  nearest_claim_examples?: NearestClaimExample[];
   auto_claimed_before_edit?: number;
   /** Count of PreToolUse claim-before-edit rows that had to be recorded under
    *  a fallback diagnostics session because the hook session row was missing. */
@@ -140,13 +147,51 @@ export interface ClaimBeforeEditStats {
   pre_tool_use_signals?: number;
 }
 
-export type ClaimBeforeEditMatchSource =
-  | 'exact_session'
-  | 'repo_branch'
-  | 'worktree'
-  | 'agent_lane';
+export interface ClaimMatchSources {
+  exact_session: number;
+  repo_branch: number;
+  worktree: number;
+  agent_lane: number;
+}
 
-export type ClaimBeforeEditMatchSources = Record<ClaimBeforeEditMatchSource, number>;
+export interface ClaimMissReasons {
+  no_claim_for_file: number;
+  claim_after_edit: number;
+  session_id_mismatch: number;
+  repo_root_mismatch: number;
+  branch_mismatch: number;
+  path_mismatch: number;
+  worktree_path_mismatch: number;
+  pseudo_path_skipped: number;
+  pre_tool_use_missing: number;
+}
+
+export interface NearestClaimExample {
+  reason: keyof ClaimMissReasons;
+  edit_id: number;
+  edit_session_id: string;
+  edit_file_path: string | null;
+  edit_repo_root: string | null;
+  edit_branch: string | null;
+  edit_worktree_path: string | null;
+  edit_ts: number;
+  nearest_claim_id: number | null;
+  claim_session_id: string | null;
+  claim_file_path: string | null;
+  claim_repo_root: string | null;
+  claim_branch: string | null;
+  claim_worktree_path: string | null;
+  claim_ts: number | null;
+  distance_ms: number | null;
+  relation: {
+    same_file_path: boolean;
+    same_session_id: boolean;
+    same_repo_root: boolean | null;
+    same_branch: boolean | null;
+    same_worktree_path: boolean | null;
+    claim_before_edit: boolean | null;
+  };
+}
 
 export interface ClaimCoverageSnapshot {
   since: number;
@@ -162,6 +207,7 @@ export interface ClaimCoverageSnapshot {
 
 const DEFAULT_STRANDED_AFTER_MS = 10 * 60_000;
 const DEFAULT_CLAIM_WINDOW_MS = 5 * 60_000;
+const DEFAULT_NEAREST_CLAIM_EXAMPLE_LIMIT = 50;
 const DEFAULT_IDLE_WINDOW_MS = 30 * 60_000;
 const DEFAULT_FILE_HEAT_LIMIT = 10;
 const DEFAULT_FILE_HEAT_MIN_HEAT = 0.05;
@@ -175,14 +221,13 @@ type JsonRecord = Record<string, unknown>;
 
 interface ClaimBeforeEditRow {
   id: number;
-  task_id: number | null;
   session_id: string;
   ts: number;
   file_path: string | null;
   repo_root: string | null;
   branch: string | null;
   worktree_path: string | null;
-  agent: string | null;
+  agent_identity: string | null;
 }
 
 export class Storage {
@@ -195,6 +240,7 @@ export class Storage {
   private coordinationActivityStmt!: Database.Statement;
   private editsWithoutClaimsStmt!: Database.Statement;
   private sessionsEndedWithoutHandoffStmt!: Database.Statement;
+  private taskClaimColumns = new Set<string>();
 
   constructor(dbPath: string, opts: StorageOptions = {}) {
     if (!opts.readonly) mkdirSync(dirname(dbPath), { recursive: true });
@@ -207,6 +253,7 @@ export class Storage {
       this.applyColumnMigrations();
       this.db.exec(POST_MIGRATION_SQL);
     }
+    this.taskClaimColumns = this.tableColumns('task_claims');
     this.prepareTaskEmbeddingStatements(opts.readonly ?? false);
   }
 
@@ -271,14 +318,21 @@ export class Storage {
    */
   private applyColumnMigrations(): void {
     for (const { table, column, sql } of COLUMN_MIGRATIONS) {
-      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-      if (cols.some((c) => c.name === column)) continue;
+      if (this.tableColumns(table).has(column)) continue;
       this.db.exec(sql);
     }
   }
 
+  private tableColumns(table: string): Set<string> {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return new Set(cols.map((col) => col.name));
+  }
+
   private prepareTaskEmbeddingStatements(readonly: boolean): void {
     const hasTaskEmbeddings = this.tableExists('task_embeddings');
+    const activeClaimPredicate = this.taskClaimColumns.has('state')
+      ? "AND tc.state = 'active'"
+      : '';
     this.getTaskEmbeddingStmt = hasTaskEmbeddings
       ? this.db.prepare(
           'SELECT task_id, model, dim, embedding, observation_count, computed_at FROM task_embeddings WHERE task_id = ?',
@@ -382,10 +436,11 @@ export class Storage {
        )
        SELECT l.session_id,
               l.last_observation_ts,
-              EXISTS (
-                SELECT 1 FROM task_claims tc
-                WHERE tc.session_id = l.session_id
-              ) AS had_active_claims,
+	              EXISTS (
+	                SELECT 1 FROM task_claims tc
+	                WHERE tc.session_id = l.session_id
+	                  ${activeClaimPredicate}
+	              ) AS had_active_claims,
               EXISTS (
                 SELECT 1 FROM observations h
                 WHERE h.session_id = l.session_id
@@ -443,6 +498,9 @@ export class Storage {
            END,
            metadata = CASE
              WHEN sessions.metadata IS NULL AND excluded.metadata IS NOT NULL THEN excluded.metadata
+             WHEN json_extract(sessions.metadata, '$.source') LIKE 'process-env:%'
+               AND json_extract(excluded.metadata, '$.source') = 'omx-active-session'
+               THEN excluded.metadata
              WHEN sessions.ide IN ('unknown', 'unbound')
                AND excluded.ide NOT IN ('unknown', 'unbound')
                AND excluded.metadata IS NOT NULL THEN excluded.metadata
@@ -1010,34 +1068,117 @@ export class Storage {
   }
 
   claimFile(c: { task_id: number; file_path: string; session_id: string }): void {
+    const filePath = this.normalizeTaskFilePath(c.task_id, c.file_path);
+    if (filePath === null) return;
     // REPLACE semantics: the latest claimer wins. Handoffs atomically swap
     // ownership, so the invariant "at most one owner per (task, file)" is
     // preserved by the transaction, not by the primary key alone.
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO task_claims(task_id, file_path, session_id, claimed_at) VALUES (?, ?, ?, ?)',
+        `INSERT OR REPLACE INTO task_claims(
+          task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+        ) VALUES (?, ?, ?, ?, 'active', NULL, NULL)`,
       )
-      .run(c.task_id, c.file_path, c.session_id, Date.now());
+      .run(c.task_id, filePath, c.session_id, Date.now());
+  }
+
+  markClaimHandoffPending(c: {
+    task_id: number;
+    file_path: string;
+    session_id: string;
+    expires_at: number;
+    handoff_observation_id: number;
+  }): void {
+    const filePaths = this.matchingClaimFilePaths(c.task_id, c.file_path);
+    if (filePaths.length === 0) return;
+    const stmt = this.db.prepare(
+      `UPDATE task_claims
+       SET state = 'handoff_pending',
+           expires_at = ?,
+           handoff_observation_id = ?
+       WHERE task_id = ? AND file_path = ? AND session_id = ? AND state = 'active'`,
+    );
+    for (const filePath of filePaths) {
+      stmt.run(c.expires_at, c.handoff_observation_id, c.task_id, filePath, c.session_id);
+    }
   }
 
   releaseClaim(c: { task_id: number; file_path: string; session_id: string }): void {
+    const filePaths = this.matchingClaimFilePaths(c.task_id, c.file_path);
+    if (filePaths.length === 0) return;
     // Only the current owner can release. Prevents a stale handoff from
     // silently dropping claims another agent already took over.
-    this.db
-      .prepare('DELETE FROM task_claims WHERE task_id = ? AND file_path = ? AND session_id = ?')
-      .run(c.task_id, c.file_path, c.session_id);
+    const stmt = this.db.prepare(
+      'DELETE FROM task_claims WHERE task_id = ? AND file_path = ? AND session_id = ?',
+    );
+    for (const filePath of filePaths) stmt.run(c.task_id, filePath, c.session_id);
   }
 
   getClaim(task_id: number, file_path: string): TaskClaimRow | undefined {
-    return this.db
+    const exact = this.db
       .prepare('SELECT * FROM task_claims WHERE task_id = ? AND file_path = ?')
-      .get(task_id, file_path) as TaskClaimRow | undefined;
+      .get(task_id, file_path) as Partial<TaskClaimRow> | undefined;
+    const normalizedExactRow = this.normalizeTaskClaimRow(exact);
+    if (normalizedExactRow) return normalizedExactRow;
+    const normalized = this.normalizeTaskFilePath(task_id, file_path);
+    if (normalized === null || normalized === file_path) return undefined;
+    const normalizedExact = this.db
+      .prepare('SELECT * FROM task_claims WHERE task_id = ? AND file_path = ?')
+      .get(task_id, normalized) as Partial<TaskClaimRow> | undefined;
+    const normalizedClaim = this.normalizeTaskClaimRow(normalizedExact);
+    if (normalizedClaim) return normalizedClaim;
+    return this.listClaims(task_id).find(
+      (claim) => this.normalizeTaskFilePath(task_id, claim.file_path) === normalized,
+    );
   }
 
   listClaims(task_id: number): TaskClaimRow[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM task_claims WHERE task_id = ? ORDER BY claimed_at ASC')
-      .all(task_id) as TaskClaimRow[];
+      .all(task_id) as Partial<TaskClaimRow>[];
+    return rows.map((row) => this.normalizeTaskClaimRow(row)).filter(isTaskClaimRow);
+  }
+
+  private normalizeTaskClaimRow(row: Partial<TaskClaimRow> | undefined): TaskClaimRow | undefined {
+    if (!row) return undefined;
+    if (
+      typeof row.task_id !== 'number' ||
+      typeof row.file_path !== 'string' ||
+      typeof row.session_id !== 'string' ||
+      typeof row.claimed_at !== 'number'
+    ) {
+      return undefined;
+    }
+    return {
+      task_id: row.task_id,
+      file_path: row.file_path,
+      session_id: row.session_id,
+      claimed_at: row.claimed_at,
+      state: row.state === 'handoff_pending' ? 'handoff_pending' : 'active',
+      expires_at: row.expires_at ?? null,
+      handoff_observation_id: row.handoff_observation_id ?? null,
+    };
+  }
+
+  normalizeTaskFilePath(task_id: number, file_path: string, cwd?: string): string | null {
+    const task = this.getTask(task_id);
+    return normalizeClaimPath({
+      repo_root: task?.repo_root,
+      cwd,
+      file_path,
+    });
+  }
+
+  private matchingClaimFilePaths(task_id: number, file_path: string): string[] {
+    const normalized = this.normalizeTaskFilePath(task_id, file_path);
+    if (normalized === null) return [];
+    const matches = new Set<string>([file_path, normalized]);
+    for (const claim of this.listClaims(task_id)) {
+      if (this.normalizeTaskFilePath(task_id, claim.file_path) === normalized) {
+        matches.add(claim.file_path);
+      }
+    }
+    return [...matches];
   }
 
   /**
@@ -1047,11 +1188,190 @@ export class Storage {
    * describe work that's already finished, not live collisions.
    */
   recentClaims(task_id: number, since_ts: number, limit = 50): TaskClaimRow[] {
+    const activeClaimPredicate = this.taskClaimColumns.has('state') ? "AND state = 'active'" : '';
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM task_claims
+         WHERE task_id = ? AND claimed_at > ? ${activeClaimPredicate}
+         ORDER BY claimed_at DESC LIMIT ?`,
+      )
+      .all(task_id, since_ts, limit) as Partial<TaskClaimRow>[];
+    return rows.map((row) => this.normalizeTaskClaimRow(row)).filter(isTaskClaimRow);
+  }
+
+  setLaneState(p: {
+    session_id: string;
+    state: LaneRunState;
+    updated_by_session_id: string;
+    reason?: string | null;
+    updated_at?: number;
+  }): LaneStateRow {
+    const now = p.updated_at ?? Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO lane_states(session_id, state, reason, updated_at, updated_by_session_id)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           state = excluded.state,
+           reason = excluded.reason,
+           updated_at = excluded.updated_at,
+           updated_by_session_id = excluded.updated_by_session_id`,
+      )
+      .run(p.session_id, p.state, p.reason ?? null, now, p.updated_by_session_id);
+    return this.getLaneState(p.session_id) as LaneStateRow;
+  }
+
+  getLaneState(session_id: string): LaneStateRow | undefined {
+    return this.db.prepare('SELECT * FROM lane_states WHERE session_id = ?').get(session_id) as
+      | LaneStateRow
+      | undefined;
+  }
+
+  listPausedLanes(limit = 100): PausedLaneRow[] {
     return this.db
       .prepare(
-        'SELECT * FROM task_claims WHERE task_id = ? AND claimed_at > ? ORDER BY claimed_at DESC LIMIT ?',
+        `SELECT ls.session_id,
+                ls.state,
+                ls.reason,
+                ls.updated_at,
+                ls.updated_by_session_id,
+                s.ide,
+                s.cwd,
+                (
+                  SELECT t.id
+                  FROM task_participants p
+                  JOIN tasks t ON t.id = p.task_id
+                  WHERE p.session_id = ls.session_id
+                    AND p.left_at IS NULL
+                  ORDER BY t.updated_at DESC, p.joined_at DESC
+                  LIMIT 1
+                ) AS task_id,
+                (
+                  SELECT t.repo_root
+                  FROM task_participants p
+                  JOIN tasks t ON t.id = p.task_id
+                  WHERE p.session_id = ls.session_id
+                    AND p.left_at IS NULL
+                  ORDER BY t.updated_at DESC, p.joined_at DESC
+                  LIMIT 1
+                ) AS repo_root,
+                (
+                  SELECT t.branch
+                  FROM task_participants p
+                  JOIN tasks t ON t.id = p.task_id
+                  WHERE p.session_id = ls.session_id
+                    AND p.left_at IS NULL
+                  ORDER BY t.updated_at DESC, p.joined_at DESC
+                  LIMIT 1
+                ) AS branch,
+                (
+                  SELECT t.title
+                  FROM task_participants p
+                  JOIN tasks t ON t.id = p.task_id
+                  WHERE p.session_id = ls.session_id
+                    AND p.left_at IS NULL
+                  ORDER BY t.updated_at DESC, p.joined_at DESC
+                  LIMIT 1
+                ) AS task_title
+         FROM lane_states ls
+         LEFT JOIN sessions s ON s.id = ls.session_id
+         WHERE ls.state = 'paused'
+         ORDER BY ls.updated_at DESC, ls.session_id ASC
+         LIMIT ?`,
       )
-      .all(task_id, since_ts, limit) as TaskClaimRow[];
+      .all(limit) as PausedLaneRow[];
+  }
+
+  findClaimBySessionAndFile(session_id: string, file_path: string): TaskClaimRow | undefined {
+    return this.normalizeTaskClaimRow(
+      this.db
+        .prepare(
+          `SELECT *
+           FROM task_claims
+           WHERE session_id = ?
+             AND file_path = ?
+           ORDER BY claimed_at DESC
+           LIMIT 1`,
+        )
+        .get(session_id, file_path) as Partial<TaskClaimRow> | undefined,
+    );
+  }
+
+  takeOverLaneClaim(p: {
+    target_session_id: string;
+    requester_session_id: string;
+    file_path: string;
+    reason: string;
+    requester_agent?: string | null;
+    now?: number;
+  }): LaneTakeoverResult {
+    const now = p.now ?? Date.now();
+    const previous = this.findClaimBySessionAndFile(p.target_session_id, p.file_path);
+    if (!previous) {
+      throw new Error(`no claim for ${p.file_path} held by ${p.target_session_id}`);
+    }
+    return this.transaction(() => {
+      this.createSession({
+        id: p.requester_session_id,
+        ide: p.requester_agent ?? 'unknown',
+        cwd: null,
+        started_at: now,
+        metadata: null,
+      });
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO task_claims(
+            task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+          ) VALUES (?, ?, ?, ?, 'active', NULL, NULL)`,
+        )
+        .run(previous.task_id, previous.file_path, p.requester_session_id, now);
+      const weakenedObservationId = this.insertObservation({
+        session_id: previous.session_id,
+        kind: 'claim-weakened',
+        content: `claim ${previous.file_path} weakened by takeover from ${p.requester_session_id}: ${p.reason}`,
+        compressed: false,
+        intensity: null,
+        ts: now,
+        task_id: previous.task_id,
+        metadata: {
+          kind: 'claim-weakened',
+          file_path: previous.file_path,
+          previous_session_id: previous.session_id,
+          assigned_session_id: p.requester_session_id,
+          reason: p.reason,
+          ownership_strength: 'weak',
+          previous_claimed_at: previous.claimed_at,
+        },
+      });
+      const takeoverObservationId = this.insertObservation({
+        session_id: p.requester_session_id,
+        kind: 'lane-takeover',
+        content: `takeover ${previous.file_path} from ${previous.session_id}: ${p.reason}`,
+        compressed: false,
+        intensity: null,
+        ts: now,
+        task_id: previous.task_id,
+        metadata: {
+          kind: 'lane-takeover',
+          target_session_id: previous.session_id,
+          assigned_session_id: p.requester_session_id,
+          file_path: previous.file_path,
+          reason: p.reason,
+          weakened_observation_id: weakenedObservationId,
+          previous_claimed_at: previous.claimed_at,
+        },
+      });
+      this.touchTask(previous.task_id, now);
+      return {
+        task_id: previous.task_id,
+        file_path: previous.file_path,
+        previous_session_id: previous.session_id,
+        assigned_session_id: p.requester_session_id,
+        previous_claimed_at: previous.claimed_at,
+        weakened_observation_id: weakenedObservationId,
+        takeover_observation_id: takeoverObservationId,
+      };
+    });
   }
 
   // --- task links (cross-task edges) ---
@@ -1282,13 +1602,15 @@ export class Storage {
 
   taskObservationsByKind(task_id: number, kind: string, limit = 100): ObservationRow[] {
     return this.db
-      .prepare('SELECT * FROM observations WHERE task_id = ? AND kind = ? ORDER BY ts DESC LIMIT ?')
+      .prepare(
+        'SELECT * FROM observations WHERE task_id = ? AND kind = ? ORDER BY ts DESC, id DESC LIMIT ?',
+      )
       .all(task_id, kind, limit) as ObservationRow[];
   }
 
   taskTimeline(task_id: number, limit = 50): ObservationRow[] {
     return this.db
-      .prepare('SELECT * FROM observations WHERE task_id = ? ORDER BY ts DESC LIMIT ?')
+      .prepare('SELECT * FROM observations WHERE task_id = ? ORDER BY ts DESC, id DESC LIMIT ?')
       .all(task_id, limit) as ObservationRow[];
   }
 
@@ -1434,7 +1756,7 @@ export class Storage {
     since_ts: number,
     limit = 20,
   ): Array<{ session_id: string; file_path: string; ts: number; task_id: number | null }> {
-    return this.db
+    const edits = this.db
       .prepare(
         `SELECT o.session_id,
                 json_extract(o.metadata, '$.file_path') AS file_path,
@@ -1444,22 +1766,87 @@ export class Storage {
          WHERE o.kind = 'tool_use'
            AND o.ts > ?
            AND json_extract(o.metadata, '$.file_path') IS NOT NULL
-           AND NOT EXISTS (
-             SELECT 1 FROM observations c
-             WHERE c.kind = 'claim'
-               AND c.session_id = o.session_id
-               AND json_extract(c.metadata, '$.file_path') = json_extract(o.metadata, '$.file_path')
-               AND c.ts <= o.ts
-           )
          ORDER BY o.ts DESC
          LIMIT ?`,
       )
-      .all(since_ts, limit) as Array<{
+      .all(since_ts, Math.max(limit * 5, limit)) as Array<{
       session_id: string;
       file_path: string;
       ts: number;
       task_id: number | null;
     }>;
+    const claims = this.claimObservations();
+    const rows: Array<{
+      session_id: string;
+      file_path: string;
+      ts: number;
+      task_id: number | null;
+    }> = [];
+    for (const edit of edits) {
+      const normalized = this.normalizedObservationFilePath(edit);
+      if (normalized === null) continue;
+      if (this.hasMatchingClaimBeforeEdit(claims, { ...edit, file_path: normalized })) continue;
+      rows.push({ ...edit, file_path: normalized });
+      if (rows.length >= limit) break;
+    }
+    return rows;
+  }
+
+  private claimObservations(): Array<{
+    session_id: string;
+    file_path: string | null;
+    ts: number;
+    task_id: number | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT session_id,
+                json_extract(metadata, '$.file_path') AS file_path,
+                ts,
+                task_id
+         FROM observations
+         WHERE kind = 'claim'
+           AND json_extract(metadata, '$.file_path') IS NOT NULL
+         ORDER BY ts ASC`,
+      )
+      .all() as Array<{
+      session_id: string;
+      file_path: string | null;
+      ts: number;
+      task_id: number | null;
+    }>;
+  }
+
+  private normalizedObservationFilePath(row: {
+    task_id: number | null;
+    file_path: string | null;
+  }): string | null {
+    if (row.file_path === null) return null;
+    const task = row.task_id === null ? undefined : this.getTask(row.task_id);
+    return normalizeClaimPath({
+      repo_root: task?.repo_root,
+      cwd: task?.repo_root,
+      file_path: row.file_path,
+    });
+  }
+
+  private hasMatchingClaimBeforeEdit(
+    claims: Array<{
+      session_id: string;
+      file_path: string | null;
+      ts: number;
+      task_id: number | null;
+    }>,
+    edit: { session_id: string; file_path: string; ts: number; task_id: number | null },
+  ): boolean {
+    return claims.some((claim) => {
+      if (claim.ts > edit.ts) return false;
+      if (claim.session_id !== edit.session_id) return false;
+      if (claim.task_id !== null && edit.task_id !== null && claim.task_id !== edit.task_id) {
+        return false;
+      }
+      return this.normalizedObservationFilePath(claim) === edit.file_path;
+    });
   }
 
   /** Per-session activity since `since_ts`, split into total observations
@@ -1534,7 +1921,6 @@ export class Storage {
            SELECT value AS tool FROM json_each(?)
          )
          SELECT o.id,
-                o.task_id,
                 o.session_id,
                 o.ts,
                 json_extract(o.metadata, '$.file_path') AS file_path,
@@ -1543,7 +1929,6 @@ export class Storage {
                   json_extract(o.metadata, '$.repoRoot'),
                   json_extract(s.metadata, '$.repo_root'),
                   json_extract(s.metadata, '$.repoRoot'),
-                  direct_task.repo_root,
                   (
                     SELECT t.repo_root
                     FROM task_participants p
@@ -1557,7 +1942,6 @@ export class Storage {
                 COALESCE(
                   json_extract(o.metadata, '$.branch'),
                   json_extract(s.metadata, '$.branch'),
-                  direct_task.branch,
                   (
                     SELECT t.branch
                     FROM task_participants p
@@ -1571,32 +1955,31 @@ export class Storage {
                 COALESCE(
                   json_extract(o.metadata, '$.worktree_path'),
                   json_extract(o.metadata, '$.worktreePath'),
+                  json_extract(o.metadata, '$.cwd'),
                   json_extract(s.metadata, '$.worktree_path'),
                   json_extract(s.metadata, '$.worktreePath'),
-                  json_extract(o.metadata, '$.cwd'),
                   json_extract(s.metadata, '$.cwd'),
-                  s.cwd,
-                  direct_task.repo_root
+                  s.cwd
                 ) AS worktree_path,
                 COALESCE(
-                  json_extract(o.metadata, '$.agent'),
                   json_extract(o.metadata, '$.inferred_agent'),
-                  json_extract(s.metadata, '$.agent'),
+                  json_extract(o.metadata, '$.agent'),
                   json_extract(s.metadata, '$.inferred_agent'),
+                  json_extract(s.metadata, '$.agent'),
                   (
                     SELECT p.agent
                     FROM task_participants p
+                    JOIN tasks t ON t.id = p.task_id
                     WHERE p.session_id = o.session_id
                       AND p.left_at IS NULL
-                    ORDER BY p.joined_at DESC
+                    ORDER BY t.updated_at DESC, p.joined_at DESC
                     LIMIT 1
                   ),
                   s.ide,
                   o.session_id
-                ) AS agent
+                ) AS agent_identity
          FROM observations o
          LEFT JOIN sessions s ON s.id = o.session_id
-         LEFT JOIN tasks direct_task ON direct_task.id = o.task_id
          JOIN edit_tools et
            ON et.tool = COALESCE(
              json_extract(o.metadata, '$.tool'),
@@ -1610,7 +1993,6 @@ export class Storage {
     const claimRows = this.db
       .prepare(
         `SELECT c.id,
-                c.task_id,
                 c.session_id,
                 c.ts,
                 json_extract(c.metadata, '$.file_path') AS file_path,
@@ -1629,22 +2011,21 @@ export class Storage {
                 COALESCE(
                   json_extract(c.metadata, '$.worktree_path'),
                   json_extract(c.metadata, '$.worktreePath'),
+                  json_extract(c.metadata, '$.cwd'),
                   json_extract(s.metadata, '$.worktree_path'),
                   json_extract(s.metadata, '$.worktreePath'),
-                  json_extract(c.metadata, '$.cwd'),
                   json_extract(s.metadata, '$.cwd'),
-                  s.cwd,
-                  t.repo_root
+                  s.cwd
                 ) AS worktree_path,
                 COALESCE(
-                  json_extract(c.metadata, '$.agent'),
                   json_extract(c.metadata, '$.inferred_agent'),
-                  p.agent,
-                  json_extract(s.metadata, '$.agent'),
+                  json_extract(c.metadata, '$.agent'),
                   json_extract(s.metadata, '$.inferred_agent'),
+                  json_extract(s.metadata, '$.agent'),
+                  p.agent,
                   s.ide,
                   c.session_id
-                ) AS agent
+                ) AS agent_identity
          FROM observations c
          LEFT JOIN sessions s ON s.id = c.session_id
          LEFT JOIN tasks t ON t.id = c.task_id
@@ -1681,13 +2062,68 @@ export class Storage {
       session_binding_missing: number | null;
       pre_tool_use_signals: number | null;
     };
-    const correlation = correlateClaimsBeforeEdits(editRows, claimRows, DEFAULT_CLAIM_WINDOW_MS);
+    const signalRows = this.db
+      .prepare(
+        `SELECT c.id,
+                COALESCE(json_extract(c.metadata, '$.original_session_id'), c.session_id) AS session_id,
+                c.ts,
+                json_extract(c.metadata, '$.file_path') AS file_path,
+                COALESCE(
+                  json_extract(c.metadata, '$.repo_root'),
+                  json_extract(c.metadata, '$.repoRoot'),
+                  t.repo_root,
+                  json_extract(s.metadata, '$.repo_root'),
+                  json_extract(s.metadata, '$.repoRoot')
+                ) AS repo_root,
+                COALESCE(
+                  json_extract(c.metadata, '$.branch'),
+                  t.branch,
+                  json_extract(s.metadata, '$.branch')
+                ) AS branch,
+                COALESCE(
+                  json_extract(c.metadata, '$.worktree_path'),
+                  json_extract(c.metadata, '$.worktreePath'),
+                  json_extract(c.metadata, '$.cwd'),
+                  json_extract(s.metadata, '$.worktree_path'),
+                  json_extract(s.metadata, '$.worktreePath'),
+                  json_extract(s.metadata, '$.cwd'),
+                  s.cwd
+                ) AS worktree_path,
+                COALESCE(
+                  json_extract(c.metadata, '$.inferred_agent'),
+                  json_extract(c.metadata, '$.agent'),
+                  json_extract(s.metadata, '$.inferred_agent'),
+                  json_extract(s.metadata, '$.agent'),
+                  p.agent,
+                  s.ide,
+                  c.session_id
+                ) AS agent_identity
+         FROM observations c
+         LEFT JOIN sessions s ON s.id = c.session_id
+         LEFT JOIN tasks t ON t.id = c.task_id
+         LEFT JOIN task_participants p
+           ON p.task_id = c.task_id
+          AND p.session_id = c.session_id
+          AND p.left_at IS NULL
+         WHERE c.ts > ?
+           AND c.kind = 'claim-before-edit'
+         ORDER BY c.ts ASC, c.id ASC`,
+      )
+      .all(since_ts) as ClaimBeforeEditRow[];
+    const correlation = claimBeforeEditCorrelation(
+      editRows,
+      claimRows,
+      signalRows,
+      DEFAULT_CLAIM_WINDOW_MS,
+    );
     return {
       edit_tool_calls: editRows.length,
       edits_with_file_path: editRows.filter((row) => row.file_path !== null).length,
       edits_claimed_before: correlation.edits_claimed_before,
       claim_match_window_ms: DEFAULT_CLAIM_WINDOW_MS,
       claim_match_sources: correlation.claim_match_sources,
+      claim_miss_reasons: correlation.claim_miss_reasons,
+      nearest_claim_examples: correlation.nearest_claim_examples,
       auto_claimed_before_edit: telemetry.auto_claimed_before_edit ?? 0,
       session_binding_missing: telemetry.session_binding_missing ?? 0,
       pre_tool_use_signals: telemetry.pre_tool_use_signals ?? 0,
@@ -1953,7 +2389,7 @@ export class Storage {
   }
 }
 
-function emptyClaimBeforeEditMatchSources(): ClaimBeforeEditMatchSources {
+function emptyClaimMatchSources(): ClaimMatchSources {
   return {
     exact_session: 0,
     repo_branch: 0,
@@ -1962,141 +2398,370 @@ function emptyClaimBeforeEditMatchSources(): ClaimBeforeEditMatchSources {
   };
 }
 
-function correlateClaimsBeforeEdits(
-  editRows: ClaimBeforeEditRow[],
-  claimRows: ClaimBeforeEditRow[],
-  claimWindowMs: number,
-): { edits_claimed_before: number; claim_match_sources: ClaimBeforeEditMatchSources } {
-  const claimMatchSources = emptyClaimBeforeEditMatchSources();
-  let editsClaimedBefore = 0;
-
-  for (const edit of editRows) {
-    if (edit.file_path === null) continue;
-    const matchSource = claimMatchSourceForEdit(edit, claimRows, claimWindowMs);
-    if (!matchSource) continue;
-    editsClaimedBefore++;
-    claimMatchSources[matchSource]++;
-  }
-
+function emptyClaimMissReasons(): ClaimMissReasons {
   return {
-    edits_claimed_before: editsClaimedBefore,
-    claim_match_sources: claimMatchSources,
+    no_claim_for_file: 0,
+    claim_after_edit: 0,
+    session_id_mismatch: 0,
+    repo_root_mismatch: 0,
+    branch_mismatch: 0,
+    path_mismatch: 0,
+    worktree_path_mismatch: 0,
+    pseudo_path_skipped: 0,
+    pre_tool_use_missing: 0,
   };
 }
 
-function claimMatchSourceForEdit(
-  edit: ClaimBeforeEditRow,
-  claimRows: ClaimBeforeEditRow[],
-  claimWindowMs: number,
-): ClaimBeforeEditMatchSource | null {
-  const priorPathClaims = claimRows.filter(
-    (claim) => claim.ts <= edit.ts && sameNormalizedFilePath(edit, claim),
-  );
+export type ClaimBeforeEditMatchSource = keyof ClaimMatchSources;
+export type ClaimBeforeEditMatchSources = ClaimMatchSources;
+type ClaimMissReason = keyof ClaimMissReasons;
 
-  if (priorPathClaims.some((claim) => claim.session_id === edit.session_id)) {
+function claimBeforeEditCorrelation(
+  editRows: ClaimBeforeEditRow[],
+  claimRows: ClaimBeforeEditRow[],
+  signalRows: ClaimBeforeEditRow[],
+  claimWindowMs: number,
+): {
+  edits_claimed_before: number;
+  claim_match_sources: ClaimMatchSources;
+  claim_miss_reasons: ClaimMissReasons;
+  nearest_claim_examples: NearestClaimExample[];
+} {
+  const matchSources = emptyClaimMatchSources();
+  const missReasons = emptyClaimMissReasons();
+  const nearestClaimExamples: NearestClaimExample[] = [];
+  let editsClaimedBefore = 0;
+  for (const edit of editRows) {
+    if (edit.file_path === null) continue;
+    if (isPseudoClaimPath(edit.file_path)) {
+      missReasons.pseudo_path_skipped++;
+      pushNearestClaimExample(nearestClaimExamples, 'pseudo_path_skipped', edit, claimRows);
+      continue;
+    }
+    const sameFileClaims = claimRows.filter(
+      (claim) => claim.file_path !== null && sameComparableFilePath(edit, claim),
+    );
+    const priorSameFileClaims = sameFileClaims.filter((claim) =>
+      isPriorClaimWithinWindow(edit, claim, claimWindowMs),
+    );
+    const matchSource = claimBeforeEditMatchSource(edit, priorSameFileClaims);
+    if (!matchSource) continue;
+    editsClaimedBefore++;
+    matchSources[matchSource]++;
+  }
+  for (const edit of editRows) {
+    if (edit.file_path === null) continue;
+    if (isPseudoClaimPath(edit.file_path)) continue;
+    const sameFileClaims = claimRows.filter(
+      (claim) => claim.file_path !== null && sameComparableFilePath(edit, claim),
+    );
+    const priorSameFileClaims = sameFileClaims.filter((claim) =>
+      isPriorClaimWithinWindow(edit, claim, claimWindowMs),
+    );
+    if (claimBeforeEditMatchSource(edit, priorSameFileClaims)) continue;
+    const reason = claimMissReason(edit, claimRows, signalRows, claimWindowMs);
+    missReasons[reason]++;
+    pushNearestClaimExample(nearestClaimExamples, reason, edit, claimRows);
+  }
+  return {
+    edits_claimed_before: editsClaimedBefore,
+    claim_match_sources: matchSources,
+    claim_miss_reasons: missReasons,
+    nearest_claim_examples: nearestClaimExamples,
+  };
+}
+
+function claimBeforeEditMatchSource(
+  edit: ClaimBeforeEditRow,
+  priorSameFileClaims: ClaimBeforeEditRow[],
+): ClaimBeforeEditMatchSource | null {
+  if (
+    priorSameFileClaims.some(
+      (claim) => claim.session_id === edit.session_id && compatibleClaimScope(edit, claim),
+    )
+  ) {
     return 'exact_session';
   }
-
-  const windowed = priorPathClaims.filter((claim) => edit.ts - claim.ts <= claimWindowMs);
-  if (windowed.length === 0) return null;
-
-  const repoBranchMatches = windowed.filter((claim) => sameRepoBranch(edit, claim));
-  if (repoBranchMatches.length === 1) return 'repo_branch';
-
-  if (windowed.some((claim) => sameWorktree(edit, claim))) {
-    return 'worktree';
-  }
-
-  const agentLaneMatches = repoBranchMatches.filter((claim) => sameAgent(edit, claim));
-  if (agentLaneMatches.length === 1) return 'agent_lane';
-
-  if (repoBranchMatches.length > 0) return 'repo_branch';
+  if (priorSameFileClaims.some((claim) => sameRepoBranch(edit, claim))) return 'repo_branch';
+  if (priorSameFileClaims.some((claim) => sameWorktree(edit, claim))) return 'worktree';
+  if (hasUnambiguousAgentLaneMatch(edit, priorSameFileClaims)) return 'agent_lane';
   return null;
 }
 
-function sameNormalizedFilePath(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
-  if (edit.file_path === null || claim.file_path === null) return false;
-  const claimPaths = normalizedFilePathCandidates(claim, edit);
-  for (const editPath of normalizedFilePathCandidates(edit, claim)) {
-    if (claimPaths.has(editPath)) return true;
-  }
-  return false;
-}
-
-function normalizedFilePathCandidates(
-  row: ClaimBeforeEditRow,
-  peer?: ClaimBeforeEditRow,
-): Set<string> {
-  const out = new Set<string>();
-  if (!row.file_path) return out;
-
-  const normalizedPath = normalizeFilePath(row.file_path);
-  addFilePathCandidate(out, normalizedPath);
-  for (const root of pathRootsFor(row, peer)) {
-    addFilePathCandidate(out, stripRootPrefix(normalizedPath, root));
-  }
-  return out;
-}
-
-function pathRootsFor(row: ClaimBeforeEditRow, peer?: ClaimBeforeEditRow): string[] {
-  const roots = [row.repo_root, row.worktree_path];
-  if (peer) roots.push(peer.repo_root, peer.worktree_path);
-  return [...new Set(roots.map(normalizeRoot).filter((root): root is string => root !== null))];
-}
-
-function addFilePathCandidate(out: Set<string>, value: string): void {
-  const normalized = trimCurrentDirPrefix(normalizeFilePath(value));
-  if (!normalized || normalized === '.') return;
-  out.add(normalized);
-}
-
-function stripRootPrefix(filePath: string, root: string): string {
-  if (filePath === root) return '';
-  return filePath.startsWith(`${root}/`) ? filePath.slice(root.length + 1) : filePath;
+function isPriorClaimWithinWindow(
+  edit: ClaimBeforeEditRow,
+  claim: ClaimBeforeEditRow,
+  claimWindowMs: number,
+): boolean {
+  return claim.ts <= edit.ts && claim.ts >= edit.ts - claimWindowMs;
 }
 
 function sameRepoBranch(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
-  const editRepo = normalizeRoot(edit.repo_root);
-  const claimRepo = normalizeRoot(claim.repo_root);
   return (
-    editRepo !== null &&
-    claimRepo !== null &&
+    normalizeRoot(edit.repo_root) !== null &&
+    normalizeRoot(edit.repo_root) === normalizeRoot(claim.repo_root) &&
     edit.branch !== null &&
-    claim.branch !== null &&
-    editRepo === claimRepo &&
     edit.branch === claim.branch
   );
 }
 
 function sameWorktree(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
-  const editWorktree = normalizeRoot(edit.worktree_path);
-  const claimWorktree = normalizeRoot(claim.worktree_path);
-  return editWorktree !== null && claimWorktree !== null && editWorktree === claimWorktree;
+  return (
+    normalizeRoot(edit.worktree_path) !== null &&
+    normalizeRoot(edit.worktree_path) === normalizeRoot(claim.worktree_path) &&
+    compatibleClaimScope(edit, claim)
+  );
 }
 
-function sameAgent(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
-  const editAgent = normalizeAgent(edit.agent);
-  const claimAgent = normalizeAgent(claim.agent);
+function hasUnambiguousAgentLaneMatch(
+  edit: ClaimBeforeEditRow,
+  claims: ClaimBeforeEditRow[],
+): boolean {
+  const matches = claims.filter(
+    (claim) => sameAgentIdentity(edit, claim) && sameRepoBranch(edit, claim),
+  );
+  if (matches.length === 0) return false;
+  return new Set(matches.map((claim) => claim.session_id)).size === 1;
+}
+
+function claimMissReason(
+  edit: ClaimBeforeEditRow,
+  claimRows: ClaimBeforeEditRow[],
+  signalRows: ClaimBeforeEditRow[],
+  claimWindowMs: number,
+): ClaimMissReason {
+  const sameFileClaims = claimRows
+    .filter((claim) => claim.file_path !== null && sameComparableFilePath(edit, claim))
+    .sort((a, b) => claimDistance(edit, a) - claimDistance(edit, b) || a.id - b.id);
+
+  if (
+    sameFileClaims.some(
+      (claim) => claim.ts > edit.ts && claimDistance(edit, claim) <= claimWindowMs,
+    )
+  ) {
+    return 'claim_after_edit';
+  }
+
+  const priorSameFileClaims = sameFileClaims.filter((claim) =>
+    isPriorClaimWithinWindow(edit, claim, claimWindowMs),
+  );
+  const nearestPriorSameFile = priorSameFileClaims[0];
+  if (nearestPriorSameFile) {
+    if (knownRootMismatch(edit.repo_root, nearestPriorSameFile.repo_root)) {
+      return 'repo_root_mismatch';
+    }
+    if (knownValueMismatch(edit.branch, nearestPriorSameFile.branch)) {
+      return 'branch_mismatch';
+    }
+    if (knownRootMismatch(edit.worktree_path, nearestPriorSameFile.worktree_path)) {
+      return 'worktree_path_mismatch';
+    }
+    if (nearestPriorSameFile.session_id !== edit.session_id) {
+      return 'session_id_mismatch';
+    }
+  }
+
+  if (
+    claimRows.some(
+      (claim) =>
+        claim.ts <= edit.ts &&
+        claimDistance(edit, claim) <= claimWindowMs &&
+        !sameComparableFilePath(edit, claim) &&
+        sameClaimLaneOrSession(edit, claim),
+    )
+  ) {
+    return 'path_mismatch';
+  }
+
+  if (!hasRelatedPreToolUseSignal(edit, signalRows, claimWindowMs)) {
+    return 'pre_tool_use_missing';
+  }
+
+  return 'no_claim_for_file';
+}
+
+function pushNearestClaimExample(
+  examples: NearestClaimExample[],
+  reason: ClaimMissReason,
+  edit: ClaimBeforeEditRow,
+  claimRows: ClaimBeforeEditRow[],
+): void {
+  if (examples.length >= DEFAULT_NEAREST_CLAIM_EXAMPLE_LIMIT) return;
+  const nearest = nearestClaimCandidate(edit, claimRows);
+  examples.push(toNearestClaimExample(reason, edit, nearest));
+}
+
+function nearestClaimCandidate(
+  edit: ClaimBeforeEditRow,
+  claimRows: ClaimBeforeEditRow[],
+): ClaimBeforeEditRow | null {
+  const ranked = claimRows
+    .map((claim) => ({
+      claim,
+      rank: claimCandidateRank(edit, claim),
+      distance: claimDistance(edit, claim),
+    }))
+    .sort((a, b) => a.rank - b.rank || a.distance - b.distance || a.claim.id - b.claim.id);
+  return ranked[0]?.claim ?? null;
+}
+
+function claimCandidateRank(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): number {
+  if (claim.file_path !== null && sameComparableFilePath(edit, claim)) return 0;
+  if (claim.session_id === edit.session_id) return 10;
+  if (sameRepoBranch(edit, claim)) return 20;
+  if (sameWorktree(edit, claim)) return 30;
+  return 100;
+}
+
+function claimDistance(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): number {
+  return Math.abs(edit.ts - claim.ts);
+}
+
+function toNearestClaimExample(
+  reason: ClaimMissReason,
+  edit: ClaimBeforeEditRow,
+  claim: ClaimBeforeEditRow | null,
+): NearestClaimExample {
+  return {
+    reason,
+    edit_id: edit.id,
+    edit_session_id: edit.session_id,
+    edit_file_path: edit.file_path,
+    edit_repo_root: edit.repo_root,
+    edit_branch: edit.branch,
+    edit_worktree_path: edit.worktree_path,
+    edit_ts: edit.ts,
+    nearest_claim_id: claim?.id ?? null,
+    claim_session_id: claim?.session_id ?? null,
+    claim_file_path: claim?.file_path ?? null,
+    claim_repo_root: claim?.repo_root ?? null,
+    claim_branch: claim?.branch ?? null,
+    claim_worktree_path: claim?.worktree_path ?? null,
+    claim_ts: claim?.ts ?? null,
+    distance_ms: claim ? claimDistance(edit, claim) : null,
+    relation: {
+      same_file_path: claim ? sameComparableFilePath(edit, claim) : false,
+      same_session_id: claim ? claim.session_id === edit.session_id : false,
+      same_repo_root: claim ? nullableSameRoot(edit.repo_root, claim.repo_root) : null,
+      same_branch: claim ? nullableSameValue(edit.branch, claim.branch) : null,
+      same_worktree_path: claim ? nullableSameRoot(edit.worktree_path, claim.worktree_path) : null,
+      claim_before_edit: claim ? claim.ts <= edit.ts : null,
+    },
+  };
+}
+
+function hasRelatedPreToolUseSignal(
+  edit: ClaimBeforeEditRow,
+  signalRows: ClaimBeforeEditRow[],
+  claimWindowMs: number,
+): boolean {
+  return signalRows.some(
+    (signal) =>
+      claimDistance(edit, signal) <= claimWindowMs &&
+      (signal.session_id === edit.session_id ||
+        sameRepoBranch(edit, signal) ||
+        sameWorktree(edit, signal)) &&
+      (signal.file_path === null || sameComparableFilePath(edit, signal)),
+  );
+}
+
+function sameClaimLaneOrSession(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  return (
+    claim.session_id === edit.session_id || sameRepoBranch(edit, claim) || sameWorktree(edit, claim)
+  );
+}
+
+function sameAgentIdentity(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  const editAgent = normalizeAgentIdentity(edit.agent_identity);
+  const claimAgent = normalizeAgentIdentity(claim.agent_identity);
   return editAgent !== null && claimAgent !== null && editAgent === claimAgent;
 }
 
-function normalizeAgent(value: string | null): string | null {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : null;
+function compatibleClaimScope(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  return (
+    !knownRootMismatch(edit.repo_root, claim.repo_root) &&
+    !knownValueMismatch(edit.branch, claim.branch) &&
+    !knownRootMismatch(edit.worktree_path, claim.worktree_path)
+  );
+}
+
+function knownRootMismatch(left: string | null, right: string | null): boolean {
+  const normalizedLeft = normalizeRoot(left);
+  const normalizedRight = normalizeRoot(right);
+  return normalizedLeft !== null && normalizedRight !== null && normalizedLeft !== normalizedRight;
+}
+
+function knownValueMismatch(left: string | null, right: string | null): boolean {
+  return left !== null && right !== null && left !== right;
+}
+
+function nullableSameRoot(left: string | null, right: string | null): boolean | null {
+  const normalizedLeft = normalizeRoot(left);
+  const normalizedRight = normalizeRoot(right);
+  if (normalizedLeft === null || normalizedRight === null) return null;
+  return normalizedLeft === normalizedRight;
+}
+
+function nullableSameValue(left: string | null, right: string | null): boolean | null {
+  if (left === null || right === null) return null;
+  return left === right;
+}
+
+function sameComparableFilePath(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  if (!edit.file_path || !claim.file_path) return false;
+  const fallbackRoot = edit.repo_root ?? claim.repo_root;
+  return (
+    comparableFilePath(edit.file_path, edit.repo_root ?? fallbackRoot) ===
+    comparableFilePath(claim.file_path, claim.repo_root ?? fallbackRoot)
+  );
+}
+
+function comparableFilePath(filePath: string, repoRoot: string | null): string {
+  const normalizedPath = normalizeSlashes(normalize(filePath.trim()));
+  if (!repoRoot || !isAbsolute(normalizedPath)) return trimCurrentDirPrefix(normalizedPath);
+  const root = resolve(repoRoot);
+  const absolutePath = resolve(normalizedPath);
+  const rel = relative(root, absolutePath);
+  if (rel === '') return '.';
+  if (!rel.startsWith('..') && !isAbsolute(rel)) return normalizeSlashes(rel);
+  return normalizeSlashes(absolutePath);
 }
 
 function normalizeRoot(value: string | null): string | null {
-  const normalized = value?.trim();
-  if (!normalized) return null;
-  return normalizeFilePath(normalized).replace(/\/+$/, '');
+  const trimmed = value?.trim();
+  return trimmed ? normalizeSlashes(resolve(trimmed)) : null;
 }
 
-function normalizeFilePath(value: string): string {
-  return posix.normalize(value.trim().replaceAll('\\', '/'));
+function normalizeAgentIdentity(value: string | null): string | null {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return null;
+  const prefix = raw.includes('@')
+    ? (raw.split('@')[0] ?? raw)
+    : raw.includes('/')
+      ? (raw.split('/')[0] ?? raw)
+      : raw;
+  if (prefix.startsWith('claude')) return 'claude';
+  if (prefix.startsWith('codex')) return 'codex';
+  if (prefix.startsWith('omx')) return 'omx';
+  return prefix || null;
+}
+
+function isPseudoClaimPath(filePath: string): boolean {
+  const normalized = comparableFilePath(filePath, null);
+  return (
+    normalized === '' ||
+    normalized === '/dev/null' ||
+    normalized === 'dev/null' ||
+    normalized === 'NUL'
+  );
 }
 
 function trimCurrentDirPrefix(value: string): string {
-  return value.replace(/^\.\/+/, '');
+  return value === '.' ? value : value.replace(/^\.\/+/, '');
+}
+
+function normalizeSlashes(value: string): string {
+  return value.replaceAll('\\', '/');
 }
 
 function kindCountsWithZeroes(kinds: string[], rows: KindCount[]): KindCount[] {
@@ -2134,6 +2799,10 @@ function parseMetadata(raw: string): JsonRecord | null {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isTaskClaimRow(row: TaskClaimRow | undefined): row is TaskClaimRow {
+  return row !== undefined;
 }
 
 function extractHeatFilePaths(meta: JsonRecord): string[] {

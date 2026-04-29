@@ -1,4 +1,6 @@
 export { Storage } from './storage.js';
+export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from './claim-path.js';
+export type { ClaimPathContext, RepoFilePathContext } from './claim-path.js';
 export {
   COORDINATION_COMMIT_TOOLS,
   COORDINATION_READ_TOOLS,
@@ -11,11 +13,14 @@ export type {
   ClaimBeforeEditMatchSources,
   ClaimBeforeEditStats,
   ClaimCoverageStats,
+  ClaimMissReasons,
+  ClaimMatchSources,
   CoordinationActivity,
   EditsWithoutClaimsRow,
   FileHeatOptions,
   FileHeatRow,
   KindCount,
+  NearestClaimExample,
   RecentObservationRow,
   SessionsEndedWithoutHandoffRow,
   ToolCallRow,
@@ -28,10 +33,15 @@ export type {
   NewObservation,
   NewSummary,
   SearchHit,
+  LaneRunState,
+  LaneStateRow,
+  PausedLaneRow,
+  LaneTakeoverResult,
   TaskRow,
   NewTask,
   TaskParticipantRow,
   TaskClaimRow,
+  TaskClaimState,
   TaskLinkRow,
   NewTaskLink,
   LinkedTask,

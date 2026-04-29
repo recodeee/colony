@@ -16,6 +16,7 @@ import { registerHealthCommand } from './commands/health.js';
 import { registerHookCommand } from './commands/hook.js';
 import { registerInboxCommand } from './commands/inbox.js';
 import { registerInstallCommand } from './commands/install.js';
+import { registerLaneCommand } from './commands/lane.js';
 import { registerLifecycleCommands } from './commands/lifecycle.js';
 import { registerMcpCommand } from './commands/mcp.js';
 import { registerNoteCommand } from './commands/note.js';
@@ -28,8 +29,8 @@ import { registerSearchCommand } from './commands/search.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerSuggestCommand } from './commands/suggest.js';
 import { registerUninstallCommand } from './commands/uninstall.js';
-import { registerWorktreeCommand } from './commands/worktree.js';
 import { registerWorkerCommand } from './commands/worker.js';
+import { registerWorktreeCommand } from './commands/worktree.js';
 
 export function createProgram(): Command {
   const program = new Command();
@@ -40,6 +41,7 @@ export function createProgram(): Command {
     .version(__COLONY_VERSION__);
 
   registerInstallCommand(program);
+  registerLaneCommand(program);
   registerUninstallCommand(program);
   registerStatusCommand(program);
   registerHealthCommand(program);

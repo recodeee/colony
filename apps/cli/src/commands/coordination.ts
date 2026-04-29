@@ -10,6 +10,7 @@ import { withStore } from '../util/store.js';
 interface SweepOpts {
   repoRoot?: string;
   dryRun?: boolean;
+  releaseStaleBlockers?: boolean;
   json?: boolean;
 }
 
@@ -23,6 +24,10 @@ export function registerCoordinationCommand(program: Command): void {
     .description('Report stale claims, expired messages, decayed proposals, and stale trails')
     .option('--repo-root <path>', 'repo root to scan (defaults to process.cwd())')
     .option('--dry-run', 'scan only; this is the default until cleanup has an explicit apply path')
+    .option(
+      '--release-stale-blockers',
+      'release stale downstream blocker claims and requeue blocker subtasks; audit history retained',
+    )
     .option('--json', 'emit sweep result as JSON')
     .action(async (opts: SweepOpts) => {
       const repoRoot = resolve(opts.repoRoot ?? process.cwd());
@@ -32,12 +37,21 @@ export function registerCoordinationCommand(program: Command): void {
         const result = buildCoordinationSweep(store, {
           repo_root: repoRoot,
           repo_roots: repoRoots,
+          release_stale_blockers: opts.releaseStaleBlockers === true,
         });
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify({ ...result, dry_run: true }, null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(
+              { ...result, dry_run: opts.releaseStaleBlockers !== true },
+              null,
+              2,
+            )}\n`,
+          );
           return;
         }
-        process.stdout.write(`${renderCoordinationSweep(result)}\n`);
+        process.stdout.write(
+          `${renderCoordinationSweep(result, { dryRun: opts.releaseStaleBlockers !== true })}\n`,
+        );
       });
     });
 }
@@ -71,17 +85,22 @@ function gitOriginSlug(repoRoot: string): string | null {
   }
 }
 
-function renderCoordinationSweep(result: CoordinationSweepResult): string {
+function renderCoordinationSweep(
+  result: CoordinationSweepResult,
+  opts: { dryRun: boolean },
+): string {
   const total = staleSignalCount(result);
   const lines: string[] = [];
   if (total === 0) {
     lines.push(kleur.green('Coordination sweep: no stale biological signals'));
-    lines.push(kleur.dim('read-only: no audit history deleted'));
+    lines.push(kleur.dim('audit history retained'));
   } else {
     lines.push(kleur.bold(`Coordination sweep: ${total} stale biological signal(s)`));
   }
   lines.push(`  repo: ${result.repo_root ?? 'all'}`);
-  lines.push('  mode: dry-run, read-only');
+  lines.push(
+    opts.dryRun ? '  mode: dry-run, read-only' : '  mode: release-stale-blockers, audit-retaining',
+  );
   lines.push('  audit: observations retained; advisory claims only');
   lines.push(`  recommended action: ${result.recommended_action}`);
   lines.push(
@@ -92,6 +111,9 @@ function renderCoordinationSweep(result: CoordinationSweepResult): string {
   );
   lines.push(
     `  decayed proposals: ${result.summary.decayed_proposal_count}  stale hot files: ${result.summary.stale_hot_file_count}  blocked downstream: ${result.summary.blocked_downstream_task_count}`,
+  );
+  lines.push(
+    `  stale downstream blockers: ${result.summary.stale_downstream_blocker_count}  released stale blocker claims: ${result.summary.released_stale_blocker_claim_count}  requeued blockers: ${result.summary.requeued_stale_blocker_count}`,
   );
 
   renderSection(
@@ -157,6 +179,20 @@ function renderCoordinationSweep(result: CoordinationSweepResult): string {
     (task) =>
       `${task.plan_slug}/sub-${task.subtask_index} waits on ${task.blocked_by.map((b) => `sub-${b.subtask_index} [${b.status}]`).join(', ')} -> finish blocker or replan`,
   );
+  renderSection(
+    lines,
+    'Stale downstream blockers',
+    result.stale_downstream_blockers,
+    (blocker) =>
+      `${blocker.plan_slug}/sub-${blocker.subtask_index} task #${blocker.task_id} ${blocker.file_path} held by ${blocker.owner_session_id} for ${blocker.age_minutes}m -> unlock candidate sub-${blocker.unlock_candidate.subtask_index}`,
+  );
+  renderSection(
+    lines,
+    'Released stale downstream blockers',
+    result.released_stale_downstream_blockers,
+    (blocker) =>
+      `${blocker.plan_slug}/sub-${blocker.subtask_index} task #${blocker.task_id} released ${blocker.released_claim_count} claim(s), audit #${blocker.audit_observation_id}, requeue #${blocker.requeue_observation_id}`,
+  );
 
   return lines.join('\n');
 }
@@ -168,7 +204,8 @@ function staleSignalCount(result: CoordinationSweepResult): number {
     result.summary.expired_message_count +
     result.summary.decayed_proposal_count +
     result.summary.stale_hot_file_count +
-    result.summary.blocked_downstream_task_count
+    result.summary.blocked_downstream_task_count +
+    result.summary.stale_downstream_blocker_count
   );
 }
 

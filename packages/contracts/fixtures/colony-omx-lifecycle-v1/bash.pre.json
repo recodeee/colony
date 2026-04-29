@@ -11,22 +11,23 @@
   "tool_name": "Bash",
   "tool_input": {
     "operation": "command",
-    "command": "pnpm --filter @colony/contracts test",
+    "command": "cat README.md > packages/contracts/src/generated.ts",
     "command_redacted": false,
-    "input_summary": "Run the focused contract validation test suite.",
+    "input_summary": "Generate one contract source file through Bash redirection.",
     "paths": [
       {
-        "path": "packages/contracts/test/lifecycle-schema.test.ts",
-        "role": "input",
+        "path": "packages/contracts/src/generated.ts",
+        "role": "target",
         "kind": "file"
       }
     ],
+    "extracted_paths": ["packages/contracts/src/generated.ts"],
     "redacted": false
   },
   "result": {
     "status": "ok",
-    "code": "READ_ONLY_COMMAND",
-    "message": "Bash command does not mutate repo files.",
+    "code": "CLAIM_PRESENT",
+    "message": "Bash target file was claimed before command execution.",
     "next_action": "Run command and record post_tool_use result.",
     "candidates": []
   }

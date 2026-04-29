@@ -25,9 +25,10 @@ const HOOK_NAMES: Array<[string, string]> = [
 ];
 
 // Scope tool-use hooks to the write-family tools that actually drive the
-// auto-claim path. Bash is included because the auto-claim layer parses
-// shell redirects (printf > foo, > bar) into file writes.
-const FILE_WRITE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash';
+// auto-claim path. Bash/apply_patch are included because the auto-claim layer
+// parses shell redirects/sed and patch headers into file writes.
+const FILE_WRITE_TOOL_MATCHER =
+  'Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|ApplyPatch|Patch';
 
 function matcherForHook(hookId: string): string | undefined {
   if (hookId === 'pre-tool-use' || hookId === 'post-tool-use') return FILE_WRITE_TOOL_MATCHER;

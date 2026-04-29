@@ -72,16 +72,16 @@ describe('readWorktreeContentionReport', () => {
       dirty_worktree_count: 2,
       contention_count: 1,
     });
-    expect(report.worktrees.find((worktree) => worktree.branch === 'agent/codex/left')).toMatchObject(
-      {
-        dirty_files: expect.arrayContaining([
-          { path: 'src/left-only.ts', status: '??' },
-          { path: 'src/shared.ts', status: ' M' },
-        ]),
-        claimed_files: ['src/left-only.ts'],
-        active_session: expect.objectContaining({ session_key: 'codex-left' }),
-      },
-    );
+    expect(
+      report.worktrees.find((worktree) => worktree.branch === 'agent/codex/left'),
+    ).toMatchObject({
+      dirty_files: expect.arrayContaining([
+        { path: 'src/left-only.ts', status: '??' },
+        { path: 'src/shared.ts', status: ' M' },
+      ]),
+      claimed_files: ['src/left-only.ts'],
+      active_session: expect.objectContaining({ session_key: 'codex-left' }),
+    });
     expect(report.contentions).toEqual([
       {
         file_path: 'src/shared.ts',
@@ -123,7 +123,12 @@ function createRepo(): string {
   return repoRoot;
 }
 
-function addWorktree(repoRoot: string, root: '.omx' | '.omc', name: string, branch: string): string {
+function addWorktree(
+  repoRoot: string,
+  root: '.omx' | '.omc',
+  name: string,
+  branch: string,
+): string {
   const worktreeRoot = join(repoRoot, root, 'agent-worktrees');
   mkdirSync(worktreeRoot, { recursive: true });
   const worktreePath = join(worktreeRoot, name);
