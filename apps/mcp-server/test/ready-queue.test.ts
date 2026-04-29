@@ -427,18 +427,22 @@ describe('task_ready_for_agent', () => {
       wave_name: 'Wave 1',
       blocked_by_count: 0,
       claim_args: {
+        repo_root: repoRoot,
         plan_slug: 'stale-release-plan',
         subtask_index: 0,
         session_id: 'agent-session',
         agent: 'codex',
+        file_scope: ['apps/api/stale-blocker.ts'],
       },
     });
     expect(result.next_tool).toBe('task_plan_claim_subtask');
     expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
       plan_slug: 'stale-release-plan',
       subtask_index: 0,
       session_id: 'agent-session',
       agent: 'codex',
+      file_scope: ['apps/api/stale-blocker.ts'],
     });
 
     await claimAndComplete('stale-release-plan', 0);
@@ -455,10 +459,12 @@ describe('task_ready_for_agent', () => {
       wave_name: 'Wave 2',
       blocked_by_count: 0,
       claim_args: {
+        repo_root: repoRoot,
         plan_slug: 'stale-release-plan',
         subtask_index: 1,
         session_id: 'agent-session',
         agent: 'codex',
+        file_scope: ['apps/api/wave-two.ts'],
       },
     });
   });
