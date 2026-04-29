@@ -21,6 +21,7 @@
     "build": "pnpm -r --filter \"./packages/*\" --filter \"./apps/*\" build",
     "dev": "pnpm --filter @imdeadpool/colony-cli dev",
     "test": "node --test test/agents-contract.test.js && pnpm -r test",
+    "smoke:codex-omx-pretool": "pnpm --filter @colony/hooks test -- test/codex-omx-pretool-smoke.test.ts",
     "typecheck": "pnpm -r typecheck",
     "lint": "node --test test/agents-contract.test.js && biome check .",
     "lint:fix": "biome check --write .",

@@ -112,6 +112,7 @@ colony search "error or decision"
 colony coordination sweep --json
 colony queen sweep
 colony viewer
+pnpm smoke:codex-omx-pretool
 ```
 
 | Command | Purpose |
@@ -126,6 +127,7 @@ colony viewer
 | `colony viewer` | Open the local read-only web viewer. |
 | `colony install --ide <name>` | Register hooks and MCP config for one runtime. |
 | `colony uninstall --ide <name>` | Remove installed hooks and MCP config. |
+| `pnpm smoke:codex-omx-pretool` | Run a fresh Codex/OMX lifecycle smoke that binds a task, claims a real file, emits `pre_tool_use`, performs one edit, emits `post_tool_use`, and asserts claim-before-edit coverage. |
 
 ---
 
@@ -159,6 +161,16 @@ Readiness pillars:
 | Signal evaporation | Stale claims/proposals/handoffs decay instead of clogging work. |
 
 ---
+
+### Codex/OMX pre-tool smoke
+
+Run this when `pre_tool_use_missing` rises or when validating a Codex/OMX hook install:
+
+```bash
+pnpm smoke:codex-omx-pretool
+```
+
+The smoke uses an isolated temp repo and Colony store. It starts a fresh Codex/OMX lifecycle session, binds an active task, records a manual claim for a real file, emits `pre_tool_use`, mutates the file, emits `post_tool_use`, then asserts `pre_tool_use_signals > 0` and `edits_claimed_before > 0` inside a short stats window.
 
 ---
 
