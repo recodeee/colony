@@ -314,6 +314,9 @@ describe('colony queen CLI', () => {
     expect(output).toContain('Wave 1 has 2 stalled subtasks');
     expect(output).toContain('Wave 2 is blocked by Wave 1');
     expect(output).toContain('Finalizer waiting on 3 subtasks');
+    expect(output).toContain(
+      'replacement claude-code (Codex recently hit quota on this branch; next task_accept_handoff)',
+    );
 
     const settings = loadSettings();
     await withStore(settings, (store) => {
@@ -512,6 +515,28 @@ async function seedOrderedSweepPlan(): Promise<void> {
             subtask_index: i,
           },
         });
+        if (i === 0) {
+          store.addObservation({
+            session_id: sessionId,
+            task_id: thread.task_id,
+            kind: 'handoff',
+            content: 'codex quota_exhausted handoff',
+            metadata: {
+              kind: 'handoff',
+              status: 'pending',
+              from_session_id: sessionId,
+              from_agent: 'codex',
+              to_agent: 'any',
+              to_session_id: null,
+              quota_exhausted: true,
+              summary: 'Codex hit quota',
+              blockers: ['quota_exhausted'],
+              accepted_by_session_id: null,
+              accepted_at: null,
+              expires_at: SWEEP_NOW + MINUTE_MS,
+            },
+          });
+        }
       }
     }
     vi.setSystemTime(SWEEP_NOW);

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildAttentionInbox } from '../src/attention-inbox.js';
+import { ingestOmxRuntimeSummary } from '../src/omx-runtime-summary.js';
 import { MemoryStore } from '../src/memory-store.js';
 import { listMessagesForAgent } from '../src/messages.js';
 import { TaskThread } from '../src/task-thread.js';
@@ -911,5 +912,38 @@ describe('buildAttentionInbox', () => {
     expect(inbox.pending_wakes).toHaveLength(0);
     expect(inbox.unread_messages).toHaveLength(0);
     expect(inbox.summary.next_action).toMatch(/quiet/i);
+  });
+
+  it('surfaces high-value OMX runtime warnings for task recovery', () => {
+    seed('codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/omx-warning',
+      session_id: 'codex',
+    });
+    thread.join('codex', 'codex');
+    ingestOmxRuntimeSummary(store, {
+      session_id: 'codex',
+      repo_root: '/r',
+      branch: 'feat/omx-warning',
+      quota_warning: 'Usage limit near',
+      last_failed_tool: { name: 'Edit', error: 'permission denied' },
+      active_file_focus: ['src/runtime.ts'],
+    });
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex',
+      agent: 'codex',
+      task_ids: [thread.task_id],
+      include_stalled_lanes: false,
+    });
+
+    expect(inbox.summary.omx_runtime_warning_count).toBe(1);
+    expect(inbox.summary.next_action).toContain('OMX runtime warnings');
+    expect(inbox.omx_runtime_warnings[0]).toMatchObject({
+      task_id: thread.task_id,
+      warnings: ['quota_warning', 'last_failed_tool'],
+      active_file_focus: ['src/runtime.ts'],
+    });
   });
 });

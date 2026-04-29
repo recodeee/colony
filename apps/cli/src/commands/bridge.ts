@@ -1,5 +1,5 @@
 import { loadSettings } from '@colony/config';
-import type { MemoryStore } from '@colony/core';
+import type { IngestOmxRuntimeSummaryResult, MemoryStore, OmxRuntimeSummaryInput } from '@colony/core';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { withStore } from '../util/store.js';
@@ -54,12 +54,25 @@ interface BridgeCommandDeps {
     payload: unknown,
     options: { defaultCwd?: string; ide?: string },
   ) => Promise<OmxLifecycleRunResult>;
+  ingestOmxRuntimeSummary?: (
+    store: MemoryStore,
+    payload: OmxRuntimeSummaryInput,
+    defaults: { repoRoot?: string; sessionId?: string; agent?: string; branch?: string },
+  ) => IngestOmxRuntimeSummaryResult;
 }
 
 interface BridgeLifecycleOptions {
   json?: boolean;
   ide?: string;
   cwd?: string;
+}
+
+interface BridgeRuntimeSummaryOptions {
+  json?: boolean;
+  repoRoot?: string;
+  sessionId?: string;
+  agent?: string;
+  branch?: string;
 }
 
 function sessionFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -192,6 +205,43 @@ export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps 
       }
 
       if (!result.ok) process.exitCode = 1;
+    });
+
+  bridge
+    .command('runtime-summary')
+    .description('Receive a compact OMX runtime summary from stdin')
+    .option('--json', 'emit the ingestion result as JSON')
+    .option('--repo-root <path>', 'repo root hint (defaults to cwd)')
+    .option('--session-id <id>', 'session id fallback')
+    .option('--agent <name>', 'agent fallback')
+    .option('--branch <branch>', 'branch fallback')
+    .action(async (opts: BridgeRuntimeSummaryOptions) => {
+      const raw = await (deps.readStdin ?? readStdin)();
+      const payload = raw.trim() ? safeJson(raw) : {};
+      const settings = loadSettings();
+      await withStore(settings, async (store) => {
+        const ingest =
+          deps.ingestOmxRuntimeSummary ??
+          (await import('@colony/core')).ingestOmxRuntimeSummary;
+        const result = ingest(store, payload, {
+          repoRoot: opts.repoRoot?.trim() || process.cwd(),
+          ...(opts.sessionId?.trim() ? { sessionId: opts.sessionId.trim() } : {}),
+          ...(opts.agent?.trim() ? { agent: opts.agent.trim() } : {}),
+          ...(opts.branch?.trim() ? { branch: opts.branch.trim() } : {}),
+        });
+
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        } else if (result.ok) {
+          process.stdout.write(
+            `${kleur.green('ok')} observation=${result.observation_id ?? '-'} warnings=${result.warnings?.length ?? 0}\n`,
+          );
+        } else {
+          process.stderr.write(`${kleur.red('error')} ${result.error ?? 'summary ingest failed'}\n`);
+        }
+
+        if (!result.ok) process.exitCode = 1;
+      });
     });
 }
 

@@ -1,0 +1,1 @@
+{"session_id":"codex@fixture-jsonl","agent":"codex","timestamp":"2026-04-29T12:01:00.000Z","last_prompt_summary":"resume runtime bridge","last_failed_tool":{"name":"Edit","error":"permission denied"},"active_file_focus":["packages/core/src/attention-inbox.ts"]}

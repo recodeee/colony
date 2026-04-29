@@ -46,4 +46,7 @@ export {
   type QueenSweepWaveBlocker,
   type QueenSweepWaveRef,
   type QueenSweepWaveSummary,
+  type QueenReplacementAgent,
+  type QueenReplacementNextTool,
+  type QueenReplacementRecommendation,
 } from './sweep.js';

@@ -21,6 +21,8 @@ export type {
   FileHeatRow,
   KindCount,
   NearestClaimExample,
+  OmxRuntimeSummaryStats,
+  OmxRuntimeWarningRow,
   RecentObservationRow,
   SessionsEndedWithoutHandoffRow,
   ToolCallRow,

@@ -479,7 +479,10 @@ function renderWaveSummary(wave: QueenSweepWaveSummary): string[] {
 
 function renderExample(item: QueenAttentionItem): string {
   if (item.reason === 'stalled') {
-    return `${item.plan_slug}/sub-${item.subtask_index} stalled: claimed by ${item.claimed_by_agent ?? item.claimed_by_session_id} for ${item.age_minutes}m`;
+    const replacement = item.replacement_recommendation
+      ? `; replacement ${item.replacement_recommendation.recommended_replacement_agent} (${item.replacement_recommendation.reason}; next ${item.replacement_recommendation.next_tool})`
+      : '';
+    return `${item.plan_slug}/sub-${item.subtask_index} stalled: claimed by ${item.claimed_by_agent ?? item.claimed_by_session_id} for ${item.age_minutes}m${replacement}`;
   }
   if (item.reason === 'unclaimed') {
     return `${item.plan_slug}/sub-${item.subtask_index} unclaimed: available for ${item.age_minutes}m`;
