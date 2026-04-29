@@ -207,13 +207,18 @@ describe('publishOrderedPlan', () => {
     const [listed] = listPlans(store, { repo_root: repoRoot });
     expect(result.plan_slug).toBe('colony-adoption-fixes');
     expect(listed?.next_available.map((subtask) => subtask.subtask_index)).toEqual([0, 1, 2]);
+    expect(listed?.next_available.map((subtask) => subtask.title)).toEqual([
+      'Codex/OMX claim-before-edit bridge',
+      'Active task binding for auto-claim',
+      'Strengthen hivemind_context to attention_inbox funnel',
+    ]);
     expect(listed?.subtasks.slice(3, 6).map((subtask) => subtask.depends_on)).toEqual([
       [0, 1, 2],
       [0, 1, 2],
       [0, 1, 2],
     ]);
     expect(listed?.subtasks[6]).toMatchObject({
-      title: 'Finalize adoption docs and tests',
+      title: 'Finalize docs, tests, and health',
       depends_on: [3, 4, 5],
     });
 

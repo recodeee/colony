@@ -108,6 +108,8 @@ export function publishPlan(args: PublishPlanInput): PublishPlanResult {
         parent_plan_title: args.title,
         parent_spec_task_id: opened.task_id,
         subtask_index: index,
+        title: subtask.title,
+        description: subtask.description,
         file_scope: subtask.file_scope,
         depends_on: subtask.depends_on ?? [],
         spec_row_id: subtask.spec_row_id ?? null,

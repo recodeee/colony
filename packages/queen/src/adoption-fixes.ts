@@ -6,9 +6,9 @@ export const colonyAdoptionFixesPlanInput: QueenOrderedPlanInput = {
   problem:
     'Queen should publish the current Colony adoption fixes as claimable ordered waves so agents pull work through task_ready_for_agent and task_plan_claim_subtask instead of direct runtime assignment.',
   acceptance_criteria: [
-    'Wave 1 exposes auto-claim, warning fallback, and the hivemind_context to attention_inbox funnel as immediately claimable work.',
-    'Wave 2 unlocks notepad routing, bridge status, and health telemetry after Wave 1 completes.',
-    'Wave 3 unlocks docs and tests finalization after Wave 2 completes.',
+    'Wave 1 exposes the Codex/OMX claim-before-edit bridge, active task binding for auto-claim, and the hivemind_context to attention_inbox funnel as immediately claimable work.',
+    'Wave 2 unlocks task_ready_for_agent to task_plan_claim_subtask conversion, task_message adoption, and proposal/foraging adoption after Wave 1 completes.',
+    'Wave 3 unlocks docs, tests, and health finalization after Wave 2 completes.',
     'Queen publishes structure only; agents pull and claim subtasks themselves.',
   ],
   waves: [
@@ -17,22 +17,22 @@ export const colonyAdoptionFixesPlanInput: QueenOrderedPlanInput = {
       title: 'Claim and inbox funnel',
       subtasks: [
         {
-          title: 'Auto-claim before Edit/Write',
+          title: 'Codex/OMX claim-before-edit bridge',
           description:
-            'Auto-claim touched files before Edit/Write-like tool calls so claim-before-edit improves before mutation.',
+            'Bridge Codex and OMX edit telemetry into the claim-before-edit path so write-like tool calls can be covered before mutation.',
           file_scope: [
-            'packages/hooks/src/auto-claim.ts',
-            'packages/hooks/test/auto-claim.test.ts',
+            'packages/hooks/src/handlers/pre-tool-use.ts',
+            'packages/hooks/test/session-start-conflicts.test.ts',
           ],
           capability_hint: 'infra_work',
         },
         {
-          title: 'Add claim-before-edit warning fallback',
+          title: 'Active task binding for auto-claim',
           description:
-            'Warn when auto-claim cannot claim a touched file before a write-like tool continues.',
+            'Resolve the correct active task before auto-claiming touched files for Codex and OMX sessions.',
           file_scope: [
-            'packages/hooks/src/handlers/pre-tool-use.ts',
-            'packages/hooks/test/session-start-conflicts.test.ts',
+            'packages/hooks/src/auto-claim.ts',
+            'packages/hooks/test/auto-claim.test.ts',
           ],
           capability_hint: 'infra_work',
         },
@@ -50,33 +50,38 @@ export const colonyAdoptionFixesPlanInput: QueenOrderedPlanInput = {
     },
     {
       id: 'wave-2',
-      title: 'OMX bridge and health telemetry',
+      title: 'Adoption conversions',
       subtasks: [
         {
-          title: 'Route OMX notepad writes to task_note_working',
+          title: 'Convert task_ready_for_agent results into task_plan_claim_subtask',
           description:
-            'Prefer task_note_working for OMX working-state writes and keep notepad fallback as the compact pointer path.',
+            'Turn ready queue output into exact task_plan_claim_subtask calls so agents claim published plan work instead of stopping at discovery.',
           file_scope: [
-            'apps/mcp-server/src/tools/task.ts',
-            'apps/mcp-server/test/task-threads.test.ts',
+            'apps/mcp-server/src/tools/ready-queue.ts',
+            'apps/mcp-server/test/ready-queue.test.ts',
           ],
           capability_hint: 'api_work',
         },
         {
-          title: 'Expose bridge status for OMX display',
-          description: 'Surface compact Colony bridge status for OMX HUD and status consumers.',
+          title: 'Adopt task_message for directed coordination',
+          description:
+            'Move directed agent coordination from generic notes into task_message so inbox adoption improves and replies stay threaded.',
           file_scope: [
-            'apps/mcp-server/src/tools/bridge.ts',
-            'apps/mcp-server/test/bridge-status.test.ts',
+            'apps/mcp-server/src/tools/message.ts',
+            'apps/mcp-server/test/messages.test.ts',
           ],
           capability_hint: 'api_work',
         },
         {
-          title: 'Improve health telemetry for adoption targets',
+          title: 'Adopt proposal and foraging flows',
           description:
-            'Show active plans, ready-to-claim subtasks, task_plan_claim_subtask usage, and loop conversion health.',
-          file_scope: ['apps/cli/src/commands/health.ts', 'apps/cli/test/health.test.ts'],
-          capability_hint: 'test_work',
+            'Route future-work discovery through proposal and foraging tools so promoted work becomes pull-based plan structure.',
+          file_scope: [
+            'apps/mcp-server/src/tools/proposal.ts',
+            'apps/mcp-server/src/tools/foraging.ts',
+            'apps/mcp-server/test/foraging.test.ts',
+          ],
+          capability_hint: 'api_work',
         },
       ],
     },
@@ -85,11 +90,13 @@ export const colonyAdoptionFixesPlanInput: QueenOrderedPlanInput = {
       title: 'Docs and tests finalization',
       subtasks: [
         {
-          title: 'Finalize adoption docs and tests',
+          title: 'Finalize docs, tests, and health',
           description:
-            'Document and test the full Colony adoption loop after the claim, bridge, and health waves land.',
+            'Document and test the full Colony adoption loop, including active Queen plan health and ready subtask visibility.',
           file_scope: [
             'docs/QUEEN.md',
+            'apps/cli/src/commands/health.ts',
+            'apps/cli/test/queen-health.test.ts',
             'apps/mcp-server/test/coordination-loop.test.ts',
             'packages/queen/test/decompose.test.ts',
           ],

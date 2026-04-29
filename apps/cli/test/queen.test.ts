@@ -78,15 +78,17 @@ describe('colony queen CLI', () => {
       Queen coordination helpers for published plan lanes
 
       Options:
-        -h, --help               display help for command
+        -h, --help                display help for command
 
       Commands:
-        plan [options] [title]   Draft or publish a queen plan from the terminal
-        list [options]           List queen-published plans with sub-task rollup
-        status [options] <slug>  Show one queen plan and its sub-task claim state
-        sweep [options]          List queen plans needing attention: stalled,
-                                 unclaimed, ready to archive
-        help [command]           display help for command
+        plan [options] [title]    Draft or publish a queen plan from the terminal
+        adoption-fixes [options]  Publish current Colony adoption-fix waves into the
+                                  local DB
+        list [options]            List queen-published plans with sub-task rollup
+        status [options] <slug>   Show one queen plan and its sub-task claim state
+        sweep [options]           List queen plans needing attention: stalled,
+                                  unclaimed, ready to archive
+        help [command]            display help for command
       "
     `);
   });
@@ -216,6 +218,55 @@ describe('colony queen CLI', () => {
     expect(readFileSync(join(repoRoot, 'openspec/changes/test-goal/CHANGE.md'), 'utf8')).toContain(
       '## Acceptance criteria',
     );
+  });
+
+  it('publishes the current adoption-fix waves into the local DB', async () => {
+    await createProgram().parseAsync(
+      ['node', 'test', 'queen', 'adoption-fixes', '--repo-root', repoRoot, '--json'],
+      { from: 'node' },
+    );
+
+    const payload = JSON.parse(output);
+    expect(payload).toMatchObject({
+      plan_slug: 'colony-adoption-fixes',
+      status: 'published',
+      active_plans: 1,
+      ready_subtasks: 3,
+      blocked_subtasks: 4,
+    });
+    expect(payload.claimable_current_wave.map((task: { title: string }) => task.title)).toEqual([
+      'Codex/OMX claim-before-edit bridge',
+      'Active task binding for auto-claim',
+      'Strengthen hivemind_context to attention_inbox funnel',
+    ]);
+    expect(payload.claimable_current_wave[0].claim_args).toEqual({
+      plan_slug: 'colony-adoption-fixes',
+      subtask_index: 0,
+      session_id: '<session_id>',
+      agent: '<agent>',
+    });
+
+    const settings = loadSettings();
+    await withStore(settings, (store) => {
+      const [plan] = listPlans(store, { repo_root: repoRoot });
+      expect(plan?.plan_slug).toBe('colony-adoption-fixes');
+      expect(plan?.next_available).toHaveLength(3);
+      expect(plan?.subtasks.filter((subtask) => subtask.blocked_by_count > 0)).toHaveLength(4);
+    });
+    expect(existsSync(join(repoRoot, 'openspec/changes/colony-adoption-fixes/CHANGE.md'))).toBe(
+      false,
+    );
+
+    output = '';
+    await createProgram().parseAsync(
+      ['node', 'test', 'queen', 'adoption-fixes', '--repo-root', repoRoot, '--json'],
+      { from: 'node' },
+    );
+    expect(JSON.parse(output)).toMatchObject({
+      plan_slug: 'colony-adoption-fixes',
+      status: 'already_active',
+      ready_subtasks: 3,
+    });
   });
 
   it('lists only queen-owned plans with sub-task rollup', async () => {
