@@ -320,6 +320,10 @@ function parseHandoff(row: ObservationRow): HandoffMetadata | null {
       typeof parsed.accepted_by_session_id === 'string' ? parsed.accepted_by_session_id : null,
     accepted_at: typeof parsed.accepted_at === 'number' ? parsed.accepted_at : null,
     expires_at: parsed.expires_at,
+    handoff_ttl_ms:
+      typeof parsed.handoff_ttl_ms === 'number'
+        ? parsed.handoff_ttl_ms
+        : Math.max(0, parsed.expires_at - row.ts),
   };
 }
 

@@ -2338,7 +2338,6 @@ interface PlanSubtaskHealth {
   claimed_at: number | null;
   claimed_by_session_id: string | null;
   claimed_by_agent: string | null;
-  file_scope: string[];
   quota_handoff_pending: boolean;
   wave_index: number;
   wave_name: string;
