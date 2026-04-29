@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_PROTECTED_FILES,
   SettingsSchema,
   defaultSettings,
   loadSettings,
@@ -21,6 +22,7 @@ describe('SettingsSchema', () => {
     expect(parsed.foraging.promotionThreshold).toBe(2.5);
     expect(parsed.fileHeatHalfLifeMinutes).toBe(30);
     expect(parsed.claimStaleMinutes).toBe(240);
+    expect(parsed.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);
     expect(parsed.bridge.writeOmxNotepadPointer).toBe(false);
     expect(parsed.bridge.policyMode).toBe('warn');
   });
@@ -49,6 +51,7 @@ describe('SettingsSchema', () => {
     expect(defaultSettings.foraging.promotionThreshold).toBe(2.5);
     expect(defaultSettings.fileHeatHalfLifeMinutes).toBe(30);
     expect(defaultSettings.claimStaleMinutes).toBe(240);
+    expect(defaultSettings.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);
     expect(defaultSettings.bridge.writeOmxNotepadPointer).toBe(false);
     expect(defaultSettings.bridge.policyMode).toBe('warn');
   });
@@ -75,7 +78,10 @@ describe('SettingsSchema', () => {
       mkdirSync(join(repo, '.colony'), { recursive: true });
       writeFileSync(
         join(repo, '.colony', 'settings.json'),
-        JSON.stringify({ bridge: { policyMode: 'block-on-conflict' } }),
+        JSON.stringify({
+          bridge: { policyMode: 'block-on-conflict' },
+          protected_files: ['apps/cli/src/commands/health.ts'],
+        }),
         'utf8',
       );
 
@@ -85,6 +91,7 @@ describe('SettingsSchema', () => {
       const settings = loadSettingsForCwd(join(repo, 'packages', 'hooks'));
       expect(settings.bridge.policyMode).toBe('block-on-conflict');
       expect(settings.bridge.writeOmxNotepadPointer).toBe(false);
+      expect(settings.protected_files).toEqual(['apps/cli/src/commands/health.ts']);
     } finally {
       if (original === undefined) delete process.env.COLONY_HOME;
       else process.env.COLONY_HOME = original;

@@ -15,6 +15,14 @@ export type NotifyLevel = z.infer<typeof NotifyLevel>;
 export const BridgePolicyMode = z.enum(['warn', 'block-on-conflict', 'audit-only']);
 export type BridgePolicyMode = z.infer<typeof BridgePolicyMode>;
 
+export const DEFAULT_PROTECTED_FILES = [
+  'packages/storage/src/storage.ts',
+  'packages/storage/src/schema.ts',
+  'packages/storage/src/types.ts',
+  'apps/cli/src/commands/health.ts',
+  'packages/hooks/src/auto-claim.ts',
+] as const;
+
 export const SettingsSchema = z
   .object({
     dataDir: z
@@ -43,6 +51,12 @@ export const SettingsSchema = z
       .positive()
       .default(240)
       .describe('Minutes before a file claim is downgraded from active ownership to stale/weak.'),
+    protected_files: z
+      .array(z.string().min(1))
+      .default([...DEFAULT_PROTECTED_FILES])
+      .describe(
+        'Repo-relative high-risk files that require PROTECTED_FILE_CONTENTION escalation when multiple live sessions contend for them.',
+      ),
     compression: z
       .object({
         intensity: CompressionIntensity.default('full').describe(

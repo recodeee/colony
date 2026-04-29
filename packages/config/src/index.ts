@@ -1,4 +1,5 @@
 export {
+  DEFAULT_PROTECTED_FILES,
   SettingsSchema,
   type Settings,
   type BridgePolicyMode,
