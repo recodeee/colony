@@ -16,17 +16,31 @@ const TASK_LIST_REPEAT_WARNING = 'Stop browsing. Call task_ready_for_agent befor
 const TASK_LIST_LOOKBACK_MS = 24 * 60 * 60_000;
 const OMX_POINTER_VALUE_LIMIT = 180;
 const TASK_POST_PROPOSAL_RECOMMENDATION =
-  'This looks like future work. Use task_propose(repo_root, branch, summary, rationale, touches_files, session_id) so foraging can reinforce and promote it.';
+  'This looks like future work. Use task_propose so foraging can reinforce and promote it.';
 const TASK_POST_FUTURE_WORK_PATTERNS = [
   /\bfuture work\b/i,
   /\bfollow-?up\b/i,
   /\bdeferred\b/i,
-  /\bnot in this change\b/i,
+  /\bnot in this (?:pr|patch|change)\b/i,
   /\blater\b/i,
   /\btodo\b/i,
   /\bshould (?:eventually|later|next|also)\b/i,
   /\bneeds? (?:a |an |the )?(?:follow-?up|proposal|cleanup|refactor|investigation|test|docs?)\b/i,
 ];
+const TASK_POST_FUTURE_WORK_PREFIX_RE =
+  /^\s*(?:future work|follow-?up|deferred|later|todo|not in this (?:pr|patch|change))\s*[:.-]?\s*/i;
+const TASK_POST_RECOMMENDATION_SUMMARY_LIMIT = 140;
+const TASK_POST_RECOMMENDATION_RATIONALE_LIMIT = 320;
+
+interface TaskPostProposalRecommendation {
+  tool: 'task_propose';
+  message: string;
+  suggested_fields: {
+    summary: string;
+    rationale: string;
+    touches_files: string[];
+  };
+}
 const WorkingNotePointerSchema = z.object({
   branch: z.string().min(1).optional(),
   task: z.string().min(1).optional(),
@@ -397,11 +411,62 @@ function taskPostHint(content: string): string {
   return `For directed agent coordination, use task_message. ${fallback}`;
 }
 
-function proposalRecommendationForPost(kind: string, content: string): string | undefined {
+function proposalRecommendationForPost(
+  kind: string,
+  content: string,
+): TaskPostProposalRecommendation | undefined {
   if (kind !== 'note' && kind !== 'decision') return undefined;
-  return TASK_POST_FUTURE_WORK_PATTERNS.some((pattern) => pattern.test(content))
-    ? TASK_POST_PROPOSAL_RECOMMENDATION
-    : undefined;
+  if (!TASK_POST_FUTURE_WORK_PATTERNS.some((pattern) => pattern.test(content))) return undefined;
+  return {
+    tool: 'task_propose',
+    message: TASK_POST_PROPOSAL_RECOMMENDATION,
+    suggested_fields: {
+      summary: summarizeFutureWorkPost(content),
+      rationale: rationaleForFutureWorkPost(content),
+      touches_files: touchedFilesFromPost(content),
+    },
+  };
+}
+
+function summarizeFutureWorkPost(content: string): string {
+  const normalized = normalizePostContent(content);
+  const stripped = normalized.replace(TASK_POST_FUTURE_WORK_PREFIX_RE, '').trim();
+  const firstSentence = stripped.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? stripped;
+  const summary = firstSentence.replace(/[.!?]+$/, '').trim();
+  return truncateForRecommendation(summary || normalized, TASK_POST_RECOMMENDATION_SUMMARY_LIMIT);
+}
+
+function rationaleForFutureWorkPost(content: string): string {
+  return truncateForRecommendation(
+    `Task post said: ${normalizePostContent(content)}`,
+    TASK_POST_RECOMMENDATION_RATIONALE_LIMIT,
+  );
+}
+
+function touchedFilesFromPost(content: string): string[] {
+  const matches =
+    content.match(/`[^`]+`|(?:\.{0,2}\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+/g) ?? [];
+  const seen = new Set<string>();
+  const files: string[] = [];
+  for (const match of matches) {
+    const file = match
+      .replace(/^`|`$/g, '')
+      .replace(/^[("'[]+/, '')
+      .replace(/[)"'\].,;:!?]+$/g, '');
+    if (!file.includes('/') || /^https?:\/\//i.test(file) || seen.has(file)) continue;
+    seen.add(file);
+    files.push(file);
+  }
+  return files.slice(0, 8);
+}
+
+function normalizePostContent(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
+}
+
+function truncateForRecommendation(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit - 3).trimEnd()}...`;
 }
 
 function compactPreviousClaim(

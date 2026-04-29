@@ -387,18 +387,59 @@ describe('task threads — handoff lifecycle', () => {
   it('task_post nudges future-work notes toward task_propose', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 
-    const result = await call<{ id: number; recommendation?: string }>('task_post', {
+    const result = await call<{
+      id: number;
+      recommendation?: {
+        tool: string;
+        message: string;
+        suggested_fields: { summary: string; rationale: string; touches_files: string[] };
+      };
+    }>('task_post', {
       task_id,
       session_id: sessionA,
       kind: 'decision',
       content:
-        'Future work: add a health-card drilldown for pending proposal promotions after this patch.',
+        'Future work: add a health-card drilldown in `apps/cli/src/commands/health.ts` for pending proposal promotions after this patch.',
     });
 
     expect(result.id).toEqual(expect.any(Number));
-    expect(result.recommendation).toContain('task_propose');
-    expect(result.recommendation).toContain('foraging');
-    expect(result.recommendation).toContain('reinforce and promote');
+    expect(result.recommendation).toMatchObject({
+      tool: 'task_propose',
+      suggested_fields: {
+        summary: expect.stringContaining('health-card drilldown'),
+        rationale: expect.stringContaining('Future work'),
+        touches_files: ['apps/cli/src/commands/health.ts'],
+      },
+    });
+    expect(result.recommendation?.message).toContain('foraging');
+    expect(result.recommendation?.message).toContain('reinforce and promote');
+  });
+
+  it('task_post recommends task_propose for work explicitly not in this PR', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    const result = await call<{
+      id: number;
+      recommendation?: {
+        tool: string;
+        suggested_fields: { summary: string; rationale: string; touches_files: string[] };
+      };
+    }>('task_post', {
+      task_id,
+      session_id: sessionA,
+      kind: 'note',
+      content:
+        'Not in this PR: add proposal stale-state coverage in apps/mcp-server/test/task-threads.test.ts.',
+    });
+
+    expect(result.recommendation).toMatchObject({
+      tool: 'task_propose',
+      suggested_fields: {
+        summary: expect.stringContaining('proposal stale-state coverage'),
+        rationale: expect.stringContaining('Not in this PR'),
+        touches_files: ['apps/mcp-server/test/task-threads.test.ts'],
+      },
+    });
   });
 
   it('task_post leaves ordinary notes quiet', async () => {
