@@ -39,6 +39,15 @@ const TARGET_READY_TO_CLAIM = 0.3;
 const TARGET_CLAIM_BEFORE_EDIT = 0.5;
 const TARGET_COLONY_NOTE_SHARE = 0.7;
 const TARGET_TASK_MESSAGE_SHARE = 0.2;
+const LIFECYCLE_BRIDGE_MISSING_MIN_TASK_CLAIM_FILE_CALLS = 10;
+const LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS = 10;
+const LIFECYCLE_BRIDGE_NEAR_ZERO_PRE_TOOL_USE_SIGNAL_RATIO = 0.05;
+const LIFECYCLE_BRIDGE_ROOT_CAUSE =
+  'Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.';
+const LIFECYCLE_BRIDGE_ACTION =
+  'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.';
+const LIFECYCLE_BRIDGE_COMMAND =
+  'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json';
 const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 
 const CONVERSIONS = [
@@ -135,6 +144,9 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   /** True when edits happened but no PreToolUse telemetry was recorded —
    *  diagnostic that points at hook wiring rather than agent discipline. */
   likely_missing_hook: boolean;
+  /** Clear operator diagnosis when agents are manually claiming files but the
+   *  lifecycle bridge is not producing pre_tool_use telemetry. */
+  root_cause: RootCauseSummary | null;
   /** User-facing remediation for hook wiring or session-binding failures. */
   install_hint: string | null;
   claim_match_window_ms: number;
@@ -248,6 +260,14 @@ interface ActionHint {
   prompt: string;
 }
 
+interface RootCauseSummary {
+  kind: 'lifecycle_bridge_missing';
+  summary: string;
+  evidence: string;
+  action: string;
+  command: string;
+}
+
 function codexPrompt(input: {
   goal: string;
   current: string;
@@ -262,6 +282,7 @@ type ReadinessStatus = 'good' | 'ok' | 'bad';
 interface ReadinessSummaryItem {
   status: ReadinessStatus;
   evidence: string;
+  root_cause?: RootCauseSummary;
 }
 
 interface ReadinessSummaryPayload {
@@ -650,6 +671,7 @@ function readinessSummaryPayload(
     liveContention.protected_file_contentions > 0 ||
     liveContention.dirty_contended_files > 0 ||
     claimBeforeEdit.codex_rollout_without_bridge ||
+    claimBeforeEdit.root_cause !== null ||
     claimBeforeEdit.session_binding_missing > 0
       ? 'bad'
       : claimBeforeEdit.claim_before_edit_ratio !== null
@@ -698,6 +720,7 @@ function readinessSummaryPayload(
       evidence: `claim-before-edit ${formatPercent(
         claimBeforeEdit.claim_before_edit_ratio,
       )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+); live contentions ${liveContention.live_file_contentions}, dirty ${liveContention.dirty_contended_files}`,
+      ...(claimBeforeEdit.root_cause ? { root_cause: claimBeforeEdit.root_cause } : {}),
     },
     queen_plan_readiness: {
       status: queenStatus,
@@ -718,16 +741,25 @@ function readinessSummaryPayload(
 
 function formatReadinessSummary(summary: ReadinessSummaryPayload): string[] {
   return [
-    formatReadinessItem('coordination_readiness', summary.coordination_readiness),
-    formatReadinessItem('execution_safety', summary.execution_safety),
-    formatReadinessItem('queen_plan_readiness', summary.queen_plan_readiness),
-    formatReadinessItem('working_state_migration', summary.working_state_migration),
-    formatReadinessItem('signal_evaporation', summary.signal_evaporation),
+    ...formatReadinessItem('coordination_readiness', summary.coordination_readiness),
+    ...formatReadinessItem('execution_safety', summary.execution_safety),
+    ...formatReadinessItem('queen_plan_readiness', summary.queen_plan_readiness),
+    ...formatReadinessItem('working_state_migration', summary.working_state_migration),
+    ...formatReadinessItem('signal_evaporation', summary.signal_evaporation),
   ];
 }
 
-function formatReadinessItem(label: string, item: ReadinessSummaryItem): string {
-  return `  ${label.padEnd(25)} ${formatReadinessStatus(item.status)} ${item.evidence}`;
+function formatReadinessItem(label: string, item: ReadinessSummaryItem): string[] {
+  const lines = [`  ${label.padEnd(25)} ${formatReadinessStatus(item.status)} ${item.evidence}`];
+  if (item.root_cause) {
+    lines.push(
+      `    root cause: ${item.root_cause.summary}`,
+      `    evidence: ${item.root_cause.evidence}`,
+      `    action: ${item.root_cause.action}`,
+      `    cmd:  ${item.root_cause.command}`,
+    );
+  }
+  return lines;
 }
 
 function formatReadinessStatus(status: ReadinessStatus): string {
@@ -886,6 +918,11 @@ function claimBeforeEditPayload(
   const codexRolloutHint = codexRolloutWithoutBridge
     ? 'Codex rollout edits are present, but no Codex PreToolUse signal is installed or firing. Run colony install --ide codex and restart Codex; without Codex hooks or a rollout bridge, rollout edits stay unsupported for claim-before-edit auto-claim.'
     : null;
+  const rootCause = lifecycleBridgeRootCause({
+    task_claim_file_calls: taskClaimFileCalls,
+    hook_capable_edits: stats.edits_with_file_path,
+    pre_tool_use_signals: preToolUseSignals,
+  });
   const sessionBindingHint =
     sessionBindingMissing > 0
       ? 'PreToolUse is firing, but Colony session binding is missing. Restart the editor session so SessionStart binds the session id; keep calling task_claim_file manually until binding is restored.'
@@ -915,12 +952,46 @@ function claimBeforeEditPayload(
     },
     codex_rollout_without_bridge: codexRolloutWithoutBridge,
     likely_missing_hook: likelyMissingHook,
+    root_cause: rootCause,
     install_hint: installHint,
     claim_match_window_ms: stats.claim_match_window_ms ?? 0,
     claim_match_sources: claimMatchSources,
     claim_miss_reasons: claimMissReasons,
     nearest_claim_examples: stats.nearest_claim_examples ?? [],
   };
+}
+
+function lifecycleBridgeRootCause(input: {
+  task_claim_file_calls: number;
+  hook_capable_edits: number;
+  pre_tool_use_signals: number;
+}): RootCauseSummary | null {
+  if (input.task_claim_file_calls < LIFECYCLE_BRIDGE_MISSING_MIN_TASK_CLAIM_FILE_CALLS) {
+    return null;
+  }
+  if (input.hook_capable_edits < LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS) {
+    return null;
+  }
+  if (!isNearZeroPreToolUseSignals(input.pre_tool_use_signals, input.hook_capable_edits)) {
+    return null;
+  }
+  return {
+    kind: 'lifecycle_bridge_missing',
+    summary: LIFECYCLE_BRIDGE_ROOT_CAUSE,
+    evidence: `task_claim_file_calls=${input.task_claim_file_calls}, hook_capable_edits=${input.hook_capable_edits}, pre_tool_use_signals=${input.pre_tool_use_signals}`,
+    action: LIFECYCLE_BRIDGE_ACTION,
+    command: LIFECYCLE_BRIDGE_COMMAND,
+  };
+}
+
+function isNearZeroPreToolUseSignals(preToolUseSignals: number, hookCapableEdits: number): boolean {
+  if (preToolUseSignals === 0) return true;
+  if (hookCapableEdits <= 0) return false;
+  const nearZeroLimit = Math.max(
+    1,
+    Math.floor(hookCapableEdits * LIFECYCLE_BRIDGE_NEAR_ZERO_PRE_TOOL_USE_SIGNAL_RATIO),
+  );
+  return preToolUseSignals <= nearZeroLimit;
 }
 
 function claimMatchSourcesPayload(
@@ -1333,9 +1404,26 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   const claimBeforeEdit = payload.task_claim_file_before_edits;
   const preToolUseMissing = claimBeforeEdit.claim_miss_reasons.pre_tool_use_missing;
   const preToolUseMissingDominates = isDominantPreToolUseMiss(claimBeforeEdit.claim_miss_reasons);
-  const manualClaimAdoptionHigh =
-    preToolUseMissing > 0 && claimBeforeEdit.task_claim_file_calls >= preToolUseMissing;
-  if (
+  if (claimBeforeEdit.root_cause?.kind === 'lifecycle_bridge_missing') {
+    hints.push({
+      metric: 'claim-before-edit',
+      status: 'bad',
+      current: `${claimBeforeEdit.root_cause.summary} (${claimBeforeEdit.root_cause.evidence})`,
+      target: 'pre_tool_use before file mutation',
+      action: claimBeforeEdit.root_cause.action,
+      readiness_scope: 'execution_safety',
+      priority: 5,
+      command: claimBeforeEdit.root_cause.command,
+      prompt: codexPrompt({
+        goal: 'wire the runtime lifecycle bridge before file mutation',
+        current: claimBeforeEdit.root_cause.evidence,
+        inspect:
+          'colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/contracts/fixtures/colony-omx-lifecycle-v1/*.pre.json, packages/hooks/src/lifecycle-envelope.ts, pnpm smoke:codex-omx-pretool',
+        acceptance:
+          'runtime emits pre_tool_use before file mutation and pre_tool_use_signals rises above near-zero',
+      }),
+    });
+  } else if (
     claimBeforeEdit.codex_rollout_without_bridge &&
     (claimBeforeEdit.claim_before_edit_ratio === null ||
       isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT))
@@ -1363,16 +1451,17 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     preToolUseMissingDominates &&
     isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
   ) {
+    const manualClaimAdoptionHigh =
+      preToolUseMissing > 0 && claimBeforeEdit.task_claim_file_calls >= preToolUseMissing;
     hints.push({
       metric: 'claim-before-edit',
       status: 'bad',
       current: `pre_tool_use_missing: ${preToolUseMissing}, task_claim_file calls: ${claimBeforeEdit.task_claim_file_calls}`,
       target: 'pre_tool_use before file mutation',
-      action: 'Wire OMX/Codex/Claude runtime to emit pre_tool_use before file mutation.',
+      action: LIFECYCLE_BRIDGE_ACTION,
       readiness_scope: 'execution_safety',
       priority: 5,
-      command:
-        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+      command: LIFECYCLE_BRIDGE_COMMAND,
       prompt: codexPrompt({
         goal: 'wire the runtime lifecycle bridge before file mutation',
         current: manualClaimAdoptionHigh

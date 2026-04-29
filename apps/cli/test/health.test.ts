@@ -198,6 +198,7 @@ describe('colony health payload', () => {
           edit_file_path: 'src/missing.ts',
         }),
       ],
+      root_cause: null,
     });
     expect(payload.signal_health).toMatchObject({
       total_claims: 2,
@@ -446,6 +447,7 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('task_claim_file_before_edits');
     expect(json.task_claim_file_before_edits).toHaveProperty('claim_miss_reasons');
     expect(json.task_claim_file_before_edits).toHaveProperty('nearest_claim_examples');
+    expect(json.task_claim_file_before_edits).toHaveProperty('root_cause');
     expect(json).toHaveProperty('signal_health');
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
