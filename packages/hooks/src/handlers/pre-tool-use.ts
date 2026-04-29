@@ -104,7 +104,6 @@ export function preToolUseResult(store: MemoryStore, input: HookInput): ClaimBef
         claimWarning(input.session_id, file_path, toolName, policyMode, {
           ok: false,
           code: 'COLONY_UNAVAILABLE',
-          resolution: 'not_found',
           error: 'Colony unavailable for auto-claim',
           candidates: [],
         }),
