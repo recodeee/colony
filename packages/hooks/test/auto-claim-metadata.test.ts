@@ -53,6 +53,8 @@ describe('auto-claim active task metadata fallback', () => {
     expect(result).toMatchObject({
       ok: true,
       status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'branch_repo_root',
       task_id: thread.task_id,
     });
     expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
@@ -124,6 +126,8 @@ describe('auto-claim active task metadata fallback', () => {
     expect(result).toMatchObject({
       ok: true,
       status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'worktree',
       task_id: thread.task_id,
     });
     expect(store.storage.getClaim(thread.task_id, 'src/path.ts')?.session_id).toBe(
@@ -161,6 +165,7 @@ describe('auto-claim active task metadata fallback', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'AMBIGUOUS_ACTIVE_TASK',
+      resolution: 'ambiguous',
     });
     if (result.ok) throw new Error('expected ambiguous active task');
     expect(result.candidates).toHaveLength(2);

@@ -43,7 +43,7 @@ type PreToolUseInput = Pick<
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
 type CompactCandidate = Pick<
   ActiveTaskCandidate,
-  'task_id' | 'repo_root' | 'branch' | 'status' | 'updated_at'
+  'task_id' | 'title' | 'repo_root' | 'branch' | 'status' | 'updated_at' | 'active_files'
 >;
 
 export function preToolUse(store: MemoryStore, input: HookInput): string {
@@ -61,6 +61,7 @@ export function preToolUse(store: MemoryStore, input: HookInput): string {
         claimWarning(input.session_id, file_path, toolName, {
           ok: false,
           code: 'COLONY_UNAVAILABLE',
+          resolution: 'not_found',
           error: 'Colony unavailable for auto-claim',
           candidates: [],
         }),
@@ -256,17 +257,21 @@ function recordClaimBeforeEditFailure(
 
 function compactCandidates(candidates: AutoClaimFailure['candidates']): Array<{
   task_id: number;
+  title: string;
   repo_root: string;
   branch: string;
   status: string;
   updated_at: number;
+  active_files?: string[];
 }> {
   return candidates.slice(0, 5).map((candidate) => ({
     task_id: candidate.task_id,
+    title: candidate.title,
     repo_root: candidate.repo_root,
     branch: candidate.branch,
     status: candidate.status,
     updated_at: candidate.updated_at,
+    ...(candidate.active_files !== undefined ? { active_files: candidate.active_files } : {}),
   }));
 }
 
