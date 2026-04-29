@@ -113,6 +113,64 @@ describe('colony health next fixes', () => {
     expect(snippets).not.toContain('move agent-to-agent coordination');
     expect(snippets).not.toContain('future-work candidates');
   });
+
+  it('points dominant pre_tool_use_missing at runtime bridge wiring when manual claims are high', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          ...calls(480, 100, 'session-a', 'mcp__colony__task_claim_file'),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 128,
+          edits_with_file_path: 128,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 0,
+          claim_miss_reasons: {
+            no_claim_for_file: 0,
+            claim_after_edit: 3,
+            session_id_mismatch: 0,
+            repo_root_mismatch: 0,
+            branch_mismatch: 0,
+            path_mismatch: 0,
+            worktree_path_mismatch: 0,
+            pseudo_path_skipped: 0,
+            pre_tool_use_missing: 128,
+          },
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    const claimHint = payload.action_hints.find((hint) => hint.metric === 'claim-before-edit');
+    expect(claimHint).toMatchObject({
+      current: 'pre_tool_use_missing: 128, task_claim_file calls: 480',
+      target: 'pre_tool_use before file mutation',
+      action: 'Wire OMX/Codex/Claude runtime to emit pre_tool_use before file mutation.',
+      priority: 5,
+      command:
+        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+      prompt: expect.stringContaining('Goal: wire the runtime lifecycle bridge'),
+    });
+    expect(claimHint?.tool_call).toBeUndefined();
+
+    const nextFixes = outputSection(formatColonyHealthOutput(payload), 'Next fixes');
+    expect(nextFixes).toContain(
+      'claim-before-edit: pre_tool_use_missing: 128, task_claim_file calls: 480 (target pre_tool_use before file mutation) - Wire OMX/Codex/Claude runtime to emit pre_tool_use before file mutation.',
+    );
+    expect(nextFixes).toContain(
+      'cmd:  colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+    );
+    expect(nextFixes).not.toContain('mcp__colony__task_claim_file');
+    expect(nextFixes).not.toContain('Call task_claim_file');
+  });
 });
 
 function fakeStorage(args: {
@@ -121,6 +179,18 @@ function fakeStorage(args: {
     edit_tool_calls: number;
     edits_with_file_path: number;
     edits_claimed_before: number;
+    pre_tool_use_signals?: number;
+    claim_miss_reasons?: {
+      no_claim_for_file?: number;
+      claim_after_edit?: number;
+      session_id_mismatch?: number;
+      repo_root_mismatch?: number;
+      branch_mismatch?: number;
+      path_mismatch?: number;
+      worktree_path_mismatch?: number;
+      pseudo_path_skipped?: number;
+      pre_tool_use_missing?: number;
+    };
   };
 }): never {
   return {
@@ -137,6 +207,12 @@ function fakeStorage(args: {
 
 function call(id: number, sessionId: string, tool: string, ts: number): TestToolCall {
   return { id, session_id: sessionId, tool, ts };
+}
+
+function calls(count: number, firstId: number, sessionId: string, tool: string): TestToolCall[] {
+  return Array.from({ length: count }, (_, index) =>
+    call(firstId + index, sessionId, tool, NOW - 80_000 + index),
+  );
 }
 
 function outputSection(output: string, heading: string): string {

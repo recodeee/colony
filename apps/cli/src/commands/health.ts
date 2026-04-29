@@ -1331,6 +1331,10 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   const claimBeforeEdit = payload.task_claim_file_before_edits;
+  const preToolUseMissing = claimBeforeEdit.claim_miss_reasons.pre_tool_use_missing;
+  const preToolUseMissingDominates = isDominantPreToolUseMiss(claimBeforeEdit.claim_miss_reasons);
+  const manualClaimAdoptionHigh =
+    preToolUseMissing > 0 && claimBeforeEdit.task_claim_file_calls >= preToolUseMissing;
   if (
     claimBeforeEdit.codex_rollout_without_bridge &&
     (claimBeforeEdit.claim_before_edit_ratio === null ||
@@ -1353,6 +1357,31 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
           'packages/hooks/src/handlers/pre-tool-use.ts, packages/hooks/src/auto-claim.ts, apps/cli/src/lib/codex-rollouts.ts, colony install --ide codex',
         acceptance:
           'Codex PreToolUse or rollout bridge fires and claim-before-edit coverage can be measured',
+      }),
+    });
+  } else if (
+    preToolUseMissingDominates &&
+    isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
+  ) {
+    hints.push({
+      metric: 'claim-before-edit',
+      status: 'bad',
+      current: `pre_tool_use_missing: ${preToolUseMissing}, task_claim_file calls: ${claimBeforeEdit.task_claim_file_calls}`,
+      target: 'pre_tool_use before file mutation',
+      action: 'Wire OMX/Codex/Claude runtime to emit pre_tool_use before file mutation.',
+      readiness_scope: 'execution_safety',
+      priority: 5,
+      command:
+        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+      prompt: codexPrompt({
+        goal: 'wire the runtime lifecycle bridge before file mutation',
+        current: manualClaimAdoptionHigh
+          ? `manual claims already high (${claimBeforeEdit.task_claim_file_calls}); pre_tool_use_missing dominates (${preToolUseMissing})`
+          : `pre_tool_use_missing dominates (${preToolUseMissing})`,
+        inspect:
+          'colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/contracts/fixtures/colony-omx-lifecycle-v1/*.pre.json, packages/hooks/src/lifecycle-envelope.ts, pnpm smoke:codex-omx-pretool',
+        acceptance:
+          'runtime emits pre_tool_use before file mutation and pre_tool_use_missing stops dominating health misses',
       }),
     });
   } else if (isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)) {
@@ -1515,6 +1544,22 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   return hints;
+}
+
+function isDominantPreToolUseMiss(reasons: ClaimMissReasons): boolean {
+  const preToolUseMissing = reasons.pre_tool_use_missing;
+  if (preToolUseMissing <= 0) return false;
+  const otherMax = Math.max(
+    reasons.no_claim_for_file,
+    reasons.claim_after_edit,
+    reasons.session_id_mismatch,
+    reasons.repo_root_mismatch,
+    reasons.branch_mismatch,
+    reasons.path_mismatch,
+    reasons.worktree_path_mismatch,
+    reasons.pseudo_path_skipped,
+  );
+  return preToolUseMissing >= otherMax;
 }
 
 function visibleActionHints(
