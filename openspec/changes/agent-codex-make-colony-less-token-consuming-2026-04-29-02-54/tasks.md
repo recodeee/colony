@@ -31,5 +31,12 @@
 
 ## 4. Completion
 
-- [ ] Commit, push, PR, merge.
-- [ ] Record final `MERGED` evidence and sandbox cleanup.
+- [x] Commit, push, PR, merge.
+      Evidence: PR https://github.com/recodeee/colony/pull/244 is `MERGED`;
+      merge commit `b937fb708deb4b8be49c10e8e7361ea42e494b49`; source
+      commit `efd8b57`.
+- [x] Record final `MERGED` evidence and sandbox cleanup.
+      Evidence: `git worktree list` on `main` shows only
+      `/home/deadpool/Documents/recodee/colony  b937fb7 [main]`; local
+      branch `agent/codex/make-colony-less-token-consuming-2026-04-29-02-54`
+      is absent.
