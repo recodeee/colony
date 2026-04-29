@@ -38,7 +38,7 @@ export interface ClaimBeforeEditResult {
 
 type PreToolUseInput = Pick<
   HookInput,
-  'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd' | 'ide'
+  'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd' | 'ide' | 'metadata'
 >;
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
 type CompactCandidate = Pick<
@@ -142,20 +142,68 @@ function taskScopeForToolUse(
   repo_root?: string;
   branch?: string;
   cwd?: string;
+  worktree_path?: string;
   agent?: string;
 } {
   try {
     const session = store.storage.getSession(input.session_id);
-    const cwd = input.cwd ?? session?.cwd ?? undefined;
+    const metadataScope = hookMetadataScope(input.metadata);
+    const cwd = input.cwd ?? metadataScope.cwd ?? session?.cwd ?? undefined;
     const detected = cwd ? detectRepoBranch(cwd) : null;
     return {
-      ...(detected ? { repo_root: detected.repo_root, branch: detected.branch } : {}),
+      ...(detected
+        ? { repo_root: detected.repo_root, branch: detected.branch }
+        : {
+            ...optionalString(
+              'repo_root',
+              readString(input.metadata?.repo_root) ?? readString(input.metadata?.repoRoot),
+            ),
+            ...optionalString('branch', readString(input.metadata?.branch)),
+          }),
       ...(cwd !== undefined ? { cwd } : {}),
-      ...(input.ide !== undefined ? { agent: input.ide } : {}),
+      ...optionalString('worktree_path', metadataScope.worktree_path),
+      ...(input.ide !== undefined
+        ? { agent: input.ide }
+        : optionalString('agent', metadataScope.agent)),
     };
   } catch {
     return {};
   }
+}
+
+function hookMetadataScope(metadata: Record<string, unknown> | undefined): {
+  cwd?: string;
+  worktree_path?: string;
+  agent?: string;
+} {
+  if (!metadata) return {};
+  return {
+    ...optionalString('cwd', readString(metadata.cwd)),
+    ...optionalString(
+      'worktree_path',
+      readString(metadata.worktree_path) ?? readString(metadata.worktreePath),
+    ),
+    ...optionalString(
+      'agent',
+      readString(metadata.agent) ??
+        readString(metadata.agent_name) ??
+        readString(metadata.agentName) ??
+        readString(metadata.cli) ??
+        readString(metadata.cli_name) ??
+        readString(metadata.cliName),
+    ),
+  };
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function optionalString<K extends string>(
+  key: K,
+  value: string | undefined,
+): Partial<Record<K, string>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
 }
 
 function recordClaimBeforeEditFailure(

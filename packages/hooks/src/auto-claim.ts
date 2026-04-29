@@ -11,7 +11,7 @@ export interface ActiveTaskCandidate {
   agent: string;
 }
 
-type ActiveTaskMatch = 'session_id' | 'branch_repo_root' | 'cwd' | 'agent';
+type ActiveTaskMatch = 'session_id' | 'branch_repo_root' | 'worktree' | 'agent';
 
 interface MatchedActiveTaskCandidate extends ActiveTaskCandidate {
   matched_by: ActiveTaskMatch;
@@ -29,6 +29,7 @@ export interface AutoClaimFileForSessionInput {
   repo_root?: string;
   branch?: string;
   cwd?: string;
+  worktree_path?: string;
   agent?: string;
   file_path: string;
   note?: string;
@@ -66,7 +67,14 @@ export type AutoClaimFileForSessionResult =
 
 export function activeTaskCandidatesForSession(
   store: MemoryStore,
-  opts: { session_id: string; repo_root?: string; branch?: string; cwd?: string; agent?: string },
+  opts: {
+    session_id: string;
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
 ): ActiveTaskCandidate[] {
   return activeTaskMatchesForSession(store, opts).map(({ matched_by: _matched_by, ...row }) => row);
 }
@@ -210,19 +218,33 @@ function ensureTaskParticipant(
 
 function activeTaskMatchesForSession(
   store: MemoryStore,
-  opts: { session_id: string; repo_root?: string; branch?: string; cwd?: string; agent?: string },
+  opts: {
+    session_id: string;
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
 ): MatchedActiveTaskCandidate[] {
   const session = store.storage.getSession(opts.session_id);
-  const cwd = opts.cwd ?? session?.cwd ?? undefined;
+  const metadataScope = sessionMetadataScope(session?.metadata);
+  const cwd = opts.cwd ?? metadataScope.cwd ?? session?.cwd ?? undefined;
   const detected = cwd ? detectRepoBranch(cwd) : null;
-  const scopedRepoRoot = opts.repo_root ?? detected?.repo_root;
-  const scopedBranch = opts.branch ?? detected?.branch;
-  const agent = normalizeAgent(opts.agent ?? session?.ide ?? opts.session_id);
+  const scopedRepoRoot = opts.repo_root ?? detected?.repo_root ?? metadataScope.repo_root;
+  const scopedBranch = opts.branch ?? detected?.branch ?? metadataScope.branch;
+  const worktreePath = opts.worktree_path ?? metadataScope.worktree_path;
+  const worktreeScopes = uniqueStrings([worktreePath, cwd]);
+  const agent = normalizeAgent(
+    opts.agent ?? metadataScope.agent ?? session?.ide ?? opts.session_id,
+  );
   const tasks = store.storage.listTasks(2000).filter((task) => isActiveStatus(task.status));
 
   const sessionMatches = matchesForTasks(
     store,
-    tasks.filter((task) => taskMatchesScope(task, scopedRepoRoot, scopedBranch)),
+    tasks.filter((task) =>
+      taskMatchesResolvedScope(task, scopedRepoRoot, scopedBranch, worktreeScopes),
+    ),
     agent,
     'session_id',
     (participants) =>
@@ -240,14 +262,14 @@ function activeTaskMatchesForSession(
     if (branchMatches.length > 0) return sortCandidates(branchMatches);
   }
 
-  if (cwd !== undefined) {
-    const cwdMatches = matchesForTasks(
+  if (worktreeScopes.length > 0) {
+    const worktreeMatches = matchesForTasks(
       store,
-      tasks.filter((task) => samePathOrChild(task.repo_root, cwd)),
+      tasks.filter((task) => taskMatchesWorktreeScope(task, worktreeScopes, scopedBranch)),
       agent,
-      'cwd',
+      'worktree',
     );
-    if (cwdMatches.length > 0) return sortCandidates(cwdMatches);
+    if (worktreeMatches.length > 0) return sortCandidates(worktreeMatches);
   }
 
   if (scopedBranch !== undefined) return [];
@@ -316,9 +338,90 @@ function taskMatchesScope(
   return true;
 }
 
+function taskMatchesResolvedScope(
+  task: { repo_root: string; branch: string },
+  repo_root: string | undefined,
+  branch: string | undefined,
+  worktreeScopes: string[],
+): boolean {
+  if (repo_root === undefined && branch === undefined && worktreeScopes.length === 0) return true;
+  if (
+    (repo_root !== undefined || branch !== undefined) &&
+    taskMatchesScope(task, repo_root, branch)
+  ) {
+    return true;
+  }
+  return taskMatchesWorktreeScope(task, worktreeScopes, branch);
+}
+
+function taskMatchesWorktreeScope(
+  task: { repo_root: string; branch: string },
+  worktreeScopes: string[],
+  branch: string | undefined,
+): boolean {
+  if (branch !== undefined && task.branch !== branch) return false;
+  return worktreeScopes.some((scope) => samePathOrChild(task.repo_root, scope));
+}
+
 function samePathOrChild(repoRoot: string, cwd: string): boolean {
   const rel = relative(resolve(repoRoot), resolve(cwd));
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function sessionMetadataScope(metadata: string | null | undefined): {
+  repo_root?: string;
+  branch?: string;
+  cwd?: string;
+  worktree_path?: string;
+  agent?: string;
+} {
+  const parsed = parseMetadata(metadata);
+  if (!parsed) return {};
+  return {
+    ...optionalString('repo_root', readString(parsed.repo_root) ?? readString(parsed.repoRoot)),
+    ...optionalString('branch', readString(parsed.branch)),
+    ...optionalString('cwd', readString(parsed.cwd)),
+    ...optionalString(
+      'worktree_path',
+      readString(parsed.worktree_path) ?? readString(parsed.worktreePath),
+    ),
+    ...optionalString(
+      'agent',
+      readString(parsed.agent) ??
+        readString(parsed.agent_name) ??
+        readString(parsed.agentName) ??
+        readString(parsed.cli) ??
+        readString(parsed.cli_name) ??
+        readString(parsed.cliName),
+    ),
+  };
+}
+
+function parseMetadata(metadata: string | null | undefined): Record<string, unknown> | null {
+  if (!metadata) return null;
+  try {
+    const parsed = JSON.parse(metadata);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function optionalString<K extends string>(
+  key: K,
+  value: string | undefined,
+): Partial<Record<K, string>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, string>);
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => value !== undefined))];
 }
 
 function normalizeAgent(value: string | undefined): string {
