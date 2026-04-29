@@ -12,7 +12,7 @@ import {
   renderCoordinationBehavior,
 } from './sections/coordination-behavior.js';
 import { renderDiagnostic, renderToolUsageHistogram } from './sections/diagnostic.js';
-import { renderFileHeatMap } from './sections/heat-map.js';
+import { buildFileHeatRows, renderFileHeatMap } from './sections/heat-map.js';
 import { renderHivemindDashboard } from './sections/hivemind.js';
 import { type StrandedSessionSummary, renderStrandedSessions } from './sections/stranded.js';
 
@@ -20,6 +20,7 @@ const DEFAULT_FILE_HEAT_HALF_LIFE_MINUTES = 30;
 
 export type ClaimCoverageSnapshot = ReturnType<MemoryStore['storage']['claimCoverageSnapshot']>;
 export type { StrandedSessionSummary };
+export { buildFileHeatRows };
 
 export function buildClaimCoverageSnapshot(
   store: MemoryStore,

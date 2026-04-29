@@ -701,8 +701,41 @@ describe('worker HTTP', () => {
     expect(res.status).toBe(200);
     const body = await res.text();
     expect(body).toContain('File activity heat-map');
-    expect(body).toContain('apps/worker/src/viewer.ts');
-    expect(body).toContain('heat 1.000');
+    expect(body).toContain('data-file-heat-root');
+    expect(body).toContain('/api/colony/file-heat');
+    expect(body).toContain('function FileHeatTile(row)');
+    expect(body).not.toContain('&lt;div class=&quot;claim-tile&quot;');
+    expect(body).not.toContain('&lt;div class="claim-tile"');
+  });
+
+  it('GET /api/colony/file-heat returns structured heat-map rows', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-29T10:00:00.000Z'));
+    store.startSession({ id: 'claim-session', ide: 'codex', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/claim-task',
+      session_id: 'claim-session',
+    });
+    thread.join('claim-session', 'codex');
+    thread.claimFile({ session_id: 'claim-session', file_path: 'apps/worker/src/viewer.ts' });
+
+    const res = await app.request('/api/colony/file-heat');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(JSON.stringify(body)).not.toContain('<div');
+    expect(body).toMatchInlineSnapshot(`
+      [
+        {
+          "branch": "agent/codex/claim-task",
+          "event_count": 1,
+          "file_path": "apps/worker/src/viewer.ts",
+          "heat": 1,
+          "kind": "file_activity",
+          "last_seen": "2026-04-29T10:00:00.000Z",
+        },
+      ]
+    `);
   });
 
   it('GET /sessions/:id renders observation HTML', async () => {
