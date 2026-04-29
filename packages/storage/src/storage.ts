@@ -412,7 +412,7 @@ export class Storage {
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            ide = CASE
-             WHEN sessions.ide = 'unknown' AND excluded.ide != 'unknown' THEN excluded.ide
+             WHEN sessions.ide IN ('unknown', 'unbound') AND excluded.ide NOT IN ('unknown', 'unbound') THEN excluded.ide
              ELSE sessions.ide
            END,
            cwd = CASE
@@ -421,6 +421,9 @@ export class Storage {
            END,
            metadata = CASE
              WHEN sessions.metadata IS NULL AND excluded.metadata IS NOT NULL THEN excluded.metadata
+             WHEN sessions.ide IN ('unknown', 'unbound')
+               AND excluded.ide NOT IN ('unknown', 'unbound')
+               AND excluded.metadata IS NOT NULL THEN excluded.metadata
              ELSE sessions.metadata
            END`,
       )

@@ -55,7 +55,7 @@ function laneOwnerIde(session: HivemindSession): string {
   if (session.agent && session.agent !== 'agent') return session.agent;
   if (session.cli && session.cli !== 'unknown') return session.cli;
   const inferred = inferIdeFromSessionId(session.session_key);
-  return inferred ?? session.agent ?? 'unknown';
+  return inferred ?? 'unbound';
 }
 
 function laneNeedsAttention(session: HivemindSession): boolean {

@@ -49,7 +49,7 @@ export function renderIndex(
   const ownerCounts = new Map<string, number>();
   const items = sessions
     .map((s) => {
-      const owner = resolveOwner(s.ide, s.id);
+      const owner = resolveOwner(s);
       ownerCounts.set(owner.ide, (ownerCounts.get(owner.ide) ?? 0) + 1);
       const cwdHtml = s.cwd ? html` · ${s.cwd}` : '';
       return html`
@@ -82,7 +82,7 @@ export function renderSession(
       </div>`,
     )
     .join('');
-  const owner = resolveOwner(session.ide, session.id);
+  const owner = resolveOwner(session);
   return layout(
     `agents-hivemind · ${session.id}`,
     html`<h2>${raw(ownerChip(owner.ide, owner.derived))}${session.id}</h2><p><a href="/">&larr; all sessions</a></p>${raw(rows)}`,
@@ -111,14 +111,31 @@ function renderColonyState(
     </section>`;
 }
 
-function resolveOwner(storedIde: string, sessionId: string): { ide: string; derived: boolean } {
+function resolveOwner(session: SessionRow): { ide: string; derived: boolean } {
+  const storedIde = session.ide;
   if (storedIde && storedIde !== 'unknown') return { ide: storedIde, derived: false };
-  const inferred = inferIdeFromSessionId(sessionId);
+  const metadataOwner = inferredOwnerFromMetadata(session.metadata);
+  if (metadataOwner) return { ide: metadataOwner, derived: true };
+  const inferred = inferIdeFromSessionId(session.id);
   if (inferred) return { ide: inferred, derived: true };
-  return { ide: 'unknown', derived: false };
+  return { ide: 'unbound', derived: true };
 }
 
 function ownerChip(ide: string, derived: boolean): string {
   const label = derived ? `${ide}?` : ide;
   return html`<span class="owner" data-owner="${ide}" data-derived="${String(derived)}">${label}</span>`;
+}
+
+function inferredOwnerFromMetadata(raw: string | null): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const agent = typeof parsed.inferred_agent === 'string' ? parsed.inferred_agent.trim() : '';
+    if (agent && agent !== 'unknown' && agent !== 'unbound') {
+      return agent === 'claude' ? 'claude-code' : agent;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }

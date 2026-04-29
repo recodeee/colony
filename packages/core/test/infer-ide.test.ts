@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inferIdeFromSessionId } from '../src/infer-ide.js';
+import { inferIdeFromSessionId, inferSessionIdentity } from '../src/infer-ide.js';
 
 describe('inferIdeFromSessionId', () => {
   it('matches @-delimited prefixes (original form)', () => {
@@ -41,5 +41,48 @@ describe('inferIdeFromSessionId', () => {
     expect(inferIdeFromSessionId('')).toBeUndefined();
     // `agent/<unknown>/...` still falls through so we do not invent an owner.
     expect(inferIdeFromSessionId('agent/telemetry/abc')).toBeUndefined();
+  });
+});
+
+describe('inferSessionIdentity', () => {
+  it('uses MCP caller agent evidence before weak mcp-* session ids', () => {
+    expect(
+      inferSessionIdentity({
+        sessionId: 'mcp-1654237',
+        agent: 'codex',
+        sourceHint: 'mcp-tool-caller',
+      }),
+    ).toEqual({
+      inferred_agent: 'codex',
+      ide: 'codex',
+      confidence: 0.95,
+      source: 'mcp-tool-caller:agent',
+    });
+  });
+
+  it('derives codex from active-session branch metadata when session id is opaque', () => {
+    expect(
+      inferSessionIdentity({
+        sessionId: 'mcp-1654237',
+        ide: 'unknown',
+        agent: 'agent',
+        branch: 'agent/codex/task-binding',
+        sourceHint: 'active-session',
+      }),
+    ).toMatchObject({
+      inferred_agent: 'codex',
+      ide: 'codex',
+      confidence: 0.7,
+      source: 'active-session:branch',
+    });
+  });
+
+  it('labels sessions without evidence as unbound', () => {
+    expect(inferSessionIdentity({ sessionId: 'mcp-1654237' })).toEqual({
+      inferred_agent: 'unbound',
+      ide: 'unknown',
+      confidence: 0,
+      source: 'unbound',
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { type HivemindOptions, type HivemindSession, readActiveOmxSessions } from './hivemind.js';
-import { inferIdeFromSessionId } from './infer-ide.js';
+import { inferSessionIdentity } from './infer-ide.js';
 import type { MemoryStore } from './memory-store.js';
 
 const INVALID_SESSION_KEYS = new Set(['null', 'undefined', 'unknown', 'unknown-session']);
@@ -94,12 +94,14 @@ function stableSessionKey(value: string): string | null {
 }
 
 function sessionIde(session: HivemindSession, sessionId: string): string {
-  const cli = session.cli.trim();
-  if (cli) return cli;
-  const inferred = inferIdeFromSessionId(sessionId);
-  if (inferred) return inferred;
-  const agent = session.agent.trim();
-  return agent || 'unknown';
+  return inferSessionIdentity({
+    sessionId,
+    ide: session.cli,
+    agent: session.agent,
+    branch: session.branch,
+    worktreePath: session.worktree_path,
+    sourceHint: 'active-session',
+  }).ide;
 }
 
 function sessionStartedAt(session: HivemindSession, fallbackNow = Date.now()): number {
@@ -108,8 +110,19 @@ function sessionStartedAt(session: HivemindSession, fallbackNow = Date.now()): n
 }
 
 function sessionMetadata(session: HivemindSession): Record<string, unknown> {
+  const identity = inferSessionIdentity({
+    sessionId: session.session_key,
+    ide: session.cli,
+    agent: session.agent,
+    branch: session.branch,
+    worktreePath: session.worktree_path,
+    sourceHint: 'active-session',
+  });
   return compactMetadata({
     source: 'omx-active-session',
+    inferred_agent: identity.inferred_agent,
+    confidence: identity.confidence,
+    identity_source: identity.source,
     cli: session.cli,
     agent: session.agent,
     repo_root: session.repo_root,
@@ -122,6 +135,10 @@ function sessionMetadata(session: HivemindSession): Record<string, unknown> {
   });
 }
 
-function compactMetadata(input: Record<string, string>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(input).filter(([, value]) => value.trim()));
+function compactMetadata(input: Record<string, string | number>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) =>
+      typeof value === 'string' ? value.trim() : Number.isFinite(value),
+    ),
+  );
 }

@@ -1,7 +1,7 @@
 import { compress, expand, redactPrivate } from '@colony/compress';
 import type { Settings } from '@colony/config';
 import { type NewObservation, type ObservationRow, Storage } from '@colony/storage';
-import { inferIdeFromSessionId } from './infer-ide.js';
+import { inferSessionIdentity, sessionIdentityMetadata } from './infer-ide.js';
 import { cosine, hybridRank } from './ranker.js';
 import type { GetObservationsOptions, Observation, SearchResult } from './types.js';
 
@@ -61,7 +61,7 @@ export class MemoryStore {
   }): number {
     const redacted = redactPrivate(p.content);
     if (!redacted.trim()) return -1;
-    this.ensureSession(p.session_id);
+    this.ensureSession(p.session_id, p.metadata);
     const intensity = this.settings.compression.intensity;
     const compressed = compress(redacted, { intensity });
     const obs: NewObservation = {
@@ -99,13 +99,18 @@ export class MemoryStore {
    * resumes a session whose SessionStart was lost. Without this guard,
    * observations and summaries hit `FOREIGN KEY constraint failed`.
    */
-  private ensureSession(id: string): void {
+  private ensureSession(id: string, metadata?: Record<string, unknown>): void {
+    const identity = inferSessionIdentity({
+      sessionId: id,
+      ...(metadata !== undefined ? { metadata } : {}),
+      sourceHint: 'observation',
+    });
     this.storage.createSession({
       id,
-      ide: inferIdeFromSessionId(id) ?? 'unknown',
+      ide: identity.ide,
       cwd: null,
       started_at: Date.now(),
-      metadata: null,
+      metadata: serializeSessionMetadata(sessionIdentityMetadata(identity)),
     });
   }
 

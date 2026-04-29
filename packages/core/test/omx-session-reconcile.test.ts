@@ -56,6 +56,9 @@ describe('reconcileOmxActiveSessions', () => {
     const metadata = JSON.parse(row?.metadata ?? '{}') as Record<string, string>;
     expect(metadata).toMatchObject({
       source: 'omx-active-session',
+      inferred_agent: 'codex',
+      confidence: 1,
+      identity_source: 'active-session:explicit-ide',
       cli: 'codex',
       agent: 'codex',
       repo_root: repoRoot,
@@ -63,6 +66,47 @@ describe('reconcileOmxActiveSessions', () => {
       worktree_path: worktreePath,
       latest_task_preview: 'Tool: colony.task_post',
       last_heartbeat_at: lastHeartbeatAt,
+    });
+  });
+
+  it('attributes codex active sessions even when persisted as mcp-* with unknown names', () => {
+    dir = mkdtempSync(join(tmpdir(), 'colony-omx-reconcile-'));
+    const repoRoot = join(dir, 'repo');
+    const worktreePath = join(repoRoot, '.omx', 'agent-worktrees', 'colony__codex__identity');
+    const activeSessionsDir = join(repoRoot, '.omx', 'state', 'active-sessions');
+    mkdirSync(worktreePath, { recursive: true });
+    mkdirSync(activeSessionsDir, { recursive: true });
+    store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
+
+    writeActiveSession(activeSessionsDir, 'mcp_1654237.json', {
+      repoRoot,
+      branch: 'agent/codex/identity',
+      taskName: 'Identity task',
+      latestTaskPreview: 'Tool: colony.hivemind_context',
+      agentName: 'unknown',
+      cliName: 'unknown',
+      worktreePath,
+      startedAt: '2026-04-28T20:59:00.000Z',
+      lastHeartbeatAt: '2026-04-28T20:59:59.000Z',
+      state: 'working',
+      sessionKey: 'mcp-1654237',
+    });
+
+    const result = reconcileOmxActiveSessions(store, {
+      repoRoot,
+      now: Date.parse('2026-04-28T21:00:00.000Z'),
+    });
+
+    expect(result).toMatchObject({ scanned: 1, ensured: 1, skipped: 0 });
+    const row = store.storage.getSession('mcp-1654237');
+    expect(row).toMatchObject({ ide: 'codex', cwd: worktreePath });
+    const metadata = JSON.parse(row?.metadata ?? '{}') as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      source: 'omx-active-session',
+      inferred_agent: 'codex',
+      confidence: 1,
+      identity_source: 'active-session:explicit-ide',
+      branch: 'agent/codex/identity',
     });
   });
 
