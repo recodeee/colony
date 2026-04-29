@@ -1,10 +1,15 @@
+import { execFileSync } from 'node:child_process';
 import { defaultSettings, loadSettings } from '@colony/config';
 import {
+  type HivemindSession,
   ProposalSystem,
+  type WorktreeContentionReport,
   classifyClaimAge,
   currentSignalStrength,
   isSignalExpired,
   isStrongClaimAge,
+  readHivemind,
+  readWorktreeContentionReport,
   signalMetadataFromObservation,
   signalMetadataFromProposal,
 } from '@colony/core';
@@ -34,6 +39,7 @@ const TARGET_READY_TO_CLAIM = 0.3;
 const TARGET_CLAIM_BEFORE_EDIT = 0.5;
 const TARGET_COLONY_NOTE_SHARE = 0.7;
 const TARGET_TASK_MESSAGE_SHARE = 0.2;
+const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 
 const CONVERSIONS = [
   ['hivemind_context', 'attention_inbox'],
@@ -185,6 +191,37 @@ interface QueenWaveHealthPayload {
   plans: QueenWavePlanSummary[];
 }
 
+interface LiveContentionOwner {
+  owner: string;
+  session_id: string;
+  branch: string;
+  task_id: number;
+  task_status: string;
+  activity: string;
+  worktree_path: string;
+  claim_age_minutes: number;
+  claim_strength: string;
+  dirty: boolean;
+}
+
+interface LiveContentionConflict {
+  file_path: string;
+  owner_count: number;
+  protected: boolean;
+  dirty_worktrees: string[];
+  owners: LiveContentionOwner[];
+}
+
+interface LiveContentionPayload {
+  live_file_contentions: number;
+  protected_file_contentions: number;
+  paused_lanes: number;
+  takeover_requests: number;
+  competing_worktrees: number;
+  dirty_contended_files: number;
+  top_conflicts: LiveContentionConflict[];
+}
+
 interface AdoptionSignal {
   name: string;
   status: 'good' | 'ok' | 'bad' | 'needs_attention';
@@ -252,6 +289,7 @@ export interface ColonyHealthPayload {
   proposal_health: ProposalHealthPayload;
   ready_to_claim_vs_claimed: ReadyClaimPayload;
   queen_wave_health: QueenWaveHealthPayload;
+  live_contention_health: LiveContentionPayload;
   adoption_thresholds: AdoptionThresholdsPayload;
   action_hints: ActionHint[];
 }
@@ -279,6 +317,10 @@ export function buildColonyHealthPayload(
     now?: number;
     claim_stale_minutes?: number;
     codex_sessions_root?: string;
+    repo_root?: string;
+    hivemind?: { sessions: HivemindSession[] };
+    dirty_files_by_worktree?: Record<string, string[]>;
+    worktree_contention?: WorktreeContentionReport;
   },
 ): ColonyHealthPayload {
   const now = options.now ?? Date.now();
@@ -357,6 +399,19 @@ export function buildColonyHealthPayload(
     queen_wave_health: queenWaveHealthPayload(storage, tasks, {
       now,
       stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+    }),
+    live_contention_health: liveContentionPayload(storage, tasks, {
+      since: options.since,
+      now,
+      stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+      ...(options.repo_root !== undefined ? { repo_root: options.repo_root } : {}),
+      ...(options.hivemind !== undefined ? { hivemind: options.hivemind } : {}),
+      ...(options.dirty_files_by_worktree !== undefined
+        ? { dirty_files_by_worktree: options.dirty_files_by_worktree }
+        : {}),
+      ...(options.worktree_contention !== undefined
+        ? { worktree_contention: options.worktree_contention }
+        : {}),
     }),
     adoption_thresholds: adoptionThresholds(calls, {
       colony_mcp_share: ratio(colonyMcpToolCalls, mcpToolCalls),
@@ -481,6 +536,9 @@ export function formatColonyHealthOutput(
   lines.push('', kleur.bold('task_claim_file before edits'));
   lines.push(...formatClaimBeforeEdit(payload.task_claim_file_before_edits));
 
+  lines.push('', kleur.bold('Live contention health'));
+  lines.push(...formatLiveContention(payload.live_contention_health));
+
   lines.push(
     '',
     kleur.bold('Signal health'),
@@ -586,8 +644,13 @@ function readinessSummaryPayload(
         : 'bad';
 
   const claimBeforeEdit = payload.task_claim_file_before_edits;
+  const liveContention = payload.live_contention_health;
   const executionStatus: ReadinessStatus =
-    claimBeforeEdit.codex_rollout_without_bridge || claimBeforeEdit.session_binding_missing > 0
+    liveContention.live_file_contentions > 0 ||
+    liveContention.protected_file_contentions > 0 ||
+    liveContention.dirty_contended_files > 0 ||
+    claimBeforeEdit.codex_rollout_without_bridge ||
+    claimBeforeEdit.session_binding_missing > 0
       ? 'bad'
       : claimBeforeEdit.claim_before_edit_ratio !== null
         ? isAtOrAboveTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
@@ -634,7 +697,7 @@ function readinessSummaryPayload(
       status: executionStatus,
       evidence: `claim-before-edit ${formatPercent(
         claimBeforeEdit.claim_before_edit_ratio,
-      )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+)`,
+      )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+); live contentions ${liveContention.live_file_contentions}, dirty ${liveContention.dirty_contended_files}`,
     },
     queen_plan_readiness: {
       status: queenStatus,
@@ -1090,6 +1153,41 @@ function formatDistance(distanceMs: number | null): string {
   return `${distanceMs}ms away`;
 }
 
+function formatLiveContention(payload: LiveContentionPayload): string[] {
+  const lines = [
+    `  live_file_contentions:      ${payload.live_file_contentions}`,
+    `  protected_file_contentions: ${payload.protected_file_contentions}`,
+    `  paused_lanes:               ${payload.paused_lanes}`,
+    `  takeover_requests:          ${payload.takeover_requests}`,
+    `  competing_worktrees:        ${payload.competing_worktrees}`,
+    `  dirty_contended_files:      ${payload.dirty_contended_files}`,
+  ];
+
+  if (payload.top_conflicts.length === 0) {
+    lines.push(kleur.dim('  top conflicts: none'));
+    return lines;
+  }
+
+  lines.push('  top conflicts:');
+  for (const conflict of payload.top_conflicts) {
+    const flags = [
+      conflict.protected ? 'protected' : '',
+      conflict.dirty_worktrees.length > 0 ? 'dirty' : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    lines.push(
+      `  ${conflict.file_path} (${conflict.owner_count} owners${flags ? `; ${flags}` : ''})`,
+    );
+    for (const owner of conflict.owners) {
+      lines.push(
+        `    - owner=${owner.owner} session=${shortSession(owner.session_id)} branch=${owner.branch} activity=${owner.activity}`,
+      );
+    }
+  }
+  return lines;
+}
+
 function formatEditSourceBreakdown(payload: ClaimBeforeEditPayload): string[] {
   const source = payload.edit_source_breakdown;
   const lines = [
@@ -1107,6 +1205,31 @@ function formatEditSourceBreakdown(payload: ClaimBeforeEditPayload): string[] {
 
 function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint[] {
   const hints: ActionHint[] = [];
+  const liveContention = payload.live_contention_health;
+  if (liveContention.live_file_contentions > 0) {
+    hints.push({
+      metric: 'live file contentions',
+      status: 'bad',
+      current: `${liveContention.live_file_contentions} conflict(s), ${liveContention.dirty_contended_files} dirty`,
+      target: '0 conflicts',
+      action:
+        'Resolve same-file multi-owner claims before running broad verification or trusting branch health.',
+      readiness_scope: 'execution_safety',
+      priority: 5,
+      tool_call:
+        'mcp__colony__hivemind_context({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>", files: ["<file>"] })',
+      command: 'colony health --json',
+      prompt: codexPrompt({
+        goal: 'resolve live same-file ownership conflicts before branch verification',
+        current: `${liveContention.live_file_contentions} live file contentions; ${liveContention.dirty_contended_files} dirty contended files`,
+        inspect:
+          'colony health --json, mcp__colony__hivemind_context, mcp__colony__attention_inbox',
+        acceptance:
+          'top conflicts are handed off, released, or reclaimed and live_file_contentions returns 0',
+      }),
+    });
+  }
+
   const hivemindToAttention = payload.conversions.hivemind_context_to_attention_inbox;
   if (isBelowTarget(hivemindToAttention.conversion_rate, TARGET_HIVEMIND_TO_ATTENTION)) {
     hints.push({
@@ -1751,6 +1874,131 @@ function queenWaveHealthPayload(
   };
 }
 
+function liveContentionPayload(
+  storage: Pick<Storage, 'listClaims' | 'taskObservationsByKind'>,
+  tasks: TaskRow[],
+  options: {
+    since: number;
+    now: number;
+    stale_claim_minutes: number;
+    repo_root?: string;
+    hivemind?: { sessions: HivemindSession[] };
+    dirty_files_by_worktree?: Record<string, string[]>;
+    worktree_contention?: WorktreeContentionReport;
+  },
+): LiveContentionPayload {
+  const sessions =
+    options.hivemind?.sessions ??
+    (options.repo_root
+      ? readHivemind({
+          repoRoot: options.repo_root,
+          includeStale: true,
+          limit: 100,
+          now: options.now,
+        }).sessions
+      : []);
+  const liveSessions = sessions.filter((session) => session.activity !== 'dead');
+  const sessionsById = new Map<string, HivemindSession>();
+  const sessionsByBranch = new Map<string, HivemindSession[]>();
+
+  for (const session of liveSessions) {
+    if (session.session_key) sessionsById.set(session.session_key, session);
+    const bucket = sessionsByBranch.get(session.branch) ?? [];
+    bucket.push(session);
+    sessionsByBranch.set(session.branch, bucket);
+  }
+
+  const dirtyFilesByWorktree = readDirtyFilesForSessions(
+    liveSessions,
+    options.dirty_files_by_worktree,
+  );
+  const claimOwners: Array<{
+    file_path: string;
+    owner_key: string;
+    owner: LiveContentionOwner;
+  }> = [];
+
+  for (const task of tasks) {
+    for (const claim of storage.listClaims(task.id)) {
+      const filePath = normalizeHealthFilePath(claim.file_path);
+      if (!filePath) continue;
+
+      const age = classifyClaimAge(claim.claimed_at, {
+        now: options.now,
+        claim_stale_minutes: options.stale_claim_minutes,
+      });
+      const session = sessionsById.get(claim.session_id) ?? sessionsByBranch.get(task.branch)?.[0];
+      const hasLiveOwner = Boolean(session && session.activity !== 'dead');
+      if (!hasLiveOwner && !isStrongClaimAge(age)) continue;
+
+      const worktreePath = session?.worktree_path ?? '';
+      const dirty = worktreePath
+        ? (dirtyFilesByWorktree.get(worktreePath)?.has(filePath) ?? false)
+        : false;
+
+      claimOwners.push({
+        file_path: filePath,
+        owner_key: `${claim.session_id}\0${task.branch}`,
+        owner: {
+          owner: session?.agent || ownerFromSessionId(claim.session_id),
+          session_id: claim.session_id,
+          branch: task.branch,
+          task_id: task.id,
+          task_status: task.status ?? '',
+          activity: session?.activity ?? (isStrongClaimAge(age) ? 'claim-active' : 'unknown'),
+          worktree_path: worktreePath,
+          claim_age_minutes: age.age_minutes,
+          claim_strength: age.ownership_strength,
+          dirty,
+        },
+      });
+    }
+  }
+
+  const conflicts = Array.from(groupByFilePath(claimOwners).entries())
+    .map(([filePath, owners]) => {
+      const uniqueOwners = uniqueContentionOwners(owners);
+      if (uniqueOwners.length <= 1) return null;
+      const dirtyWorktrees = uniqueOwners
+        .filter((owner) => owner.dirty && owner.worktree_path)
+        .map((owner) => owner.worktree_path);
+      return {
+        file_path: filePath,
+        owner_count: uniqueOwners.length,
+        protected: uniqueOwners.some((owner) => isProtectedBranch(owner.branch)),
+        dirty_worktrees: [...new Set(dirtyWorktrees)].sort(),
+        owners: uniqueOwners.sort(compareContentionOwners),
+      } satisfies LiveContentionConflict;
+    })
+    .filter((conflict): conflict is LiveContentionConflict => conflict !== null)
+    .sort(compareContentionConflicts);
+  const worktreeContention =
+    options.worktree_contention ?? readWorktreeContention(options.repo_root, options.now);
+  const dirtyClaimContentions = conflicts.filter(
+    (conflict) => conflict.dirty_worktrees.length > 0,
+  ).length;
+  const dirtyWorktreeContentions = worktreeContention?.summary.contention_count ?? 0;
+  const competingWorktreesFromDirtyContention = countCompetingWorktrees(worktreeContention);
+
+  return {
+    live_file_contentions: conflicts.length,
+    protected_file_contentions: conflicts.filter((conflict) => conflict.protected).length,
+    paused_lanes: liveSessions.filter(
+      (session) => session.activity === 'idle' || session.activity === 'stalled',
+    ).length,
+    takeover_requests: takeoverRequestCount(storage, tasks, {
+      since: options.since,
+      now: options.now,
+    }),
+    competing_worktrees: Math.max(
+      competingWorktreeBranchCount(liveSessions),
+      competingWorktreesFromDirtyContention,
+    ),
+    dirty_contended_files: Math.max(dirtyClaimContentions, dirtyWorktreeContentions),
+    top_conflicts: conflicts.slice(0, HEALTH_TOOL_LIMIT),
+  };
+}
+
 function groupPlanSubtasks(subtasks: PlanSubtaskHealth[]): Map<string, PlanSubtaskHealth[]> {
   const byPlan = new Map<string, PlanSubtaskHealth[]>();
   for (const subtask of subtasks) {
@@ -1847,6 +2095,205 @@ function parseJsonObject(raw: string | null): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function groupByFilePath(
+  claims: Array<{ file_path: string; owner_key: string; owner: LiveContentionOwner }>,
+): Map<string, Array<{ owner_key: string; owner: LiveContentionOwner }>> {
+  const byFile = new Map<string, Array<{ owner_key: string; owner: LiveContentionOwner }>>();
+  for (const claim of claims) {
+    const bucket = byFile.get(claim.file_path) ?? [];
+    bucket.push({ owner_key: claim.owner_key, owner: claim.owner });
+    byFile.set(claim.file_path, bucket);
+  }
+  return byFile;
+}
+
+function uniqueContentionOwners(
+  owners: Array<{ owner_key: string; owner: LiveContentionOwner }>,
+): LiveContentionOwner[] {
+  const byOwner = new Map<string, LiveContentionOwner>();
+  for (const entry of owners) {
+    const existing = byOwner.get(entry.owner_key);
+    if (!existing || entry.owner.claim_age_minutes < existing.claim_age_minutes) {
+      byOwner.set(entry.owner_key, entry.owner);
+    }
+  }
+  return [...byOwner.values()];
+}
+
+function compareContentionOwners(left: LiveContentionOwner, right: LiveContentionOwner): number {
+  if (left.dirty !== right.dirty) return left.dirty ? -1 : 1;
+  if (left.claim_strength !== right.claim_strength) {
+    return left.claim_strength === 'strong' ? -1 : 1;
+  }
+  return (
+    left.branch.localeCompare(right.branch) ||
+    left.owner.localeCompare(right.owner) ||
+    left.session_id.localeCompare(right.session_id)
+  );
+}
+
+function compareContentionConflicts(
+  left: LiveContentionConflict,
+  right: LiveContentionConflict,
+): number {
+  if (left.dirty_worktrees.length !== right.dirty_worktrees.length) {
+    return right.dirty_worktrees.length - left.dirty_worktrees.length;
+  }
+  if (left.protected !== right.protected) return left.protected ? -1 : 1;
+  if (left.owner_count !== right.owner_count) return right.owner_count - left.owner_count;
+  return left.file_path.localeCompare(right.file_path);
+}
+
+function readDirtyFilesForSessions(
+  sessions: HivemindSession[],
+  override?: Record<string, string[]>,
+): Map<string, Set<string>> {
+  const paths = new Set(
+    sessions.map((session) => session.worktree_path).filter((path) => path.length > 0),
+  );
+  const result = new Map<string, Set<string>>();
+  for (const worktreePath of paths) {
+    const files =
+      override && Object.prototype.hasOwnProperty.call(override, worktreePath)
+        ? (override[worktreePath] ?? [])
+        : readDirtyFiles(worktreePath);
+    result.set(worktreePath, new Set(files.map(normalizeHealthFilePath).filter(Boolean)));
+  }
+  return result;
+}
+
+function readDirtyFiles(worktreePath: string): string[] {
+  try {
+    const output = execFileSync(
+      'git',
+      ['-C', worktreePath, 'status', '--porcelain', '--untracked-files=no'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    return output
+      .split('\n')
+      .map(parseGitStatusFilePath)
+      .map(normalizeHealthFilePath)
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function parseGitStatusFilePath(line: string): string {
+  if (line.length < 4) return '';
+  const raw = line.slice(3).trim();
+  const renameIndex = raw.indexOf(' -> ');
+  return stripGitStatusQuotes(renameIndex >= 0 ? raw.slice(renameIndex + 4) : raw);
+}
+
+function stripGitStatusQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function normalizeHealthFilePath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function ownerFromSessionId(sessionId: string): string {
+  const match = sessionId.match(/^(codex|claude|gemini|cursor|opencode|agent)(?:[@:_-]|$)/i);
+  return match?.[1]?.toLowerCase() ?? 'unknown';
+}
+
+function isProtectedBranch(branch: string): boolean {
+  return PROTECTED_BRANCHES.has(branch);
+}
+
+function competingWorktreeBranchCount(sessions: HivemindSession[]): number {
+  const byBranch = new Map<string, Set<string>>();
+  for (const session of sessions) {
+    if (!session.branch || !session.worktree_path) continue;
+    const bucket = byBranch.get(session.branch) ?? new Set<string>();
+    bucket.add(session.worktree_path);
+    byBranch.set(session.branch, bucket);
+  }
+  return [...byBranch.values()].filter((worktrees) => worktrees.size > 1).length;
+}
+
+function readWorktreeContention(
+  repoRoot: string | undefined,
+  now: number,
+): WorktreeContentionReport | null {
+  if (!repoRoot) return null;
+  try {
+    return readWorktreeContentionReport({ repoRoot, now });
+  } catch {
+    return null;
+  }
+}
+
+function countCompetingWorktrees(report: WorktreeContentionReport | null): number {
+  if (!report) return 0;
+  const paths = new Set<string>();
+  for (const contention of report.contentions) {
+    for (const worktree of contention.worktrees) {
+      paths.add(worktree.path);
+    }
+  }
+  return paths.size;
+}
+
+function takeoverRequestCount(
+  storage: Pick<Storage, 'taskObservationsByKind'>,
+  tasks: TaskRow[],
+  options: { since: number; now: number },
+): number {
+  let count = 0;
+  for (const task of tasks) {
+    for (const kind of ['handoff', 'relay'] as const) {
+      count += storage
+        .taskObservationsByKind(task.id, kind, 1000)
+        .filter((row) => row.ts > options.since)
+        .filter((row) => isPendingTakeoverRequest(row, options.now)).length;
+    }
+  }
+  return count;
+}
+
+function isPendingTakeoverRequest(row: ObservationRow, now: number): boolean {
+  const metadata = parseJsonObject(row.metadata);
+  if (metadata.status && metadata.status !== 'pending') return false;
+  const expiresAt = readNumber(metadata.expires_at);
+  if (expiresAt !== null && now >= expiresAt) return false;
+  const text = [
+    row.content,
+    readStringMetadata(metadata.summary),
+    readStringMetadata(metadata.one_line),
+    readStringMetadata(metadata.reason),
+    readStringArrayMetadata(metadata.blockers).join(' '),
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    metadata.auto_takeover === true || /takeover requested|usage limit|rate limit|quota/i.test(text)
+  );
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readStringMetadata(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function readStringArrayMetadata(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }
 
 function parseHours(raw: string): number {

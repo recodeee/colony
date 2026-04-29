@@ -450,10 +450,177 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
     expect(json).toHaveProperty('queen_wave_health');
+    expect(json).toHaveProperty('live_contention_health');
     expect(json).toHaveProperty('adoption_thresholds');
     expect(json).toHaveProperty('action_hints');
     expect(json.action_hints[0]).toHaveProperty('tool_call');
     expect(json.action_hints[0]).toHaveProperty('prompt');
+  });
+
+  it('reports live same-file contentions with owners, branches, dirty files, and takeover signals', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 2,
+          edits_with_file_path: 2,
+          edits_claimed_before: 2,
+        },
+        tasks: [
+          { id: 10, repo_root: '/repo', branch: 'agent/codex/left' },
+          { id: 11, repo_root: '/repo', branch: 'agent/claude/right' },
+          { id: 12, repo_root: '/repo', branch: 'main' },
+        ],
+        claimsByTask: {
+          10: [
+            {
+              task_id: 10,
+              file_path: 'src/shared.ts',
+              session_id: 'codex-left-session',
+              claimed_at: NOW - 60_000,
+            },
+          ],
+          11: [
+            {
+              task_id: 11,
+              file_path: 'src/shared.ts',
+              session_id: 'claude-right-session',
+              claimed_at: NOW - 90_000,
+            },
+          ],
+          12: [
+            {
+              task_id: 12,
+              file_path: 'src/shared.ts',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 30_000,
+            },
+          ],
+        },
+        observationsByTask: {
+          10: [
+            observation(100, 'handoff', NOW - 10_000, {
+              kind: 'handoff',
+              status: 'pending',
+              summary: 'Session hit usage limit; takeover requested.',
+              expires_at: NOW + 60_000,
+            }),
+          ],
+          11: [],
+          12: [],
+        },
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+        hivemind: {
+          sessions: [
+            hivemindSession({
+              agent: 'codex',
+              branch: 'agent/codex/left',
+              session_key: 'codex-left-session',
+              worktree_path: '/wt/codex-left',
+              activity: 'working',
+            }),
+            hivemindSession({
+              agent: 'codex',
+              branch: 'agent/codex/left',
+              session_key: 'codex-left-other',
+              worktree_path: '/wt/codex-left-other',
+              activity: 'idle',
+            }),
+            hivemindSession({
+              agent: 'claude',
+              branch: 'agent/claude/right',
+              session_key: 'claude-right-session',
+              worktree_path: '/wt/claude-right',
+              activity: 'stalled',
+            }),
+            hivemindSession({
+              agent: 'codex',
+              branch: 'main',
+              session_key: 'codex-main-session',
+              worktree_path: '/repo',
+              activity: 'working',
+            }),
+          ],
+        },
+        dirty_files_by_worktree: {
+          '/wt/codex-left': ['src/shared.ts'],
+          '/wt/codex-left-other': [],
+          '/wt/claude-right': ['src/other.ts'],
+          '/repo': [],
+        },
+        worktree_contention: fakeWorktreeContention(),
+      },
+    );
+
+    expect(payload.live_contention_health).toMatchObject({
+      live_file_contentions: 1,
+      protected_file_contentions: 1,
+      paused_lanes: 2,
+      takeover_requests: 1,
+      competing_worktrees: 2,
+      dirty_contended_files: 1,
+      top_conflicts: [
+        {
+          file_path: 'src/shared.ts',
+          owner_count: 3,
+          protected: true,
+          dirty_worktrees: ['/wt/codex-left'],
+          owners: expect.arrayContaining([
+            expect.objectContaining({
+              owner: 'codex',
+              session_id: 'codex-left-session',
+              branch: 'agent/codex/left',
+              dirty: true,
+            }),
+            expect.objectContaining({
+              owner: 'claude',
+              session_id: 'claude-right-session',
+              branch: 'agent/claude/right',
+            }),
+            expect.objectContaining({
+              owner: 'codex',
+              session_id: 'codex-main-session',
+              branch: 'main',
+            }),
+          ]),
+        },
+      ],
+    });
+
+    expect(payload.readiness_summary.execution_safety).toMatchObject({
+      status: 'bad',
+      evidence: expect.stringContaining('live contentions 1, dirty 1'),
+    });
+    expect(payload.action_hints[0]).toMatchObject({
+      metric: 'live file contentions',
+      current: '1 conflict(s), 1 dirty',
+      command: 'colony health --json',
+    });
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('Live contention health');
+    expect(text).toContain('live_file_contentions:      1');
+    expect(text).toContain('protected_file_contentions: 1');
+    expect(text).toContain('paused_lanes:               2');
+    expect(text).toContain('takeover_requests:          1');
+    expect(text).toContain('competing_worktrees:        2');
+    expect(text).toContain('dirty_contended_files:      1');
+    expect(text).toContain('src/shared.ts (3 owners; protected, dirty)');
+    expect(text).toContain(
+      'owner=codex session=codex-left-... branch=agent/codex/left activity=working',
+    );
+    expect(text).toContain(
+      'owner=claude session=claude-righ... branch=agent/claude/right activity=stalled',
+    );
+    expect(text).toContain('owner=codex session=codex-main-... branch=main activity=working');
   });
 
   it('renders claim miss reasons and nearest claim examples in text and JSON output', () => {
@@ -1157,6 +1324,82 @@ function codexFunctionCallLine(tsMs: number, name: string): string {
       call_id: `call_${name}`,
     },
   });
+}
+
+function hivemindSession(args: {
+  agent: string;
+  branch: string;
+  session_key: string;
+  worktree_path: string;
+  activity: 'working' | 'thinking' | 'idle' | 'stalled' | 'dead' | 'unknown';
+}): never {
+  return {
+    repo_root: '/repo',
+    source: 'active-session',
+    branch: args.branch,
+    task: 'task',
+    task_name: 'task',
+    latest_task_preview: 'task',
+    agent: args.agent,
+    cli: args.agent,
+    state: args.activity === 'working' || args.activity === 'idle' ? args.activity : '',
+    activity: args.activity,
+    activity_summary: args.activity,
+    worktree_path: args.worktree_path,
+    pid: null,
+    pid_alive: null,
+    started_at: new Date(NOW - 60_000).toISOString(),
+    last_heartbeat_at: new Date(NOW - 1_000).toISOString(),
+    updated_at: new Date(NOW - 1_000).toISOString(),
+    elapsed_seconds: 60,
+    task_mode: '',
+    openspec_tier: '',
+    routing_reason: '',
+    snapshot_name: '',
+    project_name: '',
+    session_key: args.session_key,
+    locked_file_count: 0,
+    locked_file_preview: [],
+    file_path: '',
+  } as never;
+}
+
+function fakeWorktreeContention(): never {
+  return {
+    generated_at: new Date(NOW).toISOString(),
+    repo_root: '/repo',
+    summary: {
+      worktree_count: 2,
+      dirty_worktree_count: 2,
+      dirty_file_count: 2,
+      contention_count: 1,
+    },
+    inspected_roots: [],
+    worktrees: [],
+    contentions: [
+      {
+        file_path: 'src/shared.ts',
+        worktrees: [
+          {
+            branch: 'agent/codex/left',
+            path: '/wt/codex-left',
+            managed_root: '.omx/agent-worktrees',
+            dirty_status: ' M',
+            claimed: true,
+            active_session_key: 'codex-left-session',
+          },
+          {
+            branch: 'agent/claude/right',
+            path: '/wt/claude-right',
+            managed_root: '.omx/agent-worktrees',
+            dirty_status: ' M',
+            claimed: true,
+            active_session_key: 'claude-right-session',
+          },
+        ],
+      },
+    ],
+  } as never;
 }
 
 function fakeStorage(args: {
