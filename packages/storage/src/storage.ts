@@ -1537,13 +1537,15 @@ export class Storage {
 
   taskObservationsByKind(task_id: number, kind: string, limit = 100): ObservationRow[] {
     return this.db
-      .prepare('SELECT * FROM observations WHERE task_id = ? AND kind = ? ORDER BY ts DESC LIMIT ?')
+      .prepare(
+        'SELECT * FROM observations WHERE task_id = ? AND kind = ? ORDER BY ts DESC, id DESC LIMIT ?',
+      )
       .all(task_id, kind, limit) as ObservationRow[];
   }
 
   taskTimeline(task_id: number, limit = 50): ObservationRow[] {
     return this.db
-      .prepare('SELECT * FROM observations WHERE task_id = ? ORDER BY ts DESC LIMIT ?')
+      .prepare('SELECT * FROM observations WHERE task_id = ? ORDER BY ts DESC, id DESC LIMIT ?')
       .all(task_id, limit) as ObservationRow[];
   }
 

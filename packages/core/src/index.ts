@@ -226,7 +226,9 @@ export {
   type FreshClaimSignal,
   type StaleClaimBranchSummary,
   type StaleClaimSignal,
+  type StaleDownstreamBlockerSignal,
   type StaleHotFileSignal,
+  type ReleasedStaleDownstreamBlocker,
 } from './coordination-sweep.js';
 export {
   ABANDONED_TASK_DAYS,

@@ -195,6 +195,7 @@ interface QueenWavePlanSummary {
   claimed_subtasks: number;
   blocked_subtasks: number;
   stale_claims_blocking_downstream: number;
+  downstream_blockers: QueenDownstreamBlockerReport[];
 }
 
 interface QueenWaveHealthPayload {
@@ -205,6 +206,23 @@ interface QueenWaveHealthPayload {
   blocked_subtasks: number;
   stale_claims_blocking_downstream: number;
   plans: QueenWavePlanSummary[];
+  downstream_blockers: QueenDownstreamBlockerReport[];
+}
+
+interface QueenDownstreamBlockerReport {
+  plan_slug: string;
+  task_id: number;
+  subtask_index: number;
+  subtask_title: string;
+  file_path: string;
+  owner_session_id: string;
+  owner_agent: string | null;
+  age_minutes: number;
+  unlock_candidate: {
+    task_id: number;
+    subtask_index: number;
+    title: string;
+  };
 }
 
 interface LiveContentionOwner {
@@ -635,6 +653,17 @@ export function formatColonyHealthOutput(
     for (const plan of payload.queen_wave_health.plans.slice(0, HEALTH_TOOL_LIMIT)) {
       lines.push(
         `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}`,
+      );
+    }
+  }
+  if (payload.queen_wave_health.downstream_blockers.length > 0) {
+    lines.push('  stale downstream blockers:');
+    for (const blocker of payload.queen_wave_health.downstream_blockers.slice(
+      0,
+      HEALTH_TOOL_LIMIT,
+    )) {
+      lines.push(
+        `    ${blocker.plan_slug}/sub-${blocker.subtask_index} task #${blocker.task_id} ${blocker.file_path} owner=${blocker.owner_session_id} age=${blocker.age_minutes}m -> unlock candidate sub-${blocker.unlock_candidate.subtask_index}`,
       );
     }
   }
@@ -2136,11 +2165,16 @@ function isExpiredLifecycleRow(
 }
 
 interface PlanSubtaskHealth {
+  task_id: number;
   plan_slug: string;
   index: number;
+  title: string;
   status: 'available' | 'claimed' | 'completed' | 'blocked';
   depends_on: number[];
   claimed_at: number | null;
+  claimed_by_session_id: string | null;
+  claimed_by_agent: string | null;
+  file_scope: string[];
   wave_index: number;
   wave_name: string;
 }
@@ -2160,12 +2194,18 @@ function readPlanSubtasks(
     if (!initial) continue;
     const initialMeta = parseJsonObject(initial.metadata);
     const lifecycle = readSubtaskLifecycle(rows, initialMeta, initial.ts);
+    const titleLine = initial.content.split('\n\n')[0] ?? '(untitled)';
     subtasks.push({
+      task_id: task.id,
       plan_slug: planSlug,
       index,
+      title: typeof initialMeta.title === 'string' ? initialMeta.title : titleLine,
       status: lifecycle.status,
       depends_on: readNumberArray(initialMeta.depends_on),
       claimed_at: lifecycle.claimed_at,
+      claimed_by_session_id: lifecycle.claimed_by_session_id,
+      claimed_by_agent: lifecycle.claimed_by_agent,
+      file_scope: readStringArray(initialMeta.file_scope),
       wave_index: 0,
       wave_name: 'Wave 1',
     });
@@ -2177,14 +2217,28 @@ function readSubtaskLifecycle(
   rows: ObservationRow[],
   initialMeta: Record<string, unknown>,
   initialTs: number,
-): Pick<PlanSubtaskHealth, 'status' | 'claimed_at'> {
-  const claimRows = rows.filter((row) => row.kind === 'plan-subtask-claim');
-  for (const precedence of ['completed', 'blocked', 'claimed'] as const) {
-    const match = claimRows
-      .filter((row) => parseJsonObject(row.metadata).status === precedence)
-      .sort((a, b) => b.ts - a.ts)[0];
-    if (match)
-      return { status: precedence, claimed_at: precedence === 'claimed' ? match.ts : null };
+): Pick<PlanSubtaskHealth, 'status' | 'claimed_at' | 'claimed_by_session_id' | 'claimed_by_agent'> {
+  const claimRows = rows
+    .filter((row) => row.kind === 'plan-subtask-claim')
+    .map((row) => ({ row, metadata: parseJsonObject(row.metadata) }))
+    .filter((entry) => isPlanSubtaskStatus(entry.metadata.status))
+    .sort((a, b) => b.row.ts - a.row.ts || b.row.id - a.row.id);
+  const completed = claimRows.find((entry) => entry.metadata.status === 'completed');
+  const resolved = completed ?? claimRows[0];
+  if (resolved) {
+    const status = resolved.metadata.status as PlanSubtaskHealth['status'];
+    return {
+      status,
+      claimed_at: status === 'claimed' ? resolved.row.ts : null,
+      claimed_by_session_id:
+        status === 'claimed' && typeof resolved.metadata.session_id === 'string'
+          ? (resolved.metadata.session_id as string)
+          : null,
+      claimed_by_agent:
+        status === 'claimed' && typeof resolved.metadata.agent === 'string'
+          ? (resolved.metadata.agent as string)
+          : null,
+    };
   }
   const initialStatus = initialMeta.status;
   if (
@@ -2196,9 +2250,22 @@ function readSubtaskLifecycle(
     return {
       status: initialStatus,
       claimed_at: initialStatus === 'claimed' ? initialTs : null,
+      claimed_by_session_id:
+        initialStatus === 'claimed' && typeof initialMeta.session_id === 'string'
+          ? (initialMeta.session_id as string)
+          : null,
+      claimed_by_agent:
+        initialStatus === 'claimed' && typeof initialMeta.agent === 'string'
+          ? (initialMeta.agent as string)
+          : null,
     };
   }
-  return { status: 'available', claimed_at: null };
+  return {
+    status: 'available',
+    claimed_at: null,
+    claimed_by_session_id: null,
+    claimed_by_agent: null,
+  };
 }
 
 function queenWaveHealthPayload(
@@ -2215,6 +2282,7 @@ function queenWaveHealthPayload(
     const currentWaveIndex = Math.min(...incomplete.map((subtask) => subtask.wave_index));
     const currentWave =
       subtasks.find((subtask) => subtask.wave_index === currentWaveIndex)?.wave_name ?? null;
+    const downstreamBlockers = staleDownstreamBlockers(subtasks, options);
 
     plans.push({
       plan_slug: planSlug,
@@ -2223,9 +2291,8 @@ function queenWaveHealthPayload(
       claimed_subtasks: subtasks.filter((subtask) => subtask.status === 'claimed').length,
       blocked_subtasks: subtasks.filter((subtask) => isBlockedPlanSubtask(subtask, subtasks))
         .length,
-      stale_claims_blocking_downstream: subtasks.filter(
-        (subtask) => isStalePlanClaim(subtask, options) && blocksDownstream(subtask, subtasks),
-      ).length,
+      stale_claims_blocking_downstream: downstreamBlockers.length,
+      downstream_blockers: downstreamBlockers,
     });
   }
 
@@ -2245,6 +2312,14 @@ function queenWaveHealthPayload(
       (sum, plan) => sum + plan.stale_claims_blocking_downstream,
       0,
     ),
+    downstream_blockers: plans
+      .flatMap((plan) => plan.downstream_blockers)
+      .sort(
+        (a, b) =>
+          b.age_minutes - a.age_minutes ||
+          a.plan_slug.localeCompare(b.plan_slug) ||
+          a.subtask_index - b.subtask_index,
+      ),
     plans: plans.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug)),
   };
 }
@@ -2454,10 +2529,60 @@ function blocksDownstream(subtask: PlanSubtaskHealth, siblings: PlanSubtaskHealt
   );
 }
 
+function staleDownstreamBlockers(
+  subtasks: PlanSubtaskHealth[],
+  options: { now: number; stale_claim_minutes: number },
+): QueenDownstreamBlockerReport[] {
+  const blockers: QueenDownstreamBlockerReport[] = [];
+  for (const subtask of subtasks) {
+    if (!isStalePlanClaim(subtask, options) || !blocksDownstream(subtask, subtasks)) continue;
+    const unlockCandidate = subtasks.find(
+      (candidate) =>
+        candidate.status !== 'completed' && candidate.depends_on.includes(subtask.index),
+    );
+    if (!unlockCandidate || !subtask.claimed_by_session_id || subtask.claimed_at === null) {
+      continue;
+    }
+    blockers.push({
+      plan_slug: subtask.plan_slug,
+      task_id: subtask.task_id,
+      subtask_index: subtask.index,
+      subtask_title: subtask.title,
+      file_path: subtask.file_scope[0] ?? '(unscoped)',
+      owner_session_id: subtask.claimed_by_session_id,
+      owner_agent: subtask.claimed_by_agent,
+      age_minutes: Math.floor((options.now - subtask.claimed_at) / 60_000),
+      unlock_candidate: {
+        task_id: unlockCandidate.task_id,
+        subtask_index: unlockCandidate.index,
+        title: unlockCandidate.title,
+      },
+    });
+  }
+  return blockers.sort(
+    (a, b) =>
+      b.age_minutes - a.age_minutes ||
+      a.plan_slug.localeCompare(b.plan_slug) ||
+      a.subtask_index - b.subtask_index,
+  );
+}
+
 function readNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((item): item is number => typeof item === 'number')
     : [];
+}
+
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function isPlanSubtaskStatus(value: unknown): value is PlanSubtaskHealth['status'] {
+  return (
+    value === 'available' || value === 'claimed' || value === 'completed' || value === 'blocked'
+  );
 }
 
 function parseJsonObject(raw: string | null): Record<string, unknown> {

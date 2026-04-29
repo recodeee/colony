@@ -143,6 +143,37 @@ function blockSubtask(planSlug: string, subtaskIndex: number, taskId: number): v
   });
 }
 
+function releaseSubtaskClaim(
+  planSlug: string,
+  subtaskIndex: number,
+  taskId: number,
+  sessionId = 'agent-session',
+  agent = 'codex',
+): void {
+  const claims = store.storage.listClaims(taskId).filter((claim) => claim.session_id === sessionId);
+  for (const claim of claims) {
+    store.storage.releaseClaim({
+      task_id: taskId,
+      file_path: claim.file_path,
+      session_id: sessionId,
+    });
+  }
+  store.addObservation({
+    session_id: sessionId,
+    task_id: taskId,
+    kind: 'plan-subtask-claim',
+    content: `sub-${subtaskIndex} released and requeued`,
+    metadata: {
+      status: 'available',
+      session_id: sessionId,
+      agent,
+      plan_slug: planSlug,
+      subtask_index: subtaskIndex,
+      released_files: claims.map((claim) => claim.file_path),
+    },
+  });
+}
+
 beforeEach(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'colony-ready-data-'));
   repoRoot = mkdtempSync(join(tmpdir(), 'colony-ready-repo-'));
@@ -329,6 +360,107 @@ describe('task_ready_for_agent', () => {
     expect(result.next_action).toBe(
       'Complete upstream dependencies or unblock current plan waves before claiming more work.',
     );
+  });
+
+  it('makes a stale blocked wave claimable again after rescue release', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    store.startSession({ id: 'stale-session', ide: 'codex', cwd: repoRoot });
+
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Stale claimed blocker',
+            description: 'This stale claim blocks later waves until release.',
+            file_scope: ['apps/api/stale-blocker.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave two API',
+            description: 'Unlocks after the stale blocker completes.',
+            file_scope: ['apps/api/wave-two.ts'],
+            depends_on: [0],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave three finalizer',
+            description: 'Unlocks after wave two completes.',
+            file_scope: ['apps/mcp-server/test/stale-blocker.test.ts'],
+            depends_on: [1],
+            capability_hint: 'test_work',
+          },
+        ],
+        { slug: 'stale-release-plan', session_id: 'queen', agent: 'queen' },
+      ),
+    });
+    const staleClaim = await claimSubtask('stale-release-plan', 0, 'stale-session');
+
+    vi.setSystemTime(t0 + 5 * 60 * 60_000);
+    let result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.total_available).toBe(0);
+    expect(result.next_tool).toBeUndefined();
+    expect(result.next_action).toBe(
+      'Complete upstream dependencies or unblock current plan waves before claiming more work.',
+    );
+
+    releaseSubtaskClaim('stale-release-plan', 0, staleClaim.task_id, 'stale-session');
+    result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0]);
+    expect(result.ready[0]).toMatchObject({
+      plan_slug: 'stale-release-plan',
+      wave_index: 0,
+      wave_name: 'Wave 1',
+      blocked_by_count: 0,
+      claim_args: {
+        plan_slug: 'stale-release-plan',
+        subtask_index: 0,
+        session_id: 'agent-session',
+        agent: 'codex',
+      },
+    });
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.claim_args).toEqual({
+      plan_slug: 'stale-release-plan',
+      subtask_index: 0,
+      session_id: 'agent-session',
+      agent: 'codex',
+    });
+
+    await claimAndComplete('stale-release-plan', 0);
+    result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([1]);
+    expect(result.ready[0]).toMatchObject({
+      wave_index: 1,
+      wave_name: 'Wave 2',
+      blocked_by_count: 0,
+      claim_args: {
+        plan_slug: 'stale-release-plan',
+        subtask_index: 1,
+        session_id: 'agent-session',
+        agent: 'codex',
+      },
+    });
   });
 
   it('continues an already claimed sub-task without fabricating a new claim call', async () => {

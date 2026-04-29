@@ -850,22 +850,26 @@ describe('colony health payload', () => {
             observation(10, 'plan-subtask-claim', NOW - 3 * 3_600_000, {
               status: 'claimed',
               session_id: 'stale-session',
+              agent: 'codex',
             }),
             observation(11, 'plan-subtask', NOW - 4 * 3_600_000, {
               status: 'available',
               depends_on: [],
+              file_scope: ['src/foundation.ts'],
             }),
           ],
           11: [
             observation(12, 'plan-subtask', NOW - 3_000, {
               status: 'available',
               depends_on: [0],
+              file_scope: ['src/downstream-a.ts'],
             }),
           ],
           12: [
             observation(13, 'plan-subtask', NOW - 3_000, {
               status: 'available',
               depends_on: [0],
+              file_scope: ['src/downstream-b.ts'],
             }),
           ],
           13: [
@@ -906,7 +910,29 @@ describe('colony health payload', () => {
           claimed_subtasks: 1,
           blocked_subtasks: 2,
           stale_claims_blocking_downstream: 1,
+          downstream_blockers: [
+            expect.objectContaining({
+              task_id: 10,
+              subtask_index: 0,
+              file_path: 'src/foundation.ts',
+              owner_session_id: 'stale-session',
+              owner_agent: 'codex',
+              age_minutes: 180,
+              unlock_candidate: expect.objectContaining({
+                task_id: 11,
+                subtask_index: 1,
+              }),
+            }),
+          ],
         },
+      ],
+      downstream_blockers: [
+        expect.objectContaining({
+          task_id: 10,
+          file_path: 'src/foundation.ts',
+          owner_session_id: 'stale-session',
+          unlock_candidate: expect.objectContaining({ subtask_index: 1 }),
+        }),
       ],
     });
     expect(payload.action_hints).toContainEqual(
@@ -921,6 +947,10 @@ describe('colony health payload', () => {
     expect(text).toContain('stale claims blocking downstream:   1');
     expect(text).toContain(
       'waves: current Wave 1; ready 0, claimed 1, blocked 2, stale blockers 1',
+    );
+    expect(text).toContain('stale downstream blockers:');
+    expect(text).toContain(
+      'waves/sub-0 task #10 src/foundation.ts owner=stale-session age=180m -> unlock candidate sub-1',
     );
   });
 

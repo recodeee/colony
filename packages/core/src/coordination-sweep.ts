@@ -1,6 +1,17 @@
 import { resolve } from 'node:path';
-import type { ObservationRow, PheromoneRow, ProposalRow, TaskRow } from '@colony/storage';
-import { type ClaimAgeClass, type ClaimOwnershipStrength, classifyClaimAge } from './claim-age.js';
+import type {
+  ObservationRow,
+  PheromoneRow,
+  ProposalRow,
+  TaskClaimRow,
+  TaskRow,
+} from '@colony/storage';
+import {
+  type ClaimAgeClass,
+  type ClaimOwnershipStrength,
+  classifyClaimAge,
+  isStrongClaimAge,
+} from './claim-age.js';
 import type { MemoryStore } from './memory-store.js';
 import { PheromoneSystem } from './pheromone.js';
 import { type SubtaskInfo, listPlans } from './plan.js';
@@ -18,6 +29,7 @@ export interface CoordinationSweepOptions {
   stale_claim_minutes?: number;
   hot_file_noise_floor?: number;
   stale_hot_file_min_original_strength?: number;
+  release_stale_blockers?: boolean;
 }
 
 export interface CoordinationSweepResult {
@@ -40,6 +52,9 @@ export interface CoordinationSweepResult {
     decayed_proposal_count: number;
     stale_hot_file_count: number;
     blocked_downstream_task_count: number;
+    stale_downstream_blocker_count: number;
+    released_stale_blocker_claim_count: number;
+    requeued_stale_blocker_count: number;
   };
   active_claims: FreshClaimSignal[];
   /** Backward-compatible alias for active_claims. */
@@ -55,6 +70,8 @@ export interface CoordinationSweepResult {
   decayed_proposals: DecayedProposalSignal[];
   stale_hot_files: StaleHotFileSignal[];
   blocked_downstream_tasks: BlockedDownstreamTaskSignal[];
+  stale_downstream_blockers: StaleDownstreamBlockerSignal[];
+  released_stale_downstream_blockers: ReleasedStaleDownstreamBlocker[];
 }
 
 export type ClaimCleanupAction = 'keep_fresh' | 'review_stale_claim' | 'expire_weak_claim';
@@ -177,6 +194,44 @@ export interface BlockedDownstreamTaskSignal {
   }>;
 }
 
+export interface StaleDownstreamBlockerSignal {
+  plan_slug: string;
+  plan_title: string;
+  repo_root: string;
+  task_id: number;
+  subtask_index: number;
+  subtask_title: string;
+  file_path: string;
+  owner_session_id: string;
+  owner_agent: string | null;
+  claimed_at: number;
+  age_minutes: number;
+  age_class: ClaimAgeClass;
+  unlock_candidate: {
+    task_id: number;
+    subtask_index: number;
+    title: string;
+    file_scope: string[];
+  };
+  blocked_downstream: Array<{
+    task_id: number;
+    subtask_index: number;
+    title: string;
+    status: string;
+  }>;
+  cleanup_action: 'release_and_requeue_stale_blocker';
+  cleanup_summary: string;
+}
+
+export interface ReleasedStaleDownstreamBlocker {
+  plan_slug: string;
+  task_id: number;
+  subtask_index: number;
+  released_claim_count: number;
+  audit_observation_id: number;
+  requeue_observation_id: number;
+}
+
 export function buildCoordinationSweep(
   store: MemoryStore,
   opts: CoordinationSweepOptions = {},
@@ -201,7 +256,21 @@ export function buildCoordinationSweep(
   const decayed_proposals = collectDecayedProposals(store, proposalSystem, repoRoots, now);
   const stale_hot_files = collectStaleHotFiles(store, tasks, now, thresholds);
   const blocked_downstream_tasks = collectBlockedDownstreamTasks(store, repoRoots);
-  const recommended_action = suggestClaimCleanup(claimBuckets);
+  const stale_downstream_blockers = collectStaleDownstreamBlockers(
+    store,
+    repoRoots,
+    now,
+    thresholds,
+  );
+  const released_stale_downstream_blockers =
+    opts.release_stale_blockers === true
+      ? releaseStaleDownstreamBlockers(store, stale_downstream_blockers, now)
+      : [];
+  const recommended_action = suggestClaimCleanup({
+    ...claimBuckets,
+    stale_downstream_blocker_count: stale_downstream_blockers.length,
+    released_stale_blocker_count: released_stale_downstream_blockers.length,
+  });
 
   return {
     generated_at: now,
@@ -217,6 +286,12 @@ export function buildCoordinationSweep(
       decayed_proposal_count: decayed_proposals.length,
       stale_hot_file_count: stale_hot_files.length,
       blocked_downstream_task_count: blocked_downstream_tasks.length,
+      stale_downstream_blocker_count: stale_downstream_blockers.length,
+      released_stale_blocker_claim_count: released_stale_downstream_blockers.reduce(
+        (sum, row) => sum + row.released_claim_count,
+        0,
+      ),
+      requeued_stale_blocker_count: released_stale_downstream_blockers.length,
     },
     active_claims: claimBuckets.active_claims,
     fresh_claims: claimBuckets.fresh_claims,
@@ -230,6 +305,8 @@ export function buildCoordinationSweep(
     decayed_proposals,
     stale_hot_files,
     blocked_downstream_tasks,
+    stale_downstream_blockers,
+    released_stale_downstream_blockers,
   };
 }
 
@@ -416,7 +493,15 @@ function suggestClaimCleanup(args: {
   fresh_claims: FreshClaimSignal[];
   stale_claims: StaleClaimSignal[];
   expired_weak_claims: ExpiredWeakClaimSignal[];
+  stale_downstream_blocker_count: number;
+  released_stale_blocker_count: number;
 }): string {
+  if (args.released_stale_blocker_count > 0) {
+    return `applied: released/requeued ${args.released_stale_blocker_count} stale downstream blocker(s); audit observations stay intact`;
+  }
+  if (args.stale_downstream_blocker_count > 0) {
+    return `dry-run: release/requeue ${args.stale_downstream_blocker_count} stale downstream blocker(s) with --release-stale-blockers; audit observations stay intact`;
+  }
   if (args.expired_weak_claims.length > 0) {
     return `dry-run: release ${args.expired_weak_claims.length} expired/weak advisory claim(s) after owner/rescue review; audit observations stay intact`;
   }
@@ -618,6 +703,207 @@ function collectBlockedDownstreamTasks(
       b.blocked_by_count - a.blocked_by_count ||
       a.plan_slug.localeCompare(b.plan_slug) ||
       a.subtask_index - b.subtask_index,
+  );
+}
+
+function collectStaleDownstreamBlockers(
+  store: MemoryStore,
+  repoRoots: Set<string> | null,
+  now: number,
+  thresholds: CoordinationSweepResult['thresholds'],
+): StaleDownstreamBlockerSignal[] {
+  const out: StaleDownstreamBlockerSignal[] = [];
+  const plans =
+    repoRoots === null
+      ? listPlans(store, { limit: 2_000 })
+      : [...repoRoots].flatMap((repo_root) => listPlans(store, { repo_root, limit: 2_000 }));
+
+  for (const plan of plans) {
+    for (const blocker of plan.subtasks) {
+      if (blocker.status !== 'claimed') continue;
+      const blockedDownstream = plan.subtasks.filter(
+        (subtask) =>
+          subtask.status !== 'completed' && subtask.blocked_by.includes(blocker.subtask_index),
+      );
+      if (blockedDownstream.length === 0) continue;
+
+      for (const claim of staleBlockerClaims(store, blocker, now, thresholds)) {
+        const unlockCandidate = blockedDownstream[0];
+        if (!unlockCandidate) continue;
+        out.push({
+          plan_slug: plan.plan_slug,
+          plan_title: plan.title,
+          repo_root: plan.repo_root,
+          task_id: blocker.task_id,
+          subtask_index: blocker.subtask_index,
+          subtask_title: blocker.title,
+          file_path: claim.file_path,
+          owner_session_id: claim.session_id,
+          owner_agent: blocker.claimed_by_agent,
+          claimed_at: claim.claimed_at,
+          age_minutes: claim.classification.age_minutes,
+          age_class: claim.classification.age_class,
+          unlock_candidate: {
+            task_id: unlockCandidate.task_id,
+            subtask_index: unlockCandidate.subtask_index,
+            title: unlockCandidate.title,
+            file_scope: unlockCandidate.file_scope,
+          },
+          blocked_downstream: blockedDownstream.map((subtask) => ({
+            task_id: subtask.task_id,
+            subtask_index: subtask.subtask_index,
+            title: subtask.title,
+            status: subtask.status,
+          })),
+          cleanup_action: 'release_and_requeue_stale_blocker',
+          cleanup_summary:
+            'release stale advisory file claim and append an available plan-subtask marker; audit observations stay intact',
+        });
+      }
+    }
+  }
+
+  return out.sort(
+    (a, b) =>
+      b.age_minutes - a.age_minutes ||
+      a.plan_slug.localeCompare(b.plan_slug) ||
+      a.subtask_index - b.subtask_index ||
+      a.file_path.localeCompare(b.file_path),
+  );
+}
+
+function staleBlockerClaims(
+  store: MemoryStore,
+  blocker: SubtaskInfo,
+  now: number,
+  thresholds: CoordinationSweepResult['thresholds'],
+): Array<{
+  file_path: string;
+  session_id: string;
+  claimed_at: number;
+  classification: ReturnType<typeof classifyClaimAge>;
+}> {
+  const owner = blocker.claimed_by_session_id;
+  if (!owner) return [];
+  const currentClaims = store.storage
+    .listClaims(blocker.task_id)
+    .filter((claim) => claim.session_id === owner);
+  const rows =
+    currentClaims.length > 0
+      ? currentClaims
+      : fallbackClaimRows(blocker, owner, blocker.claimed_at);
+
+  return rows
+    .map((claim) => ({
+      file_path: claim.file_path,
+      session_id: claim.session_id,
+      claimed_at: claim.claimed_at,
+      classification: classifyClaimAge(claim.claimed_at, {
+        now,
+        claim_stale_minutes: thresholds.stale_claim_minutes,
+      }),
+    }))
+    .filter((claim) => !isStrongClaimAge(claim.classification));
+}
+
+function fallbackClaimRows(
+  blocker: SubtaskInfo,
+  owner: string,
+  claimedAt: number | null,
+): TaskClaimRow[] {
+  if (claimedAt === null) return [];
+  const fileScope = blocker.file_scope.length > 0 ? blocker.file_scope : ['(unscoped)'];
+  return fileScope.map((file_path) => ({
+    task_id: blocker.task_id,
+    file_path,
+    session_id: owner,
+    claimed_at: claimedAt,
+  }));
+}
+
+function releaseStaleDownstreamBlockers(
+  store: MemoryStore,
+  blockers: StaleDownstreamBlockerSignal[],
+  now: number,
+): ReleasedStaleDownstreamBlocker[] {
+  const grouped = new Map<string, StaleDownstreamBlockerSignal[]>();
+  for (const blocker of blockers) {
+    const key = `${blocker.task_id}\u0000${blocker.owner_session_id}`;
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(blocker);
+    grouped.set(key, bucket);
+  }
+
+  const released: ReleasedStaleDownstreamBlocker[] = [];
+  for (const group of grouped.values()) {
+    const first = group[0];
+    if (!first) continue;
+    const result = store.storage.transaction(() => {
+      let releasedClaimCount = 0;
+      for (const blocker of group) {
+        if (blocker.file_path === '(unscoped)') continue;
+        const before = store.storage.getClaim(blocker.task_id, blocker.file_path);
+        store.storage.releaseClaim({
+          task_id: blocker.task_id,
+          file_path: blocker.file_path,
+          session_id: blocker.owner_session_id,
+        });
+        const after = store.storage.getClaim(blocker.task_id, blocker.file_path);
+        if (before && !after) releasedClaimCount++;
+      }
+      const releasedFiles = group
+        .map((blocker) => blocker.file_path)
+        .filter((filePath) => filePath !== '(unscoped)');
+      const auditId = store.addObservation({
+        session_id: 'coordination-sweep',
+        task_id: first.task_id,
+        kind: 'coordination-sweep',
+        content: `Coordination sweep released ${releasedClaimCount} stale downstream blocker claim(s) for ${first.plan_slug}/sub-${first.subtask_index}; audit history retained.`,
+        metadata: {
+          kind: 'coordination-sweep',
+          action: 'release-stale-downstream-blocker',
+          plan_slug: first.plan_slug,
+          subtask_index: first.subtask_index,
+          owner_session_id: first.owner_session_id,
+          released_files: releasedFiles,
+          blocked_downstream: first.blocked_downstream,
+          now,
+        },
+      });
+      const requeueId = store.addObservation({
+        session_id: 'coordination-sweep',
+        task_id: first.task_id,
+        kind: 'plan-subtask-claim',
+        content: `Coordination sweep requeued ${first.plan_slug}/sub-${first.subtask_index} after stale downstream blocker release.`,
+        metadata: {
+          kind: 'plan-subtask-claim',
+          status: 'available',
+          subtask_index: first.subtask_index,
+          session_id: 'coordination-sweep',
+          agent: 'coordination-sweep',
+          previous_session_id: first.owner_session_id,
+          audit_observation_id: auditId,
+          reason: 'stale downstream blocker released',
+        },
+      });
+      store.storage.touchTask(first.task_id, now);
+      return {
+        plan_slug: first.plan_slug,
+        task_id: first.task_id,
+        subtask_index: first.subtask_index,
+        released_claim_count: releasedClaimCount,
+        audit_observation_id: auditId,
+        requeue_observation_id: requeueId,
+      };
+    });
+    released.push(result);
+  }
+
+  return released.sort(
+    (a, b) =>
+      a.plan_slug.localeCompare(b.plan_slug) ||
+      a.subtask_index - b.subtask_index ||
+      a.task_id - b.task_id,
   );
 }
 
