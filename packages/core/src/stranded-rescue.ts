@@ -28,6 +28,45 @@ export interface StrandedRescueOptions {
   dry_run?: boolean;
 }
 
+export interface BulkStrandedRescueOptions {
+  stranded_after_ms?: number;
+  dry_run?: boolean;
+  now?: number;
+}
+
+export interface BulkStrandedClaim {
+  task_id: number;
+  file_path: string;
+  claimed_at: number;
+  repo_root: string | null;
+  branch: string | null;
+}
+
+export interface BulkStrandedSession {
+  session_id: string;
+  agent: string;
+  repo_root: string;
+  branch: string;
+  repo_roots: string[];
+  branches: string[];
+  task_ids: number[];
+  last_activity: number;
+  held_claim_count: number;
+  held_claims: BulkStrandedClaim[];
+  suggested_action: string;
+  audit_observation_id?: number;
+}
+
+export interface BulkStrandedRescueOutcome {
+  dry_run: boolean;
+  scanned: number;
+  stranded: BulkStrandedSession[];
+  rescued: BulkStrandedSession[];
+  skipped: Array<{ session_id: string; reason: string }>;
+  released_claim_count: number;
+  audit_observation_ids: number[];
+}
+
 export interface StrandedRescueOutcome {
   scanned: number;
   rescued: Array<{
@@ -50,12 +89,20 @@ export interface StrandedRescueOutcome {
 interface StrandedSessionRow {
   session_id?: string;
   id?: string;
+  ide?: string | null;
   repo_root?: string | null;
   cwd?: string | null;
   worktree_path?: string | null;
   branch?: string | null;
   last_observation_ts?: number | string | null;
+  held_claims_json?: string | null;
   last_tool_error?: string | null;
+}
+
+interface ParsedHeldClaim {
+  task_id: number;
+  file_path: string;
+  claimed_at: number;
 }
 
 interface RecentToolErrorRow {
@@ -252,6 +299,90 @@ export function rescueStrandedSessions(
   return outcome;
 }
 
+export function bulkRescueStrandedSessions(
+  store: MemoryStore,
+  options: BulkStrandedRescueOptions = {},
+): BulkStrandedRescueOutcome {
+  const stranded_after_ms = options.stranded_after_ms ?? DEFAULT_STRANDED_AFTER_MS;
+  const dryRun = options.dry_run ?? true;
+  const now = options.now ?? Date.now();
+  const storage = store.storage as typeof store.storage & RescueStorage;
+  const candidates = storage.findStrandedSessions({ stranded_after_ms });
+  const outcome: BulkStrandedRescueOutcome = {
+    dry_run: dryRun,
+    scanned: candidates.length,
+    stranded: [],
+    rescued: [],
+    skipped: [],
+    released_claim_count: 0,
+    audit_observation_ids: [],
+  };
+
+  for (const candidate of candidates) {
+    const session_id = candidateSessionId(candidate);
+    if (!session_id) {
+      outcome.skipped.push({ session_id: '', reason: 'missing session_id' });
+      continue;
+    }
+
+    const claims = heldClaimsForCandidate(store, candidate);
+    if (claims.length === 0) {
+      outcome.skipped.push({ session_id, reason: 'no claims' });
+      continue;
+    }
+
+    const row = strandedSessionSummary(store, candidate, claims, now);
+    outcome.stranded.push(row);
+    if (dryRun) continue;
+
+    const audit_observation_id = store.storage.transaction(() => {
+      for (const claim of claims) {
+        store.storage.releaseClaim({
+          task_id: claim.task_id,
+          file_path: claim.file_path,
+          session_id,
+        });
+      }
+      const auditId = store.addObservation({
+        session_id,
+        kind: 'rescue-stranded',
+        content: `Bulk rescue released ${claims.length} claim(s) for stranded session ${session_id}; audit history retained.`,
+        metadata: {
+          kind: 'rescue-stranded',
+          action: 'bulk-release-claims',
+          stranded_session_id: session_id,
+          agent: row.agent,
+          repo_root: row.repo_root,
+          branch: row.branch,
+          repo_roots: row.repo_roots,
+          branches: row.branches,
+          task_ids: row.task_ids,
+          last_activity: row.last_activity,
+          held_claim_count: row.held_claim_count,
+          released_claims: claims.map((claim) => ({
+            task_id: claim.task_id,
+            file_path: claim.file_path,
+            claimed_at: claim.claimed_at,
+          })),
+        },
+      });
+      store.storage.endSession(session_id, now);
+      return auditId;
+    });
+
+    const rescued = {
+      ...row,
+      audit_observation_id,
+      suggested_action: `released ${claims.length} claim(s), marked session rescued, kept audit history`,
+    };
+    outcome.rescued.push(rescued);
+    outcome.released_claim_count += claims.length;
+    outcome.audit_observation_ids.push(audit_observation_id);
+  }
+
+  return outcome;
+}
+
 function compareRescueJobs(left: RescueJob, right: RescueJob): number {
   const blockingUrgency = blockingUrgencyRank(right) - blockingUrgencyRank(left);
   if (blockingUrgency !== 0) return blockingUrgency;
@@ -432,6 +563,108 @@ function groupClaimsByTask(store: MemoryStore, session_id: string): Map<number, 
     if (claims.length > 0) grouped.set(task.id, claims);
   }
   return grouped;
+}
+
+function heldClaimsForCandidate(
+  store: MemoryStore,
+  candidate: StrandedSessionRow,
+): ParsedHeldClaim[] {
+  const parsed = parseHeldClaims(candidate.held_claims_json);
+  if (parsed.length > 0) return parsed;
+  const session_id = candidateSessionId(candidate);
+  if (!session_id) return [];
+  return [...groupClaimsByTask(store, session_id).values()].flat().map((claim) => ({
+    task_id: claim.task_id,
+    file_path: claim.file_path,
+    claimed_at: claim.claimed_at,
+  }));
+}
+
+function parseHeldClaims(raw: string | null | undefined): ParsedHeldClaim[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isParsedHeldClaim);
+  } catch {
+    return [];
+  }
+}
+
+function isParsedHeldClaim(value: unknown): value is ParsedHeldClaim {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.task_id === 'number' &&
+    Number.isFinite(record.task_id) &&
+    typeof record.file_path === 'string' &&
+    record.file_path.length > 0 &&
+    typeof record.claimed_at === 'number' &&
+    Number.isFinite(record.claimed_at)
+  );
+}
+
+function strandedSessionSummary(
+  store: MemoryStore,
+  candidate: StrandedSessionRow,
+  claims: ParsedHeldClaim[],
+  now: number,
+): BulkStrandedSession {
+  const session_id = candidateSessionId(candidate) ?? '';
+  const taskById = new Map(
+    claims.map((claim) => [claim.task_id, store.storage.getTask(claim.task_id)] as const),
+  );
+  const claimSummaries = claims.map((claim) => {
+    const task = taskById.get(claim.task_id);
+    return {
+      ...claim,
+      repo_root: task?.repo_root ?? null,
+      branch: task?.branch ?? null,
+    };
+  });
+  const repoRoots = uniqueStrings([
+    ...claimSummaries.map((claim) => claim.repo_root),
+    candidateRepoRoot(candidate) ?? null,
+  ]);
+  const branches = uniqueStrings([
+    ...claimSummaries.map((claim) => claim.branch),
+    typeof candidate.branch === 'string' ? candidate.branch : null,
+  ]);
+  const taskIds = [...new Set(claims.map((claim) => claim.task_id))].sort((a, b) => a - b);
+  const last_activity = lastObservationTs(store, session_id, candidate) ?? now;
+  return {
+    session_id,
+    agent: candidateAgent(candidate, session_id),
+    repo_root: summarizeValues(repoRoots),
+    branch: summarizeValues(branches),
+    repo_roots: repoRoots,
+    branches,
+    task_ids: taskIds,
+    last_activity,
+    held_claim_count: claims.length,
+    held_claims: claimSummaries,
+    suggested_action: `would release ${claims.length} claim(s), mark session rescued, keep audit history`,
+  };
+}
+
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value?.trim())))].sort();
+}
+
+function summarizeValues(values: string[]): string {
+  if (values.length === 0) return 'unknown';
+  if (values.length === 1) return values[0] ?? 'unknown';
+  return `multiple (${values.length})`;
+}
+
+function candidateAgent(candidate: StrandedSessionRow, session_id: string): string {
+  if (candidate.ide && candidate.ide !== 'unknown') return agentNameForIde(candidate.ide);
+  return inferAgent(session_id);
+}
+
+function agentNameForIde(ide: string): string {
+  if (ide === 'claude-code') return 'claude';
+  return ide;
 }
 
 function candidateSessionId(candidate: StrandedSessionRow): string | undefined {

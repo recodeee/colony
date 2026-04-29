@@ -1,6 +1,11 @@
 export { MemoryStore, type Embedder } from './memory-store.js';
 export {
+  bulkRescueStrandedSessions,
   rescueStrandedSessions,
+  type BulkStrandedClaim,
+  type BulkStrandedRescueOptions,
+  type BulkStrandedRescueOutcome,
+  type BulkStrandedSession,
   type StrandedRescueOptions,
   type StrandedRescueOutcome,
 } from './stranded-rescue.js';

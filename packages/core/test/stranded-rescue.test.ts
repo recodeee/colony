@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryStore } from '../src/memory-store.js';
-import { rescueStrandedSessions } from '../src/stranded-rescue.js';
+import { bulkRescueStrandedSessions, rescueStrandedSessions } from '../src/stranded-rescue.js';
 import { TaskThread } from '../src/task-thread.js';
 
 const hivemind = vi.hoisted(() => ({
@@ -163,6 +163,74 @@ describe('rescueStrandedSessions', () => {
     expect(
       store.storage.taskTimeline(thread.task_id, 10).some((row) => row.kind === 'rescue-relay'),
     ).toBe(false);
+  });
+
+  it('bulk dry-run lists old stranded sessions without writing audit or dropping claims', () => {
+    const { thread, session_id } = seedTask('feat/bulk-dry-run', [
+      'src/bulk-a.ts',
+      'src/bulk-b.ts',
+    ]);
+    configureStorage([candidate(session_id)]);
+
+    const outcome = bulkRescueStrandedSessions(store, { dry_run: true });
+
+    expect(outcome).toMatchObject({
+      dry_run: true,
+      scanned: 1,
+      released_claim_count: 0,
+      rescued: [],
+      stranded: [
+        {
+          session_id,
+          agent: 'codex',
+          repo_root: '/repo',
+          branch: 'feat/bulk-dry-run',
+          held_claim_count: 2,
+          suggested_action: 'would release 2 claim(s), mark session rescued, keep audit history',
+        },
+      ],
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/bulk-a.ts')?.session_id).toBe(session_id);
+    expect(store.storage.getSession(session_id)?.ended_at).toBeNull();
+    expect(store.storage.taskObservationsByKind(thread.task_id, 'rescue-stranded')).toHaveLength(0);
+  });
+
+  it('bulk apply releases claims, marks the session rescued, and keeps audit history', () => {
+    const { thread, session_id } = seedTask('feat/bulk-apply', ['src/bulk.ts']);
+    const noteId = store.addObservation({
+      session_id,
+      kind: 'note',
+      task_id: thread.task_id,
+      content: 'Historical note stays searchable after bulk rescue.',
+    });
+    configureStorage([candidate(session_id)]);
+
+    const outcome = bulkRescueStrandedSessions(store, { dry_run: false });
+
+    expect(outcome.rescued).toMatchObject([
+      {
+        session_id,
+        agent: 'codex',
+        repo_root: '/repo',
+        branch: 'feat/bulk-apply',
+        held_claim_count: 1,
+      },
+    ]);
+    expect(outcome.released_claim_count).toBe(1);
+    expect(outcome.audit_observation_ids).toHaveLength(1);
+    expect(store.storage.getClaim(thread.task_id, 'src/bulk.ts')).toBeUndefined();
+    expect(store.storage.getSession(session_id)?.ended_at).toEqual(expect.any(Number));
+    expect(store.storage.getObservation(noteId)?.kind).toBe('note');
+    const audit = store.storage.getObservation(outcome.audit_observation_ids[0] ?? -1);
+    expect(audit?.kind).toBe('rescue-stranded');
+    expect(JSON.parse(audit?.metadata ?? '{}')).toMatchObject({
+      kind: 'rescue-stranded',
+      action: 'bulk-release-claims',
+      stranded_session_id: session_id,
+      held_claim_count: 1,
+      task_ids: [thread.task_id],
+    });
+    expect(store.storage.taskObservationsByKind(thread.task_id, 'relay')).toHaveLength(0);
   });
 
   it('stale wave 1 claim outranks a stale leaf claim', () => {
