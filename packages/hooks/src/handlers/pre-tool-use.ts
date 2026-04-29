@@ -63,7 +63,7 @@ type PreToolUseInput = Pick<
   'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd' | 'ide' | 'metadata'
 >;
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
-type ClaimBeforeEditWarningCode = AutoClaimFailureCode | 'CLAIM_CONFLICT';
+type ClaimBeforeEditWarningCode = AutoClaimFailureCode | 'LIVE_FILE_CONTENTION';
 type ConflictStrength = ClaimOwnershipStrength | 'none';
 type CompactCandidate = Pick<
   ActiveTaskCandidate,
@@ -144,7 +144,7 @@ export function claimBeforeEditFromToolUse(
         task_id: conflict.task_id,
         file_path,
         tool: toolName,
-        code: 'CLAIM_CONFLICT',
+        code: 'LIVE_FILE_CONTENTION',
         error: conflict.warning,
         candidates: [],
         policy_mode: policyMode,
@@ -153,7 +153,7 @@ export function claimBeforeEditFromToolUse(
       result.warnings.push(
         claimWarning(input.session_id, file_path, toolName, policyMode, {
           ok: false,
-          code: 'CLAIM_CONFLICT',
+          code: 'LIVE_FILE_CONTENTION',
           error: conflict.warning,
           candidates: [],
           conflict,
@@ -198,7 +198,7 @@ export function claimBeforeEditFromToolUse(
         result.warnings.push(
           claimWarning(input.session_id, file_path, toolName, policyMode, {
             ok: false,
-            code: 'CLAIM_CONFLICT',
+            code: 'LIVE_FILE_CONTENTION',
             error: conflict.warning,
             candidates: [],
             conflict,
@@ -227,7 +227,12 @@ export function claimBeforeEditFromToolUse(
 
 function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookResult {
   const context = claimBeforeEditWarning(result);
-  const blocked = result.policy_mode === 'block-on-conflict' && result.blocked_conflicts.length > 0;
+  const blocked =
+    result.policy_mode === 'block-on-conflict' &&
+    result.warnings.some(
+      (warning) =>
+        warning.code === 'LIVE_FILE_CONTENTION' && warning.conflict_strength === 'strong',
+    );
   if (blocked) {
     const reason =
       context ||
@@ -499,7 +504,7 @@ function claimWarning(
   const tool = tool_name || 'edit tool';
   const conflict = claim.conflict;
   const message =
-    claim.code === 'CLAIM_CONFLICT' && conflict
+    claim.code === 'LIVE_FILE_CONTENTION' && conflict
       ? [
           `Colony ${conflict.conflict_strength} claim conflict before ${tool} on ${file_path}.`,
           `owner=${conflict.owner}`,

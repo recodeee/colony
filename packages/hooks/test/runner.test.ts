@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type BridgePolicyMode, defaultSettings } from '@colony/config';
 import { MemoryStore, TaskThread } from '@colony/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runHook } from '../src/index.js';
 
 let dir: string;
@@ -15,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -30,7 +31,8 @@ function useBridgePolicy(policyMode: BridgePolicyMode): void {
   });
 }
 
-function seedClaimConflict(): number {
+function seedClaimConflict(options: { file_path?: string; ageMinutes?: number } = {}): number {
+  const filePath = options.file_path ?? 'src/viewer.tsx';
   store.startSession({ id: 'A', ide: 'claude-code', cwd: '/repo' });
   store.startSession({ id: 'B', ide: 'codex', cwd: '/repo' });
   const thread = TaskThread.open(store, {
@@ -40,7 +42,14 @@ function seedClaimConflict(): number {
   });
   thread.join('A', 'claude');
   thread.join('B', 'codex');
-  thread.claimFile({ session_id: 'A', file_path: 'src/viewer.tsx' });
+  const ageMinutes = options.ageMinutes ?? 0;
+  const claimedAt = Date.now() - ageMinutes * 60_000;
+  const nowSpy = ageMinutes > 0 ? vi.spyOn(Date, 'now').mockReturnValue(claimedAt) : null;
+  try {
+    thread.claimFile({ session_id: 'A', file_path: filePath });
+  } finally {
+    nowSpy?.mockRestore();
+  }
   return thread.task_id;
 }
 
@@ -383,7 +392,7 @@ describe('runHook', () => {
     expect(result.permissionDecision).toBe('allow');
     const warning = JSON.parse(result.context ?? '{}') as Record<string, unknown>;
     expect(warning).toMatchObject({
-      code: 'CLAIM_CONFLICT',
+      code: 'LIVE_FILE_CONTENTION',
       policy_mode: 'warn',
       conflict: true,
       conflict_strength: 'strong',
@@ -414,7 +423,7 @@ describe('runHook', () => {
     const telemetry = store.storage.taskObservationsByKind(taskId, 'claim-before-edit');
     expect(metadataOf(telemetry[0])).toMatchObject({
       policy_mode: 'block-on-conflict',
-      code: 'CLAIM_CONFLICT',
+      code: 'LIVE_FILE_CONTENTION',
       conflict: true,
       conflict_strength: 'strong',
       owner: 'A',
@@ -432,6 +441,72 @@ describe('runHook', () => {
     );
     expect(unclaimed.permissionDecision).toBe('allow');
     expect(store.storage.getClaim(taskId, 'src/new.tsx')?.session_id).toBe('B');
+  });
+
+  it('block-on-conflict policy allows weak and expired live contention claims', async () => {
+    useBridgePolicy('block-on-conflict');
+    const taskId = seedClaimConflict({
+      file_path: 'src/stale.tsx',
+      ageMinutes: defaultSettings.claimStaleMinutes,
+    });
+
+    const stale = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/stale.tsx' },
+      },
+      { store },
+    );
+
+    expect(stale.ok).toBe(true);
+    expect(stale.permissionDecision).toBe('allow');
+    const staleWarning = JSON.parse(stale.context ?? '{}') as Record<string, unknown>;
+    expect(staleWarning).toMatchObject({
+      code: 'LIVE_FILE_CONTENTION',
+      policy_mode: 'block-on-conflict',
+      conflict: true,
+      conflict_strength: 'weak',
+      owner: 'A',
+    });
+    expect(store.storage.getClaim(taskId, 'src/stale.tsx')?.session_id).toBe('B');
+
+    const expiredAt = Date.now() - defaultSettings.claimStaleMinutes * 2 * 60_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(expiredAt);
+    try {
+      store.storage.claimFile({
+        task_id: taskId,
+        file_path: 'src/expired.tsx',
+        session_id: 'A',
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const expired = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/expired.tsx' },
+      },
+      { store },
+    );
+
+    expect(expired.ok).toBe(true);
+    expect(expired.permissionDecision).toBe('allow');
+    const expiredWarning = JSON.parse(expired.context ?? '{}') as Record<string, unknown>;
+    expect(expiredWarning).toMatchObject({
+      code: 'LIVE_FILE_CONTENTION',
+      policy_mode: 'block-on-conflict',
+      conflict: true,
+      conflict_strength: 'weak',
+      owner: 'A',
+    });
+    expect(store.storage.getClaim(taskId, 'src/expired.tsx')?.session_id).toBe('B');
   });
 
   it('audit-only policy records telemetry without warning or block output', async () => {
