@@ -8,6 +8,7 @@ import type { GetObservationsOptions, Observation, SearchResult } from './types.
 export interface MemoryStoreOptions {
   dbPath: string;
   settings: Settings;
+  readonly?: boolean;
 }
 
 /**
@@ -19,7 +20,7 @@ export class MemoryStore {
   readonly settings: Settings;
 
   constructor(opts: MemoryStoreOptions) {
-    this.storage = new Storage(opts.dbPath);
+    this.storage = new Storage(opts.dbPath, opts.readonly === true ? { readonly: true } : {});
     this.settings = opts.settings;
   }
 

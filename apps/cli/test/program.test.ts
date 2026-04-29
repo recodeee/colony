@@ -25,6 +25,7 @@ describe('Colony CLI program', () => {
       'note',
       'observe',
       'plan',
+      'plans',
       'queen',
       'reindex',
       'resume',
@@ -99,6 +100,8 @@ describe('Colony CLI program', () => {
                                             Run in a spare terminal during a session.
         plan                                Create and operate OpenSpec-like Colony
                                             plan workspaces
+        plans                               Prepare safe launch packets for published
+                                            Colony plans
         debrief [options]                   End-of-day collaboration post-mortem over
                                             structured DB evidence.
         inbox [options]                     Compact list of attention items for a
@@ -217,5 +220,16 @@ describe('Colony CLI program', () => {
       'publish',
       'status',
     ]);
+  });
+
+  it('exposes plans work dry-run command', () => {
+    const program = createProgram();
+    const plans = program.commands.find((c) => c.name() === 'plans');
+    expect(plans).toBeDefined();
+    expect(plans?.commands.map((c) => c.name())).toContain('work');
+    const work = plans?.commands.find((c) => c.name() === 'work');
+    expect(work?.options.find((o) => o.long === '--policy')).toBeDefined();
+    expect(work?.options.find((o) => o.long === '--dry-run')).toBeDefined();
+    expect(work?.options.find((o) => o.long === '--max-agents')).toBeDefined();
   });
 });
