@@ -704,6 +704,10 @@ function sessionWorktreePath(session) {
   return typeof session?.worktreePath === 'string' ? session.worktreePath.trim() : '';
 }
 
+function sessionRepoRoot(session) {
+  return typeof session?.repoRoot === 'string' ? session.repoRoot.trim() : '';
+}
+
 function showSessionMessage(message) {
   vscode.window.showInformationMessage?.(message);
 }
@@ -721,19 +725,47 @@ function ensureSessionWorktree(session, actionLabel) {
   return worktreePath;
 }
 
-function runSessionTerminalCommand(session, actionLabel, iconId, commandText) {
-  const worktreePath = ensureSessionWorktree(session, actionLabel.toLowerCase());
-  if (!worktreePath) {
+function ensureSessionRepoRoot(session, actionLabel) {
+  const repoRoot = sessionRepoRoot(session);
+  if (!repoRoot) {
+    showSessionMessage(`Cannot ${actionLabel}: missing repo root.`);
+    return '';
+  }
+  if (!fs.existsSync(repoRoot)) {
+    showSessionMessage(`Cannot ${actionLabel}: repo root is no longer on disk: ${repoRoot}`);
+    return '';
+  }
+  return repoRoot;
+}
+
+function resolveSessionTerminalCwd(session, actionLabel, cwdMode) {
+  if (cwdMode === 'repoRoot') {
+    return ensureSessionRepoRoot(session, actionLabel);
+  }
+  return ensureSessionWorktree(session, actionLabel);
+}
+
+function runSessionTerminalCommand(session, actionLabel, iconId, commandText, options = {}) {
+  const cwd = resolveSessionTerminalCwd(
+    session,
+    actionLabel.toLowerCase(),
+    options.cwdMode || 'worktree',
+  );
+  if (!cwd) {
     return;
   }
 
   const terminal = vscode.window.createTerminal({
     name: `GitGuardex ${actionLabel}: ${sessionDisplayLabel(session)}`,
-    cwd: worktreePath,
+    cwd,
     iconPath: new vscode.ThemeIcon(iconId),
   });
   terminal.show();
   terminal.sendText(commandText, true);
+}
+
+function buildFinishSessionCommand(session) {
+  return `gx branch finish --branch ${shellQuote(session.branch)} --via-pr --wait-for-merge --cleanup`;
 }
 
 function finishSession(session) {
@@ -741,12 +773,9 @@ function finishSession(session) {
     showSessionMessage('Cannot finish session: missing branch name.');
     return;
   }
-  runSessionTerminalCommand(
-    session,
-    'Finish',
-    'check',
-    `gx branch finish --branch ${shellQuote(session.branch)}`,
-  );
+  runSessionTerminalCommand(session, 'Finish', 'check', buildFinishSessionCommand(session), {
+    cwdMode: 'repoRoot',
+  });
 }
 
 function syncSession(session) {
@@ -2131,4 +2160,10 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
+  __test: {
+    buildFinishSessionCommand,
+    finishSession,
+    sessionRepoRoot,
+    sessionWorktreePath,
+  },
 };
