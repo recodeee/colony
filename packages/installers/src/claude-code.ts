@@ -24,6 +24,16 @@ const HOOK_NAMES: Array<[string, string]> = [
   ['SessionEnd', 'session-end'],
 ];
 
+// Scope tool-use hooks to the write-family tools that actually drive the
+// auto-claim path. Bash is included because the auto-claim layer parses
+// shell redirects (printf > foo, > bar) into file writes.
+const FILE_WRITE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash';
+
+function matcherForHook(hookId: string): string | undefined {
+  if (hookId === 'pre-tool-use' || hookId === 'post-tool-use') return FILE_WRITE_TOOL_MATCHER;
+  return undefined;
+}
+
 function settingsFile(): string {
   return join(homedir(), '.claude', 'settings.json');
 }
@@ -39,9 +49,11 @@ function installColonyHook(
   hookId: string,
 ): NonNullable<ClaudeSettings['hooks']>[string] {
   const filtered = removeColonyHook(existing, hookId);
+  const matcher = matcherForHook(hookId);
   return [
     ...filtered,
     {
+      ...(matcher !== undefined ? { matcher } : {}),
       hooks: [
         {
           type: 'command',

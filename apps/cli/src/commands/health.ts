@@ -105,6 +105,15 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   auto_claimed_before_edit: number;
   edits_without_claim_before: number;
   claim_before_edit_ratio: number | null;
+  /** Total claim-before-edit telemetry rows in window — non-zero means the
+   *  PreToolUse hook is firing somewhere; zero with edits > 0 strongly
+   *  suggests the hook is not wired into the active editor session. */
+  pre_tool_use_signals: number;
+  /** True when edits happened but no PreToolUse telemetry was recorded —
+   *  diagnostic that points at hook wiring rather than agent discipline. */
+  likely_missing_hook: boolean;
+  /** User-facing remediation when likely_missing_hook is true. */
+  install_hint: string | null;
 }
 
 interface SignalHealthPayload {
@@ -606,12 +615,19 @@ function claimBeforeEditPayload(
 ): ClaimBeforeEditPayload {
   const editsWithoutClaimBefore = stats.edits_with_file_path - stats.edits_claimed_before;
   const autoClaimedBeforeEdit = stats.auto_claimed_before_edit ?? 0;
+  const preToolUseSignals = stats.pre_tool_use_signals ?? 0;
   const status =
     stats.edit_tool_calls === 0
       ? 'no_data'
       : stats.edit_tool_calls === stats.edits_with_file_path
         ? 'available'
         : 'not_available';
+  // If edits landed but no claim-before-edit observation was ever written,
+  // PreToolUse is almost certainly not firing for the active editor.
+  const likelyMissingHook = stats.edit_tool_calls > 0 && preToolUseSignals === 0;
+  const installHint = likelyMissingHook
+    ? 'PreToolUse auto-claim is not covering edits in this window. Run colony install --ide <ide>, restart the editor session, and ensure an active task is bound for the session.'
+    : null;
   return {
     ...stats,
     status,
@@ -622,6 +638,9 @@ function claimBeforeEditPayload(
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_before_edit_ratio:
       status === 'available' ? ratio(stats.edits_claimed_before, stats.edits_with_file_path) : null,
+    pre_tool_use_signals: preToolUseSignals,
+    likely_missing_hook: likelyMissingHook,
+    install_hint: installHint,
   };
 }
 
@@ -751,15 +770,24 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
     );
     return lines;
   }
+  const explicitClaims = Math.max(
+    payload.edits_claimed_before - payload.auto_claimed_before_edit,
+    0,
+  );
   lines.push(
-    `  ${payload.edits_claimed_before} / ${payload.edits_with_file_path} edits had explicit claims first (${formatPercent(
+    `  ${payload.edits_claimed_before} / ${payload.edits_with_file_path} edits had a claim before edit (${formatPercent(
       payload.claim_before_edit_ratio,
     )})`,
   );
+  lines.push(`  explicit/manual claims before edit: ${explicitClaims}`);
+  lines.push(`  auto-claimed before edit: ${payload.auto_claimed_before_edit}`);
   lines.push(`  missing proactive claim: ${payload.edits_without_claim_before}`);
   lines.push(
-    `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}`,
+    `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}, pre_tool_use_signals=${payload.pre_tool_use_signals}`,
   );
+  if (payload.likely_missing_hook && payload.install_hint) {
+    lines.push(kleur.yellow(`  ${payload.install_hint}`));
+  }
   return lines;
 }
 
@@ -819,17 +847,23 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       TARGET_CLAIM_BEFORE_EDIT,
     )
   ) {
+    const missingHook = payload.task_claim_file_before_edits.likely_missing_hook;
     hints.push({
       metric: 'claim-before-edit',
       status: 'bad',
       current: formatPercent(payload.task_claim_file_before_edits.claim_before_edit_ratio),
       target: `${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+`,
-      action: 'Call task_claim_file for touched files before Edit or Write tool use.',
+      action: missingHook
+        ? 'PreToolUse auto-claim hook is not firing for these edits. Reinstall and restart the editor; PreToolUse will auto-claim before edits.'
+        : 'Call task_claim_file for touched files before Edit or Write tool use.',
       tool_call:
         'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
-      command: 'colony install --ide <ide>  # enables pre-edit auto-claim hooks',
-      prompt:
-        'Before editing, call mcp__colony__task_claim_file for each touched path; if agents keep missing this, run colony install --ide <ide> to enable pre-edit auto-claim hooks.',
+      command: missingHook
+        ? 'colony install --ide <ide>  # then restart the editor session'
+        : 'colony install --ide <ide>  # enables pre-edit auto-claim hooks',
+      prompt: missingHook
+        ? 'PreToolUse auto-claim is not covering edits — run colony install --ide <ide>, restart the editor session, and ensure an active task is bound. Until the hook fires, call mcp__colony__task_claim_file before each edit.'
+        : 'Before editing, call mcp__colony__task_claim_file for each touched path; if agents keep missing this, run colony install --ide <ide> to enable pre-edit auto-claim hooks.',
     });
   }
 

@@ -15,6 +15,8 @@ export interface ClaimBeforeEditFallbackWarning {
   code: AutoClaimFailureCode;
   message: string;
   next_tool: 'task_claim_file';
+  /** Concrete invocation string the agent can copy verbatim. */
+  next_call: string;
   suggested_args: {
     task_id: number | '<task_id>' | '<candidate.task_id>';
     session_id: string;
@@ -40,10 +42,10 @@ type CompactCandidate = Pick<
 >;
 
 export function preToolUse(store: MemoryStore, input: HookInput): string {
+  const toolName = input.tool_name ?? input.tool ?? '';
   try {
     return claimBeforeEditWarning(claimBeforeEditFromToolUse(store, input));
   } catch {
-    const toolName = input.tool_name ?? input.tool ?? '';
     const files = extractTouchedFiles(toolName, input.tool_input);
     return claimBeforeEditWarning({
       files,
@@ -51,7 +53,7 @@ export function preToolUse(store: MemoryStore, input: HookInput): string {
       edits_missing_claim: files,
       auto_claimed_before_edit: [],
       warnings: files.map((file_path) =>
-        claimWarning(input.session_id, file_path, {
+        claimWarning(input.session_id, file_path, toolName, {
           ok: false,
           code: 'COLONY_UNAVAILABLE',
           error: 'Colony unavailable for auto-claim',
@@ -121,7 +123,8 @@ export function claimBeforeEditFromToolUse(
       error: claim.error,
       candidates: claim.candidates,
     });
-    if (!warningDebounced) result.warnings.push(claimWarning(input.session_id, file_path, claim));
+    if (!warningDebounced)
+      result.warnings.push(claimWarning(input.session_id, file_path, toolName, claim));
   }
 
   return result;
@@ -221,13 +224,34 @@ function claimBeforeEditWarning(result: ClaimBeforeEditResult): string {
 function claimWarning(
   session_id: string,
   file_path: string,
+  tool_name: string,
   claim: AutoClaimFailure,
 ): ClaimBeforeEditFallbackWarning {
   const candidates = compactCandidates(claim.candidates);
+  // Spell out the exact tool call the agent should make next. When there is
+  // exactly one candidate task we substitute its id; ambiguous candidates and
+  // no-candidate cases keep a placeholder so the agent picks consciously.
+  const taskRef =
+    candidates.length === 1
+      ? String(candidates[0]?.task_id ?? '<task_id>')
+      : candidates.length > 0
+        ? '<candidate.task_id>'
+        : '<task_id>';
+  const next_call = `mcp__colony__task_claim_file({ task_id: ${taskRef}, session_id: "${session_id}", file_path: "${file_path}", note: "pre-edit claim" })`;
+  const tool = tool_name || 'edit tool';
+  const message = [
+    `Missing Colony claim before ${tool} on ${file_path}.`,
+    `reason=${claim.code}: ${claim.error}`,
+    `next=${next_call}`,
+    candidates.length > 0 ? `candidates=${JSON.stringify(candidates)}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
   return {
     code: claim.code,
-    message: `Missing Colony claim before edit. Call task_claim_file for ${file_path} before editing.`,
+    message,
     next_tool: 'task_claim_file',
+    next_call,
     suggested_args: {
       task_id: candidates.length > 0 ? '<candidate.task_id>' : '<task_id>',
       session_id,

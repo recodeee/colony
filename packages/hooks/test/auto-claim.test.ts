@@ -405,12 +405,18 @@ describe('claimBeforeEditFromToolUse', () => {
 
     expect(result.auto_claimed_before_edit).toEqual([]);
     expect(result.edits_missing_claim).toEqual(['src/x.ts']);
+    const expectedNextCall =
+      'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "solo", file_path: "src/x.ts", note: "pre-edit claim" })';
     expect(result.warnings).toEqual([
       {
         code: 'ACTIVE_TASK_NOT_FOUND',
-        message:
-          'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+        message: [
+          'Missing Colony claim before Edit on src/x.ts.',
+          'reason=ACTIVE_TASK_NOT_FOUND: no active Colony task matched session/repo/branch',
+          `next=${expectedNextCall}`,
+        ].join('\n'),
         next_tool: 'task_claim_file',
+        next_call: expectedNextCall,
         suggested_args: {
           task_id: '<task_id>',
           session_id: 'solo',
@@ -451,9 +457,13 @@ describe('claimBeforeEditFromToolUse', () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toMatchObject({
       code: 'AMBIGUOUS_ACTIVE_TASK',
-      message:
-        'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+      message: expect.stringContaining(
+        'reason=AMBIGUOUS_ACTIVE_TASK: multiple active Colony tasks matched session/repo/branch',
+      ),
       next_tool: 'task_claim_file',
+      next_call: expect.stringContaining(
+        'mcp__colony__task_claim_file({ task_id: <candidate.task_id>, session_id: "A", file_path: "src/x.ts", note: "pre-edit claim" })',
+      ),
       suggested_args: {
         task_id: '<candidate.task_id>',
         session_id: 'A',
@@ -461,6 +471,8 @@ describe('claimBeforeEditFromToolUse', () => {
         note: 'pre-edit claim',
       },
     });
+    expect(result.warnings[0]?.message).toContain('Missing Colony claim before Edit on src/x.ts.');
+    expect(result.warnings[0]?.message).toContain('candidates=');
     expect(result.warnings[0]?.candidates).toHaveLength(2);
     expect(result.warnings[0]?.candidates).toEqual(
       expect.arrayContaining([
@@ -503,12 +515,18 @@ describe('claimBeforeEditFromToolUse', () => {
 
     expect(result.auto_claimed_before_edit).toEqual([]);
     expect(result.edits_missing_claim).toEqual(['src/x.ts']);
+    const sessionNotFoundNextCall =
+      'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "missing", file_path: "src/x.ts", note: "pre-edit claim" })';
     expect(result.warnings).toEqual([
       {
         code: 'SESSION_NOT_FOUND',
-        message:
-          'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+        message: [
+          'Missing Colony claim before Edit on src/x.ts.',
+          'reason=SESSION_NOT_FOUND: Colony session missing was not found',
+          `next=${sessionNotFoundNextCall}`,
+        ].join('\n'),
         next_tool: 'task_claim_file',
+        next_call: sessionNotFoundNextCall,
         suggested_args: {
           task_id: '<task_id>',
           session_id: 'missing',
@@ -552,9 +570,10 @@ describe('claimBeforeEditFromToolUse', () => {
 
     expect(JSON.parse(context)).toMatchObject({
       code: 'ACTIVE_TASK_NOT_FOUND',
-      message:
-        'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+      message: expect.stringContaining('Missing Colony claim before Edit on src/x.ts.'),
       next_tool: 'task_claim_file',
+      next_call:
+        'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "json-session", file_path: "src/x.ts", note: "pre-edit claim" })',
       suggested_args: {
         task_id: '<task_id>',
         session_id: 'json-session',
@@ -579,11 +598,17 @@ describe('claimBeforeEditFromToolUse', () => {
       tool_input: { file_path: 'src/x.ts' },
     });
 
+    const unavailableNextCall =
+      'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "A", file_path: "src/x.ts", note: "pre-edit claim" })';
     expect(JSON.parse(context)).toEqual({
       code: 'COLONY_UNAVAILABLE',
-      message:
-        'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+      message: [
+        'Missing Colony claim before Edit on src/x.ts.',
+        'reason=COLONY_UNAVAILABLE: db unavailable',
+        `next=${unavailableNextCall}`,
+      ].join('\n'),
       next_tool: 'task_claim_file',
+      next_call: unavailableNextCall,
       suggested_args: {
         task_id: '<task_id>',
         session_id: 'A',

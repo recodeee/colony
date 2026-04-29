@@ -151,6 +151,7 @@ describe('colony health read queries', () => {
       edits_with_file_path: 2,
       edits_claimed_before: 1,
       auto_claimed_before_edit: 0,
+      pre_tool_use_signals: 0,
     });
   });
 });

@@ -64,7 +64,10 @@ describe('claude-code installer', () => {
     const settingsPath = join(home, '.claude', 'settings.json');
     expect(existsSync(settingsPath)).toBe(true);
     const first = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
-      hooks: Record<string, Array<{ hooks: Array<{ type: string; command: string }> }>>;
+      hooks: Record<
+        string,
+        Array<{ matcher?: string; hooks: Array<{ type: string; command: string }> }>
+      >;
       mcpServers: Record<string, { command: string; args?: string[] }>;
     };
     expect(Object.keys(first.hooks).sort()).toEqual(
@@ -80,9 +83,18 @@ describe('claude-code installer', () => {
     expect(first.hooks.SessionStart?.[0]?.hooks?.[0]?.command).toBe(
       `${ctx.nodeBin} ${ctx.cliPath} hook run session-start --ide claude-code`,
     );
+    expect(first.hooks.SessionStart?.[0]?.matcher).toBeUndefined();
     expect(first.hooks.PreToolUse?.[0]?.hooks?.[0]?.command).toBe(
       `${ctx.nodeBin} ${ctx.cliPath} hook run pre-tool-use --ide claude-code`,
     );
+    // PreToolUse and PostToolUse run our auto-claim path; scope them to the
+    // tool calls that actually touch files so unrelated tools don't pay the
+    // hook cost and so claim-before-edit telemetry has clean coverage.
+    expect(first.hooks.PreToolUse?.[0]?.matcher).toBe('Edit|Write|MultiEdit|NotebookEdit|Bash');
+    expect(first.hooks.PostToolUse?.[0]?.hooks?.[0]?.command).toBe(
+      `${ctx.nodeBin} ${ctx.cliPath} hook run post-tool-use --ide claude-code`,
+    );
+    expect(first.hooks.PostToolUse?.[0]?.matcher).toBe('Edit|Write|MultiEdit|NotebookEdit|Bash');
     expect(first.mcpServers.colony).toEqual({
       command: ctx.nodeBin,
       args: [ctx.cliPath, 'mcp'],
@@ -147,6 +159,7 @@ describe('claude-code installer', () => {
         hooks: [{ type: 'command', command: 'node /home/me/.claude/hooks/context.js' }],
       },
       {
+        matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash',
         hooks: [
           {
             type: 'command',

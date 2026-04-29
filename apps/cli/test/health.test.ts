@@ -214,7 +214,7 @@ describe('colony health payload', () => {
     expect(text).toContain('task_post vs task_message');
     expect(text).toContain('task_post vs OMX notepad');
     expect(text).toContain('Search calls per session');
-    expect(text).toContain('1 / 2 edits had explicit claims first (50%)');
+    expect(text).toContain('1 / 2 edits had a claim before edit (50%)');
     expect(text).toContain('Signal health');
     expect(text).toContain('Proposal decay/promotions');
     expect(text).toContain('Ready-to-claim vs claimed');
@@ -526,10 +526,13 @@ describe('colony health payload', () => {
         metric: 'claim-before-edit',
         current: '0%',
         target: '50%+',
-        action: expect.stringContaining('task_claim_file'),
+        // Action wording branches on whether PreToolUse telemetry exists; both
+        // branches reference task_claim_file, but the missing-hook branch
+        // recommends reinstalling the hook before relying on agent discipline.
+        action: expect.stringContaining('PreToolUse auto-claim hook is not firing'),
         tool_call: expect.stringContaining('mcp__colony__task_claim_file'),
         command: expect.stringContaining('colony install --ide <ide>'),
-        prompt: expect.stringContaining('pre-edit auto-claim hooks'),
+        prompt: expect.stringContaining('PreToolUse auto-claim is not covering edits'),
       }),
       expect.objectContaining({
         metric: 'stale claims',
@@ -561,7 +564,9 @@ describe('colony health payload', () => {
     expect(text).toContain(
       'task_ready_for_agent -> claim: 0% (target 30%+) - When ready work fits',
     );
-    expect(text).toContain('claim-before-edit: 0% (target 50%+) - Call task_claim_file');
+    expect(text).toContain(
+      'claim-before-edit: 0% (target 50%+) - PreToolUse auto-claim hook is not firing',
+    );
     expect(text).toContain(
       'tool: mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
     );

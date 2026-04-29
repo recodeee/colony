@@ -330,11 +330,16 @@ function adoptionNudgesFromMetrics(store: MemoryStore, now: number): HivemindAdo
       claimBeforeEditRatio !== null &&
       claimBeforeEditRatio < TARGET_CLAIM_BEFORE_EDIT
     ) {
+      const preToolUseSignals = claimStats.pre_tool_use_signals ?? 0;
+      const likelyMissingHook =
+        claimStats.edits_claimed_before === 0 && preToolUseSignals === 0;
       nudges.push({
         key: 'claim_before_edit_low',
         tool: 'task_claim_file',
-        current: `claimed_before_edit=${claimStats.edits_claimed_before}/${claimStats.edits_with_file_path}`,
-        hint: 'Call task_claim_file for touched files before edit tools.',
+        current: `claimed_before_edit=${claimStats.edits_claimed_before}/${claimStats.edits_with_file_path}; pre_tool_use_signals=${preToolUseSignals}`,
+        hint: likelyMissingHook
+          ? 'PreToolUse auto-claim is not covering edits. Run colony install --ide <ide>, restart the editor, or call task_claim_file before editing.'
+          : 'Call task_claim_file for touched files before edit tools.',
       });
     }
   } catch {

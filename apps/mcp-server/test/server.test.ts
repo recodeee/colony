@@ -440,7 +440,9 @@ describe('MCP server', () => {
       expect.objectContaining({
         key: 'claim_before_edit_low',
         tool: 'task_claim_file',
-        current: 'claimed_before_edit=0/1',
+        // Compact diagnostic now appends pre_tool_use_signals so agents can
+        // distinguish missing-hook (=0) from missed-by-agent (>0) at a glance.
+        current: 'claimed_before_edit=0/1; pre_tool_use_signals=0',
       }),
     ]);
     expect(payload.summary.suggested_tools).toEqual([

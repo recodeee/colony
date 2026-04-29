@@ -66,18 +66,33 @@ export function registerHookCommand(program: Command): void {
 }
 
 function writeIdeOutput(hook: HookName, result: HookResult): void {
-  // Only SessionStart and UserPromptSubmit can usefully feed text back into
-  // the agent. For other hooks we deliberately stay silent on stdout.
-  if (hook !== 'session-start' && hook !== 'user-prompt-submit') return;
   const ctx = result.context?.trim();
   if (!ctx) return;
-  const payload = {
-    hookSpecificOutput: {
-      hookEventName: CLAUDE_EVENT_NAME[hook],
-      additionalContext: ctx,
-    },
-  };
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+
+  if (hook === 'session-start' || hook === 'user-prompt-submit') {
+    const payload = {
+      hookSpecificOutput: {
+        hookEventName: CLAUDE_EVENT_NAME[hook],
+        additionalContext: ctx,
+      },
+    };
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    return;
+  }
+
+  // PreToolUse: surface the auto-claim warning to the agent via
+  // permissionDecisionReason while keeping the call allowed — we never block
+  // edits, we annotate so the agent learns the missing claim.
+  if (hook === 'pre-tool-use') {
+    const payload = {
+      hookSpecificOutput: {
+        hookEventName: CLAUDE_EVENT_NAME[hook],
+        permissionDecision: 'allow',
+        permissionDecisionReason: ctx,
+      },
+    };
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+  }
 }
 
 function safeJson(s: string): Record<string, unknown> {
