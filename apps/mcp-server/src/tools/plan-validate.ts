@@ -4,6 +4,7 @@ import { hasDependencyPath, validateOrderedPlan } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
+import { buildPlanValidationSummary } from './plan-validation-summary.js';
 
 const SubtaskInputSchema = z.object({
   title: z.string().min(1),
@@ -60,17 +61,33 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     wrapHandler('task_plan_validate', async ({ repo_root, subtasks }) => {
       const pairwise = pairwiseScopeOverlap(subtasks);
-      const liveCollisions = liveClaimCollisions(store, repo_root, subtasks);
+      const claims = claimsForPaths(
+        store,
+        repo_root,
+        [...new Set(subtasks.flatMap((subtask) => subtask.file_scope))],
+      );
+      const liveCollisions = liveClaimCollisions(subtasks, claims);
       const moduleWarnings = computeModuleOverlaps(subtasks);
       const orderedWaveErrors = validateOrderedPlan(subtasks);
+      const summary = buildPlanValidationSummary({
+        store,
+        repo_root,
+        subtasks,
+        runtime: ctx.planValidation,
+        live_claims: claims,
+      });
 
       return jsonReply({
         pairwise_overlaps: pairwise,
         live_claim_collisions: liveCollisions,
         module_warnings: moduleWarnings,
         ordered_wave_errors: orderedWaveErrors,
+        summary,
         partition_clean:
-          pairwise.length === 0 && liveCollisions.length === 0 && orderedWaveErrors.length === 0,
+          pairwise.length === 0 &&
+          liveCollisions.length === 0 &&
+          orderedWaveErrors.length === 0 &&
+          !summary.blocking,
       });
     }),
   );
@@ -96,13 +113,7 @@ function pairwiseScopeOverlap(subtasks: SubtaskInput[]): PairwiseOverlap[] {
   return overlaps;
 }
 
-function liveClaimCollisions(
-  store: MemoryStore,
-  repoRoot: string,
-  subtasks: SubtaskInput[],
-): LiveClaimCollision[] {
-  const paths = [...new Set(subtasks.flatMap((subtask) => subtask.file_scope))];
-  const claims = claimsForPaths(store, repoRoot, paths);
+function liveClaimCollisions(subtasks: SubtaskInput[], claims: LiveClaim[]): LiveClaimCollision[] {
   const collisions: LiveClaimCollision[] = [];
 
   for (let subtaskIndex = 0; subtaskIndex < subtasks.length; subtaskIndex++) {

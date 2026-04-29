@@ -38,11 +38,12 @@ export function registerCoordinationCommand(program: Command): void {
           repo_root: repoRoot,
           repo_roots: repoRoots,
           release_stale_blockers: opts.releaseStaleBlockers === true,
+          release_safe_stale_claims: opts.json === true && opts.dryRun !== true,
         });
         if (opts.json) {
           process.stdout.write(
             `${JSON.stringify(
-              { ...result, dry_run: opts.releaseStaleBlockers !== true },
+              { ...result, dry_run: opts.dryRun === true },
               null,
               2,
             )}\n`,
@@ -114,6 +115,9 @@ function renderCoordinationSweep(
   );
   lines.push(
     `  stale downstream blockers: ${result.summary.stale_downstream_blocker_count}  released stale blocker claims: ${result.summary.released_stale_blocker_claim_count}  requeued blockers: ${result.summary.requeued_stale_blocker_count}`,
+  );
+  lines.push(
+    `  released stale claims: ${result.summary.released_stale_claim_count}  downgraded stale claims: ${result.summary.downgraded_stale_claim_count}  skipped dirty claims: ${result.summary.skipped_dirty_claim_count}`,
   );
 
   renderSection(
@@ -192,6 +196,27 @@ function renderCoordinationSweep(
     result.released_stale_downstream_blockers,
     (blocker) =>
       `${blocker.plan_slug}/sub-${blocker.subtask_index} task #${blocker.task_id} released ${blocker.released_claim_count} claim(s), audit #${blocker.audit_observation_id}, requeue #${blocker.requeue_observation_id}`,
+  );
+  renderSection(
+    lines,
+    'Released stale claims',
+    result.released_stale_claims,
+    (claim) =>
+      `task #${claim.task_id} ${claim.file_path} held by ${claim.session_id} -> released, audit #${claim.audit_observation_id}`,
+  );
+  renderSection(
+    lines,
+    'Downgraded stale claims',
+    result.downgraded_stale_claims,
+    (claim) =>
+      `task #${claim.task_id} ${claim.file_path} held by ${claim.session_id} -> audit-only, audit #${claim.audit_observation_id}`,
+  );
+  renderSection(
+    lines,
+    'Skipped dirty claims',
+    result.skipped_dirty_claims,
+    (claim) =>
+      `task #${claim.task_id} ${claim.branch} ${claim.file_path} held by ${claim.session_id} (${claim.reason}) -> ${claim.recommended_action}`,
   );
 
   return lines.join('\n');

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore } from '@colony/core';
+import { MemoryStore, type WorktreeContentionReport } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -38,6 +38,11 @@ interface PublishResult {
     };
     ready_when: string;
   }>;
+  plan_validation: {
+    blocking: boolean;
+    finding_count: number;
+    counts: { error: number; warning: number; info: number };
+  };
 }
 
 interface PlanRollup {
@@ -174,11 +179,29 @@ beforeEach(async () => {
   store.startSession({ id: 'A', ide: 'claude-code', cwd: repoRoot });
   store.startSession({ id: 'B', ide: 'codex', cwd: repoRoot });
   store.startSession({ id: 'C', ide: 'claude-code', cwd: repoRoot });
-  const server = buildServer(store, defaultSettings);
+  const server = buildServer(store, defaultSettings, {
+    planValidation: { readWorktreeContention: emptyWorktreeReport },
+  });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'test', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
 });
+
+function emptyWorktreeReport(repoRoot: string): WorktreeContentionReport {
+  return {
+    generated_at: '2026-04-29T00:00:00.000Z',
+    repo_root: repoRoot,
+    inspected_roots: [],
+    worktrees: [],
+    contentions: [],
+    summary: {
+      worktree_count: 0,
+      dirty_worktree_count: 0,
+      dirty_file_count: 0,
+      contention_count: 0,
+    },
+  };
+}
 
 afterEach(async () => {
   await client.close();
@@ -196,6 +219,11 @@ describe('task_plan_publish', () => {
     expect(result.subtasks[1]?.branch).toBe('spec/add-widget-page/sub-1');
     expect(result.spec_change_path).toContain('openspec/changes/add-widget-page/CHANGE.md');
     expect(result.plan_workspace_path).toContain('openspec/plans/add-widget-page');
+    expect(result.plan_validation).toMatchObject({
+      blocking: false,
+      finding_count: 0,
+      counts: { error: 0, warning: 0, info: 0 },
+    });
     expect(existsSync(join(repoRoot, 'openspec/plans/add-widget-page/plan.md'))).toBe(true);
     expect(
       readFileSync(join(repoRoot, 'openspec/plans/add-widget-page/tasks.md'), 'utf8'),

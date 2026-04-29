@@ -707,8 +707,9 @@ describe('TaskThread', () => {
       state: 'handoff_pending',
       handoff_observation_id: relayId,
     });
-    expect(classifyClaimAge(pending!, { now: t0 + 4 * 60_000 }).age_class).toBe('stale');
-    expect(classifyClaimAge(pending!, { now: t0 + 6 * 60_000 })).toMatchObject({
+    if (!pending) throw new Error('expected pending quota claim');
+    expect(classifyClaimAge(pending, { now: t0 + 4 * 60_000 }).age_class).toBe('stale');
+    expect(classifyClaimAge(pending, { now: t0 + 6 * 60_000 })).toMatchObject({
       age_class: 'expired/weak',
       ownership_strength: 'weak',
       state: 'handoff_pending',

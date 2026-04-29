@@ -428,6 +428,13 @@ function renderSweep(result: ReturnType<typeof sweepQueenPlans>, opts: SweepOpts
     lines.push(...waveDiagnostics);
   }
 
+  const validationDiagnostics = renderValidationDiagnostics(result);
+  if (validationDiagnostics.length > 0) {
+    lines.push('');
+    lines.push(kleur.cyan('Plan validation:'));
+    lines.push(...validationDiagnostics);
+  }
+
   lines.push('');
   lines.push(kleur.cyan('Examples:'));
   for (const item of items.slice(0, 5)) {
@@ -438,6 +445,21 @@ function renderSweep(result: ReturnType<typeof sweepQueenPlans>, opts: SweepOpts
   }
 
   return lines.join('\n');
+}
+
+function renderValidationDiagnostics(result: ReturnType<typeof sweepQueenPlans>): string[] {
+  const lines: string[] = [];
+  for (const plan of result) {
+    const validation = plan.validation_summary;
+    if (!validation || validation.finding_count === 0) continue;
+    lines.push(
+      `  ${plan.plan_slug}: ${validation.finding_count} finding(s), errors ${validation.counts.error}, warnings ${validation.counts.warning}, info ${validation.counts.info}`,
+    );
+    for (const finding of validation.top_findings.slice(0, 3)) {
+      lines.push(`    ${finding.severity}: ${finding.message}`);
+    }
+  }
+  return lines;
 }
 
 function renderWaveDiagnostics(result: ReturnType<typeof sweepQueenPlans>): string[] {
@@ -479,7 +501,10 @@ function renderWaveSummary(wave: QueenSweepWaveSummary): string[] {
 
 function renderExample(item: QueenAttentionItem): string {
   if (item.reason === 'stalled') {
-    return `${item.plan_slug}/sub-${item.subtask_index} stalled: claimed by ${item.claimed_by_agent ?? item.claimed_by_session_id} for ${item.age_minutes}m`;
+    const replacement = item.replacement_recommendation
+      ? `; replacement ${item.replacement_recommendation.recommended_replacement_agent} (${item.replacement_recommendation.reason}; next ${item.replacement_recommendation.next_tool})`
+      : '';
+    return `${item.plan_slug}/sub-${item.subtask_index} stalled: claimed by ${item.claimed_by_agent ?? item.claimed_by_session_id} for ${item.age_minutes}m${replacement}`;
   }
   if (item.reason === 'unclaimed') {
     return `${item.plan_slug}/sub-${item.subtask_index} unclaimed: available for ${item.age_minutes}m`;

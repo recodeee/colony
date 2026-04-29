@@ -129,6 +129,26 @@ export interface RecentObservationRow {
   ts: number;
 }
 
+export interface OmxRuntimeSummaryStats {
+  status: 'available' | 'unavailable';
+  summaries_ingested: number;
+  latest_summary_ts: number | null;
+  warning_count: number;
+}
+
+export interface OmxRuntimeWarningRow {
+  id: number;
+  task_id: number | null;
+  session_id: string;
+  ts: number;
+  content: string;
+  warnings: string[];
+  quota_warning: string | null;
+  runtime_model_error: string | null;
+  last_failed_tool: unknown;
+  active_file_focus: string[];
+}
+
 export interface ClaimBeforeEditStats {
   edit_tool_calls: number;
   edits_with_file_path: number;
@@ -435,7 +455,7 @@ export class Storage {
          GROUP BY session_id
        )
        SELECT l.session_id,
-              l.last_observation_ts,
+	              l.last_observation_ts,
 	              EXISTS (
 	                SELECT 1 FROM task_claims tc
 	                WHERE tc.session_id = l.session_id
@@ -679,6 +699,75 @@ export class Storage {
          LIMIT ?`,
       )
       .all(limit) as RecentObservationRow[];
+  }
+
+  omxRuntimeSummaryStats(since_ts: number): OmxRuntimeSummaryStats {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS summaries_ingested,
+                MAX(ts) AS latest_summary_ts,
+                SUM(COALESCE(json_extract(metadata, '$.warning_count'), 0)) AS warning_count
+         FROM observations
+         WHERE kind = 'omx-runtime-summary'
+           AND ts > ?`,
+      )
+      .get(since_ts) as {
+      summaries_ingested: number;
+      latest_summary_ts: number | null;
+      warning_count: number | null;
+    };
+    return {
+      status: row.summaries_ingested > 0 ? 'available' : 'unavailable',
+      summaries_ingested: row.summaries_ingested,
+      latest_summary_ts: row.latest_summary_ts,
+      warning_count: row.warning_count ?? 0,
+    };
+  }
+
+  omxRuntimeWarningsSince(since_ts: number, limit = 10): OmxRuntimeWarningRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id,
+                task_id,
+                session_id,
+                ts,
+                content,
+                json_extract(metadata, '$.warnings') AS warnings,
+                json_extract(metadata, '$.quota_warning') AS quota_warning,
+                json_extract(metadata, '$.runtime_model_error') AS runtime_model_error,
+                json_extract(metadata, '$.last_failed_tool') AS last_failed_tool,
+                json_extract(metadata, '$.active_file_focus') AS active_file_focus
+         FROM observations
+         WHERE kind = 'omx-runtime-summary'
+           AND ts > ?
+           AND COALESCE(json_extract(metadata, '$.warning_count'), 0) > 0
+         ORDER BY ts DESC, id DESC
+         LIMIT ?`,
+      )
+      .all(since_ts, limit) as Array<{
+      id: number;
+      task_id: number | null;
+      session_id: string;
+      ts: number;
+      content: string;
+      warnings: string | null;
+      quota_warning: string | null;
+      runtime_model_error: string | null;
+      last_failed_tool: string | null;
+      active_file_focus: string | null;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      task_id: row.task_id,
+      session_id: row.session_id,
+      ts: row.ts,
+      content: row.content,
+      warnings: parseStringArray(row.warnings),
+      quota_warning: row.quota_warning,
+      runtime_model_error: row.runtime_model_error,
+      last_failed_tool: parseJson(row.last_failed_tool),
+      active_file_focus: parseStringArray(row.active_file_focus),
+    }));
   }
 
   timeline(sessionId: string, aroundId?: number, limit = 50): ObservationRow[] {
@@ -2869,6 +2958,21 @@ function addHeat(
   current.heat += event.heat;
   current.last_activity_ts = Math.max(current.last_activity_ts, event.ts);
   current.event_count += 1;
+}
+
+function parseJson(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseStringArray(value: string | null): string[] {
+  const parsed = parseJson(value);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
 }
 
 function sanitizeMatch(q: string): string {

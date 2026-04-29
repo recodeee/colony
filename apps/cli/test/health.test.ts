@@ -5,8 +5,10 @@ import {
   type ClaimMatchSources,
   type ClaimMissReasons,
   type NearestClaimExample,
+  type OmxRuntimeSummaryStats,
   Storage,
 } from '@colony/storage';
+// @ts-expect-error better-sqlite3 has no bundled declarations in the CLI test tsconfig.
 import Database from 'better-sqlite3';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,6 +153,17 @@ describe('colony health payload', () => {
         window_hours: 24,
         now: NOW,
         codex_sessions_root: NO_CODEX_ROOT,
+        mcp_capability_sources: [
+          {
+            id: 'fixture',
+            servers: {
+              colony: { command: 'node', args: ['colony', 'mcp'] },
+              omx: { command: 'omx', args: ['mcp'] },
+              github: { command: 'github-mcp-server' },
+              filesystem: { command: 'mcp-server-filesystem' },
+            },
+          },
+        ],
       },
     );
 
@@ -161,6 +174,12 @@ describe('colony health payload', () => {
       share_of_all_tool_calls: 13 / 17,
       share_of_mcp_tool_calls: 13 / 15,
     });
+    expect(payload.mcp_capability_map.summary).toEqual([
+      'colony: claims, plans',
+      'filesystem: repo-inspection',
+      'github: issues, PRs, repo',
+      'omx: runtime-state',
+    ]);
     expect(payload.conversions.hivemind_context_to_attention_inbox).toMatchObject({
       from_sessions: 2,
       converted_sessions: 1,
@@ -330,6 +349,9 @@ describe('colony health payload', () => {
     expect(text).toContain('working_state_migration');
     expect(text).toContain('signal_evaporation');
     expect(text).toContain('Colony MCP share');
+    expect(text).toContain('MCP capability map');
+    expect(text).toContain('colony: claims, plans');
+    expect(text).toContain('github: issues, PRs, repo');
     expect(text).toContain('hivemind_context -> attention_inbox: 1 / 2 (50%) sessions');
     expect(text).toContain('attention_inbox -> task_ready_for_agent: 1 / 1 (100%) sessions');
     expect(text).toContain('task_list vs task_ready_for_agent');
@@ -952,6 +974,14 @@ describe('colony health payload', () => {
               status: 'pending',
               expires_at: NOW + 15 * 60_000,
             }),
+            observation(17, 'handoff', NOW - 2 * 3_600_000, {
+              kind: 'handoff',
+              status: 'pending',
+              from_agent: 'codex',
+              quota_exhausted: true,
+              summary: 'Codex quota exhausted',
+              expires_at: NOW + 60_000,
+            }),
           ],
           11: [
             observation(12, 'plan-subtask', NOW - 3_000, {
@@ -977,7 +1007,14 @@ describe('colony health payload', () => {
             }),
           ],
         },
-        claimsByTask: {},
+        claimsByTask: {
+          10: [
+            { task_id: 10, file_path: 'src/a.ts', session_id: 'stale-session', claimed_at: NOW },
+          ],
+        },
+        sessionsById: {
+          'stale-session': { id: 'stale-session', ide: 'codex', cwd: '/r' },
+        },
         proposals: [],
         reinforcements: {},
       }),
@@ -998,6 +1035,11 @@ describe('colony health payload', () => {
       blocked_subtasks: 2,
       stale_claims_blocking_downstream: 1,
       quota_handoffs_blocking_downstream: 1,
+      replacement_recommendation: {
+        recommended_replacement_agent: 'claude-code',
+        reason: 'Codex recently hit quota on this branch',
+        next_tool: 'task_accept_handoff',
+      },
       plans: [
         {
           plan_slug: 'waves',
@@ -1021,6 +1063,10 @@ describe('colony health payload', () => {
               }),
             }),
           ],
+          replacement_recommendation: {
+            recommended_replacement_agent: 'claude-code',
+            reason: 'Codex recently hit quota on this branch',
+          },
         },
       ],
       downstream_blockers: [
@@ -1050,6 +1096,10 @@ describe('colony health payload', () => {
     expect(text).toContain(
       'waves/sub-0 task #10 src/foundation.ts owner=stale-session age=180m -> unlock candidate sub-1',
     );
+    expect(text).toContain(
+      'recommended replacement:           claude-code (Codex recently hit quota on this branch; next task_accept_handoff)',
+    );
+    expect(text).toContain('replacement: claude-code - Codex recently hit quota on this branch');
   });
 
   it('colors adoption threshold status labels by severity', () => {
@@ -1554,6 +1604,37 @@ describe('colony health payload', () => {
       fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  it('shows OMX runtime bridge summary ingestion status', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+        omxRuntimeStats: {
+          status: 'available',
+          summaries_ingested: 2,
+          latest_summary_ts: NOW - 5 * 60_000,
+          warning_count: 3,
+        },
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.omx_runtime_bridge).toMatchObject({
+      status: 'available',
+      summaries_ingested: 2,
+      latest_summary_age_ms: 5 * 60_000,
+      warning_count: 3,
+    });
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('OMX runtime bridge');
+    expect(text).toContain('summaries ingested:  2');
+    expect(text).toContain('latest summary age:  5m');
+  });
 });
 
 function codexRolloutLine(tsMs: number, server: string, tool: string): string {
@@ -1685,18 +1766,37 @@ function fakeStorage(args: {
       handoff_observation_id?: number | null;
     }>
   >;
+  sessionsById?: Record<string, { id: string; ide: string; cwd: string | null }>;
   proposals?: TestProposal[];
   reinforcements?: Record<number, TestReinforcement[]>;
+  omxRuntimeStats?: OmxRuntimeSummaryStats;
 }): never {
   const tasks = args.tasks ?? healthyTasks();
   const observationsByTask = args.observationsByTask ?? healthyObservationsByTask();
   const claimsByTask = args.claimsByTask ?? healthyClaimsByTask();
+  const sessionsById = args.sessionsById ?? {};
   const proposals = args.proposals ?? healthyProposals();
   const reinforcements = args.reinforcements ?? healthyReinforcements();
   return {
     toolCallsSince: () => args.calls,
     claimBeforeEditStats: () => args.claimBeforeEdit,
+    omxRuntimeSummaryStats: () =>
+      args.omxRuntimeStats ?? {
+        status: 'unavailable',
+        summaries_ingested: 0,
+        latest_summary_ts: null,
+        warning_count: 0,
+      },
     listTasks: () => tasks,
+    getSession: (id: string) =>
+      sessionsById[id]
+        ? {
+            ...sessionsById[id],
+            started_at: NOW - 3_600_000,
+            ended_at: null,
+            metadata: null,
+          }
+        : undefined,
     listClaims: (taskId: number) => claimsByTask[taskId] ?? [],
     taskTimeline: (taskId: number) => observationsByTask[taskId] ?? [],
     taskObservationsByKind: (taskId: number, kind: string) =>

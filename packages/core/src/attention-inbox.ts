@@ -1,5 +1,11 @@
 import { resolve } from 'node:path';
-import type { FileHeatRow, PausedLaneRow, TaskClaimRow, TaskRow } from '@colony/storage';
+import type {
+  FileHeatRow,
+  OmxRuntimeWarningRow,
+  PausedLaneRow,
+  TaskClaimRow,
+  TaskRow,
+} from '@colony/storage';
 import { type ClaimAgeClass, type ClaimOwnershipStrength, classifyClaimAge } from './claim-age.js';
 import {
   type HivemindActivity,
@@ -145,6 +151,17 @@ export interface InboxStaleClaimSignals {
   sweep_suggestion: string;
 }
 
+export interface InboxOmxRuntimeWarning {
+  id: number;
+  task_id: number | null;
+  session_id: string;
+  ts: number;
+  warnings: string[];
+  preview: string;
+  active_file_focus: string[];
+  next_action: string;
+}
+
 /**
  * Coalesced view: a group of inbox messages that share `(task_id,
  * from_session_id, urgency)`. Lets the preface render "B sent 4 fyi
@@ -202,6 +219,7 @@ export interface AttentionInbox {
     recent_other_claim_count: number;
     live_file_contention_count: number;
     hot_file_count: number;
+    omx_runtime_warning_count: number;
     /**
      * True iff at least one unread message is `urgency='blocking'`. The
      * preface renderer should use this to gate non-message sections —
@@ -228,6 +246,7 @@ export interface AttentionInbox {
   recent_other_claims: InboxRecentClaim[];
   live_file_contentions: LiveFileContentionWarning[];
   file_heat: InboxFileHeat[];
+  omx_runtime_warnings: InboxOmxRuntimeWarning[];
 }
 
 export interface AttentionInboxOptions {
@@ -256,6 +275,7 @@ export interface AttentionInboxOptions {
   file_heat_half_life_ms?: number;
   file_heat_limit?: number;
   file_heat_min_heat?: number;
+  omx_runtime_warning_limit?: number;
   /** Window (ms) for read-receipt surfacing. Receipts older than this drop
    *  out so a long-running session doesn't accumulate stale "B read your
    *  message 3 days ago" hints. Default 6h. */
@@ -281,6 +301,7 @@ const DEFAULT_STALE_CLAIM_BRANCH_LIMIT = 5;
 const DEFAULT_READ_RECEIPT_WINDOW_MS = 6 * 60 * 60_000;
 const DEFAULT_READ_RECEIPT_MIN_AGE_MS = 5 * 60_000;
 const DEFAULT_READ_RECEIPT_LIMIT = 20;
+const DEFAULT_OMX_RUNTIME_WARNING_LIMIT = 5;
 
 /**
  * Aggregate "things that need this session's attention" across tasks and
@@ -359,6 +380,7 @@ export function buildAttentionInbox(
   const stalled_lanes = stalledLaneResult.rows;
   const paused_lanes = collectPausedLanes(store, opts);
   const file_heat = collectFileHeat(store, opts, taskIds, now);
+  const omx_runtime_warnings = collectOmxRuntimeWarnings(store, opts, taskIds, now);
 
   const read_receipts = collectReadReceipts(store, opts, taskIds, now);
   const coalesced_messages = coalesceMessages(unread_messages);
@@ -381,6 +403,7 @@ export function buildAttentionInbox(
     recent_other_claim_count: recent_other_claims.length,
     live_file_contention_count: live_file_contentions.length,
     hot_file_count: file_heat.length,
+    omx_runtime_warning_count: omx_runtime_warnings.length,
     blocked,
     next_action: deriveNextAction({
       pending_handoffs,
@@ -394,6 +417,7 @@ export function buildAttentionInbox(
       live_file_contentions,
       file_heat,
       read_receipts,
+      omx_runtime_warnings,
     }),
   };
 
@@ -415,6 +439,7 @@ export function buildAttentionInbox(
     recent_other_claims,
     live_file_contentions,
     file_heat,
+    omx_runtime_warnings,
   };
 }
 
@@ -532,6 +557,36 @@ function collectReadReceipts(
     }
   }
   return out.sort((a, b) => b.read_at - a.read_at).slice(0, cap);
+}
+
+function collectOmxRuntimeWarnings(
+  store: MemoryStore,
+  opts: AttentionInboxOptions,
+  taskIds: number[],
+  now: number,
+): InboxOmxRuntimeWarning[] {
+  const cap = opts.omx_runtime_warning_limit ?? DEFAULT_OMX_RUNTIME_WARNING_LIMIT;
+  if (cap <= 0) return [];
+  const since = now - DEFAULT_READ_RECEIPT_WINDOW_MS;
+  const taskIdSet = new Set(taskIds);
+  return store.storage
+    .omxRuntimeWarningsSince(since, cap * 4)
+    .filter((row) => row.task_id === null || taskIdSet.size === 0 || taskIdSet.has(row.task_id))
+    .slice(0, cap)
+    .map(compactOmxRuntimeWarning);
+}
+
+function compactOmxRuntimeWarning(row: OmxRuntimeWarningRow): InboxOmxRuntimeWarning {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    session_id: row.session_id,
+    ts: row.ts,
+    warnings: row.warnings,
+    preview: row.content.slice(0, 240),
+    active_file_focus: row.active_file_focus,
+    next_action: 'Review OMX runtime warning before resuming this lane; Colony remains coordination truth.',
+  };
 }
 
 function resolveTaskIds(store: MemoryStore, opts: AttentionInboxOptions): number[] {
@@ -862,6 +917,7 @@ function deriveNextAction(parts: {
   live_file_contentions: LiveFileContentionWarning[];
   file_heat: InboxFileHeat[];
   read_receipts: ReadReceipt[];
+  omx_runtime_warnings: InboxOmxRuntimeWarning[];
 }): string {
   if (parts.pending_handoffs.some((h) => h.reason === 'quota_exhausted')) {
     return 'Accept active quota_exhausted handoff first; sender is blocked_by_runtime_limit.';
@@ -889,6 +945,9 @@ function deriveNextAction(parts: {
   }
   if (parts.live_file_contentions.length > 0) {
     return 'LIVE_FILE_CONTENTION: another live agent owns a file you claimed; coordinate before editing.';
+  }
+  if (parts.omx_runtime_warnings.length > 0) {
+    return 'Review OMX runtime warnings before resuming; quota, model, or failed-tool state may affect recovery.';
   }
   if (parts.paused_lanes.length > 0) {
     return 'Review paused lanes — resume them or request takeover for contended files.';

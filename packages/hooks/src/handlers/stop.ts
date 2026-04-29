@@ -41,7 +41,7 @@ export async function stop(store: MemoryStore, input: HookInput): Promise<void> 
   const thread = new TaskThread(store, taskId);
   const agent = deriveAgent(input);
   const lastUpdate = compactOneLine(summary, 180);
-  const quotaContext = buildQuotaHandoffContext(store, input, thread, agent, usageReason);
+  const quotaContext = buildQuotaHandoffContext(input, thread, agent, usageReason);
 
   thread.post({
     session_id: input.session_id,
@@ -72,7 +72,6 @@ export async function stop(store: MemoryStore, input: HookInput): Promise<void> 
 }
 
 function buildQuotaHandoffContext(
-  store: MemoryStore,
   input: HookInput,
   thread: TaskThread,
   agent: string,
@@ -96,7 +95,12 @@ function buildQuotaHandoffContext(
     task_id: thread.task_id,
     claimed_files: claimedFiles,
     dirty_files: readStringList(
-      firstDefined(metadata.dirty_files, metadata.dirtyFiles, result.dirty_files, result.dirtyFiles),
+      firstDefined(
+        metadata.dirty_files,
+        metadata.dirtyFiles,
+        result.dirty_files,
+        result.dirtyFiles,
+      ),
     ),
     last_command:
       readString(firstDefined(metadata.last_command, metadata.lastCommand, result.last_command)) ??

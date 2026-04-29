@@ -58,6 +58,7 @@ function baseInbox(overrides: Partial<AttentionInbox> = {}): AttentionInbox {
       recent_other_claim_count: 0,
       live_file_contention_count: 0,
       hot_file_count: 0,
+      omx_runtime_warning_count: 0,
       blocked: false,
       next_action: 'quiet',
     },
@@ -78,6 +79,7 @@ function baseInbox(overrides: Partial<AttentionInbox> = {}): AttentionInbox {
     recent_other_claims: [],
     live_file_contentions: [],
     file_heat: [],
+    omx_runtime_warnings: [],
     ...overrides,
   };
 }

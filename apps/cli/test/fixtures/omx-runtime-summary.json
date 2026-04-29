@@ -1,0 +1,16 @@
+{
+  "session_id": "codex@fixture",
+  "agent": "codex",
+  "repo_root": "/repo",
+  "branch": "agent/codex/fixture",
+  "timestamp": "2026-04-29T12:00:00.000Z",
+  "quota_warning": "Usage limit approaching",
+  "runtime_model_error": "model overloaded",
+  "last_prompt_summary": "implement OMX summary bridge",
+  "last_failed_tool": {
+    "name": "Bash",
+    "error": "spawn EPERM"
+  },
+  "local_working_note": "branch=agent/codex/fixture; next=retry",
+  "active_file_focus": ["apps/cli/src/commands/health.ts"]
+}

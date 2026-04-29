@@ -27,6 +27,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { withPlanPublishGuidance } from './plan-output.js';
+import { buildPlanValidationSummary } from './plan-validation-summary.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 const SubtaskInputSchema = z.object({
@@ -128,6 +129,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
           topLevelWaves: args.waves,
           orderingHints: args.ordering_hints,
         });
+        const validation = buildPlanValidationSummary({
+          store,
+          repo_root: args.repo_root,
+          subtasks: ordered.subtasks,
+          runtime: ctx.planValidation,
+        });
         const result = publishPlan({
           store,
           repo_root: args.repo_root,
@@ -140,14 +147,24 @@ export function register(server: McpServer, ctx: ToolContext): void {
           subtasks: ordered.subtasks,
           auto_archive: args.auto_archive ?? false,
         });
+        store.addObservation({
+          session_id: args.session_id,
+          task_id: result.spec_task_id,
+          kind: 'plan-validation',
+          content: `plan ${args.slug} validation: ${validation.finding_count} finding(s), blocking=${validation.blocking}`,
+          metadata: { ...validation },
+        });
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify(
-                withPlanPublishGuidance(result, ordered.subtasks, {
-                  wave_names: ordered.waveNames,
-                }),
+                {
+                  ...withPlanPublishGuidance(result, ordered.subtasks, {
+                    wave_names: ordered.waveNames,
+                  }),
+                  plan_validation: validation,
+                },
               ),
             },
           ],
