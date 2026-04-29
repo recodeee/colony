@@ -109,10 +109,13 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
    *  PreToolUse hook is firing somewhere; zero with edits > 0 strongly
    *  suggests the hook is not wired into the active editor session. */
   pre_tool_use_signals: number;
+  /** PreToolUse fired, but the hook session id was not present in Colony
+   *  storage, so telemetry was recorded under the diagnostics fallback. */
+  session_binding_missing: number;
   /** True when edits happened but no PreToolUse telemetry was recorded —
    *  diagnostic that points at hook wiring rather than agent discipline. */
   likely_missing_hook: boolean;
-  /** User-facing remediation when likely_missing_hook is true. */
+  /** User-facing remediation for hook wiring or session-binding failures. */
   install_hint: string | null;
 }
 
@@ -616,6 +619,7 @@ function claimBeforeEditPayload(
   const editsWithoutClaimBefore = stats.edits_with_file_path - stats.edits_claimed_before;
   const autoClaimedBeforeEdit = stats.auto_claimed_before_edit ?? 0;
   const preToolUseSignals = stats.pre_tool_use_signals ?? 0;
+  const sessionBindingMissing = stats.session_binding_missing ?? 0;
   const status =
     stats.edit_tool_calls === 0
       ? 'no_data'
@@ -625,9 +629,13 @@ function claimBeforeEditPayload(
   // If edits landed but no claim-before-edit observation was ever written,
   // PreToolUse is almost certainly not firing for the active editor.
   const likelyMissingHook = stats.edit_tool_calls > 0 && preToolUseSignals === 0;
+  const sessionBindingHint =
+    sessionBindingMissing > 0
+      ? 'PreToolUse is firing, but Colony session binding is missing. Restart the editor session so SessionStart binds the session id; keep calling task_claim_file manually until binding is restored.'
+      : null;
   const installHint = likelyMissingHook
     ? 'PreToolUse auto-claim is not covering edits in this window. Run colony install --ide <ide>, restart the editor session, and ensure an active task is bound for the session.'
-    : null;
+    : sessionBindingHint;
   return {
     ...stats,
     status,
@@ -639,6 +647,7 @@ function claimBeforeEditPayload(
     claim_before_edit_ratio:
       status === 'available' ? ratio(stats.edits_claimed_before, stats.edits_with_file_path) : null,
     pre_tool_use_signals: preToolUseSignals,
+    session_binding_missing: sessionBindingMissing,
     likely_missing_hook: likelyMissingHook,
     install_hint: installHint,
   };
@@ -785,7 +794,12 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   lines.push(
     `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}, pre_tool_use_signals=${payload.pre_tool_use_signals}`,
   );
+  if (payload.session_binding_missing > 0) {
+    lines.push(kleur.yellow(`  session binding missing: ${payload.session_binding_missing}`));
+  }
   if (payload.likely_missing_hook && payload.install_hint) {
+    lines.push(kleur.yellow(`  ${payload.install_hint}`));
+  } else if (payload.session_binding_missing > 0 && payload.install_hint) {
     lines.push(kleur.yellow(`  ${payload.install_hint}`));
   }
   return lines;
@@ -848,6 +862,7 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     )
   ) {
     const missingHook = payload.task_claim_file_before_edits.likely_missing_hook;
+    const sessionBindingMissing = payload.task_claim_file_before_edits.session_binding_missing > 0;
     hints.push({
       metric: 'claim-before-edit',
       status: 'bad',
@@ -855,15 +870,21 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+`,
       action: missingHook
         ? 'PreToolUse auto-claim hook is not firing for these edits. Reinstall and restart the editor; PreToolUse will auto-claim before edits.'
-        : 'Call task_claim_file for touched files before Edit or Write tool use.',
+        : sessionBindingMissing
+          ? 'PreToolUse is firing, but session binding is missing. Restart the editor so SessionStart binds the active session before relying on auto-claim.'
+          : 'Call task_claim_file for touched files before Edit or Write tool use.',
       tool_call:
         'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
       command: missingHook
         ? 'colony install --ide <ide>  # then restart the editor session'
-        : 'colony install --ide <ide>  # enables pre-edit auto-claim hooks',
+        : sessionBindingMissing
+          ? 'colony install --ide <ide>  # then restart the editor session to refresh SessionStart binding'
+          : 'colony install --ide <ide>  # enables pre-edit auto-claim hooks',
       prompt: missingHook
         ? 'PreToolUse auto-claim is not covering edits — run colony install --ide <ide>, restart the editor session, and ensure an active task is bound. Until the hook fires, call mcp__colony__task_claim_file before each edit.'
-        : 'Before editing, call mcp__colony__task_claim_file for each touched path; if agents keep missing this, run colony install --ide <ide> to enable pre-edit auto-claim hooks.',
+        : sessionBindingMissing
+          ? 'PreToolUse is firing, but Colony session binding is missing. Restart the editor session so SessionStart binds the active session id; until then, call mcp__colony__task_claim_file before each edit.'
+          : 'Before editing, call mcp__colony__task_claim_file for each touched path; if agents keep missing this, run colony install --ide <ide> to enable pre-edit auto-claim hooks.',
     });
   }
 

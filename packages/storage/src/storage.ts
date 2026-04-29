@@ -129,6 +129,9 @@ export interface ClaimBeforeEditStats {
   edits_with_file_path: number;
   edits_claimed_before: number;
   auto_claimed_before_edit?: number;
+  /** Count of PreToolUse claim-before-edit rows that had to be recorded under
+   *  a fallback diagnostics session because the hook session row was missing. */
+  session_binding_missing?: number;
   /** Count of `claim-before-edit` telemetry observations in the window — any
    *  outcome (success, conflict, failure). Authoritative signal that the
    *  PreToolUse hook is firing at all in the active editor sessions. */
@@ -1538,14 +1541,21 @@ export class Storage {
                   SELECT COUNT(*) FROM observations c
                   WHERE c.ts > ?
                     AND c.kind = 'claim-before-edit'
+                    AND json_extract(c.metadata, '$.session_binding_missing') = 1
+                ) AS session_binding_missing,
+                (
+                  SELECT COUNT(*) FROM observations c
+                  WHERE c.ts > ?
+                    AND c.kind = 'claim-before-edit'
                 ) AS pre_tool_use_signals
          FROM edit_rows`,
       )
-      .get(FILE_EDIT_TOOLS_JSON, since_ts, since_ts, since_ts) as {
+      .get(FILE_EDIT_TOOLS_JSON, since_ts, since_ts, since_ts, since_ts) as {
       edit_tool_calls: number;
       edits_with_file_path: number | null;
       edits_claimed_before: number | null;
       auto_claimed_before_edit: number | null;
+      session_binding_missing: number | null;
       pre_tool_use_signals: number | null;
     };
     return {
@@ -1553,6 +1563,7 @@ export class Storage {
       edits_with_file_path: row.edits_with_file_path ?? 0,
       edits_claimed_before: row.edits_claimed_before ?? 0,
       auto_claimed_before_edit: row.auto_claimed_before_edit ?? 0,
+      session_binding_missing: row.session_binding_missing ?? 0,
       pre_tool_use_signals: row.pre_tool_use_signals ?? 0,
     };
   }

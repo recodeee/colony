@@ -138,6 +138,20 @@ describe('colony health read queries', () => {
     toolUse('codex@health', 'Edit', 3_000, 'src/claimed.ts');
     toolUse('claude@health', 'Edit', 4_000, 'src/unclaimed.ts');
     toolUse('claude@health', 'Edit', 5_000);
+    session('colony-pre-tool-use-diagnostics');
+    storage.insertObservation({
+      session_id: 'colony-pre-tool-use-diagnostics',
+      kind: 'claim-before-edit',
+      content: 'session binding missing',
+      compressed: false,
+      intensity: null,
+      ts: 5_500,
+      metadata: {
+        source: 'pre-tool-use',
+        outcome: 'edits_missing_claim',
+        session_binding_missing: true,
+      },
+    });
 
     expect(storage.toolCallsSince(0).map((row) => row.tool)).toEqual([
       'mcp__colony__task_list',
@@ -151,7 +165,8 @@ describe('colony health read queries', () => {
       edits_with_file_path: 2,
       edits_claimed_before: 1,
       auto_claimed_before_edit: 0,
-      pre_tool_use_signals: 0,
+      session_binding_missing: 1,
+      pre_tool_use_signals: 1,
     });
   });
 });

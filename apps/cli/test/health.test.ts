@@ -620,6 +620,44 @@ describe('colony health payload', () => {
     expect(text).toContain('top recorded tools: Bash (3), Edit (1), Read (1)');
   });
 
+  it('diagnoses missing session binding separately from a missing PreToolUse hook', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [call(1, 'codex-alpha-session', 'Edit', NOW - 1_000)],
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 1,
+          session_binding_missing: 1,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits).toMatchObject({
+      likely_missing_hook: false,
+      pre_tool_use_signals: 1,
+      session_binding_missing: 1,
+      install_hint: expect.stringContaining('session binding is missing'),
+    });
+    const claimHint = payload.action_hints.find((hint) => hint.metric === 'claim-before-edit');
+    expect(claimHint).toMatchObject({
+      action: expect.stringContaining('session binding is missing'),
+      prompt: expect.stringContaining('SessionStart binds the active session id'),
+    });
+    expect(claimHint?.action).not.toContain('hook is not firing');
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('session binding missing: 1');
+    expect(text).not.toContain('PreToolUse auto-claim hook is not firing');
+  });
+
   it('omits the zero-mcp diagnostic when the window is genuinely empty', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
@@ -747,6 +785,9 @@ function fakeStorage(args: {
     edit_tool_calls: number;
     edits_with_file_path: number;
     edits_claimed_before: number;
+    auto_claimed_before_edit?: number;
+    session_binding_missing?: number;
+    pre_tool_use_signals?: number;
   };
   tasks?: TestTask[];
   observationsByTask?: Record<number, TestObservation[]>;

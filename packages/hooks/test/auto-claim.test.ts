@@ -535,6 +535,26 @@ describe('claimBeforeEditFromToolUse', () => {
         },
       },
     ]);
+    expect(store.storage.getSession('missing')).toBeUndefined();
+    expect(store.storage.getSession('colony-pre-tool-use-diagnostics')).toMatchObject({
+      ide: 'colony-hook',
+    });
+    const fallbackTelemetry = store
+      .timeline('colony-pre-tool-use-diagnostics')
+      .filter((row) => row.kind === 'claim-before-edit');
+    expect(fallbackTelemetry).toHaveLength(1);
+    expect(metadataOf(fallbackTelemetry[0])).toMatchObject({
+      source: 'pre-tool-use',
+      outcome: 'edits_missing_claim',
+      file_path: 'src/x.ts',
+      code: 'SESSION_NOT_FOUND',
+      session_binding_missing: true,
+      original_session_id: 'missing',
+    });
+    expect(store.storage.claimBeforeEditStats(0)).toMatchObject({
+      pre_tool_use_signals: 1,
+      session_binding_missing: 1,
+    });
   });
 
   it('debounces repeated warning output for the same session, file, and code', () => {

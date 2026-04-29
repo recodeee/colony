@@ -9,6 +9,7 @@ import type { HookInput } from '../types.js';
 import { extractTouchedFiles } from './post-tool-use.js';
 
 const CLAIM_WARNING_DEBOUNCE_MS = 60_000;
+const CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID = 'colony-pre-tool-use-diagnostics';
 const claimWarningDebounceByStore = new WeakMap<MemoryStore, Map<string, number>>();
 
 export interface ClaimBeforeEditFallbackWarning {
@@ -158,10 +159,22 @@ function recordClaimBeforeEditFailure(
     candidates: AutoClaimFailure['candidates'];
   },
 ): void {
-  if (metadata.code === 'SESSION_NOT_FOUND' || metadata.code === 'COLONY_UNAVAILABLE') return;
+  if (metadata.code === 'COLONY_UNAVAILABLE') return;
+  const sessionBindingMissing = metadata.code === 'SESSION_NOT_FOUND';
+  const observationSessionId = sessionBindingMissing
+    ? CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID
+    : session_id;
   try {
+    if (sessionBindingMissing) {
+      store.startSession({
+        id: CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID,
+        ide: 'colony-hook',
+        cwd: null,
+        metadata: { source: 'pre-tool-use', purpose: 'session-binding-diagnostics' },
+      });
+    }
     store.addObservation({
-      session_id,
+      session_id: observationSessionId,
       kind: 'claim-before-edit',
       content: `edits_missing_claim: ${metadata.file_path}`,
       metadata: {
@@ -172,6 +185,9 @@ function recordClaimBeforeEditFailure(
         tool: metadata.tool,
         code: metadata.code,
         error: metadata.error,
+        ...(sessionBindingMissing
+          ? { session_binding_missing: true, original_session_id: session_id }
+          : {}),
         candidates: compactCandidates(metadata.candidates),
       },
     });
