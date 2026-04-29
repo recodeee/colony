@@ -250,7 +250,9 @@ describe('colony health next fixes', () => {
     });
     expect(payload.task_claim_file_before_edits.edits_claimed_before).toBeGreaterThan(0);
     expect(payload.task_claim_file_before_edits.pre_tool_use_signals).toBeGreaterThan(0);
-    expect(payload.action_hints.find((hint) => hint.metric === 'claim-before-edit')).toBeUndefined();
+    expect(
+      payload.action_hints.find((hint) => hint.metric === 'claim-before-edit'),
+    ).toBeUndefined();
 
     const nextFixes = outputSection(formatColonyHealthOutput(payload), 'Next fixes');
     expect(nextFixes).not.toContain('pre_tool_use before file mutation');
