@@ -15,6 +15,8 @@ let store: MemoryStore;
 let client: Client;
 
 interface ReadyEntry {
+  next_tool?: 'task_plan_claim_subtask';
+  next_action_reason?: string;
   plan_slug: string;
   subtask_index: number;
   wave_index: number;
@@ -27,10 +29,12 @@ interface ReadyEntry {
   reason: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
   reasoning: string;
   claim_args: {
+    repo_root: string;
     plan_slug: string;
     subtask_index: number;
     session_id: string;
     agent: string;
+    file_scope: string[];
   };
 }
 
@@ -73,12 +77,15 @@ interface ReadyResult {
   subtask_index?: number;
   reason?: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
   claim_args?: {
+    repo_root: string;
     plan_slug: string;
     subtask_index: number;
     session_id: string;
     agent: string;
+    file_scope: string[];
   };
   codex_mcp_call?: string;
+  next_action_reason?: string;
   empty_state?: string;
 }
 
@@ -207,18 +214,81 @@ describe('task_ready_for_agent', () => {
     expect(result.plan_slug).toBe('claimable-plan');
     expect(result.subtask_index).toBe(0);
     expect(result.reason).toBe('ready_high_score');
+    expect(result.next_action_reason).toBe(
+      'Claim claimable-plan/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.',
+    );
     expect(result.next_action).toContain('task_plan_claim_subtask');
     expect(result.next_action).toContain('plan_slug="claimable-plan"');
+    expect(result.ready[0]).toMatchObject({
+      next_tool: 'task_plan_claim_subtask',
+      next_action_reason:
+        'Claim claimable-plan/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.',
+    });
     expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
       plan_slug: 'claimable-plan',
       subtask_index: 0,
       session_id: 'agent-session',
       agent: 'codex',
+      file_scope: ['apps/api/claimable.ts'],
     });
     expect(result.codex_mcp_call).toBe(
-      'mcp__colony__task_plan_claim_subtask({ agent: "codex", session_id: "agent-session", plan_slug: "claimable-plan", subtask_index: 0 })',
+      `mcp__colony__task_plan_claim_subtask({ agent: "codex", session_id: "agent-session", repo_root: ${JSON.stringify(repoRoot)}, plan_slug: "claimable-plan", subtask_index: 0, file_scope: ["apps/api/claimable.ts"] })`,
     );
     expect(result.empty_state).toBeUndefined();
+  });
+
+  it('makes ready output directly claimable so agents do not stop at discovery', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Claim from ready output',
+            description: 'Agent should claim this directly from ready queue metadata.',
+            file_scope: ['apps/api/direct-claim.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Follow after ready claim',
+            description: 'Dependent work stays blocked until the claimable item finishes.',
+            file_scope: ['docs/direct-claim.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'direct-ready-claim' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready).toHaveLength(1);
+    expect(result.ready[0]).toMatchObject({
+      next_tool: 'task_plan_claim_subtask',
+      next_action_reason:
+        'Claim direct-ready-claim/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.',
+      claim_args: {
+        repo_root: repoRoot,
+        plan_slug: 'direct-ready-claim',
+        subtask_index: 0,
+        session_id: 'agent-session',
+        agent: 'codex',
+        file_scope: ['apps/api/direct-claim.ts'],
+      },
+    });
+
+    const claimed = await call<ClaimResult>(
+      result.ready[0]?.next_tool ?? 'missing_next_tool',
+      result.ready[0]?.claim_args ?? {},
+    );
+    expect(claimed).toMatchObject({
+      branch: 'spec/direct-ready-claim/sub-0',
+      file_scope: ['apps/api/direct-claim.ts'],
+    });
   });
 
   it('returns the empty state when all future sub-tasks are blocked', async () => {
@@ -338,11 +408,17 @@ describe('task_ready_for_agent', () => {
     );
     for (const entry of result.ready) {
       expect(entry.claim_args).toEqual({
+        repo_root: repoRoot,
         plan_slug: colonyAdoptionFixesPlan.slug,
         subtask_index: entry.subtask_index,
         session_id: 'agent-session',
         agent: 'codex',
+        file_scope: entry.file_scope,
       });
+      expect(entry.next_tool).toBe('task_plan_claim_subtask');
+      expect(entry.next_action_reason).toContain(
+        `Claim ${colonyAdoptionFixesPlan.slug}/sub-${entry.subtask_index}:`,
+      );
     }
     expect(result.ready.map((entry) => entry.subtask_index)).not.toContain(3);
     expect(result.ready.map((entry) => entry.subtask_index)).not.toContain(6);
@@ -352,10 +428,12 @@ describe('task_ready_for_agent', () => {
     expect(result.plan_slug).toBe(colonyAdoptionFixesPlan.slug);
     expect(result.subtask_index).toBe(result.ready[0]?.subtask_index);
     expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
       plan_slug: colonyAdoptionFixesPlan.slug,
       subtask_index: result.ready[0]?.subtask_index,
       session_id: 'agent-session',
       agent: 'codex',
+      file_scope: result.ready[0]?.file_scope,
     });
 
     const claimed = await claimSubtask(
@@ -407,10 +485,18 @@ describe('task_ready_for_agent', () => {
       blocked_by_count: 0,
       title: 'Finalize docs, tests, and health',
       claim_args: {
+        repo_root: repoRoot,
         plan_slug: colonyAdoptionFixesPlan.slug,
         subtask_index: 6,
         session_id: 'agent-session',
         agent: 'codex',
+        file_scope: [
+          'docs/QUEEN.md',
+          'apps/cli/src/commands/health.ts',
+          'apps/cli/test/queen-health.test.ts',
+          'apps/mcp-server/test/coordination-loop.test.ts',
+          'packages/queen/test/decompose.test.ts',
+        ],
       },
     });
   });
