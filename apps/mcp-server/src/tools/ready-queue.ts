@@ -20,6 +20,11 @@ const RELEASE_DENSITY_WINDOW_MS = 60 * 60 * 1000;
 const CURRENT_TASK_SWITCH_MARGIN = 0.2;
 const RECENT_CLAIM_COOLDOWN_MS = 20 * 60 * 1000;
 const RECENT_CLAIM_COOLDOWN_MARGIN = 0.05;
+const RECENT_RUNTIME_SIGNAL_WINDOW_MS = 6 * 60 * 60 * 1000;
+const STALE_BLOCKER_WINDOW_MS = 60 * 60 * 1000;
+const LARGE_TASK_FILE_COUNT = 4;
+const MISSING_CAPABILITY_SCORE = 0.2;
+const CAPABLE_AGENT_SCORE = 0.5;
 const PLAN_SUBTASK_KIND = 'plan-subtask';
 const PLAN_SUBTASK_CLAIM_KIND = 'plan-subtask-claim';
 export const NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE =
@@ -60,6 +65,8 @@ export interface ReadySubtask {
   fit_score: number;
   reason: ReadyReason;
   reasoning: string;
+  assigned_agent: string;
+  routing_reason: string;
   claim_args: TaskPlanClaimArgs;
 }
 
@@ -75,6 +82,8 @@ export interface ReadyForAgentResult {
   plan_slug?: string;
   subtask_index?: number;
   reason?: ReadyReason;
+  assigned_agent?: string;
+  routing_reason?: string;
   claim_args?: TaskPlanClaimArgs;
   codex_mcp_call?: string;
   next_action_reason?: string;
@@ -180,7 +189,7 @@ export async function buildReadyForAgent(
       urgentTaskIds.has(task.task_id) ? { ...task, reason: 'urgent_override' } : task,
     ),
     currentClaims,
-  );
+  ).map((task) => applyRuntimeRouting(store, task, args.agent, args.repo_root));
 
   const selected = ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
   const claimable = ranked.find((task) => !task.current_claim) ?? null;
@@ -237,6 +246,17 @@ function buildReadyResult(
   }
 
   const claim_args = claimable.claim_args;
+  if (claimable.assigned_agent !== args.agent && claimable.assigned_agent !== 'any') {
+    return {
+      ...base,
+      next_action: `Route ${claimable.plan_slug}/sub-${claimable.subtask_index} to ${claimable.assigned_agent}: ${claimable.routing_reason}.`,
+      plan_slug: claimable.plan_slug,
+      subtask_index: claimable.subtask_index,
+      reason: claimable.reason,
+      assigned_agent: claimable.assigned_agent,
+      routing_reason: claimable.routing_reason,
+    };
+  }
   return {
     ...base,
     next_action: readyNextAction(base.ready, args),
@@ -244,6 +264,8 @@ function buildReadyResult(
     plan_slug: claimable.plan_slug,
     subtask_index: claimable.subtask_index,
     reason: claimable.reason,
+    assigned_agent: claimable.assigned_agent,
+    routing_reason: claimable.routing_reason,
     next_action_reason: claimReason(claimable),
     claim_args,
     codex_mcp_call: codexMcpCall(claim_args),
@@ -377,6 +399,8 @@ function rankSubtask(
       recent_claim_density: recentClaimDensity,
       queen_bonus: queenBonus,
     }),
+    assigned_agent: args.agent,
+    routing_reason: 'Current agent remains eligible for this task.',
     claim_args: {
       repo_root: args.repo_root,
       plan_slug: args.plan_slug,
@@ -483,6 +507,263 @@ function capabilityMatchScore(capabilityHint: string | null, profile: AgentProfi
   if (capabilityHint === null) return 0.5;
   const summary = CAPABILITY_HINT_TEXT[capabilityHint] ?? capabilityHint.replace(/_/g, ' ');
   return clampScore(rankCandidates({ summary }, [profile])[0]?.score ?? 0);
+}
+
+function applyRuntimeRouting(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+): RankedSubtask {
+  if (task.current_claim) return task;
+
+  const signal = runtimeRoutingSignal(store, task, requestedAgent, repoRoot);
+  if (!signal.shouldRouteAway) {
+    return { ...task, assigned_agent: requestedAgent, routing_reason: signal.reason };
+  }
+
+  return {
+    ...task,
+    assigned_agent: bestAlternateRuntime(store, task, requestedAgent, repoRoot, signal),
+    routing_reason: signal.reason,
+  };
+}
+
+function runtimeRoutingSignal(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+): { shouldRouteAway: boolean; reason: string; quotaAgents: Set<string> } {
+  const quotaAgents = recentQuotaAgents(store, repoRoot, task.task_id);
+  const requestedQuota = quotaAgents.has(normalizeAgentKey(requestedAgent));
+  const fileCount = task.file_scope.length;
+  const protectedCount = protectedFileCount(task.file_scope);
+  const staleBlockers = staleBlockerCount(store, task.task_id);
+  const requestedCapability = capabilityMatchScore(
+    task.capability_hint,
+    loadProfile(store.storage, requestedAgent),
+  );
+  const missingCapability =
+    task.capability_hint !== null && requestedCapability <= MISSING_CAPABILITY_SCORE;
+  const largeTask = fileCount >= LARGE_TASK_FILE_COUNT;
+  const riskyAfterQuota = requestedQuota && (largeTask || protectedCount > 0 || staleBlockers > 0);
+
+  if (missingCapability) {
+    return {
+      shouldRouteAway: hasCapableAlternate(store, task, requestedAgent, repoRoot, quotaAgents),
+      reason: `${displayAgent(requestedAgent)} lacks known ${task.capability_hint} capability; task requires ${task.capability_hint}.`,
+      quotaAgents,
+    };
+  }
+
+  if (riskyAfterQuota) {
+    return {
+      shouldRouteAway: true,
+      reason: quotaRoutingReason(requestedAgent, fileCount, protectedCount, staleBlockers),
+      quotaAgents,
+    };
+  }
+
+  if (requestedQuota) {
+    return {
+      shouldRouteAway: false,
+      reason:
+        fileCount <= 1 && protectedCount === 0
+          ? `${displayAgent(requestedAgent)} recently hit quota, but this task is tiny and isolated.`
+          : `${displayAgent(requestedAgent)} recently hit quota, but this task stays below routing-away thresholds.`,
+      quotaAgents,
+    };
+  }
+
+  return {
+    shouldRouteAway: false,
+    reason: 'No recent runtime quota or capability signal requires rerouting.',
+    quotaAgents,
+  };
+}
+
+function quotaRoutingReason(
+  agent: string,
+  fileCount: number,
+  protectedCount: number,
+  staleBlockers: number,
+): string {
+  const details: string[] = [];
+  if (fileCount >= LARGE_TASK_FILE_COUNT) details.push(`task spans ${fileCount} files`);
+  if (protectedCount > 0) {
+    details.push(`task touches ${protectedCount} protected file${protectedCount === 1 ? '' : 's'}`);
+  }
+  if (staleBlockers > 0) {
+    details.push(`${staleBlockers} stale blocker${staleBlockers === 1 ? '' : 's'} exist`);
+  }
+  return `${displayAgent(agent)} recently hit quota on this branch; ${details.join('; ')}`;
+}
+
+function bestAlternateRuntime(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+  signal: { quotaAgents: Set<string> },
+): string {
+  const requestedKey = normalizeAgentKey(requestedAgent);
+  const candidates = candidateAgents(store, repoRoot).filter((agent) => {
+    const key = normalizeAgentKey(agent);
+    return key !== requestedKey && !signal.quotaAgents.has(key);
+  });
+  if (candidates.length === 0 && requestedKey === 'codex') {
+    return 'claude-code';
+  }
+  if (candidates.length === 0) return 'any';
+
+  const ranked = candidates
+    .map((agent) => ({
+      agent,
+      score: capabilityMatchScore(task.capability_hint, loadProfile(store.storage, agent)),
+    }))
+    .sort((a, b) => b.score - a.score || a.agent.localeCompare(b.agent));
+  return ranked[0]?.agent ?? 'any';
+}
+
+function hasCapableAlternate(
+  store: MemoryStore,
+  task: RankedSubtask,
+  requestedAgent: string,
+  repoRoot: string | undefined,
+  quotaAgents: Set<string>,
+): boolean {
+  const requestedKey = normalizeAgentKey(requestedAgent);
+  return candidateAgents(store, repoRoot).some((agent) => {
+    const key = normalizeAgentKey(agent);
+    if (key === requestedKey || quotaAgents.has(key)) return false;
+    return (
+      capabilityMatchScore(task.capability_hint, loadProfile(store.storage, agent)) >=
+      CAPABLE_AGENT_SCORE
+    );
+  });
+}
+
+function candidateAgents(store: MemoryStore, repoRoot: string | undefined): string[] {
+  const agents = new Set<string>();
+  for (const row of store.storage.listAgentProfiles()) agents.add(row.agent);
+  for (const session of store.storage.listSessions(500)) {
+    const ide = session.ide?.trim();
+    if (ide) agents.add(ide);
+    const prefix = session.id.includes('@') ? session.id.split('@')[0]?.trim() : '';
+    if (prefix) agents.add(prefix);
+  }
+  for (const task of store.storage.listTasks(2000)) {
+    if (repoRoot !== undefined && task.repo_root !== repoRoot) continue;
+    for (const participant of store.storage.listParticipants(task.id)) {
+      agents.add(participant.agent);
+    }
+  }
+  return [...agents].filter((agent) => !isSystemAgent(agent)).sort();
+}
+
+function isSystemAgent(agent: string): boolean {
+  const key = normalizeAgentKey(agent);
+  return key === 'any' || key === 'queen' || key === 'planner';
+}
+
+function recentQuotaAgents(
+  store: MemoryStore,
+  repoRoot: string | undefined,
+  preferredTaskId: number,
+): Set<string> {
+  const since = Date.now() - RECENT_RUNTIME_SIGNAL_WINDOW_MS;
+  const agents = new Set<string>();
+  const tasks = store.storage
+    .listTasks(2000)
+    .filter((task) => repoRoot === undefined || task.repo_root === repoRoot)
+    .sort((a, b) => (a.id === preferredTaskId ? -1 : b.id === preferredTaskId ? 1 : 0));
+
+  for (const task of tasks) {
+    for (const row of store.storage.taskTimeline(task.id, 200)) {
+      if (row.ts < since) continue;
+      const meta = parseMeta(row.metadata);
+      if (!isQuotaObservation(row, meta)) continue;
+      const agent = readRuntimeAgent(store, task.id, row, meta);
+      if (agent) agents.add(normalizeAgentKey(agent));
+    }
+  }
+  return agents;
+}
+
+function readRuntimeAgent(
+  store: MemoryStore,
+  taskId: number,
+  row: ObservationRow,
+  meta: Record<string, unknown>,
+): string | null {
+  for (const key of ['from_agent', 'agent', 'claimed_by_agent']) {
+    const value = meta[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return (
+    store.storage.getParticipantAgent(taskId, row.session_id) ??
+    store.storage.getSession(row.session_id)?.ide ??
+    null
+  );
+}
+
+function isQuotaObservation(row: ObservationRow, meta: Record<string, unknown>): boolean {
+  const text = [
+    row.kind,
+    row.content,
+    ...Object.values(meta).flatMap((value) =>
+      typeof value === 'string'
+        ? [value]
+        : Array.isArray(value)
+          ? value.filter((entry): entry is string => typeof entry === 'string')
+          : [],
+    ),
+  ].join(' ');
+  return /\b(quota(?:[_\s-]*exhausted|[_\s-]*exceeded|[_\s-]*hit)?|usage[_\s-]*limit|rate[_\s-]*limit|RATE_LIMIT_EXCEEDED)\b/i.test(
+    text,
+  );
+}
+
+function protectedFileCount(fileScope: string[]): number {
+  return fileScope.filter((file) => isProtectedFile(file)).length;
+}
+
+function isProtectedFile(file: string): boolean {
+  return (
+    file === 'AGENTS.md' ||
+    file === 'package.json' ||
+    file === 'pnpm-lock.yaml' ||
+    file.startsWith('.github/') ||
+    file.startsWith('.githooks/') ||
+    file.startsWith('openspec/') ||
+    file.startsWith('scripts/') ||
+    file.endsWith('/schema.ts')
+  );
+}
+
+function staleBlockerCount(store: MemoryStore, taskId: number): number {
+  const before = Date.now() - STALE_BLOCKER_WINDOW_MS;
+  return store.storage
+    .taskTimeline(taskId, 200)
+    .filter((row) => row.ts <= before && isBlockerObservation(row, parseMeta(row.metadata))).length;
+}
+
+function isBlockerObservation(row: ObservationRow, meta: Record<string, unknown>): boolean {
+  return (
+    row.kind === 'blocker' || (row.kind === PLAN_SUBTASK_CLAIM_KIND && meta.status === 'blocked')
+  );
+}
+
+function normalizeAgentKey(agent: string): string {
+  return agent.toLowerCase().replace(/[_\s]+/g, '-');
+}
+
+function displayAgent(agent: string): string {
+  const key = normalizeAgentKey(agent);
+  if (key === 'codex') return 'Codex';
+  if (key === 'claude' || key === 'claude-code') return 'Claude';
+  return agent;
 }
 
 function scopeConflicts(

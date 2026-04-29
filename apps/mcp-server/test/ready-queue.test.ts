@@ -28,6 +28,8 @@ interface ReadyEntry {
   fit_score: number;
   reason: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
   reasoning: string;
+  assigned_agent?: string;
+  routing_reason?: string;
   claim_args: {
     repo_root: string;
     plan_slug: string;
@@ -76,6 +78,8 @@ interface ReadyResult {
   plan_slug?: string;
   subtask_index?: number;
   reason?: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
+  assigned_agent?: string;
+  routing_reason?: string;
   claim_args?: {
     repo_root: string;
     plan_slug: string;
@@ -95,6 +99,9 @@ const EMPTY_READY_STATE =
 async function call<T>(name: string, args: Record<string, unknown>): Promise<T> {
   const res = await client.callTool({ name, arguments: args });
   const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+  if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) {
+    throw new Error(text);
+  }
   return JSON.parse(text) as T;
 }
 
@@ -139,6 +146,31 @@ function blockSubtask(planSlug: string, subtaskIndex: number, taskId: number): v
       agent: 'codex',
       plan_slug: planSlug,
       subtask_index: subtaskIndex,
+    },
+  });
+}
+
+function recordQuotaHandoff(taskId: number, agent = 'codex'): void {
+  store.addObservation({
+    session_id: 'agent-session',
+    task_id: taskId,
+    kind: 'handoff',
+    content: 'quota_exhausted handoff',
+    metadata: {
+      kind: 'handoff',
+      from_session_id: 'agent-session',
+      from_agent: agent,
+      to_agent: 'any',
+      to_session_id: null,
+      summary: 'Session hit usage limit; takeover requested.',
+      next_steps: ['Continue from ready queue.'],
+      blockers: ['quota_exhausted'],
+      released_files: [],
+      transferred_files: [],
+      status: 'pending',
+      accepted_by_session_id: null,
+      accepted_at: null,
+      expires_at: Date.now() + 60_000,
     },
   });
 }
@@ -669,6 +701,178 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready.map((entry) => entry.title)).toEqual(['Build API', 'Build page']);
     expect(result.ready[0]?.fit_score).toBeGreaterThan(result.ready[1]?.fit_score ?? 0);
+  });
+
+  it('routes large ready work away from Codex after recent Codex quota history', async () => {
+    await call('agent_upsert_profile', {
+      agent: 'claude-code',
+      capabilities: { api_work: 0.8 },
+    });
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Large API migration',
+            description: 'Touch several tool files after quota handoff.',
+            file_scope: [
+              'apps/mcp-server/src/tools/one.ts',
+              'apps/mcp-server/src/tools/two.ts',
+              'apps/mcp-server/src/tools/three.ts',
+              'apps/mcp-server/src/tools/four.ts',
+              'apps/mcp-server/src/tools/five.ts',
+              'apps/mcp-server/src/tools/six.ts',
+            ],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Large API docs',
+            description: 'Dependent docs stay blocked while routing the large task.',
+            file_scope: ['docs/large-api.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'quota-large-plan' },
+      ),
+    });
+    const largeTaskId = taskIdForSubtask('quota-large-plan', 0);
+    new TaskThread(store, largeTaskId).join('other-session', 'claude-code');
+    recordQuotaHandoff(largeTaskId, 'codex');
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready[0]).toMatchObject({
+      assigned_agent: 'claude-code',
+      routing_reason: 'Codex recently hit quota on this branch; task spans 6 files',
+    });
+    expect(result.assigned_agent).toBe('claude-code');
+    expect(result.routing_reason).toBe(
+      'Codex recently hit quota on this branch; task spans 6 files',
+    );
+    expect(result.next_tool).toBeUndefined();
+    expect(result.next_action).toContain('Route quota-large-plan/sub-0 to claude-code');
+  });
+
+  it('keeps tiny isolated ready work eligible for Codex after recent Codex quota history', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Tiny API follow-up',
+            description: 'Small isolated task remains safe for Codex.',
+            file_scope: ['apps/mcp-server/src/tools/tiny.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Tiny API docs',
+            description: 'Dependent docs stay blocked while routing the tiny task.',
+            file_scope: ['docs/tiny-api.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'quota-tiny-plan' },
+      ),
+    });
+    recordQuotaHandoff(taskIdForSubtask('quota-tiny-plan', 0), 'codex');
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(['codex', 'any']).toContain(result.assigned_agent);
+    expect(result.ready[0]?.assigned_agent).toBe('codex');
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.routing_reason).toContain('tiny and isolated');
+  });
+
+  it('preserves existing routing behavior when there is no quota history', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Normal API task',
+            description: 'No runtime routing signal exists.',
+            file_scope: [
+              'apps/mcp-server/src/tools/normal-one.ts',
+              'apps/mcp-server/src/tools/normal-two.ts',
+              'apps/mcp-server/src/tools/normal-three.ts',
+              'apps/mcp-server/src/tools/normal-four.ts',
+            ],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Normal API docs',
+            description: 'Dependent docs stay blocked while preserving routing.',
+            file_scope: ['docs/normal-api.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'no-quota-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.assigned_agent).toBe('codex');
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.claim_args?.agent).toBe('codex');
+    expect(result.ready[0]?.assigned_agent).toBe('codex');
+  });
+
+  it('routes away from a runtime missing the required capability when another runtime is known capable', async () => {
+    await call('agent_upsert_profile', {
+      agent: 'codex',
+      capabilities: { api_work: 0 },
+    });
+    await call('agent_upsert_profile', {
+      agent: 'claude-code',
+      capabilities: { api_work: 0.9 },
+    });
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'MCP API tool work',
+            description: 'Requires API/MCP tool capability.',
+            file_scope: ['apps/mcp-server/src/tools/capability.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'MCP API docs',
+            description: 'Dependent docs stay blocked while routing by capability.',
+            file_scope: ['docs/capability.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'missing-capability-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.assigned_agent).toBe('claude-code');
+    expect(result.routing_reason).toBe(
+      'Codex lacks known api_work capability; task requires api_work.',
+    );
+    expect(result.next_tool).toBeUndefined();
+    expect(result.ready[0]?.assigned_agent).toBe('claude-code');
   });
 
   it('boosts queen-published plan sub-tasks ahead of equal manual plan sub-tasks', async () => {
