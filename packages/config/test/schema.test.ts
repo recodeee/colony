@@ -1,5 +1,15 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { SettingsSchema, defaultSettings, loadSettings, settingsPath } from '../src/index.js';
+import {
+  SettingsSchema,
+  defaultSettings,
+  loadSettings,
+  loadSettingsForCwd,
+  repoSettingsPath,
+  settingsPath,
+} from '../src/index.js';
 
 describe('SettingsSchema', () => {
   it('parses empty object into defaults', () => {
@@ -12,6 +22,7 @@ describe('SettingsSchema', () => {
     expect(parsed.fileHeatHalfLifeMinutes).toBe(30);
     expect(parsed.claimStaleMinutes).toBe(240);
     expect(parsed.bridge.writeOmxNotepadPointer).toBe(false);
+    expect(parsed.bridge.policyMode).toBe('warn');
   });
 
   it('rejects invalid intensity', () => {
@@ -19,8 +30,15 @@ describe('SettingsSchema', () => {
   });
 
   it('allows enabling the OMX notepad pointer bridge', () => {
-    const parsed = SettingsSchema.parse({ bridge: { writeOmxNotepadPointer: true } });
+    const parsed = SettingsSchema.parse({
+      bridge: { writeOmxNotepadPointer: true, policyMode: 'audit-only' },
+    });
     expect(parsed.bridge.writeOmxNotepadPointer).toBe(true);
+    expect(parsed.bridge.policyMode).toBe('audit-only');
+  });
+
+  it('rejects unknown bridge policy modes', () => {
+    expect(() => SettingsSchema.parse({ bridge: { policyMode: 'hard-block' } })).toThrow();
   });
 
   it('defaults match exported defaultSettings', () => {
@@ -32,6 +50,7 @@ describe('SettingsSchema', () => {
     expect(defaultSettings.fileHeatHalfLifeMinutes).toBe(30);
     expect(defaultSettings.claimStaleMinutes).toBe(240);
     expect(defaultSettings.bridge.writeOmxNotepadPointer).toBe(false);
+    expect(defaultSettings.bridge.policyMode).toBe('warn');
   });
 
   it('uses COLONY_HOME for default settings location and data dir', () => {
@@ -43,6 +62,33 @@ describe('SettingsSchema', () => {
     } finally {
       if (original === undefined) delete process.env.COLONY_HOME;
       else process.env.COLONY_HOME = original;
+    }
+  });
+
+  it('merges repo-local settings over local defaults for hook policy', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'colony-config-repo-'));
+    const original = process.env.COLONY_HOME;
+    try {
+      process.env.COLONY_HOME = join(dir, 'home');
+      const repo = join(dir, 'repo');
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      mkdirSync(join(repo, '.colony'), { recursive: true });
+      writeFileSync(
+        join(repo, '.colony', 'settings.json'),
+        JSON.stringify({ bridge: { policyMode: 'block-on-conflict' } }),
+        'utf8',
+      );
+
+      expect(repoSettingsPath(join(repo, 'packages', 'hooks'))).toBe(
+        join(repo, '.colony', 'settings.json'),
+      );
+      const settings = loadSettingsForCwd(join(repo, 'packages', 'hooks'));
+      expect(settings.bridge.policyMode).toBe('block-on-conflict');
+      expect(settings.bridge.writeOmxNotepadPointer).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.COLONY_HOME;
+      else process.env.COLONY_HOME = original;
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

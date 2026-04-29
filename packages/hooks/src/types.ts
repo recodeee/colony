@@ -57,5 +57,7 @@ export interface HookResult {
   ok: boolean;
   ms: number;
   context?: string;
+  permissionDecision?: 'allow' | 'deny';
+  permissionDecisionReason?: string;
   error?: string;
 }

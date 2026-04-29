@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@colony/config';
-import { MemoryStore } from '@colony/core';
+import { type BridgePolicyMode, defaultSettings } from '@colony/config';
+import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runHook } from '../src/index.js';
 
@@ -18,6 +18,38 @@ afterEach(() => {
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+function useBridgePolicy(policyMode: BridgePolicyMode): void {
+  store.close();
+  store = new MemoryStore({
+    dbPath: join(dir, `${policyMode}.db`),
+    settings: {
+      ...defaultSettings,
+      bridge: { ...defaultSettings.bridge, policyMode },
+    },
+  });
+}
+
+function seedClaimConflict(): number {
+  store.startSession({ id: 'A', ide: 'claude-code', cwd: '/repo' });
+  store.startSession({ id: 'B', ide: 'codex', cwd: '/repo' });
+  const thread = TaskThread.open(store, {
+    repo_root: '/repo',
+    branch: 'feat/policy',
+    session_id: 'A',
+  });
+  thread.join('A', 'claude');
+  thread.join('B', 'codex');
+  thread.claimFile({ session_id: 'A', file_path: 'src/viewer.tsx' });
+  return thread.task_id;
+}
+
+function metadataOf(row: { metadata: string | Record<string, unknown> | null } | undefined) {
+  if (!row?.metadata) return {};
+  return typeof row.metadata === 'string'
+    ? (JSON.parse(row.metadata) as Record<string, unknown>)
+    : row.metadata;
+}
 
 describe('runHook', () => {
   it('session-start creates a session and returns a (possibly empty) context', async () => {
@@ -330,6 +362,104 @@ describe('runHook', () => {
       source: 'post-tool-use',
       file_path: '/tmp/x.txt',
       tool: 'Edit',
+    });
+  });
+
+  it('warn policy surfaces strong claim conflicts and continues', async () => {
+    const taskId = seedClaimConflict();
+
+    const result = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/viewer.tsx' },
+      },
+      { store },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.permissionDecision).toBe('allow');
+    const warning = JSON.parse(result.context ?? '{}') as Record<string, unknown>;
+    expect(warning).toMatchObject({
+      code: 'CLAIM_CONFLICT',
+      policy_mode: 'warn',
+      conflict: true,
+      conflict_strength: 'strong',
+      owner: 'A',
+    });
+    expect(store.storage.getClaim(taskId, 'src/viewer.tsx')?.session_id).toBe('B');
+  });
+
+  it('block-on-conflict policy denies only strong active claim conflicts', async () => {
+    useBridgePolicy('block-on-conflict');
+    const taskId = seedClaimConflict();
+
+    const result = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/viewer.tsx' },
+      },
+      { store },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.permissionDecision).toBe('deny');
+    expect(result.permissionDecisionReason).toContain('Colony strong claim conflict');
+    expect(store.storage.getClaim(taskId, 'src/viewer.tsx')?.session_id).toBe('A');
+    const telemetry = store.storage.taskObservationsByKind(taskId, 'claim-before-edit');
+    expect(metadataOf(telemetry[0])).toMatchObject({
+      policy_mode: 'block-on-conflict',
+      code: 'CLAIM_CONFLICT',
+      conflict: true,
+      conflict_strength: 'strong',
+      owner: 'A',
+    });
+
+    const unclaimed = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/new.tsx' },
+      },
+      { store },
+    );
+    expect(unclaimed.permissionDecision).toBe('allow');
+    expect(store.storage.getClaim(taskId, 'src/new.tsx')?.session_id).toBe('B');
+  });
+
+  it('audit-only policy records telemetry without warning or block output', async () => {
+    useBridgePolicy('audit-only');
+    const taskId = seedClaimConflict();
+
+    const result = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/viewer.tsx' },
+      },
+      { store },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.permissionDecision).toBe('allow');
+    expect(result.context).toBe('');
+    expect(result.permissionDecisionReason).toBeUndefined();
+    expect(store.storage.getClaim(taskId, 'src/viewer.tsx')?.session_id).toBe('B');
+    const telemetry = store.storage.taskObservationsByKind(taskId, 'claim-before-edit');
+    expect(metadataOf(telemetry[0])).toMatchObject({
+      policy_mode: 'audit-only',
+      conflict: true,
+      conflict_strength: 'strong',
+      owner: 'A',
     });
   });
 

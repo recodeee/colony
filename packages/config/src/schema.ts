@@ -12,6 +12,9 @@ export type NotifyProvider = z.infer<typeof NotifyProvider>;
 export const NotifyLevel = z.enum(['info', 'warn', 'error']);
 export type NotifyLevel = z.infer<typeof NotifyLevel>;
 
+export const BridgePolicyMode = z.enum(['warn', 'block-on-conflict', 'audit-only']);
+export type BridgePolicyMode = z.infer<typeof BridgePolicyMode>;
+
 export const SettingsSchema = z
   .object({
     dataDir: z
@@ -149,8 +152,11 @@ export const SettingsSchema = z
           .describe(
             'If true, successful Colony working-note writes append a tiny pointer to <repo>/.omx/notepad.md for transition-era OMX resume flows.',
           ),
+        policyMode: BridgePolicyMode.default('warn').describe(
+          'Claim-before-edit bridge policy: warn surfaces Colony warnings and continues; block-on-conflict denies only strong active claim conflicts; audit-only records telemetry silently.',
+        ),
       })
-      .default({ writeOmxNotepadPointer: false })
+      .default({ writeOmxNotepadPointer: false, policyMode: 'warn' })
       .describe(
         'Transition bridge settings between Colony-native coordination and legacy OMX state.',
       ),

@@ -33,6 +33,7 @@ describe('coerceForPath (schema-directed)', () => {
 
   it('leaves enum values as raw strings so zod can reject unknown members', () => {
     expect(coerceForPath('ultra', 'compression.intensity')).toBe('ultra');
+    expect(coerceForPath('block-on-conflict', 'bridge.policyMode')).toBe('block-on-conflict');
     expect(coerceForPath('garbage', 'compression.intensity')).toBe('garbage');
   });
 
@@ -44,6 +45,7 @@ describe('coerceForPath (schema-directed)', () => {
 describe('leafSchema', () => {
   it('walks nested object paths', () => {
     expect(leafSchema(SettingsSchema, 'embedding.provider')).toBeDefined();
+    expect(leafSchema(SettingsSchema, 'bridge.policyMode')).toBeDefined();
     expect(leafSchema(SettingsSchema, 'search.alpha')).toBeDefined();
   });
 

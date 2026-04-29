@@ -1,10 +1,10 @@
 import { join } from 'node:path';
-import { loadSettings, resolveDataDir } from '@colony/config';
+import { loadSettingsForCwd, resolveDataDir } from '@colony/config';
 import { MemoryStore, inferIdeFromSessionId } from '@colony/core';
 import { removeActiveSession, upsertActiveSession } from './active-session.js';
 import { ensureWorkerRunning } from './auto-spawn.js';
 import { postToolUse } from './handlers/post-tool-use.js';
-import { preToolUse } from './handlers/pre-tool-use.js';
+import { preToolUseResult } from './handlers/pre-tool-use.js';
 import { sessionEnd } from './handlers/session-end.js';
 import { buildProposalPreface, buildTaskPreface, sessionStart } from './handlers/session-start.js';
 import { stop } from './handlers/stop.js';
@@ -27,17 +27,19 @@ export async function runHook(
   const start = performance.now();
   const injected = opts.store !== undefined;
   let store: MemoryStore;
-  let settingsForSpawn: ReturnType<typeof loadSettings> | undefined;
+  let settingsForSpawn: ReturnType<typeof loadSettingsForCwd> | undefined;
   if (opts.store) {
     store = opts.store;
   } else {
-    const settings = loadSettings();
+    const settings = loadSettingsForCwd(input.cwd);
     settingsForSpawn = settings;
     const dbPath = join(resolveDataDir(settings.dataDir), 'data.db');
     store = new MemoryStore({ dbPath, settings });
   }
   try {
     let bootstrapContext = '';
+    let permissionDecision: HookResult['permissionDecision'];
+    let permissionDecisionReason: string | undefined;
     if (name !== 'session-start') {
       materializeSession(store, input);
       if (name !== 'session-end') {
@@ -57,7 +59,12 @@ export async function runHook(
         break;
       case 'pre-tool-use':
         upsertActiveSession(input, name);
-        context = preToolUse(store, input);
+        {
+          const preToolUse = preToolUseResult(store, input);
+          context = preToolUse.context;
+          permissionDecision = preToolUse.permissionDecision;
+          permissionDecisionReason = preToolUse.permissionDecisionReason;
+        }
         break;
       case 'post-tool-use':
         upsertActiveSession(input, name);
@@ -80,6 +87,9 @@ export async function runHook(
     }
     const result: HookResult = { ok: true, ms: Math.round(performance.now() - start) };
     if (context !== undefined) result.context = context;
+    if (permissionDecision !== undefined) result.permissionDecision = permissionDecision;
+    if (permissionDecisionReason !== undefined)
+      result.permissionDecisionReason = permissionDecisionReason;
     return result;
   } catch (err) {
     return {

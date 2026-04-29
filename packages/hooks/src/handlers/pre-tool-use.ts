@@ -1,8 +1,16 @@
-import { type MemoryStore, detectRepoBranch } from '@colony/core';
+import type { BridgePolicyMode } from '@colony/config';
+import {
+  type ClaimAgeClass,
+  type ClaimOwnershipStrength,
+  type MemoryStore,
+  classifyClaimAge,
+  detectRepoBranch,
+} from '@colony/core';
 import {
   type ActiveTaskCandidate,
   type AutoClaimFailureCode,
   type AutoClaimFileForSessionResult,
+  activeTaskCandidatesForSession,
   autoClaimFileBeforeEdit,
 } from '../auto-claim.js';
 import type { HookInput } from '../types.js';
@@ -13,8 +21,13 @@ const CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID = 'colony-pre-tool-use-diagnostics';
 const claimWarningDebounceByStore = new WeakMap<MemoryStore, Map<string, number>>();
 
 export interface ClaimBeforeEditFallbackWarning {
-  code: AutoClaimFailureCode;
+  code: ClaimBeforeEditWarningCode;
   message: string;
+  warning?: string;
+  policy_mode?: BridgePolicyMode;
+  conflict?: boolean;
+  conflict_strength?: ConflictStrength;
+  owner?: string | null;
   next_tool: 'task_claim_file';
   /** Concrete invocation string the agent can copy verbatim. */
   next_call: string;
@@ -28,11 +41,20 @@ export interface ClaimBeforeEditFallbackWarning {
   creation_guidance?: string;
 }
 
+export interface ClaimBeforeEditHookResult {
+  context: string;
+  permissionDecision: 'allow' | 'deny';
+  permissionDecisionReason?: string;
+}
+
 export interface ClaimBeforeEditResult {
+  policy_mode: BridgePolicyMode;
   files: string[];
   edits_with_claim: string[];
   edits_missing_claim: string[];
   auto_claimed_before_edit: string[];
+  conflicts: ClaimConflictInfo[];
+  blocked_conflicts: ClaimConflictInfo[];
   warnings: ClaimBeforeEditFallbackWarning[];
 }
 
@@ -41,24 +63,45 @@ type PreToolUseInput = Pick<
   'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd' | 'ide' | 'metadata'
 >;
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
+type ClaimBeforeEditWarningCode = AutoClaimFailureCode | 'CLAIM_CONFLICT';
+type ConflictStrength = ClaimOwnershipStrength | 'none';
 type CompactCandidate = Pick<
   ActiveTaskCandidate,
   'task_id' | 'title' | 'repo_root' | 'branch' | 'status' | 'updated_at' | 'active_files'
 >;
 
+interface ClaimConflictInfo {
+  file_path: string;
+  task_id: number;
+  owner: string;
+  conflict_strength: ClaimOwnershipStrength;
+  claimed_at: number;
+  age_minutes: number;
+  age_class: ClaimAgeClass;
+  warning: string;
+}
+
 export function preToolUse(store: MemoryStore, input: HookInput): string {
+  return preToolUseResult(store, input).context;
+}
+
+export function preToolUseResult(store: MemoryStore, input: HookInput): ClaimBeforeEditHookResult {
   const toolName = input.tool_name ?? input.tool ?? '';
   try {
-    return claimBeforeEditWarning(claimBeforeEditFromToolUse(store, input));
+    return bridgePolicyResult(claimBeforeEditFromToolUse(store, input));
   } catch {
     const files = extractTouchedFiles(toolName, input.tool_input);
-    return claimBeforeEditWarning({
+    const policyMode = bridgePolicyMode(store);
+    return bridgePolicyResult({
+      policy_mode: policyMode,
       files,
       edits_with_claim: [],
       edits_missing_claim: files,
       auto_claimed_before_edit: [],
+      conflicts: [],
+      blocked_conflicts: [],
       warnings: files.map((file_path) =>
-        claimWarning(input.session_id, file_path, toolName, {
+        claimWarning(input.session_id, file_path, toolName, policyMode, {
           ok: false,
           code: 'COLONY_UNAVAILABLE',
           resolution: 'not_found',
@@ -76,11 +119,15 @@ export function claimBeforeEditFromToolUse(
 ): ClaimBeforeEditResult {
   const toolName = input.tool_name ?? input.tool ?? '';
   const files = extractTouchedFiles(toolName, input.tool_input);
+  const policyMode = bridgePolicyMode(store);
   const result: ClaimBeforeEditResult = {
+    policy_mode: policyMode,
     files,
     edits_with_claim: [],
     edits_missing_claim: [],
     auto_claimed_before_edit: [],
+    conflicts: [],
+    blocked_conflicts: [],
     warnings: [],
   };
   if (files.length === 0) return result;
@@ -88,6 +135,34 @@ export function claimBeforeEditFromToolUse(
   const scope = taskScopeForToolUse(store, input);
 
   for (const file_path of files) {
+    const conflict = currentClaimConflict(store, input.session_id, scope, file_path);
+    if (conflict) result.conflicts.push(conflict);
+
+    if (policyMode === 'block-on-conflict' && conflict?.conflict_strength === 'strong') {
+      result.edits_missing_claim.push(file_path);
+      result.blocked_conflicts.push(conflict);
+      recordClaimBeforeEditFailure(store, input.session_id, {
+        task_id: conflict.task_id,
+        file_path,
+        tool: toolName,
+        code: 'CLAIM_CONFLICT',
+        error: conflict.warning,
+        candidates: [],
+        policy_mode: policyMode,
+        conflict,
+      });
+      result.warnings.push(
+        claimWarning(input.session_id, file_path, toolName, policyMode, {
+          ok: false,
+          code: 'CLAIM_CONFLICT',
+          error: conflict.warning,
+          candidates: [],
+          conflict,
+        }),
+      );
+      continue;
+    }
+
     const claim = autoClaimFileBeforeEdit({
       store,
       session_id: input.session_id,
@@ -105,6 +180,7 @@ export function claimBeforeEditFromToolUse(
         outcome: 'edits_with_claim',
         file_path,
         tool: toolName,
+        policy_mode: policyMode,
       });
       continue;
     }
@@ -115,8 +191,21 @@ export function claimBeforeEditFromToolUse(
         outcome: 'auto_claimed_before_edit',
         file_path,
         tool: toolName,
+        policy_mode: policyMode,
+        ...(conflict ? { conflict } : {}),
         ...(claim.observation_id !== null ? { claim_observation_id: claim.observation_id } : {}),
       });
+      if (conflict) {
+        result.warnings.push(
+          claimWarning(input.session_id, file_path, toolName, policyMode, {
+            ok: false,
+            code: 'CLAIM_CONFLICT',
+            error: conflict.warning,
+            candidates: [],
+            conflict,
+          }),
+        );
+      }
       continue;
     }
 
@@ -128,12 +217,76 @@ export function claimBeforeEditFromToolUse(
       code: claim.code,
       error: claim.error,
       candidates: claim.candidates,
+      policy_mode: policyMode,
     });
     if (!warningDebounced)
-      result.warnings.push(claimWarning(input.session_id, file_path, toolName, claim));
+      result.warnings.push(claimWarning(input.session_id, file_path, toolName, policyMode, claim));
   }
 
   return result;
+}
+
+function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookResult {
+  const context = claimBeforeEditWarning(result);
+  const blocked = result.policy_mode === 'block-on-conflict' && result.blocked_conflicts.length > 0;
+  if (blocked) {
+    const reason =
+      context ||
+      result.blocked_conflicts
+        .map((conflict) => conflict.warning)
+        .filter(Boolean)
+        .join('\n');
+    return {
+      context,
+      permissionDecision: 'deny',
+      ...(reason ? { permissionDecisionReason: reason } : {}),
+    };
+  }
+  return { context, permissionDecision: 'allow' };
+}
+
+function bridgePolicyMode(store: MemoryStore): BridgePolicyMode {
+  const mode = (store as Partial<MemoryStore>).settings?.bridge?.policyMode;
+  if (mode === 'warn' || mode === 'block-on-conflict' || mode === 'audit-only') return mode;
+  return 'warn';
+}
+
+function currentClaimConflict(
+  store: MemoryStore,
+  session_id: string,
+  scope: {
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
+  file_path: string,
+): ClaimConflictInfo | null {
+  try {
+    const candidates = activeTaskCandidatesForSession(store, { session_id, ...scope });
+    if (candidates.length !== 1) return null;
+    const candidate = candidates[0];
+    if (!candidate) return null;
+    const claim = store.storage.getClaim(candidate.task_id, file_path);
+    if (!claim || claim.session_id === session_id) return null;
+    const classification = classifyClaimAge(claim.claimed_at, {
+      claim_stale_minutes: store.settings.claimStaleMinutes,
+    });
+    const warning = `Colony ${classification.ownership_strength} claim on ${file_path} is held by ${claim.session_id}.`;
+    return {
+      file_path,
+      task_id: candidate.task_id,
+      owner: claim.session_id,
+      conflict_strength: classification.ownership_strength,
+      claimed_at: claim.claimed_at,
+      age_minutes: classification.age_minutes,
+      age_class: classification.age_class,
+      warning,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function taskScopeForToolUse(
@@ -211,11 +364,14 @@ function recordClaimBeforeEditFailure(
   store: MemoryStore,
   session_id: string,
   metadata: {
+    task_id?: number;
     file_path: string;
     tool: string;
-    code: AutoClaimFailureCode;
+    code: ClaimBeforeEditWarningCode;
     error: string;
     candidates: AutoClaimFailure['candidates'];
+    policy_mode: BridgePolicyMode;
+    conflict?: ClaimConflictInfo;
   },
 ): void {
   if (metadata.code === 'COLONY_UNAVAILABLE') return;
@@ -236,6 +392,7 @@ function recordClaimBeforeEditFailure(
       session_id: observationSessionId,
       kind: 'claim-before-edit',
       content: `edits_missing_claim: ${metadata.file_path}`,
+      ...(metadata.task_id !== undefined ? { task_id: metadata.task_id } : {}),
       metadata: {
         kind: 'claim-before-edit',
         source: 'pre-tool-use',
@@ -244,6 +401,11 @@ function recordClaimBeforeEditFailure(
         tool: metadata.tool,
         code: metadata.code,
         error: metadata.error,
+        policy_mode: metadata.policy_mode,
+        conflict: metadata.conflict !== undefined,
+        conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
+        owner: metadata.conflict?.owner ?? null,
+        warning: metadata.conflict?.warning ?? metadata.error,
         ...(sessionBindingMissing
           ? { session_binding_missing: true, original_session_id: session_id }
           : {}),
@@ -283,8 +445,10 @@ function recordClaimBeforeEdit(
     outcome: 'edits_with_claim' | 'edits_missing_claim' | 'auto_claimed_before_edit';
     file_path: string;
     tool: string;
+    policy_mode: BridgePolicyMode;
     other_session?: string;
     claim_observation_id?: number;
+    conflict?: ClaimConflictInfo;
   },
 ): void {
   store.addObservation({
@@ -292,19 +456,35 @@ function recordClaimBeforeEdit(
     kind: 'claim-before-edit',
     content: `${metadata.outcome}: ${metadata.file_path}`,
     task_id,
-    metadata: { kind: 'claim-before-edit', source: 'pre-tool-use', ...metadata },
+    metadata: {
+      kind: 'claim-before-edit',
+      source: 'pre-tool-use',
+      ...metadata,
+      conflict: metadata.conflict !== undefined,
+      conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
+      owner: metadata.conflict?.owner ?? null,
+      warning: metadata.conflict?.warning ?? null,
+    },
   });
 }
 
 function claimBeforeEditWarning(result: ClaimBeforeEditResult): string {
+  if (result.policy_mode === 'audit-only') return '';
   return result.warnings.map((warning) => JSON.stringify(warning)).join('\n');
 }
+
+type ClaimWarningInput = Pick<AutoClaimFailure, 'error' | 'candidates' | 'creation_guidance'> & {
+  ok?: false;
+  code: ClaimBeforeEditWarningCode;
+  conflict?: ClaimConflictInfo;
+};
 
 function claimWarning(
   session_id: string,
   file_path: string,
   tool_name: string,
-  claim: AutoClaimFailure,
+  policyMode: BridgePolicyMode,
+  claim: ClaimWarningInput,
 ): ClaimBeforeEditFallbackWarning {
   const candidates = compactCandidates(claim.candidates);
   // Spell out the exact tool call the agent should make next. When there is
@@ -318,17 +498,35 @@ function claimWarning(
         : '<task_id>';
   const next_call = `mcp__colony__task_claim_file({ task_id: ${taskRef}, session_id: "${session_id}", file_path: "${file_path}", note: "pre-edit claim" })`;
   const tool = tool_name || 'edit tool';
-  const message = [
-    `Missing Colony claim before ${tool} on ${file_path}.`,
-    `reason=${claim.code}: ${claim.error}`,
-    `next=${next_call}`,
-    candidates.length > 0 ? `candidates=${JSON.stringify(candidates)}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const conflict = claim.conflict;
+  const message =
+    claim.code === 'CLAIM_CONFLICT' && conflict
+      ? [
+          `Colony ${conflict.conflict_strength} claim conflict before ${tool} on ${file_path}.`,
+          `owner=${conflict.owner}`,
+          `policy=${policyMode}`,
+          `warning=${conflict.warning}`,
+        ].join('\n')
+      : [
+          `Missing Colony claim before ${tool} on ${file_path}.`,
+          `reason=${claim.code}: ${claim.error}`,
+          `next=${next_call}`,
+          candidates.length > 0 ? `candidates=${JSON.stringify(candidates)}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
   return {
     code: claim.code,
     message,
+    ...(conflict
+      ? {
+          warning: conflict.warning,
+          policy_mode: policyMode,
+          conflict: true,
+          conflict_strength: conflict.conflict_strength,
+          owner: conflict.owner,
+        }
+      : {}),
     next_tool: 'task_claim_file',
     next_call,
     suggested_args: {
