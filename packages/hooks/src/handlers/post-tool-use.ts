@@ -53,7 +53,7 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
     toolInput,
     touchedPathContextForToolUse(store, input),
   );
-  const metadata: Record<string, unknown> = { tool };
+  const metadata: Record<string, unknown> = { tool, ...lifecycleLinkMetadata(input.metadata) };
   if (touchedFiles.length > 0) {
     metadata.file_path = touchedFiles[0];
     metadata.file_paths = touchedFiles;
@@ -100,6 +100,20 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
   // thinking about them explicitly — the ordinary work of editing code
   // feeds the foraging algorithm for free.
   reinforceAdjacentProposals(store, input);
+}
+
+function lifecycleLinkMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!metadata) return {};
+  return {
+    ...optionalString('lifecycle_event_id', readString(metadata.event_id)),
+    ...optionalString('parent_event_id', readString(metadata.parent_event_id)),
+    ...optionalString(
+      'lifecycle_event_type',
+      readString(metadata.event_type) ?? readString(metadata.event_name),
+    ),
+  };
 }
 
 function extractBashCoordinationEvents(

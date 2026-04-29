@@ -83,6 +83,9 @@ describe('claim-before-edit full bridge path', () => {
     expect(parseMetadata(editObservation?.metadata)).toMatchObject({
       tool: 'Edit',
       file_path: FILE_PATH,
+      lifecycle_event_id: 'evt_edit_post',
+      parent_event_id: 'evt_edit_pre',
+      lifecycle_event_type: 'post_tool_use',
     });
     expect(claimObservation?.ts).toBeLessThanOrEqual(editObservation?.ts ?? 0);
 
@@ -100,7 +103,7 @@ describe('claim-before-edit full bridge path', () => {
     expect(stats.edits_claimed_before / stats.edits_with_file_path).toBeGreaterThan(0);
   });
 
-  it('reports pre_tool_use_missing when post_tool_use arrives without a prior pre_tool_use', async () => {
+  it('synthesizes pre_tool_use before post_tool_use telemetry when post arrives first', async () => {
     const sessionId = 'codex@missing-pre';
 
     await emitLifecycle(10, {
@@ -119,23 +122,48 @@ describe('claim-before-edit full bridge path', () => {
       tool_response: { success: true },
     });
 
+    const taskId = store.storage.findActiveTaskForSession(sessionId);
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task was not bound');
+
+    const lifecycleEvents = taskLifecycleEvents(taskId);
+    expect(lifecycleEvents.map((row) => row.event_type)).toEqual([
+      'session_start',
+      'task_bind',
+      'pre_tool_use',
+      'post_tool_use',
+    ]);
+    expect(lifecycleEvents[2]).toMatchObject({
+      event_id: 'evt_missing_pre_post:pre_tool_use',
+      event_type: 'pre_tool_use',
+    });
+    expect(lifecycleEvents[3]).toMatchObject({
+      event_id: 'evt_missing_pre_post',
+      parent_event_id: 'evt_missing_pre_post:pre_tool_use',
+    });
+
+    const editObservation = firstSessionObservation(sessionId, 'tool_use');
+    expect(parseMetadata(editObservation?.metadata)).toMatchObject({
+      tool: 'Edit',
+      file_path: FILE_PATH,
+      lifecycle_event_id: 'evt_missing_pre_post',
+      parent_event_id: 'evt_missing_pre_post:pre_tool_use',
+      lifecycle_event_type: 'post_tool_use',
+    });
+
     const stats = store.storage.claimBeforeEditStats(0);
     expect(stats).toMatchObject({
       edit_tool_calls: 1,
       edits_with_file_path: 1,
-      edits_claimed_before: 0,
-      auto_claimed_before_edit: 0,
-      pre_tool_use_signals: 0,
+      edits_claimed_before: 1,
+      auto_claimed_before_edit: 1,
+      pre_tool_use_signals: 1,
       claim_miss_reasons: {
-        pre_tool_use_missing: 1,
+        pre_tool_use_missing: 0,
       },
-      nearest_claim_examples: [
-        expect.objectContaining({
-          reason: 'pre_tool_use_missing',
-          edit_file_path: FILE_PATH,
-        }),
-      ],
     });
+    expect(stats.edits_claimed_before).toBeGreaterThan(0);
+    expect(stats.pre_tool_use_signals ?? 0).toBeGreaterThan(0);
   });
 
   it('records extracted paths on Bash and apply_patch pre_tool_use lifecycle payloads', async () => {

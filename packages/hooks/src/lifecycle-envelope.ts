@@ -2,6 +2,7 @@ import path, { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
 import { MemoryStore, TaskThread, inferIdeFromSessionId } from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
+import { extractTouchedFiles } from './handlers/post-tool-use.js';
 import { runHook } from './runner.js';
 import type { HookInput, HookName } from './types.js';
 
@@ -92,6 +93,7 @@ export function parseOmxLifecycleEnvelope(
 
     const eventId = readString(root.event_id);
     if (!eventId) return { ok: false, error: 'missing event_id' };
+    const parentEventId = readString(root.parent_event_id);
 
     const eventType = root.event_name as OmxLifecycleEventType;
     const sessionId = readString(root.session_id);
@@ -122,6 +124,7 @@ export function parseOmxLifecycleEnvelope(
       schema: OMX_LIFECYCLE_SCHEMA,
       schema_id: OMX_LIFECYCLE_SCHEMA_ID,
       event_id: eventId,
+      ...optionalString('parent_event_id', parentEventId),
       event_type: eventType,
       event_name: eventType,
       source,
@@ -137,7 +140,7 @@ export function parseOmxLifecycleEnvelope(
       event: {
         schema: OMX_LIFECYCLE_SCHEMA,
         event_id: eventId,
-        ...optionalString('parent_event_id', readString(root.parent_event_id)),
+        ...optionalString('parent_event_id', parentEventId),
         event_type: eventType,
         session_id: sessionId,
         agent,
@@ -267,6 +270,8 @@ async function routeLifecycleEvent(
   }
 
   if (event.event_type === 'post_tool_use') {
+    const preToolUse = await ensurePreToolUseBeforePostToolUse(store, event);
+    if (!preToolUse.ok) return preToolUse;
     return hookRouteResult(
       'post-tool-use',
       await runHook('post-tool-use', hookInputFromLifecycle(event), { store }),
@@ -275,6 +280,94 @@ async function routeLifecycleEvent(
 
   bindTaskFromLifecycle(store, event);
   return hookRouteResult('stop', await runHook('stop', hookInputFromLifecycle(event), { store }));
+}
+
+async function ensurePreToolUseBeforePostToolUse(
+  store: MemoryStore,
+  event: NormalizedOmxLifecycleEvent,
+): Promise<{
+  ok: boolean;
+  route: string;
+  context?: string;
+  extracted_paths?: string[];
+  error?: string;
+}> {
+  const touchedFiles = extractTouchedFiles(event.tool_name ?? '', toolInputForHook(event), {
+    cwd: event.cwd,
+    repoRoot: event.repo_root,
+  });
+  if (touchedFiles.length === 0) return { ok: true, route: 'pre-tool-use-not-needed' };
+
+  const parentEventId =
+    event.parent_event_id ??
+    findMatchingPreToolUseEventId(store, event, touchedFiles) ??
+    syntheticPreToolUseEventId(event);
+  event.parent_event_id = parentEventId;
+  event.metadata = { ...event.metadata, parent_event_id: parentEventId };
+
+  if (hasProcessedLifecycleEvent(store, parentEventId, event.session_id)) {
+    return { ok: true, route: 'pre-tool-use-existing', extracted_paths: touchedFiles };
+  }
+
+  const preEvent = preToolUseEventFromPost(event, parentEventId);
+  const routed = hookRouteResult(
+    'pre-tool-use',
+    await runHook('pre-tool-use', hookInputFromLifecycle(preEvent), { store }),
+  );
+  recordLifecycleAudit(store, preEvent, routed);
+  if (!routed.ok) return routed;
+  return { ok: true, route: 'pre-tool-use-synthesized', extracted_paths: touchedFiles };
+}
+
+function findMatchingPreToolUseEventId(
+  store: MemoryStore,
+  event: NormalizedOmxLifecycleEvent,
+  touchedFiles: string[],
+): string | undefined {
+  const rows = store.storage.timeline(event.session_id, undefined, 250);
+  for (const row of rows.slice().reverse()) {
+    if (row.kind !== 'omx-lifecycle') continue;
+    const metadata = parseMetadata(row.metadata);
+    if (!metadata || metadata.event_type !== 'pre_tool_use') continue;
+    if (metadata.tool_name !== event.tool_name) continue;
+    const paths = stringArray(metadata.extracted_paths);
+    if (paths.length > 0 && !paths.some((filePath) => touchedFiles.includes(filePath))) continue;
+    return readString(metadata.event_id);
+  }
+  return undefined;
+}
+
+function syntheticPreToolUseEventId(event: NormalizedOmxLifecycleEvent): string {
+  return `${event.event_id}:pre_tool_use`;
+}
+
+function preToolUseEventFromPost(
+  event: NormalizedOmxLifecycleEvent,
+  eventId: string,
+): NormalizedOmxLifecycleEvent {
+  return {
+    schema: event.schema,
+    event_id: eventId,
+    event_type: 'pre_tool_use',
+    session_id: event.session_id,
+    agent: event.agent,
+    ide: event.ide,
+    cwd: event.cwd,
+    repo_root: event.repo_root,
+    branch: event.branch,
+    timestamp: event.timestamp,
+    ...optionalString('tool_name', event.tool_name),
+    ...('tool_input' in event ? { tool_input: event.tool_input } : {}),
+    source: event.source,
+    metadata: {
+      ...event.metadata,
+      event_id: eventId,
+      event_type: 'pre_tool_use',
+      event_name: 'pre_tool_use',
+      synthesized_from_event_id: event.event_id,
+      synthesized_from_event_type: 'post_tool_use',
+    },
+  };
 }
 
 function hookRouteResult(
