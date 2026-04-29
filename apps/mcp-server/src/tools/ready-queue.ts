@@ -548,6 +548,7 @@ function capabilityMatchScore(capabilityHint: string | null, profile: AgentProfi
   return clampScore(rankCandidates({ summary }, [profile])[0]?.score ?? 0);
 }
 
+<<<<<<< HEAD
 function staleBlockerRescueCandidate(
   plans: Array<{
     plan_slug: string;
@@ -611,6 +612,8 @@ function unlockCandidateFor(blocker: SubtaskInfo, subtasks: SubtaskInfo[]): Subt
   );
 }
 
+=======
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
 function applyRuntimeRouting(
   store: MemoryStore,
   task: RankedSubtask,
@@ -628,9 +631,16 @@ function applyRuntimeRouting(
     };
   }
 
+<<<<<<< HEAD
   return {
     ...task,
     assigned_agent: bestAlternateRuntime(store, task, requestedAgent, repoRoot, signal),
+=======
+  const candidate = bestAlternateRuntime(store, task, requestedAgent, repoRoot, signal);
+  return {
+    ...task,
+    assigned_agent: candidate,
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
     routing_reason: signal.reason,
   };
 }
@@ -650,8 +660,12 @@ function runtimeRoutingSignal(
     task.capability_hint,
     loadProfile(store.storage, requestedAgent),
   );
+<<<<<<< HEAD
   const missingCapability =
     task.capability_hint !== null && requestedCapability <= MISSING_CAPABILITY_SCORE;
+=======
+  const missingCapability = task.capability_hint !== null && requestedCapability <= MISSING_CAPABILITY_SCORE;
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
   const largeTask = fileCount >= LARGE_TASK_FILE_COUNT;
   const riskyAfterQuota = requestedQuota && (largeTask || protectedCount > 0 || staleBlockers > 0);
 
@@ -697,12 +711,17 @@ function quotaRoutingReason(
 ): string {
   const details: string[] = [];
   if (fileCount >= LARGE_TASK_FILE_COUNT) details.push(`task spans ${fileCount} files`);
+<<<<<<< HEAD
   if (protectedCount > 0) {
     details.push(`task touches ${protectedCount} protected file${protectedCount === 1 ? '' : 's'}`);
   }
   if (staleBlockers > 0) {
     details.push(`${staleBlockers} stale blocker${staleBlockers === 1 ? '' : 's'} exist`);
   }
+=======
+  if (protectedCount > 0) details.push(`task touches ${protectedCount} protected file${protectedCount === 1 ? '' : 's'}`);
+  if (staleBlockers > 0) details.push(`${staleBlockers} stale blocker${staleBlockers === 1 ? '' : 's'} exist`);
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
   return `${displayAgent(agent)} recently hit quota on this branch; ${details.join('; ')}`;
 }
 
@@ -718,9 +737,12 @@ function bestAlternateRuntime(
     const key = normalizeAgentKey(agent);
     return key !== requestedKey && !signal.quotaAgents.has(key);
   });
+<<<<<<< HEAD
   if (candidates.length === 0 && requestedKey === 'codex') {
     return 'claude-code';
   }
+=======
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
   if (candidates.length === 0) return 'any';
 
   const ranked = candidates
@@ -743,10 +765,14 @@ function hasCapableAlternate(
   return candidateAgents(store, repoRoot).some((agent) => {
     const key = normalizeAgentKey(agent);
     if (key === requestedKey || quotaAgents.has(key)) return false;
+<<<<<<< HEAD
     return (
       capabilityMatchScore(task.capability_hint, loadProfile(store.storage, agent)) >=
       CAPABLE_AGENT_SCORE
     );
+=======
+    return capabilityMatchScore(task.capability_hint, loadProfile(store.storage, agent)) >= CAPABLE_AGENT_SCORE;
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
   });
 }
 
@@ -757,7 +783,11 @@ function candidateAgents(store: MemoryStore, repoRoot: string | undefined): stri
     if (repoRoot !== undefined && session.cwd !== repoRoot) continue;
     const ide = session.ide?.trim();
     if (ide) agents.add(ide);
+<<<<<<< HEAD
     const prefix = session.id.includes('@') ? session.id.split('@')[0]?.trim() : '';
+=======
+    const prefix = session.id.split('@')[0]?.trim();
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
     if (prefix) agents.add(prefix);
   }
   for (const task of store.storage.listTasks(2000)) {
@@ -771,7 +801,11 @@ function candidateAgents(store: MemoryStore, repoRoot: string | undefined): stri
 
 function isSystemAgent(agent: string): boolean {
   const key = normalizeAgentKey(agent);
+<<<<<<< HEAD
   return key === 'any' || key === 'queen' || key === 'planner';
+=======
+  return key === 'queen' || key === 'planner';
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
 }
 
 function recentQuotaAgents(
@@ -808,11 +842,15 @@ function readRuntimeAgent(
     const value = meta[key];
     if (typeof value === 'string' && value.trim()) return value;
   }
+<<<<<<< HEAD
   return (
     store.storage.getParticipantAgent(taskId, row.session_id) ??
     store.storage.getSession(row.session_id)?.ide ??
     null
   );
+=======
+  return store.storage.getParticipantAgent(taskId, row.session_id) ?? store.storage.getSession(row.session_id)?.ide ?? null;
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
 }
 
 function isQuotaObservation(row: ObservationRow, meta: Record<string, unknown>): boolean {
@@ -857,9 +895,13 @@ function staleBlockerCount(store: MemoryStore, taskId: number): number {
 }
 
 function isBlockerObservation(row: ObservationRow, meta: Record<string, unknown>): boolean {
+<<<<<<< HEAD
   return (
     row.kind === 'blocker' || (row.kind === PLAN_SUBTASK_CLAIM_KIND && meta.status === 'blocked')
   );
+=======
+  return row.kind === 'blocker' || (row.kind === PLAN_SUBTASK_CLAIM_KIND && meta.status === 'blocked');
+>>>>>>> agent/codex/record-health-fix-pr-evidence-2026-04-29-21-03
 }
 
 function normalizeAgentKey(agent: string): string {
