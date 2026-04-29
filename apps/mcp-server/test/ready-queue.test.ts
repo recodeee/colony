@@ -26,6 +26,12 @@ interface ReadyEntry {
   fit_score: number;
   reason: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
   reasoning: string;
+  claim_args: {
+    plan_slug: string;
+    subtask_index: number;
+    session_id: string;
+    agent: string;
+  };
 }
 
 interface ClaimResult {
@@ -325,11 +331,19 @@ describe('task_ready_for_agent', () => {
     expect(new Set(result.ready.map((entry) => entry.wave_index))).toEqual(new Set([0]));
     expect(result.ready.map((entry) => entry.title)).toEqual(
       expect.arrayContaining([
-        'Auto-claim before Edit/Write',
-        'Add claim-before-edit warning fallback',
+        'Codex/OMX claim-before-edit bridge',
+        'Active task binding for auto-claim',
         'Strengthen hivemind_context to attention_inbox funnel',
       ]),
     );
+    for (const entry of result.ready) {
+      expect(entry.claim_args).toEqual({
+        plan_slug: colonyAdoptionFixesPlan.slug,
+        subtask_index: entry.subtask_index,
+        session_id: 'agent-session',
+        agent: 'codex',
+      });
+    }
     expect(result.ready.map((entry) => entry.subtask_index)).not.toContain(3);
     expect(result.ready.map((entry) => entry.subtask_index)).not.toContain(6);
     expect(result.next_action).toContain('task_plan_claim_subtask');
@@ -391,7 +405,13 @@ describe('task_ready_for_agent', () => {
       wave_index: 2,
       wave_name: 'Wave 3',
       blocked_by_count: 0,
-      title: 'Finalize adoption docs and tests',
+      title: 'Finalize docs, tests, and health',
+      claim_args: {
+        plan_slug: colonyAdoptionFixesPlan.slug,
+        subtask_index: 6,
+        session_id: 'agent-session',
+        agent: 'codex',
+      },
     });
   });
 

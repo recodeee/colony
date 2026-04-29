@@ -37,6 +37,13 @@ const CAPABILITY_HINT_TEXT: Record<string, string> = {
 
 export type ReadyReason = 'continue_current_task' | 'urgent_override' | 'ready_high_score';
 
+export interface TaskPlanClaimArgs {
+  plan_slug: string;
+  subtask_index: number;
+  session_id: string;
+  agent: string;
+}
+
 export interface ReadySubtask {
   plan_slug: string;
   subtask_index: number;
@@ -49,17 +56,11 @@ export interface ReadySubtask {
   fit_score: number;
   reason: ReadyReason;
   reasoning: string;
+  claim_args: TaskPlanClaimArgs;
 }
 
 export interface ReadySubtaskWithWarnings extends ReadySubtask {
   negative_warnings: CompactNegativeWarning[];
-}
-
-export interface TaskPlanClaimArgs {
-  plan_slug: string;
-  subtask_index: number;
-  session_id: string;
-  agent: string;
 }
 
 export interface ReadyForAgentResult {
@@ -133,6 +134,7 @@ export async function buildReadyForAgent(
         plan_slug: plan.plan_slug,
         subtask,
         session_id: args.session_id,
+        agent: args.agent,
         profile,
         parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
         created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
@@ -152,6 +154,7 @@ export async function buildReadyForAgent(
           plan_slug: plan.plan_slug,
           subtask,
           session_id: args.session_id,
+          agent: args.agent,
           profile,
           parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
           created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
@@ -217,12 +220,7 @@ function buildReadyResult(
     };
   }
 
-  const claim_args: TaskPlanClaimArgs = {
-    plan_slug: claimable.plan_slug,
-    subtask_index: claimable.subtask_index,
-    session_id: args.session_id,
-    agent: args.agent,
-  };
+  const claim_args = claimable.claim_args;
   return {
     ...base,
     next_action: readyNextAction(base.ready, args),
@@ -317,6 +315,7 @@ function rankSubtask(
     plan_slug: string;
     subtask: SubtaskInfo;
     session_id: string;
+    agent: string;
     profile: AgentProfile;
     parent_plan_created_by: string | null;
     created_at: number;
@@ -353,6 +352,12 @@ function rankSubtask(
       recent_claim_density: recentClaimDensity,
       queen_bonus: queenBonus,
     }),
+    claim_args: {
+      plan_slug: args.plan_slug,
+      subtask_index: args.subtask.subtask_index,
+      session_id: args.session_id,
+      agent: args.agent,
+    },
     created_at: args.created_at,
     claim_ts: args.current_claim
       ? currentClaimTimestamp(store, args.subtask.task_id, args.session_id)

@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadSettings } from '@colony/config';
-import { type MemoryStore, type PlanInfo, type SubtaskInfo, listPlans } from '@colony/core';
+import {
+  type MemoryStore,
+  type PlanInfo,
+  type SubtaskInfo,
+  TaskThread,
+  listPlans,
+} from '@colony/core';
 import {
   type CapabilityHint,
   DEFAULT_STALLED_MINUTES,
@@ -11,6 +17,7 @@ import {
   type QueenPlan,
   type QueenSubtask,
   type QueenSweepWaveSummary,
+  colonyAdoptionFixesPlan,
   planGoal,
   publishOrderedPlan,
   sweepQueenPlans,
@@ -34,6 +41,10 @@ interface PlanOpts {
 
 interface RepoOpts {
   repoRoot?: string;
+}
+
+interface AdoptionFixesOpts extends RepoOpts {
+  json?: boolean;
 }
 
 interface SweepOpts {
@@ -131,6 +142,48 @@ export function registerQueenCommand(program: Command): void {
         process.stdout.write(`${kleur.green('✓')} queen plan published ${kleur.cyan(plan.slug)}\n`);
         process.stdout.write(`  spec: ${published.spec_change_path}\n`);
         process.stdout.write(renderPublishedSubtasks(plan, published.subtasks));
+      });
+    });
+
+  group
+    .command('adoption-fixes')
+    .description('Publish current Colony adoption-fix waves into the local DB')
+    .option('--repo-root <path>', 'Repo root (defaults to process.cwd())')
+    .option('--json', 'Emit publish status as JSON')
+    .action(async (opts: AdoptionFixesOpts) => {
+      const repoRoot = resolve(opts.repoRoot ?? process.cwd());
+      const settings = loadSettings();
+      await withStore(settings, (store) => {
+        store.startSession({ id: QUEEN_SESSION_ID, ide: QUEEN_AGENT, cwd: repoRoot });
+        const existing = queenPlans(store, repoRoot).find(
+          (candidate) => candidate.plan_slug === colonyAdoptionFixesPlan.slug,
+        );
+        const published =
+          existing === undefined
+            ? publishQueenPlanStructure(store, repoRoot, colonyAdoptionFixesPlan)
+            : null;
+        const plan = queenPlans(store, repoRoot).find(
+          (candidate) => candidate.plan_slug === colonyAdoptionFixesPlan.slug,
+        );
+        if (!plan)
+          throw new Error(`queen plan not found after publish: ${colonyAdoptionFixesPlan.slug}`);
+
+        if (opts.json === true) {
+          process.stdout.write(
+            `${JSON.stringify(adoptionFixesPayload(plan, published !== null), null, 2)}\n`,
+          );
+          return;
+        }
+
+        process.stdout.write(
+          `${kleur.green('✓')} queen adoption-fixes ${
+            published === null ? 'already active' : 'published'
+          } ${kleur.cyan(plan.plan_slug)}\n`,
+        );
+        process.stdout.write(
+          `  ready: ${plan.next_available.length}; blocked: ${blockedFutureSubtaskCount(plan)}; agents pull with task_ready_for_agent\n`,
+        );
+        renderPlanRollup(plan);
       });
     });
 
@@ -458,6 +511,120 @@ function queenPlans(store: MemoryStore, repoRoot: string): PlanInfo[] {
       .listParticipants(plan.spec_task_id)
       .some((participant) => participant.agent === QUEEN_AGENT),
   );
+}
+
+function publishQueenPlanStructure(
+  store: MemoryStore,
+  repoRoot: string,
+  plan: QueenPlan,
+): {
+  spec_task_id: number;
+  subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
+} {
+  const parent = TaskThread.open(store, {
+    repo_root: repoRoot,
+    branch: `spec/${plan.slug}`,
+    title: plan.title,
+    session_id: QUEEN_SESSION_ID,
+  });
+  parent.join(QUEEN_SESSION_ID, QUEEN_AGENT);
+  store.addObservation({
+    session_id: QUEEN_SESSION_ID,
+    task_id: parent.task_id,
+    kind: 'plan-config',
+    content: `queen plan ${plan.slug} config: auto_archive=false`,
+    metadata: {
+      plan_slug: plan.slug,
+      auto_archive: false,
+      source: 'queen',
+      source_tool: 'queen adoption-fixes',
+    },
+  });
+
+  const subtasks = plan.subtasks.map((subtask, index) => {
+    const branch = `spec/${plan.slug}/sub-${index}`;
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch,
+      session_id: QUEEN_SESSION_ID,
+    });
+    store.addObservation({
+      session_id: QUEEN_SESSION_ID,
+      task_id: thread.task_id,
+      kind: 'plan-subtask',
+      content: `${subtask.title}\n\n${subtask.description}`,
+      metadata: {
+        parent_plan_slug: plan.slug,
+        parent_plan_title: plan.title,
+        parent_spec_task_id: parent.task_id,
+        subtask_index: index,
+        title: subtask.title,
+        description: subtask.description,
+        file_scope: subtask.file_scope,
+        depends_on: subtask.depends_on,
+        spec_row_id: null,
+        capability_hint: subtask.capability_hint,
+        status: 'available',
+      },
+    });
+    return {
+      subtask_index: index,
+      branch,
+      task_id: thread.task_id,
+      title: subtask.title,
+    };
+  });
+
+  return { spec_task_id: parent.task_id, subtasks };
+}
+
+function adoptionFixesPayload(
+  plan: PlanInfo,
+  published: boolean,
+): {
+  plan_slug: string;
+  status: 'published' | 'already_active';
+  active_plans: number;
+  ready_subtasks: number;
+  blocked_subtasks: number;
+  claimable_current_wave: Array<{
+    subtask_index: number;
+    title: string;
+    wave_index: number;
+    wave_name: string;
+    claim_args: {
+      plan_slug: string;
+      subtask_index: number;
+      session_id: '<session_id>';
+      agent: '<agent>';
+    };
+  }>;
+} {
+  return {
+    plan_slug: plan.plan_slug,
+    status: published ? 'published' : 'already_active',
+    active_plans: 1,
+    ready_subtasks: plan.next_available.length,
+    blocked_subtasks: blockedFutureSubtaskCount(plan),
+    claimable_current_wave: plan.next_available.map((subtask) => ({
+      subtask_index: subtask.subtask_index,
+      title: subtask.title,
+      wave_index: subtask.wave_index,
+      wave_name: subtask.wave_name,
+      claim_args: {
+        plan_slug: plan.plan_slug,
+        subtask_index: subtask.subtask_index,
+        session_id: '<session_id>',
+        agent: '<agent>',
+      },
+    })),
+  };
+}
+
+function blockedFutureSubtaskCount(plan: PlanInfo): number {
+  return plan.subtasks.filter(
+    (subtask) => subtask.status === 'available' && subtask.blocked_by_count > 0,
+  ).length;
 }
 
 function renderDraftTable(plan: QueenPlan): void {

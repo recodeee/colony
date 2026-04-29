@@ -90,13 +90,15 @@ function readSubtask(store: MemoryStore, task_id: number, plan_slug: string): Su
   const status = resolvedStatus ?? (meta.status as SubtaskStatus | undefined) ?? 'available';
 
   const [titleLine, ...rest] = initial.content.split('\n\n');
+  const metaTitle = typeof meta.title === 'string' ? meta.title : null;
+  const metaDescription = typeof meta.description === 'string' ? meta.description : null;
   const dependsOn = Array.isArray(meta.depends_on) ? (meta.depends_on as number[]) : [];
 
   return {
     task_id,
     subtask_index: typeof meta.subtask_index === 'number' ? meta.subtask_index : -1,
-    title: titleLine ?? '(untitled)',
-    description: rest.join('\n\n').trim(),
+    title: metaTitle ?? titleLine ?? '(untitled)',
+    description: metaDescription ?? rest.join('\n\n').trim(),
     status,
     file_scope: Array.isArray(meta.file_scope) ? (meta.file_scope as string[]) : [],
     depends_on: dependsOn,
@@ -387,6 +389,8 @@ export function synthesizePlanFromProposal(
         parent_plan_title: proposal.summary,
         parent_spec_task_id: parent.task_id,
         subtask_index: i,
+        title: group.title,
+        description: group.description,
         file_scope: group.file_scope,
         depends_on: [],
         spec_row_id: null,

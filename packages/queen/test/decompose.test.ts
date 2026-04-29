@@ -507,13 +507,13 @@ describe('orderedPlanFromWaves', () => {
       ['wave-3', [6]],
     ]);
     expect(plan.subtasks.map((subtask) => subtask.title)).toEqual([
-      'Auto-claim before Edit/Write',
-      'Add claim-before-edit warning fallback',
+      'Codex/OMX claim-before-edit bridge',
+      'Active task binding for auto-claim',
       'Strengthen hivemind_context to attention_inbox funnel',
-      'Route OMX notepad writes to task_note_working',
-      'Expose bridge status for OMX display',
-      'Improve health telemetry for adoption targets',
-      'Finalize adoption docs and tests',
+      'Convert task_ready_for_agent results into task_plan_claim_subtask',
+      'Adopt task_message for directed coordination',
+      'Adopt proposal and foraging flows',
+      'Finalize docs, tests, and health',
     ]);
     expect(plan.subtasks.slice(3, 6).map((subtask) => subtask.depends_on)).toEqual([
       [0, 1, 2],
