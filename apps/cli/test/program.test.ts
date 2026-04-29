@@ -24,6 +24,7 @@ describe('Colony CLI program', () => {
       'plan',
       'queen',
       'reindex',
+      'rescue',
       'search',
       'start',
       'status',
@@ -96,6 +97,7 @@ describe('Colony CLI program', () => {
                                             sources
         queen                               Queen coordination helpers for published
                                             plan lanes
+        rescue                              Clean up stranded sessions safely
         help [command]                      display help for command
       "
     `);
