@@ -9,6 +9,7 @@ export interface ActiveTaskCandidate {
   status: string;
   updated_at: number;
   agent: string;
+  active_files?: string[];
 }
 
 type ActiveTaskMatch = 'session_id' | 'branch_repo_root' | 'worktree' | 'agent';
@@ -16,6 +17,29 @@ type ActiveTaskMatch = 'session_id' | 'branch_repo_root' | 'worktree' | 'agent';
 interface MatchedActiveTaskCandidate extends ActiveTaskCandidate {
   matched_by: ActiveTaskMatch;
 }
+
+export type ActiveTaskBindingStatus = 'bound' | 'ambiguous' | 'not_found';
+
+export interface ActiveTaskSuggestedAction {
+  create_or_bind_task: string;
+  manual_claim_if_task_id_known: string;
+}
+
+export type ActiveTaskBindingResult =
+  | {
+      status: 'bound';
+      candidate: ActiveTaskCandidate;
+      matched_by: ActiveTaskMatch;
+    }
+  | {
+      status: 'ambiguous';
+      candidates: ActiveTaskCandidate[];
+    }
+  | {
+      status: 'not_found';
+      candidates: [];
+      suggested_action: ActiveTaskSuggestedAction;
+    };
 
 export type AutoClaimObservationKind = 'claim' | 'auto-claim';
 export type AutoClaimFailureCode =
@@ -52,6 +76,8 @@ export type AutoClaimFileForSessionResult =
   | {
       ok: true;
       status: 'claimed' | 'already_claimed';
+      resolution: 'bound';
+      matched_by: ActiveTaskMatch;
       task_id: number;
       observation_id: number | null;
       candidate: ActiveTaskCandidate;
@@ -60,10 +86,17 @@ export type AutoClaimFileForSessionResult =
   | {
       ok: false;
       code: AutoClaimFailureCode;
+      resolution: 'ambiguous' | 'not_found';
       error: string;
       creation_guidance?: string;
+      suggested_action?: ActiveTaskSuggestedAction;
       candidates: ActiveTaskCandidate[];
     };
+
+const ACTIVE_TASK_NOT_FOUND_SUGGESTED_ACTION: ActiveTaskSuggestedAction = {
+  create_or_bind_task: 'Create or bind a Colony task for this session/repo/branch.',
+  manual_claim_if_task_id_known: 'Manually call task_claim_file if task_id is already known.',
+};
 
 export function activeTaskCandidatesForSession(
   store: MemoryStore,
@@ -76,7 +109,41 @@ export function activeTaskCandidatesForSession(
     agent?: string;
   },
 ): ActiveTaskCandidate[] {
-  return activeTaskMatchesForSession(store, opts).map(({ matched_by: _matched_by, ...row }) => row);
+  const resolution = resolveActiveTaskBinding(store, opts);
+  if (resolution.status === 'bound') return [resolution.candidate];
+  if (resolution.status === 'ambiguous') return resolution.candidates;
+  return [];
+}
+
+export function resolveActiveTaskBinding(
+  store: MemoryStore,
+  opts: {
+    session_id: string;
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
+): ActiveTaskBindingResult {
+  const candidates = activeTaskMatchesForSession(store, opts);
+  if (candidates.length === 1) {
+    const candidate = candidates[0];
+    if (!candidate) throw new Error('active task resolution lost its only candidate');
+    const { matched_by, ...row } = candidate;
+    return { status: 'bound', candidate: row, matched_by };
+  }
+  if (candidates.length > 1) {
+    return {
+      status: 'ambiguous',
+      candidates: candidates.map(({ matched_by: _matched_by, ...row }) => row),
+    };
+  }
+  return {
+    status: 'not_found',
+    candidates: [],
+    suggested_action: ACTIVE_TASK_NOT_FOUND_SUGGESTED_ACTION,
+  };
 }
 
 export function autoClaimFileForSession(
@@ -99,33 +166,37 @@ export function autoClaimFileForSession(
       return {
         ok: false,
         code: 'SESSION_NOT_FOUND',
+        resolution: 'not_found',
         error: `Colony session ${input.session_id} was not found`,
+        suggested_action: ACTIVE_TASK_NOT_FOUND_SUGGESTED_ACTION,
         candidates: [],
       };
     }
 
-    const candidates = activeTaskCandidatesForSession(store, input);
-    if (candidates.length !== 1) {
-      const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+    const binding = resolveActiveTaskBinding(store, input);
+    if (binding.status !== 'bound') {
+      const code =
+        binding.status === 'not_found' ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
       return {
         ok: false,
         code,
+        resolution: binding.status,
         error:
           code === 'ACTIVE_TASK_NOT_FOUND'
             ? 'no active Colony task matched session/repo/branch'
             : 'multiple active Colony tasks matched session/repo/branch',
-        ...(code === 'ACTIVE_TASK_NOT_FOUND'
+        ...(binding.status === 'not_found'
           ? {
               creation_guidance:
                 'Create or join a Colony task for this session with cwd/repo_root/branch, then retry the edit or call task_claim_file with an explicit task_id.',
+              suggested_action: binding.suggested_action,
             }
           : {}),
-        candidates,
+        candidates: binding.candidates,
       };
     }
 
-    const candidate = candidates[0];
-    if (!candidate) throw new Error('active task resolution lost its only candidate');
+    const candidate = binding.candidate;
     ensureTaskParticipant(store, candidate, input.session_id);
 
     const existing = store.storage.getClaim(candidate.task_id, input.file_path);
@@ -133,6 +204,8 @@ export function autoClaimFileForSession(
       return {
         ok: true,
         status: 'already_claimed',
+        resolution: 'bound',
+        matched_by: binding.matched_by,
         task_id: candidate.task_id,
         observation_id: null,
         candidate,
@@ -181,6 +254,8 @@ export function autoClaimFileForSession(
     return {
       ok: true,
       status: 'claimed',
+      resolution: 'bound',
+      matched_by: binding.matched_by,
       task_id: candidate.task_id,
       observation_id: observationId,
       candidate,
@@ -192,7 +267,9 @@ export function autoClaimFileForSession(
     return {
       ok: false,
       code: 'COLONY_UNAVAILABLE',
+      resolution: 'not_found',
       error: err instanceof Error ? err.message : String(err),
+      suggested_action: ACTIVE_TASK_NOT_FOUND_SUGGESTED_ACTION,
       candidates: [],
     };
   }
@@ -240,15 +317,8 @@ function activeTaskMatchesForSession(
   );
   const tasks = store.storage.listTasks(2000).filter((task) => isActiveStatus(task.status));
 
-  const sessionMatches = matchesForTasks(
-    store,
-    tasks.filter((task) =>
-      taskMatchesResolvedScope(task, scopedRepoRoot, scopedBranch, worktreeScopes),
-    ),
-    agent,
-    'session_id',
-    (participants) =>
-      participants.find((row) => row.session_id === opts.session_id && row.left_at === null),
+  const sessionMatches = matchesForTasks(store, tasks, agent, 'session_id', (participants) =>
+    participants.find((row) => row.session_id === opts.session_id && row.left_at === null),
   );
   if (sessionMatches.length > 0) return sortCandidates(sessionMatches);
 
@@ -265,14 +335,12 @@ function activeTaskMatchesForSession(
   if (worktreeScopes.length > 0) {
     const worktreeMatches = matchesForTasks(
       store,
-      tasks.filter((task) => taskMatchesWorktreeScope(task, worktreeScopes, scopedBranch)),
+      tasks.filter((task) => taskMatchesWorktreeScope(task, worktreeScopes)),
       agent,
       'worktree',
     );
     if (worktreeMatches.length > 0) return sortCandidates(worktreeMatches);
   }
-
-  if (scopedBranch !== undefined) return [];
 
   const agentMatches = matchesForTasks(
     store,
@@ -314,6 +382,10 @@ function matchesForTasks(
           (row) => row.left_at === null && normalizeAgent(row.agent) === fallbackAgent,
         )?.agent ??
         fallbackAgent;
+      const activeFiles = store.storage
+        .listClaims(task.id)
+        .map((claim) => claim.file_path)
+        .slice(0, 5);
       return {
         task_id: task.id,
         title: task.title,
@@ -322,6 +394,7 @@ function matchesForTasks(
         status: task.status,
         updated_at: task.updated_at,
         agent,
+        ...(activeFiles.length > 0 ? { active_files: activeFiles } : {}),
         matched_by,
       };
     })
@@ -338,28 +411,10 @@ function taskMatchesScope(
   return true;
 }
 
-function taskMatchesResolvedScope(
-  task: { repo_root: string; branch: string },
-  repo_root: string | undefined,
-  branch: string | undefined,
-  worktreeScopes: string[],
-): boolean {
-  if (repo_root === undefined && branch === undefined && worktreeScopes.length === 0) return true;
-  if (
-    (repo_root !== undefined || branch !== undefined) &&
-    taskMatchesScope(task, repo_root, branch)
-  ) {
-    return true;
-  }
-  return taskMatchesWorktreeScope(task, worktreeScopes, branch);
-}
-
 function taskMatchesWorktreeScope(
   task: { repo_root: string; branch: string },
   worktreeScopes: string[],
-  branch: string | undefined,
 ): boolean {
-  if (branch !== undefined && task.branch !== branch) return false;
   return worktreeScopes.some((scope) => samePathOrChild(task.repo_root, scope));
 }
 

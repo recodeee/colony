@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { autoClaimFileBeforeEdit, autoClaimFileForSession } from '../src/auto-claim.js';
+import {
+  autoClaimFileBeforeEdit,
+  autoClaimFileForSession,
+  resolveActiveTaskBinding,
+} from '../src/auto-claim.js';
 import { autoClaimFromToolUse, extractTouchedFiles } from '../src/handlers/post-tool-use.js';
 import { claimBeforeEditFromToolUse, preToolUse } from '../src/handlers/pre-tool-use.js';
 import { buildConflictPreface } from '../src/handlers/user-prompt-submit.js';
@@ -94,7 +98,13 @@ describe('autoClaimFileForSession', () => {
       file_path: 'src/viewer.tsx',
     });
 
-    expect(result).toMatchObject({ ok: true, status: 'claimed', task_id });
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'session_id',
+      task_id,
+    });
     expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
     const claims = store.storage.taskObservationsByKind(task_id, 'claim');
     expect(claims).toHaveLength(1);
@@ -115,6 +125,7 @@ describe('autoClaimFileForSession', () => {
         session_id: 'A',
       });
       thread.join('A', 'codex');
+      thread.claimFile({ session_id: 'A', file_path: `src/${branch.replace('/', '-')}.ts` });
     }
 
     const result = autoClaimFileForSession(store, {
@@ -126,9 +137,17 @@ describe('autoClaimFileForSession', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'AMBIGUOUS_ACTIVE_TASK',
+      resolution: 'ambiguous',
     });
     if (result.ok) throw new Error('expected ambiguous active task');
     expect(result.candidates).toHaveLength(2);
+    expect(result.candidates[0]).toEqual(
+      expect.objectContaining({
+        task_id: expect.any(Number),
+        title: expect.any(String),
+        active_files: [expect.stringMatching(/^src\/feat-(one|two)\.ts$/)],
+      }),
+    );
   });
 
   it('returns ACTIVE_TASK_NOT_FOUND when no active task matches', () => {
@@ -144,7 +163,12 @@ describe('autoClaimFileForSession', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'ACTIVE_TASK_NOT_FOUND',
+      resolution: 'not_found',
       candidates: [],
+      suggested_action: {
+        create_or_bind_task: expect.stringContaining('Create or bind'),
+        manual_claim_if_task_id_known: expect.stringContaining('task_claim_file'),
+      },
     });
     expect(store.storage.findActiveTaskForSession('A')).toBeUndefined();
   });
@@ -160,6 +184,11 @@ describe('autoClaimFileForSession', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'SESSION_NOT_FOUND',
+      resolution: 'not_found',
+      suggested_action: {
+        create_or_bind_task: expect.stringContaining('Create or bind'),
+        manual_claim_if_task_id_known: expect.stringContaining('task_claim_file'),
+      },
       candidates: [],
     });
   });
@@ -210,6 +239,8 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: true,
       status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'branch_repo_root',
       task_id: thread.task_id,
     });
     expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
@@ -236,6 +267,8 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: true,
       status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'agent',
       task_id: thread.task_id,
     });
     expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe('codex@new');
@@ -261,6 +294,7 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'AMBIGUOUS_ACTIVE_TASK',
+      resolution: 'ambiguous',
     });
     if (result.ok) throw new Error('expected ambiguous active task');
     expect(result.candidates).toHaveLength(2);
@@ -289,6 +323,7 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'AMBIGUOUS_ACTIVE_TASK',
+      resolution: 'ambiguous',
     });
     if (result.ok) throw new Error('expected ambiguous active task');
     expect(result.candidates).toHaveLength(2);
@@ -307,7 +342,12 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'ACTIVE_TASK_NOT_FOUND',
+      resolution: 'not_found',
       creation_guidance: expect.stringContaining('Create or join a Colony task'),
+      suggested_action: {
+        create_or_bind_task: expect.stringContaining('Create or bind'),
+        manual_claim_if_task_id_known: expect.stringContaining('task_claim_file'),
+      },
       candidates: [],
     });
     expect(store.storage.findActiveTaskForSession('A')).toBeUndefined();
@@ -324,7 +364,44 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'SESSION_NOT_FOUND',
+      resolution: 'not_found',
       candidates: [],
+    });
+  });
+
+  it('resolves exact session_id before conflicting repo_root and branch scope', () => {
+    store.startSession({ id: 'codex@exact', ide: 'codex', cwd: '/repo/exact' });
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo/other' });
+    const exactThread = TaskThread.open(store, {
+      repo_root: '/repo/exact',
+      branch: 'agent/codex/exact',
+      session_id: 'codex@exact',
+    });
+    exactThread.join('codex@exact', 'codex');
+    const scopedThread = TaskThread.open(store, {
+      repo_root: '/repo/other',
+      branch: 'agent/codex/scoped',
+      session_id: 'owner',
+    });
+    scopedThread.join('owner', 'claude');
+
+    const result = resolveActiveTaskBinding(store, {
+      session_id: 'codex@exact',
+      repo_root: '/repo/other',
+      branch: 'agent/codex/scoped',
+    });
+
+    expect(result).toMatchObject({
+      status: 'bound',
+      matched_by: 'session_id',
+      candidate: {
+        task_id: exactThread.task_id,
+        repo_root: '/repo/exact',
+        branch: 'agent/codex/exact',
+      },
+    });
+    expect(result).not.toMatchObject({
+      candidate: { task_id: scopedThread.task_id },
     });
   });
 });
@@ -603,20 +680,22 @@ describe('claimBeforeEditFromToolUse', () => {
     expect(result.warnings[0]?.candidates).toHaveLength(2);
     expect(result.warnings[0]?.candidates).toEqual(
       expect.arrayContaining([
-        {
+        expect.objectContaining({
           task_id: expect.any(Number),
+          title: expect.any(String),
           repo_root: '/repo',
           branch: 'feat/one',
           status: 'open',
           updated_at: expect.any(Number),
-        },
-        {
+        }),
+        expect.objectContaining({
           task_id: expect.any(Number),
+          title: expect.any(String),
           repo_root: '/repo',
           branch: 'feat/two',
           status: 'open',
           updated_at: expect.any(Number),
-        },
+        }),
       ]),
     );
     expect(result.warnings[0]?.candidates?.[0]).toEqual(
