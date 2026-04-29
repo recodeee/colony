@@ -20,6 +20,9 @@ interface SeedSubtask {
   completed_minutes_ago?: number;
   session_id?: string;
   agent?: string;
+  file_scope?: string[];
+  claimed_files?: string[];
+  quota_handoff?: boolean;
   depends_on?: number[];
   wave?: {
     index: number;
@@ -220,6 +223,95 @@ describe('sweepQueenPlans', () => {
     })[0]?.content;
     expect(body).toBe('Sub-task 0 has been claimed for 90 minutes — still active?');
   });
+
+  it('recommends Claude when Codex hit quota on a stale blocker', () => {
+    seedPlan('codex-quota-plan', {
+      auto_archive: true,
+      subtasks: [
+        {
+          status: 'claimed',
+          claimed_minutes_ago: 90,
+          session_id: 'codex@quota',
+          agent: 'codex',
+          claimed_files: ['src/a.ts', 'src/b.ts'],
+          quota_handoff: true,
+        },
+        { status: 'available', depends_on: [0] },
+      ],
+    });
+
+    const stalled = sweepQueenPlans(store, { now: NOW })[0]?.items.find(
+      (item) => item.reason === 'stalled',
+    );
+
+    expect(stalled).toMatchObject({
+      reason: 'stalled',
+      replacement_recommendation: {
+        recommended_replacement_agent: 'claude-code',
+        reason: 'Codex recently hit quota on this branch',
+        next_tool: 'task_accept_handoff',
+        claim_args: {
+          handoff_observation_id: expect.any(Number),
+          session_id: '<session_id>',
+        },
+        signals: {
+          stale_blocker_age_minutes: 90,
+          claimed_file_count: 2,
+          task_size: 1,
+          claimed_by_agent: 'codex',
+          runtime_history: 'codex',
+          quota_exhausted_handoff_id: expect.any(Number),
+        },
+      },
+    });
+  });
+
+  it('recommends Codex when Claude is the stale blocker without quota evidence', () => {
+    seedPlan('claude-stale-plan', {
+      auto_archive: true,
+      subtasks: [
+        {
+          status: 'claimed',
+          claimed_minutes_ago: 120,
+          session_id: 'claude@stale',
+          agent: 'claude',
+          file_scope: ['src/a.ts', 'src/b.ts'],
+          claimed_files: ['src/a.ts'],
+        },
+        { status: 'available', depends_on: [0] },
+      ],
+    });
+
+    const stalled = sweepQueenPlans(store, { now: NOW })[0]?.items.find(
+      (item) => item.reason === 'stalled',
+    );
+
+    expect(stalled).toMatchObject({
+      replacement_recommendation: {
+        recommended_replacement_agent: 'codex',
+        reason: 'Claude stale for 120m on 1 claimed file(s); task size 2 file(s)',
+        next_tool: 'task_plan_claim_subtask',
+        claim_args: {
+          plan_slug: 'claude-stale-plan',
+          subtask_index: 0,
+          agent: 'codex',
+          repo_root: REPO_ROOT,
+          file_scope: ['src/a.ts', 'src/b.ts'],
+        },
+      },
+    });
+  });
+
+  it('does not recommend a replacement without a stale or quota blocker', () => {
+    seedPlan('active-plan', {
+      auto_archive: true,
+      subtasks: [{ status: 'claimed', claimed_minutes_ago: 10, session_id: 'codex@active' }],
+    });
+
+    const result = sweepQueenPlans(store, { now: NOW });
+
+    expect(result).toEqual([]);
+  });
 });
 
 function seedPlan(
@@ -263,7 +355,7 @@ function seedPlan(
         parent_plan_title: `${slug} title`,
         parent_spec_task_id: parent.task_id,
         subtask_index: i,
-        file_scope: [`src/${slug}-${i}.ts`],
+        file_scope: subtask.file_scope ?? [`src/${slug}-${i}.ts`],
         depends_on: subtask.depends_on ?? [],
         spec_row_id: null,
         capability_hint: null,
@@ -296,6 +388,31 @@ function seedPlan(
           subtask_index: i,
         },
       });
+      for (const file of subtask.claimed_files ?? []) {
+        thread.claimFile({ session_id: sessionId, file_path: file });
+      }
+      if (subtask.quota_handoff === true) {
+        store.addObservation({
+          session_id: sessionId,
+          task_id: thread.task_id,
+          kind: 'handoff',
+          content: `${agent} quota_exhausted handoff`,
+          metadata: {
+            kind: 'handoff',
+            status: 'pending',
+            from_session_id: sessionId,
+            from_agent: agent,
+            to_agent: 'any',
+            to_session_id: null,
+            quota_exhausted: true,
+            summary: `${agent} hit quota`,
+            blockers: ['quota_exhausted'],
+            accepted_by_session_id: null,
+            accepted_at: null,
+            expires_at: NOW + 60 * MINUTE_MS,
+          },
+        });
+      }
     }
 
     if (subtask.status === 'completed') {

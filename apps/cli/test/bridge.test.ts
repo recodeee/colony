@@ -219,3 +219,62 @@ describe('bridge lifecycle --json', () => {
     });
   });
 });
+
+describe('bridge runtime-summary --json', () => {
+  it('ingests compact OMX runtime summaries from stdin', async () => {
+    mocks.readStdin.mockResolvedValue(
+      JSON.stringify({
+        session_id: 'codex@runtime',
+        quota_warning: 'Usage limit near',
+        last_failed_tool: { name: 'Bash', error: 'spawn EPERM' },
+      }),
+    );
+    const ingest = vi.fn(() => ({
+      ok: true,
+      observation_id: 101,
+      task_id: 17,
+      warnings: ['quota_warning' as const, 'last_failed_tool' as const],
+    }));
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerBridgeCommand(program, {
+      readStdin: mocks.readStdin,
+      ingestOmxRuntimeSummary: ingest,
+    });
+
+    await program.parseAsync(
+      [
+        'node',
+        'test',
+        'bridge',
+        'runtime-summary',
+        '--json',
+        '--repo-root',
+        '/repo',
+        '--branch',
+        'agent/codex/runtime',
+      ],
+      { from: 'node' },
+    );
+
+    expect(ingest).toHaveBeenCalledWith(
+      { kind: 'store' },
+      {
+        session_id: 'codex@runtime',
+        quota_warning: 'Usage limit near',
+        last_failed_tool: { name: 'Bash', error: 'spawn EPERM' },
+      },
+      { repoRoot: '/repo', branch: 'agent/codex/runtime' },
+    );
+    expect(JSON.parse(output.join(''))).toMatchObject({
+      ok: true,
+      observation_id: 101,
+      warnings: ['quota_warning', 'last_failed_tool'],
+    });
+  });
+});

@@ -73,8 +73,9 @@ async function claimAndComplete(planSlug: string, subtaskIndex: number): Promise
 interface ReadyResult {
   ready: ReadyEntry[];
   total_available: number;
+  mcp_capability_map: { summary: string[]; unknown_servers: string[] };
   next_action: string;
-  next_tool?: 'task_plan_claim_subtask';
+  next_tool?: 'task_plan_claim_subtask' | 'rescue_stranded_scan';
   plan_slug?: string;
   subtask_index?: number;
   reason?: 'continue_current_task' | 'urgent_override' | 'ready_high_score';
@@ -88,6 +89,23 @@ interface ReadyResult {
     agent: string;
     file_scope: string[];
   };
+  rescue_candidate?: {
+    plan_slug: string;
+    task_id: number;
+    subtask_index: number;
+    title: string;
+    file: string | null;
+    owner_session_id: string | null;
+    owner_agent: string | null;
+    age_minutes: number;
+    unlock_candidate: {
+      task_id: number;
+      subtask_index: number;
+      title: string;
+      file_scope: string[];
+    } | null;
+  };
+  rescue_args?: { stranded_after_minutes: number };
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
@@ -239,6 +257,7 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready).toEqual([]);
     expect(result.total_available).toBe(0);
+    expect(result.mcp_capability_map.summary).toEqual(expect.any(Array));
     expect(result.empty_state).toBe(EMPTY_READY_STATE);
     expect(result.next_tool).toBeUndefined();
     expect(result.next_action).toBe('Publish a Queen/task plan for multi-agent work.');
@@ -274,6 +293,7 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0]);
     expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.rescue_candidate).toBeUndefined();
     expect(result.plan_slug).toBe('claimable-plan');
     expect(result.subtask_index).toBe(0);
     expect(result.reason).toBe('ready_high_score');
@@ -388,6 +408,7 @@ describe('task_ready_for_agent', () => {
     expect(result.total_available).toBe(0);
     expect(result.empty_state).toBe(EMPTY_READY_STATE);
     expect(result.next_tool).toBeUndefined();
+    expect(result.rescue_candidate).toBeUndefined();
     expect(result.codex_mcp_call).toBeUndefined();
     expect(result.next_action).toBe(
       'Complete upstream dependencies or unblock current plan waves before claiming more work.',
@@ -439,9 +460,28 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready).toEqual([]);
     expect(result.total_available).toBe(0);
-    expect(result.next_tool).toBeUndefined();
+    expect(result.next_tool).toBe('rescue_stranded_scan');
+    expect(result.empty_state).toBeUndefined();
+    expect(result.next_action).toContain('Rescue stale blocker stale-release-plan/sub-0');
+    expect(result.rescue_args).toEqual({ stranded_after_minutes: 60 });
+    expect(result.rescue_candidate).toMatchObject({
+      plan_slug: 'stale-release-plan',
+      task_id: staleClaim.task_id,
+      subtask_index: 0,
+      title: 'Stale claimed blocker',
+      file: 'apps/api/stale-blocker.ts',
+      owner_session_id: 'stale-session',
+      owner_agent: 'codex',
+      age_minutes: 300,
+      unlock_candidate: {
+        task_id: taskIdForSubtask('stale-release-plan', 1),
+        subtask_index: 1,
+        title: 'Wave two API',
+        file_scope: ['apps/api/wave-two.ts'],
+      },
+    });
     expect(result.next_action).toBe(
-      'Complete upstream dependencies or unblock current plan waves before claiming more work.',
+      'Rescue stale blocker stale-release-plan/sub-0; it blocks sub-1.',
     );
 
     releaseSubtaskClaim('stale-release-plan', 0, staleClaim.task_id, 'stale-session');

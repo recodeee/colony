@@ -1,9 +1,11 @@
 import {
   type AgentProfile,
   type ClaimHolder,
+  type McpCapabilityMap,
   type MemoryStore,
   type SubtaskInfo,
   claimsForPaths,
+  discoverMcpCapabilities,
   listMessagesForAgent,
   listPlans,
   loadProfile,
@@ -77,14 +79,17 @@ export interface ReadySubtaskWithWarnings extends ReadySubtask {
 export interface ReadyForAgentResult {
   ready: ReadySubtaskWithWarnings[];
   total_available: number;
+  mcp_capability_map: McpCapabilityMap;
   next_action: string;
-  next_tool?: 'task_plan_claim_subtask';
+  next_tool?: 'task_plan_claim_subtask' | 'rescue_stranded_scan';
   plan_slug?: string;
   subtask_index?: number;
   reason?: ReadyReason;
   assigned_agent?: string;
   routing_reason?: string;
   claim_args?: TaskPlanClaimArgs;
+  rescue_candidate?: StaleBlockerRescueCandidate;
+  rescue_args?: { stranded_after_minutes: number };
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
@@ -100,6 +105,23 @@ interface RankedSubtask extends ReadySubtask {
 interface ScopeConflict {
   file_path: string;
   holder: ClaimHolder;
+}
+
+export interface StaleBlockerRescueCandidate {
+  plan_slug: string;
+  task_id: number;
+  subtask_index: number;
+  title: string;
+  file: string | null;
+  owner_session_id: string | null;
+  owner_agent: string | null;
+  age_minutes: number;
+  unlock_candidate: {
+    task_id: number;
+    subtask_index: number;
+    title: string;
+    file_scope: string[];
+  } | null;
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
@@ -218,24 +240,41 @@ export async function buildReadyForAgent(
   );
 
   return buildReadyResult(
-    { ready, total_available: available.length },
+    {
+      ready,
+      total_available: available.length,
+      mcp_capability_map: discoverMcpCapabilities(),
+    },
     claimable,
     args,
     plans.length > 0,
+    available.length === 0 ? staleBlockerRescueCandidate(plans) : null,
   );
 }
 
 function buildReadyResult(
-  base: Pick<ReadyForAgentResult, 'ready' | 'total_available'>,
+  base: Pick<ReadyForAgentResult, 'ready' | 'total_available' | 'mcp_capability_map'>,
   claimable: RankedSubtask | null,
   args: { session_id: string; agent: string },
   hasPlans: boolean,
+  rescueCandidate: StaleBlockerRescueCandidate | null,
 ): ReadyForAgentResult {
   if (claimable === null) {
     if (base.ready.length > 0) {
       return {
         ...base,
         next_action: readyNextAction(base.ready, args),
+      };
+    }
+    if (rescueCandidate) {
+      return {
+        ...base,
+        next_action: `Rescue stale blocker ${rescueCandidate.plan_slug}/sub-${rescueCandidate.subtask_index}; it blocks sub-${rescueCandidate.unlock_candidate?.subtask_index ?? 'unknown'}.`,
+        next_tool: 'rescue_stranded_scan',
+        plan_slug: rescueCandidate.plan_slug,
+        subtask_index: rescueCandidate.subtask_index,
+        rescue_candidate: rescueCandidate,
+        rescue_args: { stranded_after_minutes: STALE_BLOCKER_WINDOW_MS / 60_000 },
       };
     }
     return {
@@ -509,6 +548,69 @@ function capabilityMatchScore(capabilityHint: string | null, profile: AgentProfi
   return clampScore(rankCandidates({ summary }, [profile])[0]?.score ?? 0);
 }
 
+function staleBlockerRescueCandidate(
+  plans: Array<{
+    plan_slug: string;
+    subtasks: SubtaskInfo[];
+  }>,
+): StaleBlockerRescueCandidate | null {
+  const now = Date.now();
+  const candidates: StaleBlockerRescueCandidate[] = [];
+  for (const plan of plans) {
+    for (const subtask of plan.subtasks) {
+      if (!isStaleClaimedSubtask(subtask, now)) continue;
+      const unlock = unlockCandidateFor(subtask, plan.subtasks);
+      if (!unlock) continue;
+      candidates.push({
+        plan_slug: plan.plan_slug,
+        task_id: subtask.task_id,
+        subtask_index: subtask.subtask_index,
+        title: subtask.title,
+        file: subtask.file_scope[0] ?? null,
+        owner_session_id: subtask.claimed_by_session_id,
+        owner_agent: subtask.claimed_by_agent,
+        age_minutes: Math.floor((now - (subtask.claimed_at ?? now)) / 60_000),
+        unlock_candidate: {
+          task_id: unlock.task_id,
+          subtask_index: unlock.subtask_index,
+          title: unlock.title,
+          file_scope: unlock.file_scope,
+        },
+      });
+    }
+  }
+
+  return (
+    candidates.sort(
+      (a, b) =>
+        b.age_minutes - a.age_minutes ||
+        a.plan_slug.localeCompare(b.plan_slug) ||
+        a.subtask_index - b.subtask_index,
+    )[0] ?? null
+  );
+}
+
+function isStaleClaimedSubtask(subtask: SubtaskInfo, now: number): boolean {
+  return (
+    subtask.status === 'claimed' &&
+    subtask.claimed_at !== null &&
+    now - subtask.claimed_at >= STALE_BLOCKER_WINDOW_MS
+  );
+}
+
+function unlockCandidateFor(blocker: SubtaskInfo, subtasks: SubtaskInfo[]): SubtaskInfo | null {
+  return (
+    subtasks
+      .filter(
+        (subtask) =>
+          subtask.status !== 'completed' &&
+          subtask.subtask_index !== blocker.subtask_index &&
+          subtask.blocked_by.includes(blocker.subtask_index),
+      )
+      .sort((a, b) => a.wave_index - b.wave_index || a.subtask_index - b.subtask_index)[0] ?? null
+  );
+}
+
 function applyRuntimeRouting(
   store: MemoryStore,
   task: RankedSubtask,
@@ -519,7 +621,11 @@ function applyRuntimeRouting(
 
   const signal = runtimeRoutingSignal(store, task, requestedAgent, repoRoot);
   if (!signal.shouldRouteAway) {
-    return { ...task, assigned_agent: requestedAgent, routing_reason: signal.reason };
+    return {
+      ...task,
+      assigned_agent: requestedAgent,
+      routing_reason: signal.reason,
+    };
   }
 
   return {
@@ -648,6 +754,7 @@ function candidateAgents(store: MemoryStore, repoRoot: string | undefined): stri
   const agents = new Set<string>();
   for (const row of store.storage.listAgentProfiles()) agents.add(row.agent);
   for (const session of store.storage.listSessions(500)) {
+    if (repoRoot !== undefined && session.cwd !== repoRoot) continue;
     const ide = session.ide?.trim();
     if (ide) agents.add(ide);
     const prefix = session.id.includes('@') ? session.id.split('@')[0]?.trim() : '';

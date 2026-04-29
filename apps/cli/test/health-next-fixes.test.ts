@@ -258,6 +258,52 @@ describe('colony health next fixes', () => {
     expect(nextFixes).not.toContain('pre_tool_use before file mutation');
     expect(nextFixes).not.toContain('Wire OMX/Codex/Claude runtime');
   });
+
+  it('does not ask for bridge wiring when pre_tool_use covers write edits', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          call(4, 'session-a', 'mcp__colony__task_claim_file', NOW - 87_000),
+          call(5, 'session-a', 'Edit', NOW - 86_000),
+          call(6, 'session-a', 'Write', NOW - 85_000),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 2,
+          edits_with_file_path: 2,
+          edits_claimed_before: 2,
+          pre_tool_use_signals: 2,
+          claim_miss_reasons: {
+            pre_tool_use_missing: 0,
+          },
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits).toMatchObject({
+      edit_tool_calls: 2,
+      edits_with_file_path: 2,
+      edits_claimed_before: 2,
+      pre_tool_use_signals: 2,
+    });
+    expect(payload.task_claim_file_before_edits.edits_claimed_before).toBeGreaterThan(0);
+    expect(payload.task_claim_file_before_edits.pre_tool_use_signals).toBeGreaterThan(0);
+    expect(
+      payload.action_hints.find((hint) => hint.metric === 'claim-before-edit'),
+    ).toBeUndefined();
+
+    const nextFixes = outputSection(formatColonyHealthOutput(payload), 'Next fixes');
+    expect(nextFixes).not.toContain('pre_tool_use before file mutation');
+    expect(nextFixes).not.toContain('Wire OMX/Codex/Claude runtime');
+  });
 });
 
 function fakeStorage(args: {

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore, TaskThread } from '@colony/core';
+import { MemoryStore, TaskThread, type WorktreeContentionReport } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,21 @@ let dir: string;
 let repoRoot: string;
 let store: MemoryStore;
 let client: Client;
+let planValidationRuntime: {
+  now?: () => number;
+  readWorktreeContention?: (repoRoot: string) => WorktreeContentionReport;
+  availableMcpTools?: string[];
+  requiredMcpTools?: string[];
+  quotaRiskRuntimes?: Array<{
+    agent: string;
+    session_id?: string;
+    reason: 'quota' | 'rate-limit' | 'turn-cap' | 'unknown';
+    capability_hints?: Array<'ui_work' | 'api_work' | 'test_work' | 'infra_work' | 'doc_work'>;
+  }>;
+  omxNotes?: Array<{ session_id: string; content: string; file_paths?: string[] }>;
+  protectedFilePatterns?: string[];
+  strictClaimPolicy?: boolean;
+};
 
 interface ValidateResult {
   pairwise_overlaps: Array<{ a: number; b: number; shared: string[] }>;
@@ -33,6 +48,19 @@ interface ValidateResult {
     shared?: string[];
     related_subtask_indices?: number[];
   }>;
+  summary: {
+    blocking: boolean;
+    finding_count: number;
+    counts: { error: number; warning: number; info: number };
+    findings: Array<{
+      code: string;
+      severity: 'error' | 'warning' | 'info';
+      message: string;
+      subtask_index?: number;
+      file_path?: string;
+      detail?: string;
+    }>;
+  };
   partition_clean: boolean;
 }
 
@@ -66,11 +94,34 @@ beforeEach(async () => {
   store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
   store.startSession({ id: 'A', ide: 'claude-code', cwd: repoRoot });
   store.startSession({ id: 'B', ide: 'codex', cwd: repoRoot });
-  const server = buildServer(store, defaultSettings);
+  planValidationRuntime = { readWorktreeContention: emptyWorktreeReport };
+  const server = buildServer(store, defaultSettings, { planValidation: planValidationRuntime });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'test', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
 });
+
+function emptyWorktreeReport(repoRoot: string): WorktreeContentionReport {
+  return {
+    generated_at: '2026-04-29T00:00:00.000Z',
+    repo_root: repoRoot,
+    inspected_roots: [],
+    worktrees: [],
+    contentions: [],
+    summary: {
+      worktree_count: 0,
+      dirty_worktree_count: 0,
+      dirty_file_count: 0,
+      contention_count: 0,
+    },
+  };
+}
+
+function finding(result: ValidateResult, code: string): ValidateResult['summary']['findings'][number] {
+  const found = result.summary.findings.find((candidate) => candidate.code === code);
+  if (!found) throw new Error(`missing finding ${code}`);
+  return found;
+}
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -134,6 +185,11 @@ describe('task_plan_validate', () => {
         holder_branch: 'agent/codex/held-file',
       },
     ]);
+    expect(finding(result, 'file_already_claimed')).toMatchObject({
+      severity: 'warning',
+      subtask_index: 0,
+      file_path: 'apps/api/src/widgets.ts',
+    });
   });
 
   it('ignores stale claims as live-claim collisions', async () => {
@@ -156,6 +212,137 @@ describe('task_plan_validate', () => {
     ]);
 
     expect(result.live_claim_collisions).toEqual([]);
+  });
+
+  it('warns when a stale blocker mentions a planned file', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    planValidationRuntime.now = () => t0 + 90 * 60_000;
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/codex/blocker',
+      session_id: 'A',
+    });
+    store.addObservation({
+      session_id: 'A',
+      task_id: thread.task_id,
+      kind: 'blocker',
+      content: 'BLOCKED: apps/api/src/widgets.ts waits on owner reply',
+    });
+
+    const result = await callValidate([
+      subtask('API', ['apps/api/src/widgets.ts']),
+      subtask('UI', ['apps/frontend/src/widgets.tsx']),
+    ]);
+
+    expect(finding(result, 'stale_blocker_exists')).toMatchObject({
+      severity: 'warning',
+      file_path: 'apps/api/src/widgets.ts',
+    });
+  });
+
+  it('reports quota-risk runtimes against matching capability hints as info', async () => {
+    planValidationRuntime.quotaRiskRuntimes = [
+      {
+        agent: 'codex',
+        session_id: 'quota-session',
+        reason: 'quota',
+        capability_hints: ['api_work'],
+      },
+    ];
+
+    const result = await callValidate([
+      subtask('API', ['apps/api/src/widgets.ts'], undefined, 'api_work'),
+      subtask('UI', ['apps/frontend/src/widgets.tsx'], undefined, 'ui_work'),
+    ]);
+
+    expect(finding(result, 'quota_risk_runtime_assigned')).toMatchObject({
+      severity: 'info',
+      subtask_index: 0,
+      detail: 'quota',
+    });
+  });
+
+  it('warns when a dirty worktree touches a planned file', async () => {
+    planValidationRuntime.readWorktreeContention = (root) => ({
+      ...emptyWorktreeReport(root),
+      worktrees: [
+        {
+          branch: 'agent/codex/dirty',
+          path: '/worktrees/dirty',
+          managed_root: '.omx/agent-worktrees',
+          dirty_files: [{ path: 'apps/api/src/widgets.ts', status: ' M' }],
+          claimed_files: [],
+          active_session: null,
+        },
+      ],
+    });
+
+    const result = await callValidate([
+      subtask('API', ['apps/api/src/widgets.ts']),
+      subtask('UI', ['apps/frontend/src/widgets.tsx']),
+    ]);
+
+    expect(finding(result, 'dirty_worktree_touches_planned_file')).toMatchObject({
+      severity: 'warning',
+      file_path: 'apps/api/src/widgets.ts',
+    });
+  });
+
+  it('reports OMX active note conflicts as info', async () => {
+    planValidationRuntime.omxNotes = [
+      {
+        session_id: 'omx-note',
+        content:
+          'branch=agent/codex/other; task=other lane; blocker=none; next=apps/api/src/widgets.ts; evidence=notepad',
+        file_paths: ['apps/api/src/widgets.ts'],
+      },
+    ];
+
+    const result = await callValidate([
+      subtask('API', ['apps/api/src/widgets.ts']),
+      subtask('UI', ['apps/frontend/src/widgets.tsx']),
+    ]);
+
+    expect(finding(result, 'omx_active_note_conflicts')).toMatchObject({
+      severity: 'info',
+      subtask_index: 0,
+      file_path: 'apps/api/src/widgets.ts',
+    });
+  });
+
+  it('errors when a required MCP capability is unavailable', async () => {
+    planValidationRuntime.requiredMcpTools = ['mcp__colony__task_plan_claim_subtask'];
+    planValidationRuntime.availableMcpTools = ['mcp__colony__task_plan_validate'];
+
+    const result = await callValidate([
+      subtask('API', ['apps/api/src/widgets.ts']),
+      subtask('UI', ['apps/frontend/src/widgets.tsx']),
+    ]);
+
+    expect(result.summary.blocking).toBe(true);
+    expect(result.partition_clean).toBe(false);
+    expect(finding(result, 'required_mcp_capability_unavailable')).toMatchObject({
+      severity: 'error',
+      detail: 'mcp__colony__task_plan_claim_subtask',
+    });
+  });
+
+  it('warns when protected files are planned without strict claim policy', async () => {
+    planValidationRuntime.protectedFilePatterns = ['AGENTS.md'];
+    planValidationRuntime.strictClaimPolicy = false;
+
+    const result = await callValidate([
+      subtask('Policy', ['AGENTS.md']),
+      subtask('Docs', ['docs/queen.md']),
+    ]);
+
+    expect(finding(result, 'protected_file_without_strict_claim_policy')).toMatchObject({
+      severity: 'warning',
+      subtask_index: 0,
+      file_path: 'AGENTS.md',
+    });
   });
 
   it('warns when independent sub-tasks touch different files in the same module', async () => {

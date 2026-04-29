@@ -24,6 +24,7 @@ import { registerObserveCommand } from './commands/observe.js';
 import { registerPlanCommand } from './commands/plan.js';
 import { registerQueenCommand } from './commands/queen.js';
 import { registerReindexCommand } from './commands/reindex.js';
+import { registerResumeCommand } from './commands/resume.js';
 import { registerRescueCommand } from './commands/rescue.js';
 import { registerSearchCommand } from './commands/search.js';
 import { registerStatusCommand } from './commands/status.js';
@@ -67,6 +68,7 @@ export function createProgram(): Command {
   registerInboxCommand(program);
   registerForagingCommand(program);
   registerQueenCommand(program);
+  registerResumeCommand(program);
   registerRescueCommand(program);
 
   return program;

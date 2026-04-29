@@ -42,7 +42,11 @@ export type { BridgeStatus, BridgeStatusOptions } from './tools/bridge.js';
  *
  * Embedder is loaded lazily on first search — keeps MCP handshake fast.
  */
-export function buildServer(store: MemoryStore, settings: Settings): McpServer {
+export function buildServer(
+  store: MemoryStore,
+  settings: Settings,
+  options: Pick<ToolContext, 'planValidation'> = {},
+): McpServer {
   const server = new McpServer({
     name: 'colony',
     version: '0.1.0',
@@ -73,6 +77,7 @@ export function buildServer(store: MemoryStore, settings: Settings): McpServer {
   const ctx: ToolContext = {
     store,
     settings,
+    ...(options.planValidation !== undefined ? { planValidation: options.planValidation } : {}),
     resolveEmbedder,
     wrapHandler: createHeartbeatWrapper(store),
   };

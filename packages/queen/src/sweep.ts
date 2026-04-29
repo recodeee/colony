@@ -49,6 +49,24 @@ export interface QueenSweepWaveSummary extends QueenSweepWaveRef {
   blocked_by: QueenSweepWaveBlocker[];
 }
 
+export type QueenReplacementAgent = 'claude-code' | 'codex' | 'any';
+export type QueenReplacementNextTool = 'task_accept_handoff' | 'task_plan_claim_subtask';
+
+export interface QueenReplacementRecommendation {
+  recommended_replacement_agent: QueenReplacementAgent;
+  reason: string;
+  next_tool: QueenReplacementNextTool;
+  claim_args: Record<string, unknown>;
+  signals: {
+    stale_blocker_age_minutes: number;
+    claimed_file_count: number;
+    task_size: number;
+    claimed_by_agent: string | null;
+    runtime_history: string | null;
+    quota_exhausted_handoff_id: number | null;
+  };
+}
+
 interface BaseAttention {
   reason: QueenAttentionReason;
   plan_slug: string;
@@ -67,6 +85,7 @@ export interface StalledSubtaskAttention extends BaseAttention {
   claimed_by_session_id: string;
   claimed_by_agent: string | null;
   message_observation_id?: number;
+  replacement_recommendation?: QueenReplacementRecommendation;
 }
 
 export interface UnclaimedSubtaskAttention extends BaseAttention {
@@ -96,6 +115,24 @@ export interface QueenPlanAttention {
   spec_task_id: number;
   items: QueenAttentionItem[];
   waves?: QueenSweepWaveSummary[];
+  validation_summary?: QueenPlanValidationSweepSummary;
+}
+
+export interface QueenPlanValidationSweepSummary {
+  blocking: boolean;
+  finding_count: number;
+  counts: {
+    error: number;
+    warning: number;
+    info: number;
+  };
+  top_findings: Array<{
+    code: string;
+    severity: 'error' | 'warning' | 'info';
+    message: string;
+    file_path?: string;
+    subtask_index?: number;
+  }>;
 }
 
 export function sweepQueenPlans(
@@ -137,6 +174,8 @@ export function sweepQueenPlans(
               claimed_by_agent: subtask.claimed_by_agent,
               ...waveForAttention(waveModel, subtask),
             };
+            const recommendation = recommendReplacementAgent(store, item, subtask, now);
+            if (recommendation !== undefined) item.replacement_recommendation = recommendation;
             if (opts.auto_message === true) {
               item.message_observation_id = messageStalledClaimer(store, item);
             }
@@ -177,6 +216,7 @@ export function sweepQueenPlans(
 
     if (items.length > 0) {
       const waves = summarizeWaves(plan, items, waveModel);
+      const validationSummary = latestValidationSummary(store, plan.spec_task_id);
       attention.push({
         plan_slug: plan.plan_slug,
         title: plan.title,
@@ -184,11 +224,152 @@ export function sweepQueenPlans(
         spec_task_id: plan.spec_task_id,
         items,
         ...(waves.length > 0 ? { waves } : {}),
+        ...(validationSummary !== null ? { validation_summary: validationSummary } : {}),
       });
     }
   }
 
   return attention;
+}
+
+function recommendReplacementAgent(
+  store: MemoryStore,
+  item: StalledSubtaskAttention,
+  subtask: SubtaskInfo,
+  now: number,
+): QueenReplacementRecommendation | undefined {
+  const claimedFileCount = store.storage.listClaims(item.task_id).length;
+  const taskSize = subtask.file_scope.length;
+  const runtimeHistory = store.storage.getSession(item.claimed_by_session_id)?.ide ?? null;
+  const quotaHandoff = latestQuotaExhaustedHandoff(store, item.task_id, now);
+  const stalledAgent = normalizeRuntimeAgent(
+    quotaHandoff?.from_agent ?? item.claimed_by_agent ?? runtimeHistory,
+  );
+  const recommended = oppositeRuntime(stalledAgent, claimedFileCount, taskSize);
+
+  if (quotaHandoff !== null) {
+    return {
+      recommended_replacement_agent: recommended,
+      reason: `${displayRuntime(stalledAgent)} recently hit quota on this branch`,
+      next_tool: 'task_accept_handoff',
+      claim_args: {
+        handoff_observation_id: quotaHandoff.id,
+        session_id: '<session_id>',
+      },
+      signals: {
+        stale_blocker_age_minutes: item.age_minutes,
+        claimed_file_count: claimedFileCount,
+        task_size: taskSize,
+        claimed_by_agent: item.claimed_by_agent,
+        runtime_history: runtimeHistory,
+        quota_exhausted_handoff_id: quotaHandoff.id,
+      },
+    };
+  }
+
+  if (item.age_minutes < DEFAULT_STALLED_MINUTES) return undefined;
+  return {
+    recommended_replacement_agent: recommended,
+    reason: `${displayRuntime(stalledAgent)} stale for ${item.age_minutes}m on ${claimedFileCount} claimed file(s); task size ${taskSize} file(s)`,
+    next_tool: 'task_plan_claim_subtask',
+    claim_args: {
+      plan_slug: item.plan_slug,
+      subtask_index: item.subtask_index,
+      session_id: '<session_id>',
+      agent: recommended,
+      repo_root: item.repo_root,
+      file_scope: subtask.file_scope,
+    },
+    signals: {
+      stale_blocker_age_minutes: item.age_minutes,
+      claimed_file_count: claimedFileCount,
+      task_size: taskSize,
+      claimed_by_agent: item.claimed_by_agent,
+      runtime_history: runtimeHistory,
+      quota_exhausted_handoff_id: null,
+    },
+  };
+}
+
+function latestQuotaExhaustedHandoff(
+  store: MemoryStore,
+  taskId: number,
+  now: number,
+): { id: number; from_agent: string | null } | null {
+  const rows = store.storage.taskObservationsByKind(taskId, 'handoff', 100);
+  for (const row of rows) {
+    const meta = parseMeta(row.metadata);
+    if (!isPendingSignal(meta, now)) continue;
+    const text = [
+      row.content,
+      stringValue(meta.reason),
+      stringValue(meta.summary),
+      stringValue(meta.one_line),
+      stringArrayValue(meta.blockers).join(' '),
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (
+      meta.quota_exhausted === true ||
+      /\bquota(?:[-_\s]*exhausted|[-_\s]*hit|[-_\s]*reached|[-_\s]*exceeded)?\b/i.test(text)
+    ) {
+      return {
+        id: row.id,
+        from_agent: stringValue(meta.from_agent) ?? null,
+      };
+    }
+  }
+  return null;
+}
+
+function isPendingSignal(meta: Record<string, unknown>, now: number): boolean {
+  const status = stringValue(meta.status);
+  if (status !== undefined && status !== 'pending') return false;
+  const expiresAt = numberValue(meta.expires_at);
+  return expiresAt === undefined || now < expiresAt;
+}
+
+function latestValidationSummary(
+  store: MemoryStore,
+  specTaskId: number,
+): QueenPlanValidationSweepSummary | null {
+  const latest = store.storage.taskObservationsByKind(specTaskId, 'plan-validation', 1)[0];
+  if (!latest?.metadata) return null;
+  const meta = parseMeta(latest.metadata);
+  const counts = objectValue(meta.counts);
+  const findings = Array.isArray(meta.findings) ? meta.findings : [];
+  return {
+    blocking: booleanValue(meta.blocking) ?? false,
+    finding_count: numberValue(meta.finding_count) ?? findings.length,
+    counts: {
+      error: numberValue(counts?.error) ?? 0,
+      warning: numberValue(counts?.warning) ?? 0,
+      info: numberValue(counts?.info) ?? 0,
+    },
+    top_findings: findings.slice(0, 5).flatMap((finding) => {
+      const item = objectValue(finding);
+      const code = stringValue(item?.code);
+      const severity = stringValue(item?.severity);
+      const message = stringValue(item?.message);
+      if (
+        !code ||
+        !message ||
+        (severity !== 'error' && severity !== 'warning' && severity !== 'info')
+      ) {
+        return [];
+      }
+      const out: QueenPlanValidationSweepSummary['top_findings'][number] = {
+        code,
+        severity,
+        message,
+      };
+      const filePath = stringValue(item?.file_path);
+      const subtaskIndex = numberValue(item?.subtask_index);
+      if (filePath !== undefined) out.file_path = filePath;
+      if (subtaskIndex !== undefined) out.subtask_index = subtaskIndex;
+      return [out];
+    }),
+  };
 }
 
 function messageStalledClaimer(store: MemoryStore, item: StalledSubtaskAttention): number {
@@ -483,10 +664,39 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
+function stringArrayValue(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function normalizeRuntimeAgent(value: string | null | undefined): QueenReplacementAgent {
+  const normalized = value?.toLowerCase() ?? '';
+  if (normalized.includes('claude')) return 'claude-code';
+  if (normalized.includes('codex')) return 'codex';
+  return 'any';
+}
+
+function oppositeRuntime(
+  staleAgent: QueenReplacementAgent,
+  claimedFileCount: number,
+  taskSize: number,
+): QueenReplacementAgent {
+  if (staleAgent === 'codex') return 'claude-code';
+  if (staleAgent === 'claude-code') return 'codex';
+  return claimedFileCount > 3 || taskSize > 3 ? 'any' : 'codex';
+}
+
+function displayRuntime(agent: QueenReplacementAgent): string {
+  if (agent === 'claude-code') return 'Claude';
+  if (agent === 'codex') return 'Codex';
+  return 'Unknown runtime';
 }
