@@ -1,4 +1,5 @@
 export {
+  buildFileHeatRows,
   buildClaimCoverageSnapshot,
   renderIndex,
   renderSession,

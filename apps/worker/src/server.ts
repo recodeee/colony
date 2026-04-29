@@ -2,7 +2,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expand } from '@colony/compress';
-import { type Settings, loadSettings, resolveDataDir } from '@colony/config';
+import { type Settings, defaultSettings, loadSettings, resolveDataDir } from '@colony/config';
 import {
   type DiscrepancyReport,
   type HivemindOptions,
@@ -21,6 +21,7 @@ import { type RescueLoopHandle, startRescueLoop } from './rescue-loop.js';
 import {
   type StrandedSessionSummary,
   buildClaimCoverageSnapshot,
+  buildFileHeatRows,
   renderIndex,
   renderSession,
 } from './viewer.js';
@@ -73,6 +74,16 @@ export function buildApp(
   app.get('/api/colony/claim-coverage', (c) => {
     const since = parseSinceQuery(c.req.query('since'), Date.now() - CLAIM_COVERAGE_WINDOW_MS);
     return c.json(buildClaimCoverageSnapshot(store, since));
+  });
+
+  app.get('/api/colony/file-heat', (c) => {
+    return c.json(
+      buildFileHeatRows(
+        store.storage,
+        store.storage.listTasks(200).filter((task) => task.status === 'open'),
+        options.fileHeatHalfLifeMinutes ?? defaultSettings.fileHeatHalfLifeMinutes,
+      ),
+    );
   });
 
   app.get('/api/colony/stranded', (c) => {
