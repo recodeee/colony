@@ -10,8 +10,9 @@ export function dataDbPath(settings: Settings): string {
 export async function withStore<T>(
   settings: Settings,
   run: (store: MemoryStore) => T | Promise<T>,
+  options: { readonly?: boolean } = {},
 ): Promise<T> {
-  const store = new MemoryStore({ dbPath: dataDbPath(settings), settings });
+  const store = new MemoryStore({ dbPath: dataDbPath(settings), settings, ...options });
   try {
     return await run(store);
   } finally {
