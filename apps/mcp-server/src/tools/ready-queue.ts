@@ -38,13 +38,17 @@ const CAPABILITY_HINT_TEXT: Record<string, string> = {
 export type ReadyReason = 'continue_current_task' | 'urgent_override' | 'ready_high_score';
 
 export interface TaskPlanClaimArgs {
+  repo_root: string;
   plan_slug: string;
   subtask_index: number;
   session_id: string;
   agent: string;
+  file_scope: string[];
 }
 
 export interface ReadySubtask {
+  next_tool?: 'task_plan_claim_subtask';
+  next_action_reason?: string;
   plan_slug: string;
   subtask_index: number;
   wave_index: number;
@@ -73,6 +77,7 @@ export interface ReadyForAgentResult {
   reason?: ReadyReason;
   claim_args?: TaskPlanClaimArgs;
   codex_mcp_call?: string;
+  next_action_reason?: string;
   empty_state?: string;
 }
 
@@ -132,6 +137,7 @@ export async function buildReadyForAgent(
     plan.next_available.map((subtask) =>
       rankSubtask(store, {
         plan_slug: plan.plan_slug,
+        repo_root: plan.repo_root,
         subtask,
         session_id: args.session_id,
         agent: args.agent,
@@ -152,6 +158,7 @@ export async function buildReadyForAgent(
       .map((subtask) =>
         rankSubtask(store, {
           plan_slug: plan.plan_slug,
+          repo_root: plan.repo_root,
           subtask,
           session_id: args.session_id,
           agent: args.agent,
@@ -185,10 +192,19 @@ export async function buildReadyForAgent(
         claim_ts: _claimTs,
         current_claim: _currentClaim,
         ...entry
-      }) => ({
-        ...entry,
-        negative_warnings: await readyNegativeWarnings(store, entry),
-      }),
+      }) => {
+        const claimMetadata = _currentClaim
+          ? {}
+          : {
+              next_tool: 'task_plan_claim_subtask' as const,
+              next_action_reason: claimReason(entry),
+            };
+        return {
+          ...entry,
+          ...claimMetadata,
+          negative_warnings: await readyNegativeWarnings(store, entry),
+        };
+      },
     ),
   );
 
@@ -228,13 +244,14 @@ function buildReadyResult(
     plan_slug: claimable.plan_slug,
     subtask_index: claimable.subtask_index,
     reason: claimable.reason,
+    next_action_reason: claimReason(claimable),
     claim_args,
     codex_mcp_call: codexMcpCall(claim_args),
   };
 }
 
 function codexMcpCall(args: TaskPlanClaimArgs): string {
-  return `mcp__colony__task_plan_claim_subtask({ agent: ${JSON.stringify(args.agent)}, session_id: ${JSON.stringify(args.session_id)}, plan_slug: ${JSON.stringify(args.plan_slug)}, subtask_index: ${args.subtask_index} })`;
+  return `mcp__colony__task_plan_claim_subtask({ agent: ${JSON.stringify(args.agent)}, session_id: ${JSON.stringify(args.session_id)}, repo_root: ${JSON.stringify(args.repo_root)}, plan_slug: ${JSON.stringify(args.plan_slug)}, subtask_index: ${args.subtask_index}, file_scope: ${JSON.stringify(args.file_scope)} })`;
 }
 
 function readyNextAction(
@@ -249,6 +266,13 @@ function readyNextAction(
     return `Continue claimed sub-task ${top.plan_slug}/sub-${top.subtask_index}; call task_plan_complete_subtask when done. Claim different ready work only when it should override the current task.`;
   }
   return `Call task_plan_claim_subtask with plan_slug="${top.plan_slug}", subtask_index=${top.subtask_index}, session_id="${args.session_id}", agent="${args.agent}".`;
+}
+
+function claimReason(entry: ReadySubtask): string {
+  if (entry.reason === 'urgent_override') {
+    return `Claim ${entry.plan_slug}/sub-${entry.subtask_index}: blocking task message overrides the current task bias.`;
+  }
+  return `Claim ${entry.plan_slug}/sub-${entry.subtask_index}: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.`;
 }
 
 async function readyNegativeWarnings(
@@ -313,6 +337,7 @@ function rankSubtask(
   store: MemoryStore,
   args: {
     plan_slug: string;
+    repo_root: string;
     subtask: SubtaskInfo;
     session_id: string;
     agent: string;
@@ -353,10 +378,12 @@ function rankSubtask(
       queen_bonus: queenBonus,
     }),
     claim_args: {
+      repo_root: args.repo_root,
       plan_slug: args.plan_slug,
       subtask_index: args.subtask.subtask_index,
       session_id: args.session_id,
       agent: args.agent,
+      file_scope: args.subtask.file_scope,
     },
     created_at: args.created_at,
     claim_ts: args.current_claim

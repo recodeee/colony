@@ -1274,7 +1274,7 @@ Find the next task to claim for this agent. Use this when deciding what to work 
 }
 ```
 
-Returns `{ ready, total_available, next_action }`. Each `ready` entry includes `plan_slug`, `subtask_index`, `wave_index`, `wave_name`, `blocked_by_count`, `title`, `capability_hint`, `file_scope`, `fit_score`, compact `reason`, and `reasoning`. `reason` is one of `continue_current_task`, `urgent_override`, or `ready_high_score`. Blocked work is filtered out, and conflicting active file claims lower the score. When ready work exists, `next_action` points at `task_plan_claim_subtask` with the top ready entry's `plan_slug` and `subtask_index`; if the top reason is `continue_current_task`, keep working the already-claimed sub-task.
+Returns `{ ready, total_available, next_action }`. Each `ready` entry includes `plan_slug`, `subtask_index`, `wave_index`, `wave_name`, `blocked_by_count`, `title`, `capability_hint`, `file_scope`, `fit_score`, compact `reason`, and `reasoning`. Claimable `ready` entries also include `next_tool: "task_plan_claim_subtask"`, exact copy-paste `claim_args`, and `next_action_reason` so agents can claim instead of stopping at discovery. `reason` is one of `continue_current_task`, `urgent_override`, or `ready_high_score`. Blocked work is filtered out, and conflicting active file claims lower the score. When ready work exists, `next_action` points at `task_plan_claim_subtask` with the top ready entry's `plan_slug` and `subtask_index`; if the top reason is `continue_current_task`, keep working the already-claimed sub-task.
 
 When claimable work exists, the response also includes exact routing fields:
 
@@ -1284,13 +1284,16 @@ When claimable work exists, the response also includes exact routing fields:
   "plan_slug": "example-plan",
   "subtask_index": 0,
   "reason": "ready_high_score",
+  "next_action_reason": "Claim example-plan/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.",
   "claim_args": {
+    "repo_root": "/abs/repo",
     "plan_slug": "example-plan",
     "subtask_index": 0,
     "session_id": "sess_def",
-    "agent": "codex"
+    "agent": "codex",
+    "file_scope": ["apps/api/example.ts"]
   },
-  "codex_mcp_call": "mcp__colony__task_plan_claim_subtask({ agent: \"codex\", session_id: \"sess_def\", plan_slug: \"example-plan\", subtask_index: 0 })"
+  "codex_mcp_call": "mcp__colony__task_plan_claim_subtask({ agent: \"codex\", session_id: \"sess_def\", repo_root: \"/abs/repo\", plan_slug: \"example-plan\", subtask_index: 0, file_scope: [\"apps/api/example.ts\"] })"
 }
 ```
 

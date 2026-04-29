@@ -229,8 +229,9 @@ Use `task_list` for browsing/debugging. Use `task_ready_for_agent` for work sele
 When plan work is claimable, `task_ready_for_agent` returns:
 
 - `next_tool: "task_plan_claim_subtask"`
-- exact `claim_args`
+- exact copy-paste `claim_args` with `session_id`, `agent`, `repo_root`, `plan_slug`, `subtask_index`, and `file_scope`
 - `reason`
+- `next_action_reason`
 - copy-paste MCP call
 
 When nothing is claimable, it returns an empty state that tells the agent to publish a Queen/task plan for multi-agent work.

@@ -193,6 +193,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
       subtask_index: z.number().int().nonnegative(),
       session_id: z.string().min(1),
       agent: z.string().min(1),
+      repo_root: z.string().min(1).optional(),
+      file_scope: z.array(z.string().min(1)).optional(),
     },
     wrapHandler('task_plan_claim_subtask', async (args) => {
       const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
