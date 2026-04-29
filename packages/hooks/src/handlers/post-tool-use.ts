@@ -14,11 +14,18 @@ import type { HookInput } from '../types.js';
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const APPLY_PATCH_TOOLS = new Set(['apply_patch', 'ApplyPatch', 'Patch']);
 const DIRECT_PATH_FIELDS = ['file_path', 'path', 'notebook_path'];
+const PATH_ARRAY_FIELDS = ['file_paths', 'extracted_paths'];
 const PSEUDO_HOOK_FILE_PATHS = new Set([
   '/dev/null',
+  'dev/null',
   '/dev/stdin',
+  'dev/stdin',
   '/dev/stdout',
+  'dev/stdout',
   '/dev/stderr',
+  'dev/stderr',
+  'stdout',
+  'stderr',
   'NUL',
 ]);
 
@@ -27,6 +34,8 @@ type TouchedPathContext = {
   repoRoot?: string | undefined;
   relativeToCwd?: boolean | undefined;
 };
+
+type PathRef = { path: string; role?: string; kind?: string };
 
 export async function postToolUse(store: MemoryStore, input: HookInput): Promise<void> {
   const tool = input.tool_name ?? input.tool ?? 'unknown';
@@ -278,15 +287,10 @@ export function extractTouchedFiles(
   }
   if (!WRITE_TOOLS.has(toolName)) return [];
   if (typeof toolInput !== 'object' || toolInput === null) return [];
-
-  const input = toolInput as Record<string, unknown>;
-  for (const field of DIRECT_PATH_FIELDS) {
-    const value = input[field];
-    if (typeof value === 'string' && value.length > 0) {
-      return normalizeAndFilterTouchedFiles([value], context);
-    }
-  }
-  return [];
+  return normalizeAndFilterTouchedFiles(
+    extractToolInputPathValues(toolInput as Record<string, unknown>),
+    context,
+  );
 }
 
 function extractBashTouchedFiles(toolInput: unknown, context: TouchedPathContext): string[] {
@@ -304,10 +308,13 @@ function extractBashTouchedFiles(toolInput: unknown, context: TouchedPathContext
 }
 
 function extractApplyPatchTouchedFiles(toolInput: unknown): string[] {
+  const paths: string[] =
+    typeof toolInput === 'object' && toolInput !== null
+      ? extractToolInputPathValues(toolInput as Record<string, unknown>)
+      : [];
   const patch = applyPatchText(toolInput);
-  if (!patch) return [];
+  if (!patch) return paths;
 
-  const paths: string[] = [];
   for (const line of patch.split(/\r?\n/)) {
     for (const prefix of [
       '*** Add File: ',
@@ -319,6 +326,51 @@ function extractApplyPatchTouchedFiles(toolInput: unknown): string[] {
     }
   }
   return paths;
+}
+
+function extractToolInputPathValues(input: Record<string, unknown>): string[] {
+  const paths: string[] = [];
+  for (const field of DIRECT_PATH_FIELDS) {
+    const value = input[field];
+    if (typeof value === 'string' && value.length > 0) paths.push(value);
+  }
+  for (const field of PATH_ARRAY_FIELDS) {
+    const value = input[field];
+    if (!Array.isArray(value)) continue;
+    for (const entry of value) {
+      if (typeof entry === 'string' && entry.length > 0) paths.push(entry);
+    }
+  }
+
+  const pathRefs = Array.isArray(input.paths) ? input.paths.filter(isPathRef) : [];
+  const claimableRefs = pathRefs.filter(isClaimablePathRef);
+  const selectedRefs =
+    claimableRefs.length > 0
+      ? claimableRefs
+      : pathRefs.filter((ref) => ref.kind === undefined || ref.kind === 'file');
+  for (const ref of selectedRefs) paths.push(ref.path);
+
+  return paths;
+}
+
+function isPathRef(value: unknown): value is PathRef {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as Record<string, unknown>).path === 'string'
+  );
+}
+
+function isClaimablePathRef(ref: PathRef): boolean {
+  if (ref.kind === 'pseudo') return false;
+  if (ref.kind !== undefined && ref.kind !== 'file') return false;
+  return (
+    ref.role === undefined ||
+    ref.role === 'target' ||
+    ref.role === 'destination' ||
+    ref.role === 'output' ||
+    ref.role === 'unknown'
+  );
 }
 
 function applyPatchText(toolInput: unknown): string | undefined {

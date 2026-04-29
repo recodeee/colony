@@ -55,6 +55,7 @@ export interface OmxLifecycleRunResult {
   route?: string;
   duplicate?: boolean;
   context?: string;
+  extracted_paths?: string[];
   error?: string;
 }
 
@@ -216,6 +217,7 @@ export async function runOmxLifecycleEnvelope(
       route: routed.route,
     };
     if (routed.context !== undefined) result.context = routed.context;
+    if (routed.extracted_paths !== undefined) result.extracted_paths = routed.extracted_paths;
     if (routed.error !== undefined) result.error = routed.error;
     return result;
   } catch (err) {
@@ -234,7 +236,13 @@ export async function runOmxLifecycleEnvelope(
 async function routeLifecycleEvent(
   store: MemoryStore,
   event: NormalizedOmxLifecycleEvent,
-): Promise<{ ok: boolean; route: string; context?: string; error?: string }> {
+): Promise<{
+  ok: boolean;
+  route: string;
+  context?: string;
+  extracted_paths?: string[];
+  error?: string;
+}> {
   if (event.event_type === 'task_bind') return bindTaskFromLifecycle(store, event);
   if (event.event_type === 'claim_result') {
     bindTaskFromLifecycle(store, event);
@@ -271,12 +279,13 @@ async function routeLifecycleEvent(
 
 function hookRouteResult(
   route: HookName,
-  result: { ok: boolean; context?: string; error?: string },
-): { ok: boolean; route: string; context?: string; error?: string } {
+  result: { ok: boolean; context?: string; extracted_paths?: string[]; error?: string },
+): { ok: boolean; route: string; context?: string; extracted_paths?: string[]; error?: string } {
   return {
     ok: result.ok,
     route,
     ...(result.context !== undefined ? { context: result.context } : {}),
+    ...(result.extracted_paths !== undefined ? { extracted_paths: result.extracted_paths } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
   };
 }
@@ -327,12 +336,19 @@ function toolInputForHook(event: NormalizedOmxLifecycleEvent): unknown {
 }
 
 function targetPathFromLifecycleToolInput(input: JsonRecord): string | undefined {
+  const extractedPaths = stringArray(input.extracted_paths);
+  if (extractedPaths.length > 0) return extractedPaths[0];
   const paths = Array.isArray(input.paths) ? input.paths.filter(isPathRef) : [];
   const target =
     paths.find((p) => p.kind === 'file' && p.role === 'target') ??
     paths.find((p) => p.kind === 'file' && p.role === 'destination') ??
     paths.find((p) => p.kind === 'file');
   return target?.path;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
 }
 
 function hasProcessedLifecycleEvent(
@@ -357,7 +373,7 @@ function hasProcessedLifecycleEvent(
 function recordLifecycleAudit(
   store: MemoryStore,
   event: NormalizedOmxLifecycleEvent,
-  routed: { ok: boolean; route: string; error?: string },
+  routed: { ok: boolean; route: string; error?: string; extracted_paths?: string[] },
 ): void {
   const taskId = activeTaskIdForLifecycle(store, event);
   store.storage.insertObservation({
@@ -383,6 +399,7 @@ function recordLifecycleAudit(
       tool_name: event.tool_name ?? null,
       route: routed.route,
       ok: routed.ok,
+      ...(routed.extracted_paths?.length ? { extracted_paths: routed.extracted_paths } : {}),
       ...(routed.error ? { error: routed.error } : {}),
     },
     task_id: taskId ?? null,

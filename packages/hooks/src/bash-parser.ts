@@ -1,6 +1,18 @@
 const GIT_OPS = new Set(['checkout', 'switch', 'merge', 'rebase', 'reset']);
 const FILE_OPS = new Set(['mv', 'rm', 'cp']);
 const REDIRECT_OPS = new Set(['>', '>>']);
+const PSEUDO_FILE_PATHS = new Set([
+  '/dev/null',
+  'dev/null',
+  '/dev/stdout',
+  'dev/stdout',
+  '/dev/stderr',
+  'dev/stderr',
+  'stdout',
+  'stderr',
+  'NUL',
+]);
+type FileOp = 'mv' | 'rm' | 'cp' | 'sed' | 'perl' | 'tee';
 
 export type BashCoordinationEvent =
   | {
@@ -11,7 +23,7 @@ export type BashCoordinationEvent =
     }
   | {
       kind: 'file-op';
-      op: 'mv' | 'rm' | 'cp' | 'sed';
+      op: FileOp;
       argv: string[];
       file_paths: string[];
       segment: string;
@@ -59,6 +71,12 @@ function parseCommandEvent(argv: string[], segment: string): BashCoordinationEve
 
   const sedEvent = parseSedEvent(argv, segment);
   if (sedEvent) return sedEvent;
+
+  const perlEvent = parsePerlEvent(argv, segment);
+  if (perlEvent) return perlEvent;
+
+  const teeEvent = parseTeeEvent(argv, segment);
+  if (teeEvent) return teeEvent;
 
   return undefined;
 }
@@ -164,6 +182,119 @@ function isSedScriptOptionWithAttachedValue(arg: string): boolean {
   );
 }
 
+function parsePerlEvent(argv: string[], segment: string): BashCoordinationEvent | undefined {
+  if (commandName(argv[0] ?? '') !== 'perl') return undefined;
+  if (!hasPerlInPlaceOption(argv.slice(1))) return undefined;
+
+  const filePaths = unique(
+    perlEditedFileArgs(argv.slice(1))
+      .map((arg) => parseFilePath(arg))
+      .filter((filePath): filePath is string => filePath !== undefined),
+  );
+  if (filePaths.length === 0) return undefined;
+
+  return { kind: 'file-op', op: 'perl', argv, file_paths: filePaths, segment };
+}
+
+function hasPerlInPlaceOption(args: string[]): boolean {
+  return args.some((arg) => isPerlInPlaceOption(arg));
+}
+
+function perlEditedFileArgs(args: string[]): string[] {
+  const candidates: string[] = [];
+  let programSeen = false;
+  let parsingOptions = true;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? '';
+    if (parsingOptions && arg === '--') {
+      parsingOptions = false;
+      continue;
+    }
+    if (parsingOptions && isPerlProgramOptionWithSeparateValue(arg)) {
+      programSeen = true;
+      i += 1;
+      continue;
+    }
+    if (parsingOptions && isPerlProgramOptionWithAttachedValue(arg)) {
+      programSeen = true;
+      continue;
+    }
+    if (parsingOptions && isPerlModuleOption(arg)) {
+      if (arg === '-M' || arg === '-m') i += 1;
+      continue;
+    }
+    if (parsingOptions && isPerlInPlaceOption(arg)) continue;
+    if (parsingOptions && arg.startsWith('-')) continue;
+
+    if (!programSeen) {
+      programSeen = true;
+      continue;
+    }
+    candidates.push(arg);
+  }
+
+  return candidates;
+}
+
+function isPerlInPlaceOption(arg: string): boolean {
+  return arg === '-i' || (arg.startsWith('-i') && !arg.startsWith('--')) || /^-[^-]*i/.test(arg);
+}
+
+function isPerlProgramOptionWithSeparateValue(arg: string): boolean {
+  return arg === '-e' || arg === '-E' || /^-[^-]*[eE]$/.test(arg);
+}
+
+function isPerlProgramOptionWithAttachedValue(arg: string): boolean {
+  return /^-[^-]*[eE].+/.test(arg) && !isPerlProgramOptionWithSeparateValue(arg);
+}
+
+function isPerlModuleOption(arg: string): boolean {
+  return arg === '-M' || arg === '-m' || arg.startsWith('-M') || arg.startsWith('-m');
+}
+
+function parseTeeEvent(argv: string[], segment: string): BashCoordinationEvent | undefined {
+  if (commandName(argv[0] ?? '') !== 'tee') return undefined;
+
+  const filePaths = unique(
+    teeOutputArgs(argv.slice(1))
+      .map((arg) => parseFilePath(arg))
+      .filter((filePath): filePath is string => filePath !== undefined),
+  );
+  if (filePaths.length === 0) return undefined;
+
+  return { kind: 'file-op', op: 'tee', argv, file_paths: filePaths, segment };
+}
+
+function teeOutputArgs(args: string[]): string[] {
+  const outputs: string[] = [];
+  let parsingOptions = true;
+
+  for (const arg of args) {
+    if (parsingOptions && arg === '--') {
+      parsingOptions = false;
+      continue;
+    }
+    if (parsingOptions && isTeeOption(arg)) continue;
+    outputs.push(arg);
+  }
+
+  return outputs;
+}
+
+function isTeeOption(arg: string): boolean {
+  return (
+    arg === '-a' ||
+    arg === '--append' ||
+    arg === '-i' ||
+    arg === '--ignore-interrupts' ||
+    arg === '-p' ||
+    arg === '--output-error' ||
+    arg.startsWith('--output-error=') ||
+    (arg.startsWith('-') && arg !== '-')
+  );
+}
+
 function parseRedirectEvents(tokens: Token[], segment: string): BashCoordinationEvent[] {
   const events: BashCoordinationEvent[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
@@ -241,6 +372,12 @@ function splitSegments(command: string): string[] {
         pushSegment(segments, current);
         current = '';
         i += 1;
+        continue;
+      }
+      if (char === '|') {
+        pushSegment(segments, current);
+        current = '';
+        if (next === '&') i += 1;
         continue;
       }
     }
@@ -378,8 +515,15 @@ function positionalArgs(args: string[]): string[] {
 }
 
 function parseFilePath(rawPath: string): string | undefined {
-  if (!rawPath || rawPath.startsWith('&')) return undefined;
-  return rawPath;
+  const value = rawPath.trim();
+  if (!value || value === '-' || value.startsWith('&')) return undefined;
+  if (PSEUDO_FILE_PATHS.has(value)) return undefined;
+  if (isLikelyCodeFragment(value)) return undefined;
+  return value;
+}
+
+function isLikelyCodeFragment(value: string): boolean {
+  return /^(?:s|tr|y)(.).+\1.*\1[A-Za-z]*$/.test(value);
 }
 
 function findCommandSubstitutionEnd(input: string, start: number): number {

@@ -137,12 +137,86 @@ describe('claim-before-edit full bridge path', () => {
       ],
     });
   });
+
+  it('records extracted paths on Bash and apply_patch pre_tool_use lifecycle payloads', async () => {
+    const sessionId = 'codex@bash-patch-pre';
+
+    await emitLifecycle(10, {
+      event_id: 'evt_bash_patch_session_start',
+      event_name: 'session_start',
+      session_id: sessionId,
+    });
+    await emitLifecycle(20, {
+      event_id: 'evt_bash_patch_task_bind',
+      event_name: 'task_bind',
+      session_id: sessionId,
+    });
+    const taskId = store.storage.findActiveTaskForSession(sessionId);
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task was not bound');
+
+    const bash = await emitLifecycle(100, {
+      event_id: 'evt_bash_pre',
+      event_name: 'pre_tool_use',
+      session_id: sessionId,
+      tool_name: 'Bash',
+      tool_input: {
+        operation: 'command',
+        command: 'perl -pi -e "s/a/b/" src/perl.ts && printf x | tee src/tee.ts > /dev/null',
+      },
+    });
+    expect(bash.extracted_paths).toEqual(['src/perl.ts', 'src/tee.ts']);
+
+    const applyPatch = await emitLifecycle(110, {
+      event_id: 'evt_apply_patch_pre',
+      event_name: 'pre_tool_use',
+      session_id: sessionId,
+      tool_name: 'apply_patch',
+      tool_input: {
+        operation: 'patch',
+        command: [
+          '*** Begin Patch',
+          '*** Update File: src/example.ts',
+          '*** Add File: src/generated.ts',
+          '*** Update File: /dev/null',
+          '*** End Patch',
+        ].join('\n'),
+      },
+    });
+    expect(applyPatch.extracted_paths).toEqual(['src/example.ts', 'src/generated.ts']);
+
+    expect(store.storage.getClaim(taskId, 'src/perl.ts')?.session_id).toBe(sessionId);
+    expect(store.storage.getClaim(taskId, 'src/tee.ts')?.session_id).toBe(sessionId);
+    expect(store.storage.getClaim(taskId, 'src/example.ts')?.session_id).toBe(sessionId);
+    expect(store.storage.getClaim(taskId, 'src/generated.ts')?.session_id).toBe(sessionId);
+    expect(firstSessionObservation(sessionId, 'tool_use')).toBeUndefined();
+
+    const lifecycleEvents = taskLifecycleEvents(taskId);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_id: 'evt_bash_pre',
+          event_type: 'pre_tool_use',
+          extracted_paths: ['src/perl.ts', 'src/tee.ts'],
+        }),
+        expect.objectContaining({
+          event_id: 'evt_apply_patch_pre',
+          event_type: 'pre_tool_use',
+          extracted_paths: ['src/example.ts', 'src/generated.ts'],
+        }),
+      ]),
+    );
+  });
 });
 
-async function emitLifecycle(tsOffset: number, overrides: Record<string, unknown>): Promise<void> {
+async function emitLifecycle(
+  tsOffset: number,
+  overrides: Record<string, unknown>,
+): Promise<Awaited<ReturnType<typeof runOmxLifecycleEnvelope>>> {
   vi.setSystemTime(BASE_TS + tsOffset);
   const result = await runOmxLifecycleEnvelope(envelope(overrides), { store });
   expect(result.ok).toBe(true);
+  return result;
 }
 
 function envelope(overrides: Record<string, unknown>): Record<string, unknown> {

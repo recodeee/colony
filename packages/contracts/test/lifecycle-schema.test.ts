@@ -241,4 +241,16 @@ describe('colony-omx-lifecycle-v1 schema', () => {
       ]),
     );
   });
+
+  it('allows extracted_paths on Bash and apply_patch pre_tool_use payloads', () => {
+    const bash = fixtures().find((fixture) => fixture.name === 'bash.pre.json');
+    const applyPatch = fixtures().find((fixture) => fixture.name === 'apply-patch.pre.json');
+
+    expect((bash?.value.tool_input as { extracted_paths?: string[] }).extracted_paths).toEqual([
+      'packages/contracts/src/generated.ts',
+    ]);
+    expect(
+      (applyPatch?.value.tool_input as { extracted_paths?: string[] }).extracted_paths,
+    ).toEqual(['packages/contracts/src/index.ts']);
+  });
 });

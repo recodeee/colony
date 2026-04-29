@@ -183,6 +183,31 @@ describe('parseBashCoordinationEvents', () => {
       command: 'sed "s/a/b/" src/edit.ts',
       expected: [],
     },
+    {
+      name: 'perl in-place file target',
+      command: 'perl -pi -e "s/a/b/" src/perl.ts',
+      expected: [{ kind: 'file-op', op: 'perl', file_paths: ['src/perl.ts'] }],
+    },
+    {
+      name: 'perl in-place with backup and multiple files',
+      command: 'perl -i.bak -pe "s/a/b/" src/a.ts src/b.ts',
+      expected: [{ kind: 'file-op', op: 'perl', file_paths: ['src/a.ts', 'src/b.ts'] }],
+    },
+    {
+      name: 'tee output target',
+      command: 'tee -a src/tee.ts',
+      expected: [{ kind: 'file-op', op: 'tee', file_paths: ['src/tee.ts'] }],
+    },
+    {
+      name: 'pipeline tee output target',
+      command: 'printf x | tee src/pipe.ts > /dev/null',
+      expected: [{ kind: 'file-op', op: 'tee', file_paths: ['src/pipe.ts'] }],
+    },
+    {
+      name: 'pseudo redirect target is ignored',
+      command: 'printf x > stdout',
+      expected: [],
+    },
   ];
 
   it.each(cases)('$name', ({ command, expected }) => {

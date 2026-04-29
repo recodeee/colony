@@ -45,11 +45,13 @@ export interface ClaimBeforeEditHookResult {
   context: string;
   permissionDecision: 'allow' | 'deny';
   permissionDecisionReason?: string;
+  extracted_paths: string[];
 }
 
 export interface ClaimBeforeEditResult {
   policy_mode: BridgePolicyMode;
   files: string[];
+  extracted_paths: string[];
   edits_with_claim: string[];
   edits_missing_claim: string[];
   auto_claimed_before_edit: string[];
@@ -99,6 +101,7 @@ export function preToolUseResult(store: MemoryStore, input: HookInput): ClaimBef
     return bridgePolicyResult({
       policy_mode: policyMode,
       files,
+      extracted_paths: files,
       edits_with_claim: [],
       edits_missing_claim: files,
       auto_claimed_before_edit: [],
@@ -130,6 +133,7 @@ export function claimBeforeEditFromToolUse(
   const result: ClaimBeforeEditResult = {
     policy_mode: policyMode,
     files,
+    extracted_paths: files,
     edits_with_claim: [],
     edits_missing_claim: [],
     auto_claimed_before_edit: [],
@@ -155,6 +159,7 @@ export function claimBeforeEditFromToolUse(
         candidates: [],
         policy_mode: policyMode,
         conflict,
+        extracted_paths: files,
       });
       result.warnings.push(
         claimWarning(input.session_id, file_path, toolName, policyMode, {
@@ -186,6 +191,7 @@ export function claimBeforeEditFromToolUse(
         file_path,
         tool: toolName,
         policy_mode: policyMode,
+        extracted_paths: files,
       });
       continue;
     }
@@ -199,6 +205,7 @@ export function claimBeforeEditFromToolUse(
         policy_mode: policyMode,
         ...(conflict ? { conflict } : {}),
         ...(claim.observation_id !== null ? { claim_observation_id: claim.observation_id } : {}),
+        extracted_paths: files,
       });
       if (conflict) {
         result.warnings.push(
@@ -223,6 +230,7 @@ export function claimBeforeEditFromToolUse(
       error: claim.error,
       candidates: claim.candidates,
       policy_mode: policyMode,
+      extracted_paths: files,
     });
     if (!warningDebounced)
       result.warnings.push(claimWarning(input.session_id, file_path, toolName, policyMode, claim));
@@ -233,6 +241,7 @@ export function claimBeforeEditFromToolUse(
 
 function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookResult {
   const context = claimBeforeEditWarning(result);
+  const extracted_paths = result.extracted_paths;
   const blocked =
     result.policy_mode === 'block-on-conflict' &&
     result.warnings.some(
@@ -249,10 +258,11 @@ function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookR
     return {
       context,
       permissionDecision: 'deny',
+      extracted_paths,
       ...(reason ? { permissionDecisionReason: reason } : {}),
     };
   }
-  return { context, permissionDecision: 'allow' };
+  return { context, permissionDecision: 'allow', extracted_paths };
 }
 
 function bridgePolicyMode(store: MemoryStore): BridgePolicyMode {
@@ -386,6 +396,7 @@ function recordClaimBeforeEditFailure(
     candidates: AutoClaimFailure['candidates'];
     policy_mode: BridgePolicyMode;
     conflict?: ClaimConflictInfo;
+    extracted_paths?: string[];
   },
 ): void {
   if (metadata.code === 'COLONY_UNAVAILABLE') return;
@@ -412,6 +423,7 @@ function recordClaimBeforeEditFailure(
         source: 'pre-tool-use',
         outcome: 'edits_missing_claim',
         file_path: metadata.file_path,
+        extracted_paths: metadata.extracted_paths ?? [metadata.file_path],
         tool: metadata.tool,
         code: metadata.code,
         error: metadata.error,
@@ -463,6 +475,7 @@ function recordClaimBeforeEdit(
     other_session?: string;
     claim_observation_id?: number;
     conflict?: ClaimConflictInfo;
+    extracted_paths?: string[];
   },
 ): void {
   store.addObservation({
@@ -474,6 +487,7 @@ function recordClaimBeforeEdit(
       kind: 'claim-before-edit',
       source: 'pre-tool-use',
       ...metadata,
+      extracted_paths: metadata.extracted_paths ?? [metadata.file_path],
       conflict: metadata.conflict !== undefined,
       conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
       owner: metadata.conflict?.owner ?? null,

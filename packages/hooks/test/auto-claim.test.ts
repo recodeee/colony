@@ -83,10 +83,18 @@ describe('extractTouchedFiles', () => {
     expect(
       extractTouchedFiles(
         'Bash',
-        { command: 'sed -i "s/a/b/" src/edit.ts && cat README.md > ../generated.ts' },
+        {
+          command:
+            'sed -i "s/a/b/" src/edit.ts && perl -pi -e "s/a/b/" src/perl.ts && printf x | tee src/tee.ts > /dev/null && cat README.md > ../generated.ts',
+        },
         { cwd: '/repo/packages/hooks', repoRoot: '/repo' },
       ),
-    ).toEqual(['packages/hooks/src/edit.ts', 'packages/generated.ts']);
+    ).toEqual([
+      'packages/hooks/src/edit.ts',
+      'packages/hooks/src/perl.ts',
+      'packages/hooks/src/tee.ts',
+      'packages/generated.ts',
+    ]);
   });
 
   it('extracts normalized apply_patch file headers', () => {
@@ -102,6 +110,16 @@ describe('extractTouchedFiles', () => {
       'src/edit.ts',
       'packages/hooks/src/new.ts',
     ]);
+    expect(
+      extractTouchedFiles(
+        'apply_patch',
+        {
+          paths: [{ path: 'src/from-payload.ts', role: 'target', kind: 'file' }],
+          extracted_paths: ['src/from-extracted.ts'],
+        },
+        { repoRoot: '/repo' },
+      ),
+    ).toEqual(['src/from-extracted.ts', 'src/from-payload.ts']);
   });
 
   it('ignores pseudo device paths', () => {
@@ -937,6 +955,70 @@ describe('runHook integration: A edits -> B sees warning', () => {
       edits_claimed_before: 1,
       auto_claimed_before_edit: 1,
     });
+  });
+
+  it('PreToolUse extracts Bash and apply_patch paths before the write runs', async () => {
+    const task_id = seedTwoSessionTask();
+
+    const bash = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'A',
+        ide: 'codex',
+        cwd: '/repo/packages/hooks',
+        tool_name: 'Bash',
+        tool_input: {
+          command: 'perl -pi -e "s/a/b/" src/perl.ts && printf x | tee src/tee.ts > /dev/null',
+        },
+      },
+      { store },
+    );
+
+    expect(bash).toMatchObject({
+      ok: true,
+      extracted_paths: ['packages/hooks/src/perl.ts', 'packages/hooks/src/tee.ts'],
+    });
+    expect(store.storage.getClaim(task_id, 'packages/hooks/src/perl.ts')?.session_id).toBe('A');
+    expect(store.storage.getClaim(task_id, 'packages/hooks/src/tee.ts')?.session_id).toBe('A');
+    expect(store.timeline('A').filter((row) => row.kind === 'tool_use')).toHaveLength(0);
+    expect(
+      metadataOf(
+        store.storage
+          .taskObservationsByKind(task_id, 'claim-before-edit')
+          .find((row) => metadataOf(row).file_path === 'packages/hooks/src/perl.ts'),
+      ),
+    ).toMatchObject({
+      tool: 'Bash',
+      extracted_paths: ['packages/hooks/src/perl.ts', 'packages/hooks/src/tee.ts'],
+    });
+
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: src/viewer.tsx',
+      '*** Add File: src/generated.ts',
+      '*** Update File: stdout',
+      '*** End Patch',
+    ].join('\n');
+
+    const applyPatch = await runHook(
+      'pre-tool-use',
+      {
+        session_id: 'B',
+        ide: 'codex',
+        cwd: '/repo',
+        tool_name: 'apply_patch',
+        tool_input: { command: patch },
+      },
+      { store },
+    );
+
+    expect(applyPatch).toMatchObject({
+      ok: true,
+      extracted_paths: ['src/viewer.tsx', 'src/generated.ts'],
+    });
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    expect(store.storage.getClaim(task_id, 'src/generated.ts')?.session_id).toBe('B');
+    expect(store.storage.getClaim(task_id, 'stdout')).toBeUndefined();
   });
 
   it('PostToolUse auto-claims, and the next UserPromptSubmit warns the other session', async () => {
