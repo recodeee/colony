@@ -1,5 +1,10 @@
 import { isAbsolute, relative, resolve } from 'node:path';
-import { type MemoryStore, detectRepoBranch, normalizeClaimPath } from '@colony/core';
+import {
+  type MemoryStore,
+  detectRepoBranch,
+  guardedClaimFile,
+  normalizeClaimPath,
+} from '@colony/core';
 
 export interface ActiveTaskCandidate {
   task_id: number;
@@ -47,7 +52,9 @@ export type AutoClaimFailureCode =
   | 'AMBIGUOUS_ACTIVE_TASK'
   | 'SESSION_NOT_FOUND'
   | 'COLONY_UNAVAILABLE'
-  | 'UNCLAIMABLE_FILE_PATH';
+  | 'UNCLAIMABLE_FILE_PATH'
+  | 'CLAIM_TAKEOVER_RECOMMENDED'
+  | 'CLAIM_HELD_BY_ACTIVE_OWNER';
 
 export interface AutoClaimFileForSessionInput {
   session_id: string;
@@ -217,7 +224,25 @@ export function autoClaimFileForSession(
     ensureTaskParticipant(store, candidate, input.session_id);
 
     const existing = store.storage.getClaim(candidate.task_id, normalizedFilePath);
-    if (existing?.session_id === input.session_id) {
+    const guarded = guardedClaimFile(store, {
+      task_id: candidate.task_id,
+      file_path: normalizedFilePath,
+      session_id: input.session_id,
+      agent: input.agent ?? candidate.agent,
+    });
+    if (guarded.status === 'takeover_recommended' || guarded.status === 'blocked_active_owner') {
+      return {
+        ok: false,
+        code:
+          guarded.status === 'takeover_recommended'
+            ? 'CLAIM_TAKEOVER_RECOMMENDED'
+            : 'CLAIM_HELD_BY_ACTIVE_OWNER',
+        resolution: 'not_found',
+        error: guarded.recommendation ?? 'claim is held by another owner',
+        candidates: [candidate],
+      };
+    }
+    if (guarded.status === 'refreshed_same_session') {
       return {
         ok: true,
         status: 'already_claimed',
@@ -229,7 +254,7 @@ export function autoClaimFileForSession(
       };
     }
 
-    const previousClaimSession = existing?.session_id;
+    const previousClaimSession = guarded.owner_session_id ?? existing?.session_id;
     const kind = input.observation_kind ?? 'claim';
     const observationId = store.storage.transaction(() => {
       if (previousClaimSession && input.record_conflict === true) {
@@ -247,11 +272,6 @@ export function autoClaimFileForSession(
         });
       }
 
-      store.storage.claimFile({
-        task_id: candidate.task_id,
-        file_path: normalizedFilePath,
-        session_id: input.session_id,
-      });
       return store.addObservation({
         session_id: input.session_id,
         kind,

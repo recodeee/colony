@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore, type WorktreeContentionReport } from '@colony/core';
+import { MemoryStore, TaskThread, type WorktreeContentionReport } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -574,6 +574,31 @@ describe('task_plan_claim_subtask', () => {
     const sub0 = plans[0]?.subtasks.find((s) => s.subtask_index === 0);
     expect(sub0?.status).toBe('claimed');
     expect(sub0?.claimed_by_session_id).toBe('B');
+  });
+
+  it('does not duplicate file claims when the same session already owns the scoped file', async () => {
+    const published = await call<PublishResult>('task_plan_publish', basicPublishArgs());
+    const subtaskId = published.subtasks[0]?.task_id ?? -1;
+    store.storage.claimFile({
+      task_id: subtaskId,
+      file_path: 'apps/api/src/widgets.ts',
+      session_id: 'B',
+    });
+
+    const claim = await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'add-widget-page',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+
+    expect(claim.branch).toBe('spec/add-widget-page/sub-0');
+    expect(store.storage.listClaims(claim.task_id)).toEqual([
+      expect.objectContaining({
+        file_path: 'apps/api/src/widgets.ts',
+        session_id: 'B',
+      }),
+    ]);
   });
 
   it('rejects claim when dependencies are not yet completed', async () => {

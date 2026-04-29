@@ -396,7 +396,7 @@ describe('autoClaimFileBeforeEdit', () => {
     ).toBe(editSession);
   });
 
-  it('records conflict telemetry when fallback binding finds a different owner', () => {
+  it('blocks auto-claim when fallback binding finds an active different owner', () => {
     store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo' });
     const thread = TaskThread.open(store, {
       repo_root: '/repo',
@@ -416,21 +416,40 @@ describe('autoClaimFileBeforeEdit', () => {
     });
 
     expect(result).toMatchObject({
-      ok: true,
-      status: 'claimed',
-      previous_claim_session: 'owner',
-      task_id: thread.task_id,
+      ok: false,
+      code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe('owner');
+    const conflicts = store.storage.taskObservationsByKind(thread.task_id, 'claim-conflict');
+    expect(conflicts).toHaveLength(0);
+  });
+
+  it('recommends takeover when auto-claim finds an unknown owner', () => {
+    store.startSession({ id: 'unknown-owner', ide: 'unknown', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/conflict',
+      session_id: 'unknown-owner',
+    });
+    thread.join('unknown-owner', 'unknown');
+    thread.claimFile({ session_id: 'unknown-owner', file_path: 'src/viewer.tsx' });
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex-edit-session',
+      agent: 'codex',
+      repo_root: '/repo',
+      branch: 'agent/codex/conflict',
+      file_path: 'src/viewer.tsx',
+      record_conflict: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'CLAIM_TAKEOVER_RECOMMENDED',
     });
     expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
-      'codex-edit-session',
+      'unknown-owner',
     );
-    const conflicts = store.storage.taskObservationsByKind(thread.task_id, 'claim-conflict');
-    expect(conflicts).toHaveLength(1);
-    expect(metadataOf(conflicts[0])).toMatchObject({
-      source: 'autoClaimFileBeforeEdit',
-      file_path: 'src/viewer.tsx',
-      other_session: 'owner',
-    });
   });
 
   it('resolves the only active task for the same agent when no branch scope exists', () => {
@@ -628,7 +647,7 @@ describe('autoClaimFromToolUse', () => {
     expect(store.storage.taskObservationsByKind(task_id, 'auto-claim')).toHaveLength(1);
   });
 
-  it('reports a conflict when another session already holds a fresh claim', () => {
+  it('does not auto-claim over another session holding a fresh claim', () => {
     const task_id = seedTwoSessionTask();
     // A claims first.
     autoClaimFromToolUse(store, {
@@ -636,24 +655,16 @@ describe('autoClaimFromToolUse', () => {
       tool_name: 'Edit',
       tool_input: { file_path: 'src/viewer.tsx' },
     });
-    // B edits the same file — expect the conflict to be reported AND
-    // ownership to transfer, because the edit already happened.
     const result = autoClaimFromToolUse(store, {
       session_id: 'B',
       tool_name: 'Edit',
       tool_input: { file_path: 'src/viewer.tsx' },
     });
-    expect(result.claimed).toEqual(['src/viewer.tsx']);
-    expect(result.conflicts).toEqual([{ file_path: 'src/viewer.tsx', other_session: 'A' }]);
-    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    expect(result.claimed).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
     const conflicts = store.storage.taskObservationsByKind(task_id, 'claim-conflict');
-    expect(conflicts).toHaveLength(1);
-    expect(metadataOf(conflicts[0])).toMatchObject({
-      source: 'post-tool-use',
-      file_path: 'src/viewer.tsx',
-      tool: 'Edit',
-      other_session: 'A',
-    });
+    expect(conflicts).toHaveLength(0);
   });
 
   it('materializes a synthetic task for sessions not joined to any task', () => {
@@ -758,7 +769,7 @@ describe('claimBeforeEditFromToolUse', () => {
     });
   });
 
-  it('records advisory conflict telemetry and still pre-claims for the editing session', () => {
+  it('does not pre-claim over another session holding a fresh claim', () => {
     const task_id = seedTwoSessionTask();
     const thread = new TaskThread(store, task_id);
     thread.claimFile({ session_id: 'A', file_path: 'src/viewer.tsx' });
@@ -769,15 +780,11 @@ describe('claimBeforeEditFromToolUse', () => {
       tool_input: { file_path: 'src/viewer.tsx' },
     });
 
-    expect(result.auto_claimed_before_edit).toEqual(['src/viewer.tsx']);
-    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    expect(result.auto_claimed_before_edit).toEqual([]);
+    expect(result.edits_missing_claim).toEqual(['src/viewer.tsx']);
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
     const conflicts = store.storage.taskObservationsByKind(task_id, 'claim-conflict');
-    expect(conflicts).toHaveLength(1);
-    expect(metadataOf(conflicts[0])).toMatchObject({
-      source: 'pre-tool-use',
-      file_path: 'src/viewer.tsx',
-      other_session: 'A',
-    });
+    expect(conflicts).toHaveLength(0);
   });
 
   it('emits ACTIVE_TASK_NOT_FOUND and does not invent a task for unbound sessions', () => {
@@ -1214,7 +1221,7 @@ describe('runHook integration: A edits -> B sees warning', () => {
     expect(store.storage.taskObservationsByKind(task_id, 'auto-claim')).toHaveLength(1);
   });
 
-  it('records claim-conflict but allows Edit when a different session holds the file', async () => {
+  it('does not transfer claim ownership after Edit when a different session holds the file', async () => {
     const task_id = seedTwoSessionTask();
     store.storage.claimFile({ task_id, file_path: 'src/viewer.tsx', session_id: 'A' });
 
@@ -1231,15 +1238,9 @@ describe('runHook integration: A edits -> B sees warning', () => {
     );
 
     expect(edit.ok).toBe(true);
-    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('B');
+    expect(store.storage.getClaim(task_id, 'src/viewer.tsx')?.session_id).toBe('A');
     const conflicts = store.storage.taskObservationsByKind(task_id, 'claim-conflict');
-    expect(conflicts).toHaveLength(1);
-    expect(metadataOf(conflicts[0])).toMatchObject({
-      source: 'post-tool-use',
-      file_path: 'src/viewer.tsx',
-      tool: 'Edit',
-      other_session: 'A',
-    });
+    expect(conflicts).toHaveLength(0);
   });
 
   it('Bash redirects use the same auto-claim path as Write', async () => {

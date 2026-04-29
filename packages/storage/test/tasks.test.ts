@@ -82,6 +82,26 @@ describe('tasks', () => {
     expect(storage.getClaim(task.id, 'src/x.ts')).toBeUndefined();
   });
 
+  it('refreshes a duplicate same-session claim without adding another live row', () => {
+    seedSessions('owner');
+    const task = storage.findOrCreateTask({
+      title: 't',
+      repo_root: '/r',
+      branch: 'b',
+      created_by: 'owner',
+    });
+    storage.claimFile({ task_id: task.id, file_path: 'src/x.ts', session_id: 'owner' });
+    storage.claimFile({ task_id: task.id, file_path: 'src/x.ts', session_id: 'owner' });
+
+    expect(storage.listClaims(task.id)).toEqual([
+      expect.objectContaining({
+        file_path: 'src/x.ts',
+        session_id: 'owner',
+        state: 'active',
+      }),
+    ]);
+  });
+
   it('marks claims handoff_pending without deleting the row', () => {
     seedSessions('owner', 'successor');
     const task = storage.findOrCreateTask({

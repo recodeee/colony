@@ -1,6 +1,12 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { TaskThread, classifyClaimAge, listPlans, liveFileContentionsForClaim } from '@colony/core';
+import {
+  TaskThread,
+  classifyClaimAge,
+  guardedClaimFile,
+  listPlans,
+  liveFileContentionsForClaim,
+} from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
@@ -314,18 +320,48 @@ export function register(server: McpServer, ctx: ToolContext): void {
         file_path: normalizedFilePath,
         assume_requester_live: true,
       });
-      const thread = new TaskThread(store, task_id);
-      const id = thread.claimFile({
+      const guarded = guardedClaimFile(store, {
+        task_id,
         session_id,
         file_path: normalizedFilePath,
-        ...(note !== undefined ? { note } : {}),
       });
+      if (guarded.status === 'takeover_recommended') {
+        return mcpErrorResponse(
+          'CLAIM_TAKEOVER_RECOMMENDED',
+          guarded.recommendation ?? 'release or take over inactive claim before claiming',
+          { ...guarded },
+        );
+      }
+      if (guarded.status === 'blocked_active_owner') {
+        return mcpErrorResponse(
+          'CLAIM_HELD_BY_ACTIVE_OWNER',
+          guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
+          { ...guarded },
+        );
+      }
+      if (guarded.status === 'task_not_found') {
+        return mcpErrorResponse('TASK_NOT_FOUND', `task ${task_id} not found`);
+      }
+      const id = store.addObservation({
+        session_id,
+        kind: 'claim',
+        content: note ? `claim ${normalizedFilePath} — ${note}` : `claim ${normalizedFilePath}`,
+        task_id,
+        metadata: {
+          kind: 'claim',
+          file_path: normalizedFilePath,
+          guarded_claim_status: guarded.status,
+        },
+      });
+      store.storage.touchTask(task_id);
       const previousClaim = previous
         ? compactPreviousClaim(previous, session_id, settings.claimStaleMinutes)
         : null;
       return jsonReply({
         observation_id: id,
         file_path: normalizedFilePath,
+        claim_status: guarded.status,
+        claim_task_id: guarded.claim_task_id ?? task_id,
         warning: liveContentions[0] ?? null,
         live_file_contentions: liveContentions,
         overlap: previousClaim?.overlap ?? 'none',

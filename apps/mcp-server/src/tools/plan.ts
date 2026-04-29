@@ -7,6 +7,7 @@ import {
   TaskThread,
   areDepsMet,
   findSubtaskBySpecRow,
+  guardedClaimFile,
   listPlans,
   readSubtaskByBranch,
 } from '@colony/core';
@@ -277,16 +278,35 @@ export function register(server: McpServer, ctx: ToolContext): void {
           const thread = new TaskThread(store, fresh.task_id);
           thread.join(args.session_id, args.agent);
           for (const file of fresh.info.file_scope) {
-            store.storage.claimFile({
+            const guarded = guardedClaimFile(store, {
               task_id: fresh.task_id,
               file_path: file,
               session_id: args.session_id,
+              agent: args.agent,
             });
+            if (guarded.status === 'takeover_recommended') {
+              const err: CodedError = new Error(
+                guarded.recommendation ?? 'release or take over inactive claim before claiming',
+              );
+              err.__code = 'CLAIM_TAKEOVER_RECOMMENDED';
+              throw err;
+            }
+            if (guarded.status === 'blocked_active_owner') {
+              const err: CodedError = new Error(
+                guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
+              );
+              err.__code = 'CLAIM_HELD_BY_ACTIVE_OWNER';
+              throw err;
+            }
           }
         });
       } catch (err) {
         const code = (err as CodedError).__code;
-        if (code === 'PLAN_SUBTASK_NOT_AVAILABLE') {
+        if (
+          code === 'PLAN_SUBTASK_NOT_AVAILABLE' ||
+          code === 'CLAIM_TAKEOVER_RECOMMENDED' ||
+          code === 'CLAIM_HELD_BY_ACTIVE_OWNER'
+        ) {
           return mcpErrorResponse(code, (err as Error).message);
         }
         return mcpError(err);

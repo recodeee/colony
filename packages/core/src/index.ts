@@ -87,6 +87,11 @@ export {
   type LiveFileContentionWarning,
 } from './live-file-contention.js';
 export {
+  guardedClaimFile,
+  type GuardedClaimResult,
+  type GuardedClaimStatus,
+} from './scoped-claim.js';
+export {
   TaskThread,
   TaskThreadError,
   TASK_THREAD_ERROR_CODES,

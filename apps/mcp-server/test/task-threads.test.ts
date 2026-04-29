@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { MemoryStore, TASK_THREAD_ERROR_CODES, TaskThread } from '@colony/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -142,6 +142,113 @@ describe('task threads — file claims', () => {
       overlap: 'weak_stale',
     });
     expect(store.storage.taskObservationsByKind(task_id, 'claim', 10)).toHaveLength(2);
+  });
+
+  it('refreshes a same-session scoped claim instead of creating duplicate contention', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    const repoAlias = `${repoRoot}/../${basename(repoRoot)}`;
+    store.startSession({ id: 'same-session', ide: 'codex', cwd: repoRoot });
+
+    const first = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'main',
+      session_id: 'same-session',
+    });
+    first.join('same-session', 'codex');
+    await call('task_claim_file', {
+      task_id: first.task_id,
+      session_id: 'same-session',
+      file_path: 'src/protected.ts',
+    });
+
+    const second = TaskThread.open(store, {
+      repo_root: repoAlias,
+      branch: 'main',
+      session_id: 'same-session',
+    });
+    second.join('same-session', 'codex');
+    const result = await call<{ claim_status: string; claim_task_id: number }>('task_claim_file', {
+      task_id: second.task_id,
+      session_id: 'same-session',
+      file_path: 'src/protected.ts',
+    });
+
+    expect(result).toMatchObject({
+      claim_status: 'refreshed_same_session',
+      claim_task_id: first.task_id,
+    });
+    expect(store.storage.getClaim(first.task_id, 'src/protected.ts')?.session_id).toBe(
+      'same-session',
+    );
+    expect(store.storage.getClaim(second.task_id, 'src/protected.ts')).toBeUndefined();
+  });
+
+  it('recommends takeover when a scoped claim belongs to an unknown owner', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    const repoAlias = `${repoRoot}/../${basename(repoRoot)}`;
+    store.startSession({ id: 'unknown-owner', ide: 'unknown', cwd: repoRoot });
+    store.startSession({ id: 'requester', ide: 'codex', cwd: repoRoot });
+
+    const first = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'main',
+      session_id: 'unknown-owner',
+    });
+    first.join('unknown-owner', 'unknown');
+    first.claimFile({ session_id: 'unknown-owner', file_path: 'src/protected.ts' });
+    const second = TaskThread.open(store, {
+      repo_root: repoAlias,
+      branch: 'main',
+      session_id: 'requester',
+    });
+    second.join('requester', 'codex');
+
+    const err = await callError('task_claim_file', {
+      task_id: second.task_id,
+      session_id: 'requester',
+      file_path: 'src/protected.ts',
+    });
+
+    expect(err).toMatchObject({
+      code: 'CLAIM_TAKEOVER_RECOMMENDED',
+      owner_session_id: 'unknown-owner',
+      owner_active: false,
+    });
+    expect(store.storage.getClaim(second.task_id, 'src/protected.ts')).toBeUndefined();
+  });
+
+  it('blocks a scoped claim when an active different owner holds it', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    const repoAlias = `${repoRoot}/../${basename(repoRoot)}`;
+    store.startSession({ id: 'active-owner', ide: 'claude-code', cwd: repoRoot });
+    store.startSession({ id: 'requester', ide: 'codex', cwd: repoRoot });
+
+    const first = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'main',
+      session_id: 'active-owner',
+    });
+    first.join('active-owner', 'claude');
+    first.claimFile({ session_id: 'active-owner', file_path: 'src/protected.ts' });
+    const second = TaskThread.open(store, {
+      repo_root: repoAlias,
+      branch: 'main',
+      session_id: 'requester',
+    });
+    second.join('requester', 'codex');
+
+    const err = await callError('task_claim_file', {
+      task_id: second.task_id,
+      session_id: 'requester',
+      file_path: 'src/protected.ts',
+    });
+
+    expect(err).toMatchObject({
+      code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
+      owner_session_id: 'active-owner',
+      owner_active: true,
+    });
+    expect(store.storage.getClaim(second.task_id, 'src/protected.ts')).toBeUndefined();
   });
 });
 
