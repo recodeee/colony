@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Storage } from '../src/index.js';
 
@@ -336,4 +337,72 @@ describe('tasks', () => {
     const t = storage.findTaskByBranch('/r', 'b');
     expect(t?.title).toBe('t');
   });
+
+  it('migrates old task_claims rows without claim state columns', () => {
+    seedSessions('s-a');
+    const task = storage.findOrCreateTask({
+      title: 't',
+      repo_root: '/r',
+      branch: 'b',
+      created_by: 's-a',
+    });
+    storage.claimFile({ task_id: task.id, file_path: 'src/x.ts', session_id: 's-a' });
+    storage.close();
+    rewriteTaskClaimsAsOldSchema(join(dir, 'test.db'));
+
+    storage = new Storage(join(dir, 'test.db'));
+
+    expect(taskClaimColumns(join(dir, 'test.db'))).toEqual(
+      expect.arrayContaining(['state', 'expires_at', 'handoff_observation_id']),
+    );
+    expect(storage.getClaim(task.id, 'src/x.ts')).toMatchObject({
+      task_id: task.id,
+      file_path: 'src/x.ts',
+      session_id: 's-a',
+      state: 'active',
+      expires_at: null,
+      handoff_observation_id: null,
+    });
+    expect(storage.recentClaims(task.id, 0)).toEqual([
+      expect.objectContaining({
+        file_path: 'src/x.ts',
+        session_id: 's-a',
+        state: 'active',
+      }),
+    ]);
+  });
 });
+
+function rewriteTaskClaimsAsOldSchema(dbPath: string): void {
+  const db = new Database(dbPath);
+  try {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      ALTER TABLE task_claims RENAME TO task_claims_new;
+      CREATE TABLE task_claims (
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        file_path TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        claimed_at INTEGER NOT NULL,
+        PRIMARY KEY (task_id, file_path)
+      );
+      INSERT INTO task_claims(task_id, file_path, session_id, claimed_at)
+        SELECT task_id, file_path, session_id, claimed_at FROM task_claims_new;
+      DROP TABLE task_claims_new;
+      CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+function taskClaimColumns(dbPath: string): string[] {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return (db.prepare('PRAGMA table_info(task_claims)').all() as Array<{ name: string }>).map(
+      (col) => col.name,
+    );
+  } finally {
+    db.close();
+  }
+}
