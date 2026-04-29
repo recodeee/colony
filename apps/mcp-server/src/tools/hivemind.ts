@@ -33,6 +33,7 @@ const DEFAULT_CONTEXT_CLAIM_LIMIT = 12;
 const DEFAULT_CONTEXT_HOT_FILE_LIMIT = 8;
 const DEFAULT_CONTEXT_ATTENTION_ID_LIMIT = 12;
 const ADOPTION_NUDGE_LOOKBACK_MS = 24 * 60 * 60_000;
+const ATTENTION_INBOX_RECENT_LOOKBACK_MS = 10 * 60_000;
 const TARGET_TASK_READY_PER_LIST = 0.3;
 const TARGET_COLONY_NOTE_SHARE = 0.7;
 const TARGET_CLAIM_BEFORE_EDIT = 0.5;
@@ -63,7 +64,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'hivemind_context',
-    'Before editing, inspect ownership, then call attention_inbox before choosing work. Active ownership, relevant memory, negative warnings, nearby claims, hot files, compact attention counts, and observation IDs stay compact.',
+    'Before editing, inspect ownership, then call attention_inbox now before choosing work. Returns suggested_call, active ownership, relevant memory, negative warnings, nearby claims, hot files, compact attention counts, and observation IDs.',
     {
       repo_root: z.string().min(1).optional(),
       repo_roots: z.array(z.string().min(1)).max(20).optional(),
@@ -227,6 +228,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
           : undefined;
         const readyWorkCount = countReadyWork(store, { repo_root, repo_roots });
         const adoptionNudges = buildAdoptionNudges(store);
+        const mustCheckAttention = !hasRecentAttentionInboxCall(
+          store,
+          attentionIdentity.session_id,
+        );
 
         return {
           content: [
@@ -239,6 +244,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
                   attention: attentionInput,
                   readyWorkCount,
                   adoptionNudges,
+                  mustCheckAttention,
                   ...(localContext !== undefined ? { localContext } : {}),
                 }),
               ),
@@ -248,6 +254,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
       },
     ),
   );
+}
+
+function hasRecentAttentionInboxCall(store: MemoryStore, sessionId: string): boolean {
+  const since = Date.now() - ATTENTION_INBOX_RECENT_LOOKBACK_MS;
+  return store.storage
+    .toolCallsSince(since)
+    .some((call) => call.session_id === sessionId && isColonyTool(call.tool, 'attention_inbox'));
 }
 
 function resolveAttentionIdentity(
@@ -331,8 +344,7 @@ function adoptionNudgesFromMetrics(store: MemoryStore, now: number): HivemindAdo
       claimBeforeEditRatio < TARGET_CLAIM_BEFORE_EDIT
     ) {
       const preToolUseSignals = claimStats.pre_tool_use_signals ?? 0;
-      const likelyMissingHook =
-        claimStats.edits_claimed_before === 0 && preToolUseSignals === 0;
+      const likelyMissingHook = claimStats.edits_claimed_before === 0 && preToolUseSignals === 0;
       nudges.push({
         key: 'claim_before_edit_low',
         tool: 'task_claim_file',

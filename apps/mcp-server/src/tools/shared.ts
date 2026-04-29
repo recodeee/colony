@@ -34,6 +34,7 @@ export interface HivemindContextBuildOptions {
   localContext?: HivemindLocalContext;
   readyWorkCount?: number;
   adoptionNudges?: HivemindAdoptionNudge[];
+  mustCheckAttention?: boolean;
 }
 
 export interface HivemindContextAttentionInput {
@@ -86,6 +87,7 @@ export interface HivemindContext {
     claim_count: number;
     hot_file_count: number;
     next_action: string;
+    suggested_call: string;
     suggested_tools: string[];
     must_check_attention: boolean;
     attention_hint: string;
@@ -218,7 +220,7 @@ export interface HivemindContextAttentionCounts {
 }
 
 const HIVEMIND_FUNNEL_NEXT_ACTION =
-  'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.';
+  'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.';
 const HIVEMIND_SUGGESTED_TOOLS = ['attention_inbox', 'task_ready_for_agent'];
 const HIVEMIND_ATTENTION_HINT =
   'Call attention_inbox to review pending handoffs, unread messages, blockers, and stalled lanes before claiming work.';
@@ -330,10 +332,11 @@ export function buildHivemindContext(
       claim_count: ownership.claim_count,
       hot_file_count: ownership.hot_files.length,
       next_action: HIVEMIND_FUNNEL_NEXT_ACTION,
+      suggested_call: suggestedAttentionInboxCall(options.attention, snapshot.repo_roots),
       suggested_tools: [
         ...new Set([...HIVEMIND_SUGGESTED_TOOLS, ...adoptionNudges.map((nudge) => nudge.tool)]),
       ],
-      must_check_attention: true,
+      must_check_attention: options.mustCheckAttention ?? true,
       attention_hint: HIVEMIND_ATTENTION_HINT,
       ready_work_hint: HIVEMIND_READY_WORK_HINT,
       unread_message_count: attention.counts.unread_message_count,
@@ -353,6 +356,21 @@ export function buildHivemindContext(
     memory_hits: memoryHits,
     negative_warnings: negativeWarnings,
   };
+}
+
+function suggestedAttentionInboxCall(
+  attention: HivemindContextAttentionInput | undefined,
+  repoRoots: string[],
+): string {
+  if (attention === undefined) {
+    return 'mcp__colony__attention_inbox({ agent, session_id, repo_root })';
+  }
+  const args = [
+    `agent: ${JSON.stringify(attention.agent)}`,
+    `session_id: ${JSON.stringify(attention.session_id)}`,
+  ];
+  if (repoRoots.length === 1) args.push(`repo_root: ${JSON.stringify(repoRoots[0])}`);
+  return `mcp__colony__attention_inbox({ ${args.join(', ')} })`;
 }
 
 export function resolveLocalContextTask(

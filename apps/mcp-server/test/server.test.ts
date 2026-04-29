@@ -219,7 +219,7 @@ describe('MCP server', () => {
     expect(claimDescription).toContain('file ownership');
     expect(claimDescription).toContain('never block writes');
     expect(hivemindDescription).toContain(
-      'Before editing, inspect ownership, then call attention_inbox before choosing work.',
+      'Before editing, inspect ownership, then call attention_inbox now before choosing work.',
     );
     expect(docs).toContain(
       'Before editing, inspect ownership, then claim touched files on the active task.',
@@ -333,6 +333,7 @@ describe('MCP server', () => {
         lane_count: number;
         memory_hit_count: number;
         next_action: string;
+        suggested_call: string;
         suggested_tools: string[];
         must_check_attention: boolean;
         attention_hint: string;
@@ -349,8 +350,9 @@ describe('MCP server', () => {
     expect(payload.summary.lane_count).toBe(1);
     expect(payload.summary.memory_hit_count).toBeGreaterThan(0);
     expect(payload.summary.next_action).toBe(
-      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+      'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.',
     );
+    expect(payload.summary.suggested_call).toContain('mcp__colony__attention_inbox({ agent:');
     expect(payload.summary.suggested_tools).toEqual(['attention_inbox', 'task_ready_for_agent']);
     expect(payload.summary.must_check_attention).toBe(true);
     expect(payload.summary.attention_hint).toContain('attention_inbox');
@@ -641,6 +643,7 @@ describe('MCP server', () => {
       };
       summary: {
         next_action: string;
+        suggested_call: string;
         must_check_attention: boolean;
         unread_message_count: number;
         pending_handoff_count: number;
@@ -658,7 +661,12 @@ describe('MCP server', () => {
     expect(payload.attention.hydration).toContain('Hydrate with attention_inbox');
     expect(payload.attention.hydrate_with).toBe('attention_inbox');
     expect(payload.summary.next_action).toBe(
-      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+      'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.',
+    );
+    expect(payload.summary.suggested_call).toBe(
+      `mcp__colony__attention_inbox({ agent: "codex", session_id: "codex", repo_root: ${JSON.stringify(
+        repoRoot,
+      )} })`,
     );
     expect(payload.summary.must_check_attention).toBe(true);
     expect(payload.summary.pending_handoff_count).toBe(1);
@@ -754,6 +762,7 @@ describe('MCP server', () => {
         lane_count: number;
         next_action: string;
         suggested_tools: string[];
+        suggested_call: string;
         must_check_attention: boolean;
       };
       local_context: {
@@ -807,7 +816,12 @@ describe('MCP server', () => {
     expect(payload.local_context.attention.hydrate_with).toBe('attention_inbox');
     expect(payload.local_context.ready_next_action).toMatch(/blocking task messages/i);
     expect(payload.summary.next_action).toBe(
-      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+      'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.',
+    );
+    expect(payload.summary.suggested_call).toBe(
+      `mcp__colony__attention_inbox({ agent: "codex", session_id: "codex", repo_root: ${JSON.stringify(
+        repoRoot,
+      )} })`,
     );
     expect(payload.summary.suggested_tools).toEqual(
       expect.arrayContaining(['attention_inbox', 'task_ready_for_agent']),
@@ -1030,6 +1044,7 @@ describe('MCP server', () => {
         lane_count: number;
         needs_attention_count: number;
         next_action: string;
+        suggested_call: string;
         must_check_attention: boolean;
       };
       counts: Record<string, number>;
@@ -1039,8 +1054,9 @@ describe('MCP server', () => {
     expect(payload.summary.lane_count).toBe(1);
     expect(payload.summary.needs_attention_count).toBe(1);
     expect(payload.summary.next_action).toBe(
-      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+      'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.',
     );
+    expect(payload.summary.suggested_call).toContain('mcp__colony__attention_inbox');
     expect(payload.summary.must_check_attention).toBe(true);
     expect(payload.counts.stalled).toBe(1);
     expect(payload.lanes[0]).toMatchObject({

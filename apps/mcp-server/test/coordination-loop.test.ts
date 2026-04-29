@@ -30,6 +30,7 @@ interface HivemindContextResult {
     memory_hit_count: number;
     negative_warning_count: number;
     next_action: string;
+    suggested_call: string;
     suggested_tools: string[];
     must_check_attention: boolean;
     attention_hint: string;
@@ -294,7 +295,7 @@ describe('coordination loop discovery', () => {
       {
         name: 'hivemind_context',
         startsWith: /^Before editing/,
-        leadingPhrases: ['before editing', 'active ownership', 'relevant memory'],
+        leadingPhrases: ['before editing', 'attention_inbox now', 'suggested_call'],
       },
       {
         name: 'attention_inbox',
@@ -345,6 +346,49 @@ describe('coordination loop discovery', () => {
     }
   });
 
+  it('returns a compact copyable attention_inbox call before work selection', async () => {
+    writeActiveSession();
+    const res = await client.callTool({
+      name: 'hivemind_context',
+      arguments: {
+        repo_root: repoRoot,
+        session_id: 'agent-session',
+        agent: 'codex',
+        query: 'coordination loop',
+        limit: 5,
+      },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const context = JSON.parse(text) as HivemindContextResult;
+
+    expect(context.summary.suggested_call).toBe(
+      `mcp__colony__attention_inbox({ agent: "codex", session_id: "agent-session", repo_root: ${JSON.stringify(
+        repoRoot,
+      )} })`,
+    );
+    expect(context.summary.must_check_attention).toBe(true);
+    expect(context.summary.next_action).toBe(
+      'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.',
+    );
+    expect(text.length).toBeLessThan(6000);
+    expect(text).not.toContain('content');
+
+    store.addObservation({
+      session_id: 'agent-session',
+      kind: 'tool_use',
+      content: 'attention_inbox',
+      metadata: { tool: 'mcp__colony__attention_inbox' },
+    });
+    const afterInbox = await call<HivemindContextResult>('hivemind_context', {
+      repo_root: repoRoot,
+      session_id: 'agent-session',
+      agent: 'codex',
+      query: 'coordination loop',
+      limit: 5,
+    });
+    expect(afterInbox.summary.must_check_attention).toBe(false);
+  });
+
   it('documents the same ToolSearch phrases in the MCP README table', () => {
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     const tableRows = readme
@@ -386,6 +430,8 @@ describe('coordination loop discovery', () => {
 
     const context = await call<HivemindContextResult>('hivemind_context', {
       repo_root: repoRoot,
+      session_id: 'agent-session',
+      agent: 'codex',
       query: 'coordination loop',
       memory_limit: 1,
       limit: 5,
@@ -394,7 +440,12 @@ describe('coordination loop discovery', () => {
     expect(context.summary.memory_hit_count).toBeGreaterThan(0);
     expect(context.summary.negative_warning_count).toBe(1);
     expect(context.summary.next_action).toBe(
-      'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+      'Do not choose work yet. Call attention_inbox now, then task_ready_for_agent.',
+    );
+    expect(context.summary.suggested_call).toBe(
+      `mcp__colony__attention_inbox({ agent: "codex", session_id: "agent-session", repo_root: ${JSON.stringify(
+        repoRoot,
+      )} })`,
     );
     expect(context.summary.suggested_tools).toEqual(['attention_inbox', 'task_ready_for_agent']);
     expect(context.summary.must_check_attention).toBe(true);
