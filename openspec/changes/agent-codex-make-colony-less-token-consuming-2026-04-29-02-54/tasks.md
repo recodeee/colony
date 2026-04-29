@@ -31,5 +31,10 @@
 
 ## 4. Completion
 
-- [ ] Commit, push, PR, merge.
-- [ ] Record final `MERGED` evidence and sandbox cleanup.
+- [x] Commit, push, PR, merge.
+      Evidence: PR https://github.com/recodeee/colony/pull/244 merged into
+      `main` as `b937fb708deb4b8be49c10e8e7361ea42e494b49`.
+- [x] Record final `MERGED` evidence and sandbox cleanup.
+      Evidence: `gh pr view 244 --json number,url,state,mergeCommit`
+      reported `state=MERGED`; `git worktree list` showed only
+      `/home/deadpool/Documents/recodee/colony` on `main` after cleanup.
