@@ -1,9 +1,7 @@
 # Colony
 
-**Local-first memory, coordination, and work routing for AI coding agents.**
-
 <p align="center">
-  <img src="docs/assets/colony-logo.png" alt="Colony logo" width="420" />
+  <img src="docs/assets/colony-hero.svg" alt="Colony — local-first coordination for coding agents" width="860" />
 </p>
 
 <p align="center">
@@ -13,29 +11,67 @@
   <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed.svg" />
 </p>
 
-Colony helps Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and other coding agents work in the same repository without losing context or colliding on files. It records what agents observed, what task they are on, which files they claimed, what they handed off, and which follow-up work is worth doing next.
+**Colony is a local-first coordination substrate for fleets of AI coding agents.**
 
-The important part: Colony is local-first. The coordination substrate lives on your machine in SQLite, local files, and a stdio MCP server. There is no hosted coordinator in the default path, and hooks keep writing useful memory even when the worker or semantic index is unavailable.
+It helps Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and other coding agents work in the same repository without losing context, duplicating work, or colliding on files. Agents use Colony to see active lanes, read attention items, pull ready work, claim files, hand off tasks, leave working notes, and let stale coordination signals decay.
 
-## Current State
+Colony is not a remote control plane. The default path is local: SQLite, local files, hooks, and a stdio MCP server.
 
-Colony is currently a pnpm monorepo with a published CLI, a stdio MCP server, lifecycle hooks, a local worker/viewer, and a set of workspace packages that implement memory, compression, storage, embeddings, task coordination, foraging, spec-driven changes, and deterministic plan publishing.
+```text
+OMX/Codex/Claude run agents.
+Colony coordinates agents.
+Queen publishes plans.
+Agents pull claimable work.
+Stale signals evaporate.
+```
 
-The app today is best understood as five connected layers:
+<p align="center">
+  <img src="docs/assets/colony-architecture.svg" alt="Colony architecture diagram" width="900" />
+</p>
 
-1. **CLI and installers** wire Colony into agent runtimes.
-2. **Hooks** capture session events and write observations synchronously.
-3. **Storage and memory** persist compressed observations, tasks, claims, handoffs, proposals, and indexes.
-4. **MCP tools** expose compact, progressive-disclosure workflows to agents.
-5. **Worker and viewer** handle background embedding/backfill and local inspection.
+---
 
-The newest design direction is no longer just "memory search." Colony is becoming a local coordination substrate where agents can ask:
+## Why Colony exists
 
-- What changed while I was away?
-- Who is editing this area?
-- What work is ready for me?
-- Which sub-task can I safely claim?
-- What should be handed off, rescued, reinforced, or archived?
+Most agent setups fail in the same ways:
+
+- agents do not know who owns which files
+- agents browse task lists instead of claiming ready work
+- working state gets trapped in chat or scratchpads
+- stale branches, handoffs, and claims stay noisy forever
+- humans become the scheduler for parallel agents
+- follow-up work disappears instead of becoming a proposal
+
+Colony turns those behaviors into a measurable local loop:
+
+```text
+hivemind_context → attention_inbox → task_ready_for_agent → task_plan_claim_subtask → task_claim_file → task_note_working
+```
+
+Agents still execute in their normal runtime. Colony supplies the shared memory, task routing, ownership traces, and health telemetry.
+
+---
+
+## Current state
+
+Colony is a pnpm monorepo with:
+
+| Layer | What it does |
+| --- | --- |
+| CLI + installers | Registers Colony with Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and other runtimes. |
+| Hooks | Capture lifecycle, prompt, tool, and session events as local observations. |
+| Storage + memory | Persist compressed observations, task threads, claims, handoffs, proposals, plans, and indexes. |
+| MCP server | Exposes compact progressive-disclosure tools as `mcp__colony__...`. |
+| Worker + viewer | Backfill embeddings and inspect local coordination state. |
+| Queen | Publishes deterministic, claimable wave plans. Queen does not launch agents. |
+
+Colony has moved beyond “memory search.” The current direction is **local multi-agent execution coordination**.
+
+<p align="center">
+  <img src="docs/assets/colony-loop.svg" alt="Colony startup and execution loop" width="900" />
+</p>
+
+---
 
 ## Install
 
@@ -43,7 +79,7 @@ The newest design direction is no longer just "memory search." Colony is becomin
 npm install -g @imdeadpool/colony-cli
 ```
 
-Register Colony with one or more agent runtimes:
+Register Colony with one or more runtimes:
 
 ```bash
 colony install --ide claude-code
@@ -59,47 +95,112 @@ Check the install:
 colony status
 ```
 
-Colony requires Node 20 or newer. The CLI package is `@imdeadpool/colony-cli`; the executable is `colony`.
+Requirements:
 
-## Daily CLI
+- Node.js 20+
+- pnpm for repository development
+- local SQLite state under `~/.colony`
+
+---
+
+## Daily workflow
+
+```bash
+colony health
+colony status
+colony search "error or decision"
+colony coordination sweep --json
+colony queen sweep
+colony viewer
+```
 
 | Command | Purpose |
 | --- | --- |
-| `colony install --ide <name>` | Register hooks and MCP config for one IDE/runtime. |
+| `colony health` | Show readiness, adoption, stale signals, note migration, and claim-before-edit coverage. |
 | `colony status` | Show storage, installed IDEs, worker state, memory counts, and embedding status. |
 | `colony search "<query>"` | Search prior observations and session memory. |
 | `colony timeline <session-id>` | Inspect one session chronologically. |
 | `colony observe` | Watch task threads and coordination state. |
 | `colony coordination sweep` | Report stale claims, expired handoffs/messages, decayed proposals, stale hot files, and blocked downstream work. |
-| `colony plan create <slug>` | Create an OpenSpec-like local plan workspace under `openspec/plans/<slug>`. |
-| `colony plan status [slug]` | Inspect local plan tasks, checkpoints, and rollup counts. |
-| `colony plan publish <slug>` | Publish a local plan workspace into Colony task threads and `openspec/changes`. |
-| `colony plan close <slug>` | Archive a completed published plan change. |
+| `colony queen sweep` | List plans that are stalled, unclaimed, or ready to archive. |
 | `colony viewer` | Open the local read-only web viewer. |
-| `colony debrief` | Summarize recent work and surface follow-ups. |
-| `colony config show` | Print settings and documented defaults. |
-| `colony queen sweep` | List queen plans that are stalled, unclaimed, or ready to archive. |
-| `colony uninstall --ide <name>` | Remove installed hooks and MCP config for one IDE/runtime. |
+| `colony install --ide <name>` | Register hooks and MCP config for one runtime. |
+| `colony uninstall --ide <name>` | Remove installed hooks and MCP config. |
 
-## What Agents Get Through MCP
+---
 
-IDE installs register the server as `colony`, so tools appear as `mcp__colony__...`.
+## Health: the product feedback loop
 
-Colony MCP follows progressive disclosure: tools return compact IDs, snippets, status rows, and routing hints first. Agents fetch full observation bodies only after they know which IDs matter.
+`colony health` tells you whether agents are only reading Colony or actually coordinating through it.
 
-### Agent startup loop
+<p align="center">
+  <img src="docs/assets/colony-health.svg" alt="Colony health readiness summary" width="900" />
+</p>
 
-When an agent joins, resumes, asks "what needs me?", or needs the next task, call these first:
+A healthy run should trend toward:
 
-1. `hivemind_context` to see active agents, owned branches, live lanes, and compact memory hits.
-2. `attention_inbox` to see what needs your attention: live handoffs, messages, wakes, stalled lanes, fresh claims, and stale-claim cleanup signals.
-3. `task_ready_for_agent` to choose available work matched to the current agent.
+| Metric | Target |
+| --- | --- |
+| `hivemind_context → attention_inbox` | 50%+ |
+| `attention_inbox → task_ready_for_agent` | 90%+ |
+| `task_ready_for_agent → task_plan_claim_subtask` | 30%+ when plans exist |
+| claim-before-edit | 50%+ |
+| Colony note share | 70%+ |
+| stale claims | near zero active-impact stale claims |
 
-Do not choose work before attention_inbox.
+Readiness pillars:
 
-Use `task_list` for browsing/debugging recent task threads. Use `task_ready_for_agent` for choosing what to work on next.
+| Pillar | Good means |
+| --- | --- |
+| Coordination readiness | Agents start with Colony and follow the startup loop. |
+| Execution safety | Edits have a task/file claim before mutation. |
+| Queen plan readiness | Multi-agent work has active, claimable wave plans. |
+| Working-state migration | `task_note_working` beats ad hoc notepad writes. |
+| Signal evaporation | Stale claims/proposals/handoffs decay instead of clogging work. |
 
-Copy-paste startup:
+---
+
+---
+
+## Live colony graph
+
+The local viewer can render the running coordination graph: active agent sessions, tool calls, handoffs, messages, file claims, stalled lanes, and shared work traces.
+
+<p align="center">
+  <img src="docs/assets/colony-graph-live.png" alt="Colony live graph showing active agent sessions, MCP tool calls, handoffs, shares, and claims" width="900" />
+</p>
+
+Use it when you need to see the swarm instead of reading logs:
+
+```bash
+colony viewer
+```
+
+The graph is especially useful for spotting:
+
+- active vs stalled lanes
+- which agents are sharing or claiming work
+- whether `task_ready_for_agent` is replacing `task_list`
+- whether `task_note_working` is replacing ad hoc notepad writes
+- stale traces that should decay or be swept
+
+## MCP workflow
+
+Installs register the MCP server as `colony`, so tools appear as `mcp__colony__...`.
+
+Colony MCP uses progressive disclosure: tools return compact IDs, snippets, routing hints, and status rows first. Agents fetch full observation bodies only after they know which IDs matter.
+
+### Startup loop
+
+When an agent starts, resumes, asks “what needs me?”, or needs the next task:
+
+1. `hivemind_context` — active agents, branches, live lanes, ownership, compact memory hits.
+2. `attention_inbox` — handoffs, messages, blockers, wakes, stalled lanes, fresh claims, stale cleanup signals.
+3. `task_ready_for_agent` — ready work matched to the current agent.
+
+Do **not** choose work before `attention_inbox`.
+
+Use `task_list` for browsing/debugging. Use `task_ready_for_agent` for work selection.
 
 ```json
 { "name": "hivemind_context", "input": { "repo_root": "/abs/repo", "query": "current task or branch", "memory_limit": 3, "limit": 20 } }
@@ -113,13 +214,24 @@ Copy-paste startup:
 { "name": "task_ready_for_agent", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo", "limit": 5 } }
 ```
 
-If the ready item needs implementation context, call `search` with the task title, files, or error phrase, then hydrate only the needed IDs with `get_observations`. When plan work is claimable, `task_ready_for_agent` returns `next_tool: "task_plan_claim_subtask"`, exact `claim_args`, `reason`, and a copy-paste `codex_mcp_call`. When nothing is claimable, it returns `empty_state: "No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, or use task_list only for browsing."` Before editing, inspect ownership, then claim touched files on the active task with `task_claim_file` or `task_plan_claim_subtask`. Claims are warnings, not locks; they help avoid conflict and do not block writes.
+When plan work is claimable, `task_ready_for_agent` returns:
 
-### Memory and session recall
+- `next_tool: "task_plan_claim_subtask"`
+- exact `claim_args`
+- `reason`
+- copy-paste MCP call
+
+When nothing is claimable, it returns an empty state that tells the agent to publish a Queen/task plan for multi-agent work.
+
+---
+
+## Core MCP tools
+
+### Memory and recall
 
 | Tool | Use it for |
 | --- | --- |
-| `search` | Find prior decisions, errors, notes, and compact memory hits. |
+| `search` | Find prior decisions, errors, notes, and memory hits. |
 | `get_observations` | Hydrate selected observation IDs into full bodies. |
 | `list_sessions` | Find recent agent sessions. |
 | `timeline` | Navigate one session around an observation. |
@@ -130,82 +242,67 @@ If the ready item needs implementation context, call `search` with the task titl
 | Tool | Use it for |
 | --- | --- |
 | `hivemind` | See active agents, branches, task previews, and live lanes. |
-| `hivemind_context` | Inspect active lane ownership before editing and before claiming touched files. |
-| `attention_inbox` | See live pending handoffs, messages, wakes, stalled lanes, fresh claims, and stale-claim cleanup signals. |
-| `task_list` | Browse/debug recent task threads by repo, branch, and status. |
+| `hivemind_context` | Inspect active lane ownership before editing and before claiming files. |
+| `attention_inbox` | See handoffs, messages, wakes, stalled lanes, fresh claims, and cleanup signals. |
+| `task_list` | Browse/debug recent task threads. |
 | `task_timeline` | Read compact task-thread activity. |
-| `task_updates_since` | Check what changed on a task while a session was away. |
+| `task_updates_since` | Check what changed while a session was away. |
 
 ### Task collaboration
 
 | Tool | Use it for |
 | --- | --- |
-| `task_post` | Add shared questions, answers, decisions, blockers, notes, or negative warnings to a task; use `task_message` for directed agent-to-agent coordination. |
-| `task_note_working` | Save current working state to the active Colony task; write working note, remember progress, log what I am doing, and replace ad hoc notepad writes without manually resolving `task_id`. |
-| `task_message` | Send a directed or broadcast message to another agent. |
-| `task_messages` | Read compact message previews; expired rows only surface for audit-style listing. |
-| `task_message_mark_read` | Acknowledge a message and emit a read receipt; expired rows return `MESSAGE_EXPIRED`. |
-| `task_message_claim` | Claim a broadcast message before replying. |
-| `task_message_retract` | Retract a message that has not been replied to. |
-| `task_claim_file` | Claim a file before editing so file ownership is visible and overlaps warn, not lock. |
-| `task_hand_off` | Transfer work and file claims to another agent; pending handoffs expire by default after 120 minutes. |
-| `task_accept_handoff` / `task_decline_handoff` | Accept or decline pending handoffs; expired handoffs return `HANDOFF_EXPIRED`. |
+| `task_post` | Shared task notes, decisions, blockers, answers, or negative warnings. |
+| `task_note_working` | Save current working state to the active Colony task without resolving `task_id`. |
+| `task_message` | Directed or broadcast agent-to-agent message. |
+| `task_messages` | Read compact message previews. |
+| `task_message_mark_read` | Acknowledge a message and emit a read receipt. |
+| `task_claim_file` | Claim a file before editing so ownership is visible. |
+| `task_hand_off` | Transfer work and file claims. |
+| `task_accept_handoff` / `task_decline_handoff` | Accept or decline pending handoffs. |
 
-`attention_inbox` unread message entries carry `reply_tool: "task_message"`, `suggested_reply_args`, and `mark_read_tool: "task_message_mark_read"` plus compact args; legacy `reply_with_tool` / `mark_read_with_tool` aliases remain. `blocking` and `needs_reply` entries also include `next_action`, so agents can reply or mark read without re-deriving the lifecycle.
+Use `task_message` for directed coordination. Use `task_post` for shared task-thread state.
 
-If you do not know `task_id` but need to save current state, call `task_note_working` with `session_id`, optional `repo_root` / `branch`, and a compact `branch; task; blocker; next; evidence` note.
+Use `task_note_working` for compact handoffs:
 
-Negative warning kinds are `failed_approach`, `blocked_path`, `conflict_warning`, and `reverted_solution`. Use them only when another agent should avoid repeating a concrete path: failed paths, blocked approaches, reverted solutions, flaky routes, or do-not-touch warnings. `search`, `hivemind_context`, and `task_ready_for_agent` surface relevant warnings compactly before implementation; they do not penalize ready-work ranking or turn ordinary trial-and-error into blockers.
+```text
+branch=<branch>; task=<task>; blocker=<blocker>; next=<next>; evidence=<path|command|PR|spec>
+```
 
-### Proposals, foraging, and examples
+### Queen plans
+
+| Tool | Use it for |
+| --- | --- |
+| `queen_plan_goal` | Turn a goal into an ordered plan draft. |
+| `task_plan_publish` | Split a goal into claimable subtasks. |
+| `task_plan_validate` | Check dependency and file-scope conflicts. |
+| `task_plan_list` | See plans, rollups, and available subtasks. |
+| `task_ready_for_agent` | Pick available work matched to the current agent. |
+| `task_plan_claim_subtask` | Claim a ready subtask and file scope. |
+| `task_plan_complete_subtask` | Mark a subtask complete and unlock downstream work. |
+
+Queen is a deterministic plan publisher and sweeper. It does **not** launch agents or monitor shells. Agents pull unblocked work.
+
+### Proposals and foraging
 
 | Tool | Use it for |
 | --- | --- |
 | `task_propose` | Leave a weak candidate improvement for future work. |
 | `task_reinforce` | Reinforce a proposal when another agent rediscovers or supports it. |
 | `task_foraging_report` | Review pending and promoted proposals. |
-| `examples_list` | List indexed example projects discovered under `examples/`. |
-| `examples_query` | Search indexed example code patterns. |
+| `examples_list` | List indexed example projects under `examples/`. |
+| `examples_query` | Search indexed example patterns. |
 | `examples_integrate_plan` | Produce a deterministic integration plan from an example into the target repo. |
 
-Examples:
+Use proposals when a note says “future work,” “follow-up,” “deferred,” or “not in this change.” Reinforce rediscovered issues instead of burying them in chat.
 
-- Propose weak candidate: call `task_propose` when a note or decision says "future work", "follow-up", "deferred", or "not in this change"; include `summary`, `rationale`, and likely `touches_files`.
-- Reinforce rediscovered issue: call `task_reinforce` with `kind:"rediscovered"` when you independently hit the same bug or improvement another proposal describes.
-- Report pending/promoted proposals: call `task_foraging_report` before burying follow-ups in notes; pending rows can be reinforced, promoted rows have a backing task.
+---
 
-### Plans and queen
-
-| Tool | Use it for |
-| --- | --- |
-| `task_plan_publish` | Split a larger goal into claimable sub-tasks. |
-| `task_plan_validate` | Check dependency and file-scope conflicts before publishing. |
-| `task_plan_list` | See published plans, rollups, and available sub-tasks. |
-| `task_ready_for_agent` | Pick available work matched to the current agent. |
-| `task_plan_claim_subtask` | Claim a ready sub-task and its file scope. |
-| `task_plan_complete_subtask` | Mark a sub-task complete and unlock downstream work. |
-
-Queen is the deterministic plan publisher and sweeper behind this workflow. It is not an orchestrator and does not launch agents. It turns a clear goal into a bounded, claimable plan, then agents pull work through the normal Colony task-plan tools. The CLI `colony queen sweep` surfaces stalled claimed work, long-unclaimed available subtasks, and completed plans waiting on manual archive. See [Queen workflow](docs/QUEEN.md).
-
-### Spec-driven development
-
-| Tool | Use it for |
-| --- | --- |
-| `spec_read` | Read a repository `SPEC.md` and root hash. |
-| `spec_change_open` | Open an in-flight spec change and backing task thread. |
-| `spec_change_add_delta` | Append a delta to the change. |
-| `spec_build_context` | Load cite-scoped context for one spec task. |
-| `spec_build_record_failure` | Record test failures and promote repeated failures into invariant proposals. |
-| `spec_archive` | Validate, three-way merge, and archive an in-flight spec change. |
-
-## Biological Coordination Model
+## Biological coordination model
 
 Colony uses the ant-colony model as an implementation guide, not as branding.
-Agents do not wait for a global commander. They read local traces, reinforce
-useful signals, ignore stale ones, and pull work when the current context fits.
-The durable behavior contract lives in
-[`openspec/specs/biological-coordination/spec.md`](openspec/specs/biological-coordination/spec.md);
-this README is the contributor-facing summary.
+
+Agents do not wait for a global commander. They read local traces, reinforce useful signals, ignore stale ones, and pull work when context fits.
 
 | Biology | Colony |
 | --- | --- |
@@ -222,33 +319,18 @@ this README is the contributor-facing summary.
 | Alarm pheromone | blocking message / attention inbox |
 | Trail pruning | rescue / sweep / archive |
 
-Practical examples:
+Practical effects:
 
-- **Stale claim decay:** `task_claim_file` leaves a local mark so nearby agents
-  see fresh ownership before editing. Claims warn; they do not lock. When the
-  session goes stale, rescue and sweep move or hide the trail so old ownership
-  stops competing with live work.
-- **Proposal reinforcement and decay:** a forager calls `task_propose` for a bug
-  fix or improvement. Other sessions use `task_reinforce` when they support or
-  independently rediscover it; adjacent edits add weak support. Strength decays
-  over time, so ignored proposals fade while source-diverse proposals promote.
-- **Queen ordered waves:** Queen publishes a `task_plan` with dependencies, for
-  example wave 2 depending on wave 1. It does not launch workers or assign
-  shells. Agents pull unblocked subtasks with `task_ready_for_agent` and claim
-  with `task_plan_claim_subtask`.
-- **Local context before editing:** startup is `hivemind_context`,
-  `attention_inbox`, then `task_ready_for_agent`. Hydrate only the relevant
-  observations with `get_observations`, inspect ownership, then claim files.
-  Compact first, full context only when needed.
+- **Stale claim decay:** claims warn while fresh, then weaken and stop competing with active work.
+- **Proposal reinforcement:** ignored proposals fade; source-diverse rediscovery strengthens them.
+- **Queen ordered waves:** wave 2 can depend on wave 1 without Queen assigning shells.
+- **Local context first:** agents hydrate only relevant observations after compact routing.
 
-Hooks keep this local. They write observations synchronously through
-`MemoryStore` without a hosted coordinator or daemon dependency. The worker can
-backfill embeddings later; if it is down, writes still succeed and keyword
-search still works.
+---
 
 ## Storage
 
-Default local state:
+Default state:
 
 ```text
 ~/.colony/settings.json
@@ -257,33 +339,37 @@ Default local state:
 ~/.colony/logs/
 ```
 
-SQLite stores the coordination substrate. Embeddings are lazy and local by default using `Xenova/all-MiniLM-L6-v2`; Ollama and OpenAI-style providers are opt-in through settings.
+SQLite stores the coordination substrate. Embeddings are lazy and local by default with `Xenova/all-MiniLM-L6-v2`; Ollama and OpenAI-style providers are opt-in through settings.
 
 Persisted prose is compressed at rest through `@colony/compress` and expanded for human-facing reads. Technical tokens such as paths, URLs, code, commands, versions, dates, and numeric literals are preserved byte-for-byte.
 
-## Repository Layout
+---
+
+## Repository layout
 
 ```text
-apps/cli          user-facing `colony` binary
-apps/mcp-server   stdio MCP server and tool registrations
-apps/worker       local HTTP worker, viewer host, and embedding backfill
-apps/hivemind-demo deterministic demo of multi-agent coordination ideas
-packages/process  pidfile, spawn, and entrypoint helpers
-packages/config   settings schema, loader, defaults, and settings docs
-packages/compress deterministic compression engine and tokenizer
-packages/storage  SQLite, FTS5, migrations, and storage API
-packages/core     MemoryStore facade and coordination domain models
+apps/cli           user-facing colony binary
+apps/mcp-server    stdio MCP server and tool registrations
+apps/worker        local HTTP worker, viewer host, and embedding backfill
+apps/hivemind-demo deterministic demo of coordination ideas
+packages/config    settings schema, loader, defaults
+packages/compress  deterministic compression engine
+packages/core      MemoryStore facade and domain models
 packages/embedding local, Ollama, OpenAI, and none providers
-packages/hooks    lifecycle hook handlers and active-session heartbeat
-packages/installers per-IDE integration modules
-packages/foraging example discovery, indexing, and integration planning
-packages/spec     spec grammar, change sync, backprop, and scoped context
-packages/queen    deterministic plan decomposition and plan attention sweep
-viewer            Vite/React read-only UI
-hooks-scripts     portable shell stubs for hook entrypoints
-docs              architecture and workflow docs
-evals             compression and round-trip evaluation harness
+packages/foraging  example discovery, indexing, integration planning
+packages/hooks     lifecycle hook handlers and active-session heartbeat
+packages/installers per-runtime integration modules
+packages/process   pidfile, spawn, entrypoint helpers
+packages/queen     deterministic plan decomposition and sweeps
+packages/spec      spec grammar, changes, scoped context
+packages/storage   SQLite, FTS5, migrations, storage API
+viewer             Vite/React read-only UI
+hooks-scripts      portable shell stubs
+docs               architecture and workflow docs
+evals              compression and round-trip harnesses
 ```
+
+---
 
 ## Development
 
@@ -295,9 +381,7 @@ pnpm test
 pnpm build
 ```
 
-The root package is private and uses pnpm workspaces. The main package manager is `pnpm@9.12.0`.
-
-Before merging changes, keep the four normal gates green:
+Before merging changes:
 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
@@ -311,53 +395,67 @@ bash scripts/e2e-publish.sh
 
 ### Publishing the CLI
 
-Do not run `npm publish` from the repository root. The root package is the private monorepo wrapper. Publish the public CLI package through the root wrapper instead:
+Do not run `npm publish` from the repository root. Publish through the root wrapper:
 
 ```bash
 pnpm publish:cli:dry-run
 pnpm publish:cli
 ```
 
-The wrapper builds the workspace, stages the root `README.md`, `LICENSE`, and `hooks-scripts/` into `apps/cli`, then runs `npm publish --access public` from the `@imdeadpool/colony-cli` package directory.
+The wrapper builds the workspace, stages `README.md`, `LICENSE`, and `hooks-scripts/` into `apps/cli`, then runs `npm publish --access public` from `apps/cli`.
 
-## Architecture Rules
+---
+
+## Architecture rules
 
 - Keep behavior local-first.
-- Persist prose only through `MemoryStore` so compression, privacy stripping, and storage invariants apply.
+- Persist prose through `MemoryStore` so compression, privacy stripping, and storage invariants apply.
 - Keep all database I/O inside `@colony/storage`.
 - Keep settings access inside `@colony/config`.
-- Keep MCP compact shapes compact; hydrate through `get_observations`.
+- Keep MCP compact shapes compact; hydrate with `get_observations`.
 - Keep hooks fast and free of network calls.
-- Add tests for new hooks, storage behavior, MCP contracts, installer changes, and compression rules.
+- Add tests for hooks, storage behavior, MCP contracts, installer changes, and compression rules.
 - Keep CLI names, MCP namespace, package names, paths, and examples aligned on `colony`.
 
-## Rough Edges
+---
 
-- The old `cavemem` name may still appear in history, changelogs, or old installs. New installs use `colony`, the `@colony/*` workspace namespace, and `@imdeadpool/colony-cli` for the published CLI.
+## Rough edges
+
+- Claim-before-edit is strongest when the runtime provides a real pre-edit hook. Codex/OMX integrations may need a bridge when native PreToolUse is unavailable.
+- Queen planning is active work: Queen publishes structure, but agents still need to claim and complete subtasks.
 - Pheromone half-life, proposal thresholds, and routing weights need more tuning from real multi-agent use.
 - MCP transport is stdio-based, so an IDE/runtime restart can close the server process; the next installed tool call should reconnect.
-- The viewer is useful for inspection, but the primary workflow is still terminal and agent driven.
-- Spec-driven development and queen planning are active lanes. They use the existing Colony substrate instead of parallel infrastructure, but some niceties are still intentionally thin while the core loop proves itself.
+- The viewer is useful for inspection, but the primary workflow is terminal and agent driven.
 
-## Demo App
-
-`apps/hivemind-demo` is a private pedagogical artifact. It models a deterministic multi-agent loop in-process so coordination ideas can be tested without launching real IDE agents.
+---
 
 ## Roadmap
 
-- Finish release hygiene for the renamed `colony` package.
-- Expand task-thread views in the local viewer.
-- Tune pheromone half-life and proposal promotion thresholds from real work.
+- Harden Codex/OMX claim-before-edit bridge.
+- Publish and use active Queen wave plans for real multi-agent work.
+- Expand task-thread and plan views in the local viewer.
+- Tune pheromone half-life and proposal promotion thresholds from production usage.
 - Add richer routing profiles for handoffs between Claude, Codex, Cursor, and other agents.
-- Improve debrief output so useful follow-ups become proposals instead of chat-only notes.
+- Improve debrief output so follow-ups become proposals instead of chat-only notes.
 - Harden migration from older installs into `~/.colony` and the `colony` MCP namespace.
-- Expand `colony plan` from local planning workspaces into richer viewer and handoff flows.
+
+---
 
 ## Contributing
 
-Use Colony on real work, then report the exact places where coordination felt wrong: stale claims, confusing handoffs, missing session context, noisy proposals, missing examples, stranded sessions, or files that should have shown up as hot but did not.
+Use Colony on real work, then report the places where coordination felt wrong:
 
-For code changes, prefer small, observable primitives over central orchestration. Colony should help agents coordinate by leaving durable local traces, not by becoming a remote control plane.
+- stale claims
+- confusing handoffs
+- missing session context
+- noisy proposals
+- stranded sessions
+- files that should have shown up as hot
+- edits that should have been claimed before mutation
+
+For code changes, prefer small observable primitives over central orchestration. Colony should help agents coordinate by leaving durable local traces, not by becoming a remote control plane.
+
+---
 
 ## License
 
