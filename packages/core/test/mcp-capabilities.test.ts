@@ -40,11 +40,7 @@ describe('MCP capability discovery', () => {
     expect(map.servers.colony?.capabilities).toEqual(['claims', 'plans']);
     expect(map.servers.omx?.categories).toEqual(['memory']);
     expect(map.servers.omx?.capabilities).toEqual(['runtime-state']);
-    expect(map.servers.github?.categories).toEqual([
-      'repo/code',
-      'git/github',
-      'issue-tracker',
-    ]);
+    expect(map.servers.github?.categories).toEqual(['repo/code', 'git/github', 'issue-tracker']);
     expect(map.servers.github?.capabilities).toEqual(['issues', 'PRs', 'repo']);
     expect(map.servers.filesystem?.categories).toEqual(['repo/code', 'filesystem']);
     expect(map.servers.filesystem?.capabilities).toEqual(['repo-inspection']);
@@ -64,11 +60,7 @@ describe('MCP capability discovery', () => {
     });
 
     expect(map.servers.github?.sources).toEqual(['claude-code', 'codex']);
-    expect(map.servers.github?.categories).toEqual([
-      'repo/code',
-      'git/github',
-      'issue-tracker',
-    ]);
+    expect(map.servers.github?.categories).toEqual(['repo/code', 'git/github', 'issue-tracker']);
   });
 
   it('reads JSON and TOML MCP server configs from a fake home directory', () => {

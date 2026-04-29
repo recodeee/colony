@@ -137,39 +137,86 @@ export function classifyMcpServer(
   const categories = new Set<McpCapabilityCategory>();
   const capabilities = new Set<string>();
 
-  addIf(haystack, categories, capabilities, /colony|hivemind|queen|task[_-]?ready|claim/, [
-    'coordination',
-  ], ['claims', 'plans']);
-  addIf(haystack, categories, capabilities, /omx|oh-my-codex|state_get|notepad/, [
-    'memory',
-  ], ['runtime-state']);
-  addIf(haystack, categories, capabilities, /cavemem|memory|recall|observation|notepad/, [
-    'memory',
-  ], ['memory']);
-  addIf(haystack, categories, capabilities, /github|gh\b|gitlab|bitbucket/, [
-    'repo/code',
-    'git/github',
-    'issue-tracker',
-  ], ['repo', 'issues', 'PRs']);
-  addIf(haystack, categories, capabilities, /jira|linear|issue|youtrack/, ['issue-tracker'], [
-    'issues',
-  ]);
-  addIf(haystack, categories, capabilities, /filesystem|\bfs\b|file-system|read_file|write_file/, [
-    'repo/code',
-    'filesystem',
-  ], ['repo-inspection']);
-  addIf(haystack, categories, capabilities, /git\b|repo|code|sourcegraph|ripgrep|\brg\b/, [
-    'repo/code',
-  ], ['repo-inspection']);
-  addIf(haystack, categories, capabilities, /browser|playwright|puppeteer|chrome|\bui\b|screenshot/, [
-    'browser/ui',
-  ], ['ui-inspection']);
-  addIf(haystack, categories, capabilities, /docs|search|web|fetch|brave|exa|perplexity|tavily/, [
-    'docs/search',
-  ], ['docs-search']);
-  addIf(haystack, categories, capabilities, /ci|test|buildkite|circleci|jenkins|actions|workflow/, [
-    'ci/test',
-  ], ['ci-test']);
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /colony|hivemind|queen|task[_-]?ready|claim/,
+    ['coordination'],
+    ['claims', 'plans'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /omx|oh-my-codex|state_get|notepad/,
+    ['memory'],
+    ['runtime-state'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /cavemem|memory|recall|observation|notepad/,
+    ['memory'],
+    ['memory'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /github|gh\b|gitlab|bitbucket/,
+    ['repo/code', 'git/github', 'issue-tracker'],
+    ['repo', 'issues', 'PRs'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /jira|linear|issue|youtrack/,
+    ['issue-tracker'],
+    ['issues'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /filesystem|\bfs\b|file-system|read_file|write_file/,
+    ['repo/code', 'filesystem'],
+    ['repo-inspection'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /git\b|repo|code|sourcegraph|ripgrep|\brg\b/,
+    ['repo/code'],
+    ['repo-inspection'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /browser|playwright|puppeteer|chrome|\bui\b|screenshot/,
+    ['browser/ui'],
+    ['ui-inspection'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /docs|search|web|fetch|brave|exa|perplexity|tavily/,
+    ['docs/search'],
+    ['docs-search'],
+  );
+  addIf(
+    haystack,
+    categories,
+    capabilities,
+    /ci|test|buildkite|circleci|jenkins|actions|workflow/,
+    ['ci/test'],
+    ['ci-test'],
+  );
 
   if (categories.size === 0) {
     categories.add('unknown');

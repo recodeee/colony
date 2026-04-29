@@ -1,4 +1,4 @@
-import { discoverMcpCapabilities, type McpCapabilityMap } from '@colony/core';
+import { type McpCapabilityMap, discoverMcpCapabilities } from '@colony/core';
 import {
   type CapabilityHint,
   type Goal,

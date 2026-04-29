@@ -1,6 +1,7 @@
 import {
   type AgentProfile,
   type ClaimHolder,
+  type McpCapabilityMap,
   type MemoryStore,
   type McpCapabilityMap,
   type SubtaskInfo,
