@@ -224,6 +224,9 @@ const HIVEMIND_ATTENTION_HINT =
   'Call attention_inbox to review pending handoffs, unread messages, blockers, and stalled lanes before claiming work.';
 const HIVEMIND_READY_WORK_HINT =
   'Then call task_ready_for_agent to choose claimable work. Use task_list only for browsing/debugging.';
+export const HIVEMIND_ATTENTION_HYDRATION =
+  'Hydrate with attention_inbox; call get_observations with observation_ids only for bodies.';
+export const HIVEMIND_ATTENTION_HYDRATE_WITH = 'attention_inbox';
 const STATE_TOOL_REPLACEMENTS = {
   state_get_status: ['hivemind_context', 'attention_inbox'],
   state_list_active: ['hivemind_context'],
@@ -759,9 +762,8 @@ function buildAttention(
     counts,
     observation_ids: input?.observation_ids ?? [],
     observation_ids_truncated: input?.observation_ids_truncated ?? false,
-    hydration:
-      'Hydrate with attention_inbox; call get_observations with observation_ids only for bodies.',
-    hydrate_with: 'attention_inbox',
-    next_action: input?.summary.next_action ?? '',
+    hydration: HIVEMIND_ATTENTION_HYDRATION,
+    hydrate_with: HIVEMIND_ATTENTION_HYDRATE_WITH,
+    next_action: input?.summary.next_action ?? HIVEMIND_FUNNEL_NEXT_ACTION,
   };
 }

@@ -14,6 +14,8 @@ import { type ToolContext, defaultWrapHandler } from './context.js';
 import { detectMcpClientIdentity } from './heartbeat.js';
 import {
   type CompactNegativeWarning,
+  HIVEMIND_ATTENTION_HYDRATE_WITH,
+  HIVEMIND_ATTENTION_HYDRATION,
   type HivemindAdoptionNudge,
   buildContextQuery,
   buildHivemindContext,
@@ -206,9 +208,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
           counts: attentionCounts,
           observation_ids: attentionInput.observation_ids,
           observation_ids_truncated: attentionInput.observation_ids_truncated,
-          hydration:
-            'Call get_observations with observation_ids for bodies; context stays compact.',
-          hydrate_with: 'get_observations',
+          hydration: HIVEMIND_ATTENTION_HYDRATION,
+          hydrate_with: HIVEMIND_ATTENTION_HYDRATE_WITH,
           next_action: attentionInput.summary.next_action,
         };
         const localContext = localMode

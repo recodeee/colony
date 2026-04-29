@@ -243,7 +243,8 @@ Returns:
     "pending_handoffs": 0,
     "blocking": false,
     "observation_ids": [],
-    "hydrate_with": "get_observations"
+    "hydration": "Hydrate with attention_inbox; call get_observations with observation_ids only for bodies.",
+    "hydrate_with": "attention_inbox"
   },
   "lanes": [
     {

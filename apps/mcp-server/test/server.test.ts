@@ -748,7 +748,12 @@ describe('MCP server', () => {
     });
     const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
     const payload = JSON.parse(text) as {
-      summary: { lane_count: number; next_action: string; must_check_attention: boolean };
+      summary: {
+        lane_count: number;
+        next_action: string;
+        suggested_tools: string[];
+        must_check_attention: boolean;
+      };
       local_context: {
         current_task: { id: number; title: string } | null;
         files: string[];
@@ -762,6 +767,8 @@ describe('MCP server', () => {
         attention: {
           counts: { unread_message_count: number; blocked: boolean };
           observation_ids: number[];
+          hydration: string;
+          hydrate_with: string;
         };
         ready_next_action: string;
       };
@@ -793,9 +800,15 @@ describe('MCP server', () => {
     expect(payload.local_context.attention.observation_ids).toEqual(
       expect.arrayContaining([messageId, sameRepoBlockerId]),
     );
+    expect(payload.local_context.attention.hydration).toContain('attention_inbox');
+    expect(payload.local_context.attention.hydration).toContain('get_observations');
+    expect(payload.local_context.attention.hydrate_with).toBe('attention_inbox');
     expect(payload.local_context.ready_next_action).toMatch(/blocking task messages/i);
     expect(payload.summary.next_action).toBe(
       'Do not choose work yet. Call attention_inbox, then task_ready_for_agent.',
+    );
+    expect(payload.summary.suggested_tools).toEqual(
+      expect.arrayContaining(['attention_inbox', 'task_ready_for_agent']),
     );
     expect(payload.summary.must_check_attention).toBe(true);
     expect(text).not.toContain('local blocker body should require get_observations hydration');
