@@ -7,6 +7,8 @@ export {
 } from './tool-classes.js';
 export type {
   BashCoordinationVolume,
+  ClaimBeforeEditMatchSource,
+  ClaimBeforeEditMatchSources,
   ClaimBeforeEditStats,
   ClaimCoverageStats,
   CoordinationActivity,

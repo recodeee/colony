@@ -22,7 +22,21 @@ function session(id: string, started_at = 1): void {
   storage.createSession({ id, ide: 'codex', cwd: '/repo', started_at, metadata: null });
 }
 
-function toolUse(session_id: string, tool: string, ts: number, file_path?: string): void {
+function scopedSession(
+  id: string,
+  cwd: string | null,
+  metadata: Record<string, unknown> | null = null,
+): void {
+  storage.createSession({ id, ide: 'codex', cwd, started_at: 1, metadata });
+}
+
+function toolUse(
+  session_id: string,
+  tool: string,
+  ts: number,
+  file_path?: string,
+  metadata: Record<string, unknown> = {},
+): void {
   storage.insertObservation({
     session_id,
     kind: 'tool_use',
@@ -30,11 +44,17 @@ function toolUse(session_id: string, tool: string, ts: number, file_path?: strin
     compressed: false,
     intensity: null,
     ts,
-    metadata: file_path ? { tool, file_path } : { tool },
+    metadata: file_path ? { tool, file_path, ...metadata } : { tool, ...metadata },
   });
 }
 
-function claim(session_id: string, file_path: string, ts: number): void {
+function claim(
+  session_id: string,
+  file_path: string,
+  ts: number,
+  task_id?: number,
+  metadata: Record<string, unknown> = {},
+): void {
   storage.insertObservation({
     session_id,
     kind: 'claim',
@@ -42,8 +62,20 @@ function claim(session_id: string, file_path: string, ts: number): void {
     compressed: false,
     intensity: null,
     ts,
-    metadata: { kind: 'claim', file_path },
+    task_id,
+    metadata: { kind: 'claim', file_path, ...metadata },
   });
+}
+
+function task(repo_root: string, branch: string, session_id: string, agent = 'codex'): number {
+  const row = storage.findOrCreateTask({
+    title: `${branch} lane`,
+    repo_root,
+    branch,
+    created_by: session_id,
+  });
+  storage.addTaskParticipant({ task_id: row.id, session_id, agent });
+  return row.id;
 }
 
 describe('tool classification', () => {
@@ -164,9 +196,82 @@ describe('colony health read queries', () => {
       edit_tool_calls: 3,
       edits_with_file_path: 2,
       edits_claimed_before: 1,
+      claim_match_window_ms: 5 * 60_000,
+      claim_match_sources: {
+        exact_session: 1,
+        repo_branch: 0,
+        worktree: 0,
+        agent_lane: 0,
+      },
       auto_claimed_before_edit: 0,
       session_binding_missing: 1,
       pre_tool_use_signals: 1,
+    });
+  });
+
+  it('counts same repo and branch claims before edits when Codex and OMX session ids differ', () => {
+    scopedSession('mcp-claim-session', '/repo');
+    scopedSession('omx-runtime-session', '/repo');
+    const taskId = task('/repo', 'agent/codex/session-lane', 'mcp-claim-session');
+    claim('mcp-claim-session', 'src/lane.ts', 1_000, taskId);
+    toolUse('omx-runtime-session', 'Edit', 2_000, '/repo/src/lane.ts', {
+      repo_root: '/repo',
+      branch: 'agent/codex/session-lane',
+    });
+
+    expect(storage.claimBeforeEditStats(0)).toMatchObject({
+      edit_tool_calls: 1,
+      edits_with_file_path: 1,
+      edits_claimed_before: 1,
+      claim_match_sources: {
+        exact_session: 0,
+        repo_branch: 1,
+        worktree: 0,
+        agent_lane: 0,
+      },
+    });
+  });
+
+  it('counts same worktree claims before edits when branch metadata is absent', () => {
+    scopedSession('mcp-worktree-claim', '/repo/worktree');
+    scopedSession('mcp-runtime-worktree', '/repo/worktree');
+    const taskId = task('/repo/worktree', 'agent/codex/worktree-lane', 'mcp-worktree-claim');
+    claim('mcp-worktree-claim', 'src/worktree.ts', 1_000, taskId);
+    toolUse('mcp-runtime-worktree', 'Edit', 2_000, '/repo/worktree/src/worktree.ts');
+
+    expect(storage.claimBeforeEditStats(0)).toMatchObject({
+      edits_claimed_before: 1,
+      claim_match_sources: {
+        exact_session: 0,
+        repo_branch: 0,
+        worktree: 1,
+        agent_lane: 0,
+      },
+    });
+  });
+
+  it('uses agent lane fallback only when repo and branch claims are unambiguous by agent', () => {
+    scopedSession('codex-claim', null);
+    scopedSession('claude-claim', null);
+    scopedSession('mcp-edit', null);
+    const taskId = task('/repo', 'agent/shared/lane', 'codex-claim', 'codex');
+    storage.addTaskParticipant({ task_id: taskId, session_id: 'claude-claim', agent: 'claude' });
+    claim('codex-claim', 'src/shared.ts', 1_000, taskId);
+    claim('claude-claim', 'src/shared.ts', 1_100, taskId);
+    toolUse('mcp-edit', 'Edit', 2_000, 'src/shared.ts', {
+      repo_root: '/repo',
+      branch: 'agent/shared/lane',
+      agent: 'codex',
+    });
+
+    expect(storage.claimBeforeEditStats(0)).toMatchObject({
+      edits_claimed_before: 1,
+      claim_match_sources: {
+        exact_session: 0,
+        repo_branch: 0,
+        worktree: 0,
+        agent_lane: 1,
+      },
     });
   });
 });

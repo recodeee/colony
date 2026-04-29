@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, posix } from 'node:path';
 import Database from 'better-sqlite3';
 import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import {
@@ -128,6 +128,8 @@ export interface ClaimBeforeEditStats {
   edit_tool_calls: number;
   edits_with_file_path: number;
   edits_claimed_before: number;
+  claim_match_window_ms?: number;
+  claim_match_sources?: ClaimBeforeEditMatchSources;
   auto_claimed_before_edit?: number;
   /** Count of PreToolUse claim-before-edit rows that had to be recorded under
    *  a fallback diagnostics session because the hook session row was missing. */
@@ -137,6 +139,14 @@ export interface ClaimBeforeEditStats {
    *  PreToolUse hook is firing at all in the active editor sessions. */
   pre_tool_use_signals?: number;
 }
+
+export type ClaimBeforeEditMatchSource =
+  | 'exact_session'
+  | 'repo_branch'
+  | 'worktree'
+  | 'agent_lane';
+
+export type ClaimBeforeEditMatchSources = Record<ClaimBeforeEditMatchSource, number>;
 
 export interface ClaimCoverageSnapshot {
   since: number;
@@ -162,6 +172,18 @@ const FILE_EDIT_TOOLS_JSON = JSON.stringify(Array.from(FILE_EDIT_TOOLS));
 const EXPLICIT_CLAIM_KINDS = ['claim'];
 const AUTO_CLAIM_KINDS = ['auto-claim'];
 type JsonRecord = Record<string, unknown>;
+
+interface ClaimBeforeEditRow {
+  id: number;
+  task_id: number | null;
+  session_id: string;
+  ts: number;
+  file_path: string | null;
+  repo_root: string | null;
+  branch: string | null;
+  worktree_path: string | null;
+  agent: string | null;
+}
 
 export class Storage {
   private db: Database.Database;
@@ -1506,68 +1528,169 @@ export class Storage {
    * inferring from content.
    */
   claimBeforeEditStats(since_ts: number): ClaimBeforeEditStats {
-    const row = this.db
+    const editRows = this.db
       .prepare(
         `WITH edit_tools(tool) AS (
            SELECT value AS tool FROM json_each(?)
-         ),
-         edit_rows AS (
-           SELECT o.session_id,
-                  o.ts,
-                  json_extract(o.metadata, '$.file_path') AS file_path
-           FROM observations o
-           JOIN edit_tools et
-             ON et.tool = COALESCE(
-               json_extract(o.metadata, '$.tool'),
-               json_extract(o.metadata, '$.tool_name')
-             )
-           WHERE o.ts > ?
-             AND o.kind = 'tool_use'
          )
-         SELECT COUNT(*) AS edit_tool_calls,
-                SUM(CASE WHEN file_path IS NOT NULL THEN 1 ELSE 0 END) AS edits_with_file_path,
-                SUM(CASE WHEN file_path IS NOT NULL AND EXISTS (
-                  SELECT 1 FROM observations c
-                  WHERE c.kind = 'claim'
-                    AND c.session_id = edit_rows.session_id
-                    AND json_extract(c.metadata, '$.file_path') = edit_rows.file_path
-                    AND c.ts <= edit_rows.ts
-                ) THEN 1 ELSE 0 END) AS edits_claimed_before,
-                (
-                  SELECT COUNT(*) FROM observations c
-                  WHERE c.ts > ?
-                    AND c.kind = 'claim'
-                    AND json_extract(c.metadata, '$.source') = 'pre-tool-use'
-                    AND json_extract(c.metadata, '$.auto_claimed_before_edit') = 1
-                ) AS auto_claimed_before_edit,
-                (
-                  SELECT COUNT(*) FROM observations c
-                  WHERE c.ts > ?
-                    AND c.kind = 'claim-before-edit'
-                    AND json_extract(c.metadata, '$.session_binding_missing') = 1
-                ) AS session_binding_missing,
-                (
-                  SELECT COUNT(*) FROM observations c
-                  WHERE c.ts > ?
-                    AND c.kind = 'claim-before-edit'
-                ) AS pre_tool_use_signals
-         FROM edit_rows`,
+         SELECT o.id,
+                o.task_id,
+                o.session_id,
+                o.ts,
+                json_extract(o.metadata, '$.file_path') AS file_path,
+                COALESCE(
+                  json_extract(o.metadata, '$.repo_root'),
+                  json_extract(o.metadata, '$.repoRoot'),
+                  json_extract(s.metadata, '$.repo_root'),
+                  json_extract(s.metadata, '$.repoRoot'),
+                  direct_task.repo_root,
+                  (
+                    SELECT t.repo_root
+                    FROM task_participants p
+                    JOIN tasks t ON t.id = p.task_id
+                    WHERE p.session_id = o.session_id
+                      AND p.left_at IS NULL
+                    ORDER BY t.updated_at DESC, p.joined_at DESC
+                    LIMIT 1
+                  )
+                ) AS repo_root,
+                COALESCE(
+                  json_extract(o.metadata, '$.branch'),
+                  json_extract(s.metadata, '$.branch'),
+                  direct_task.branch,
+                  (
+                    SELECT t.branch
+                    FROM task_participants p
+                    JOIN tasks t ON t.id = p.task_id
+                    WHERE p.session_id = o.session_id
+                      AND p.left_at IS NULL
+                    ORDER BY t.updated_at DESC, p.joined_at DESC
+                    LIMIT 1
+                  )
+                ) AS branch,
+                COALESCE(
+                  json_extract(o.metadata, '$.worktree_path'),
+                  json_extract(o.metadata, '$.worktreePath'),
+                  json_extract(s.metadata, '$.worktree_path'),
+                  json_extract(s.metadata, '$.worktreePath'),
+                  json_extract(o.metadata, '$.cwd'),
+                  json_extract(s.metadata, '$.cwd'),
+                  s.cwd,
+                  direct_task.repo_root
+                ) AS worktree_path,
+                COALESCE(
+                  json_extract(o.metadata, '$.agent'),
+                  json_extract(o.metadata, '$.inferred_agent'),
+                  json_extract(s.metadata, '$.agent'),
+                  json_extract(s.metadata, '$.inferred_agent'),
+                  (
+                    SELECT p.agent
+                    FROM task_participants p
+                    WHERE p.session_id = o.session_id
+                      AND p.left_at IS NULL
+                    ORDER BY p.joined_at DESC
+                    LIMIT 1
+                  ),
+                  s.ide,
+                  o.session_id
+                ) AS agent
+         FROM observations o
+         LEFT JOIN sessions s ON s.id = o.session_id
+         LEFT JOIN tasks direct_task ON direct_task.id = o.task_id
+         JOIN edit_tools et
+           ON et.tool = COALESCE(
+             json_extract(o.metadata, '$.tool'),
+             json_extract(o.metadata, '$.tool_name')
+           )
+         WHERE o.ts > ?
+           AND o.kind = 'tool_use'
+         ORDER BY o.ts ASC, o.id ASC`,
       )
-      .get(FILE_EDIT_TOOLS_JSON, since_ts, since_ts, since_ts, since_ts) as {
-      edit_tool_calls: number;
-      edits_with_file_path: number | null;
-      edits_claimed_before: number | null;
+      .all(FILE_EDIT_TOOLS_JSON, since_ts) as ClaimBeforeEditRow[];
+    const claimRows = this.db
+      .prepare(
+        `SELECT c.id,
+                c.task_id,
+                c.session_id,
+                c.ts,
+                json_extract(c.metadata, '$.file_path') AS file_path,
+                COALESCE(
+                  json_extract(c.metadata, '$.repo_root'),
+                  json_extract(c.metadata, '$.repoRoot'),
+                  t.repo_root,
+                  json_extract(s.metadata, '$.repo_root'),
+                  json_extract(s.metadata, '$.repoRoot')
+                ) AS repo_root,
+                COALESCE(
+                  json_extract(c.metadata, '$.branch'),
+                  t.branch,
+                  json_extract(s.metadata, '$.branch')
+                ) AS branch,
+                COALESCE(
+                  json_extract(c.metadata, '$.worktree_path'),
+                  json_extract(c.metadata, '$.worktreePath'),
+                  json_extract(s.metadata, '$.worktree_path'),
+                  json_extract(s.metadata, '$.worktreePath'),
+                  json_extract(c.metadata, '$.cwd'),
+                  json_extract(s.metadata, '$.cwd'),
+                  s.cwd,
+                  t.repo_root
+                ) AS worktree_path,
+                COALESCE(
+                  json_extract(c.metadata, '$.agent'),
+                  json_extract(c.metadata, '$.inferred_agent'),
+                  p.agent,
+                  json_extract(s.metadata, '$.agent'),
+                  json_extract(s.metadata, '$.inferred_agent'),
+                  s.ide,
+                  c.session_id
+                ) AS agent
+         FROM observations c
+         LEFT JOIN sessions s ON s.id = c.session_id
+         LEFT JOIN tasks t ON t.id = c.task_id
+         LEFT JOIN task_participants p
+           ON p.task_id = c.task_id
+          AND p.session_id = c.session_id
+          AND p.left_at IS NULL
+         WHERE c.kind = 'claim'
+           AND json_extract(c.metadata, '$.file_path') IS NOT NULL
+         ORDER BY c.ts ASC, c.id ASC`,
+      )
+      .all() as ClaimBeforeEditRow[];
+    const telemetry = this.db
+      .prepare(
+        `SELECT
+           SUM(CASE
+             WHEN kind = 'claim'
+              AND json_extract(metadata, '$.source') = 'pre-tool-use'
+              AND json_extract(metadata, '$.auto_claimed_before_edit') = 1
+             THEN 1 ELSE 0
+           END) AS auto_claimed_before_edit,
+           SUM(CASE
+             WHEN kind = 'claim-before-edit'
+              AND json_extract(metadata, '$.session_binding_missing') = 1
+             THEN 1 ELSE 0
+           END) AS session_binding_missing,
+           SUM(CASE WHEN kind = 'claim-before-edit' THEN 1 ELSE 0 END) AS pre_tool_use_signals
+         FROM observations
+         WHERE ts > ?
+           AND kind IN ('claim', 'claim-before-edit')`,
+      )
+      .get(since_ts) as {
       auto_claimed_before_edit: number | null;
       session_binding_missing: number | null;
       pre_tool_use_signals: number | null;
     };
+    const correlation = correlateClaimsBeforeEdits(editRows, claimRows, DEFAULT_CLAIM_WINDOW_MS);
     return {
-      edit_tool_calls: row.edit_tool_calls,
-      edits_with_file_path: row.edits_with_file_path ?? 0,
-      edits_claimed_before: row.edits_claimed_before ?? 0,
-      auto_claimed_before_edit: row.auto_claimed_before_edit ?? 0,
-      session_binding_missing: row.session_binding_missing ?? 0,
-      pre_tool_use_signals: row.pre_tool_use_signals ?? 0,
+      edit_tool_calls: editRows.length,
+      edits_with_file_path: editRows.filter((row) => row.file_path !== null).length,
+      edits_claimed_before: correlation.edits_claimed_before,
+      claim_match_window_ms: DEFAULT_CLAIM_WINDOW_MS,
+      claim_match_sources: correlation.claim_match_sources,
+      auto_claimed_before_edit: telemetry.auto_claimed_before_edit ?? 0,
+      session_binding_missing: telemetry.session_binding_missing ?? 0,
+      pre_tool_use_signals: telemetry.pre_tool_use_signals ?? 0,
     };
   }
 
@@ -1828,6 +1951,152 @@ export class Storage {
       .prepare('SELECT * FROM observations WHERE ts > ? ORDER BY ts ASC LIMIT ?')
       .all(since_ts, limit) as ObservationRow[];
   }
+}
+
+function emptyClaimBeforeEditMatchSources(): ClaimBeforeEditMatchSources {
+  return {
+    exact_session: 0,
+    repo_branch: 0,
+    worktree: 0,
+    agent_lane: 0,
+  };
+}
+
+function correlateClaimsBeforeEdits(
+  editRows: ClaimBeforeEditRow[],
+  claimRows: ClaimBeforeEditRow[],
+  claimWindowMs: number,
+): { edits_claimed_before: number; claim_match_sources: ClaimBeforeEditMatchSources } {
+  const claimMatchSources = emptyClaimBeforeEditMatchSources();
+  let editsClaimedBefore = 0;
+
+  for (const edit of editRows) {
+    if (edit.file_path === null) continue;
+    const matchSource = claimMatchSourceForEdit(edit, claimRows, claimWindowMs);
+    if (!matchSource) continue;
+    editsClaimedBefore++;
+    claimMatchSources[matchSource]++;
+  }
+
+  return {
+    edits_claimed_before: editsClaimedBefore,
+    claim_match_sources: claimMatchSources,
+  };
+}
+
+function claimMatchSourceForEdit(
+  edit: ClaimBeforeEditRow,
+  claimRows: ClaimBeforeEditRow[],
+  claimWindowMs: number,
+): ClaimBeforeEditMatchSource | null {
+  const priorPathClaims = claimRows.filter(
+    (claim) => claim.ts <= edit.ts && sameNormalizedFilePath(edit, claim),
+  );
+
+  if (priorPathClaims.some((claim) => claim.session_id === edit.session_id)) {
+    return 'exact_session';
+  }
+
+  const windowed = priorPathClaims.filter((claim) => edit.ts - claim.ts <= claimWindowMs);
+  if (windowed.length === 0) return null;
+
+  const repoBranchMatches = windowed.filter((claim) => sameRepoBranch(edit, claim));
+  if (repoBranchMatches.length === 1) return 'repo_branch';
+
+  if (windowed.some((claim) => sameWorktree(edit, claim))) {
+    return 'worktree';
+  }
+
+  const agentLaneMatches = repoBranchMatches.filter((claim) => sameAgent(edit, claim));
+  if (agentLaneMatches.length === 1) return 'agent_lane';
+
+  if (repoBranchMatches.length > 0) return 'repo_branch';
+  return null;
+}
+
+function sameNormalizedFilePath(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  if (edit.file_path === null || claim.file_path === null) return false;
+  const claimPaths = normalizedFilePathCandidates(claim, edit);
+  for (const editPath of normalizedFilePathCandidates(edit, claim)) {
+    if (claimPaths.has(editPath)) return true;
+  }
+  return false;
+}
+
+function normalizedFilePathCandidates(
+  row: ClaimBeforeEditRow,
+  peer?: ClaimBeforeEditRow,
+): Set<string> {
+  const out = new Set<string>();
+  if (!row.file_path) return out;
+
+  const normalizedPath = normalizeFilePath(row.file_path);
+  addFilePathCandidate(out, normalizedPath);
+  for (const root of pathRootsFor(row, peer)) {
+    addFilePathCandidate(out, stripRootPrefix(normalizedPath, root));
+  }
+  return out;
+}
+
+function pathRootsFor(row: ClaimBeforeEditRow, peer?: ClaimBeforeEditRow): string[] {
+  const roots = [row.repo_root, row.worktree_path];
+  if (peer) roots.push(peer.repo_root, peer.worktree_path);
+  return [...new Set(roots.map(normalizeRoot).filter((root): root is string => root !== null))];
+}
+
+function addFilePathCandidate(out: Set<string>, value: string): void {
+  const normalized = trimCurrentDirPrefix(normalizeFilePath(value));
+  if (!normalized || normalized === '.') return;
+  out.add(normalized);
+}
+
+function stripRootPrefix(filePath: string, root: string): string {
+  if (filePath === root) return '';
+  return filePath.startsWith(`${root}/`) ? filePath.slice(root.length + 1) : filePath;
+}
+
+function sameRepoBranch(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  const editRepo = normalizeRoot(edit.repo_root);
+  const claimRepo = normalizeRoot(claim.repo_root);
+  return (
+    editRepo !== null &&
+    claimRepo !== null &&
+    edit.branch !== null &&
+    claim.branch !== null &&
+    editRepo === claimRepo &&
+    edit.branch === claim.branch
+  );
+}
+
+function sameWorktree(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  const editWorktree = normalizeRoot(edit.worktree_path);
+  const claimWorktree = normalizeRoot(claim.worktree_path);
+  return editWorktree !== null && claimWorktree !== null && editWorktree === claimWorktree;
+}
+
+function sameAgent(edit: ClaimBeforeEditRow, claim: ClaimBeforeEditRow): boolean {
+  const editAgent = normalizeAgent(edit.agent);
+  const claimAgent = normalizeAgent(claim.agent);
+  return editAgent !== null && claimAgent !== null && editAgent === claimAgent;
+}
+
+function normalizeAgent(value: string | null): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : null;
+}
+
+function normalizeRoot(value: string | null): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  return normalizeFilePath(normalized).replace(/\/+$/, '');
+}
+
+function normalizeFilePath(value: string): string {
+  return posix.normalize(value.trim().replaceAll('\\', '/'));
+}
+
+function trimCurrentDirPrefix(value: string): string {
+  return value.replace(/^\.\/+/, '');
 }
 
 function kindCountsWithZeroes(kinds: string[], rows: KindCount[]): KindCount[] {

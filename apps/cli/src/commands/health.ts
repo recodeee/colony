@@ -9,6 +9,7 @@ import {
   signalMetadataFromProposal,
 } from '@colony/core';
 import type {
+  ClaimBeforeEditMatchSources,
   ClaimBeforeEditStats,
   ObservationRow,
   ProposalRow,
@@ -128,6 +129,8 @@ interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   likely_missing_hook: boolean;
   /** User-facing remediation for hook wiring or session-binding failures. */
   install_hint: string | null;
+  claim_match_window_ms: number;
+  claim_match_sources: ClaimBeforeEditMatchSources;
 }
 
 interface SignalHealthPayload {
@@ -797,6 +800,7 @@ function claimBeforeEditPayload(
   const autoClaimedBeforeEdit = stats.auto_claimed_before_edit ?? 0;
   const preToolUseSignals = stats.pre_tool_use_signals ?? 0;
   const sessionBindingMissing = stats.session_binding_missing ?? 0;
+  const claimMatchSources = claimMatchSourcesPayload(stats.claim_match_sources);
   const codexRolloutWithoutBridge = codexRolloutEdits > 0 && preToolUseSignals === 0;
   const status =
     stats.edit_tool_calls === 0
@@ -841,6 +845,19 @@ function claimBeforeEditPayload(
     codex_rollout_without_bridge: codexRolloutWithoutBridge,
     likely_missing_hook: likelyMissingHook,
     install_hint: installHint,
+    claim_match_window_ms: stats.claim_match_window_ms ?? 0,
+    claim_match_sources: claimMatchSources,
+  };
+}
+
+function claimMatchSourcesPayload(
+  sources: Partial<ClaimBeforeEditMatchSources> | undefined,
+): ClaimBeforeEditMatchSources {
+  return {
+    exact_session: sources?.exact_session ?? 0,
+    repo_branch: sources?.repo_branch ?? 0,
+    worktree: sources?.worktree ?? 0,
+    agent_lane: sources?.agent_lane ?? 0,
   };
 }
 
@@ -989,6 +1006,7 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   lines.push(
     `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}, pre_tool_use_signals=${payload.pre_tool_use_signals}`,
   );
+  lines.push(...formatClaimMatchSources(payload));
   lines.push(...formatEditSourceBreakdown(payload));
   if (payload.session_binding_missing > 0) {
     lines.push(kleur.yellow(`  session binding missing: ${payload.session_binding_missing}`));
@@ -999,6 +1017,13 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
     lines.push(kleur.yellow(`  ${payload.install_hint}`));
   }
   return lines;
+}
+
+function formatClaimMatchSources(payload: ClaimBeforeEditPayload): string[] {
+  const sources = payload.claim_match_sources;
+  return [
+    `  match_source: exact_session=${sources.exact_session}, repo_branch=${sources.repo_branch}, worktree=${sources.worktree}, agent_lane=${sources.agent_lane}, window_ms=${payload.claim_match_window_ms}`,
+  ];
 }
 
 function formatEditSourceBreakdown(payload: ClaimBeforeEditPayload): string[] {
