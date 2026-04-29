@@ -163,36 +163,36 @@ export function autoClaimFileForSession(
     : (storeOrInput as AutoClaimFileForSessionCall).store;
   const input = maybeInput ?? (storeOrInput as AutoClaimFileForSessionCall);
   try {
-    if (!store.storage.getSession(input.session_id)) {
-      return {
-        ok: false,
-        code: 'SESSION_NOT_FOUND',
-        resolution: 'not_found',
-        error: `Colony session ${input.session_id} was not found`,
-        suggested_action: ACTIVE_TASK_NOT_FOUND_SUGGESTED_ACTION,
-        candidates: [],
-      };
-    }
-
+    const session = store.storage.getSession(input.session_id);
     const binding = resolveActiveTaskBinding(store, input);
     if (binding.status !== 'bound') {
       const code =
-        binding.status === 'not_found' ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+        session === undefined && binding.status === 'not_found'
+          ? 'SESSION_NOT_FOUND'
+          : binding.status === 'not_found'
+            ? 'ACTIVE_TASK_NOT_FOUND'
+            : 'AMBIGUOUS_ACTIVE_TASK';
       return {
         ok: false,
         code,
         resolution: binding.status,
         error:
-          code === 'ACTIVE_TASK_NOT_FOUND'
-            ? 'no active Colony task matched session/repo/branch'
-            : 'multiple active Colony tasks matched session/repo/branch',
-        ...(binding.status === 'not_found'
-          ? {
-              creation_guidance:
-                'Create or join a Colony task for this session with cwd/repo_root/branch, then retry the edit or call task_claim_file with an explicit task_id.',
-              suggested_action: binding.suggested_action,
-            }
-          : {}),
+          code === 'SESSION_NOT_FOUND'
+            ? `Colony session ${input.session_id} was not found`
+            : code === 'ACTIVE_TASK_NOT_FOUND'
+              ? 'no active Colony task matched session/repo/branch'
+              : 'multiple active Colony tasks matched session/repo/branch',
+        ...(code === 'ACTIVE_TASK_NOT_FOUND'
+          ? binding.status === 'not_found'
+            ? {
+                creation_guidance:
+                  'Create or join a Colony task for this session with cwd/repo_root/branch, then retry the edit or call task_claim_file with an explicit task_id.',
+                suggested_action: binding.suggested_action,
+              }
+            : {}
+          : code === 'SESSION_NOT_FOUND'
+            ? { suggested_action: ACTIVE_TASK_NOT_FOUND_SUGGESTED_ACTION }
+            : {}),
         candidates: binding.candidates,
       };
     }
@@ -213,6 +213,7 @@ export function autoClaimFileForSession(
       };
     }
     const normalizedInput = { ...input, file_path: normalizedFilePath };
+    ensureAutoClaimSession(store, input, candidate);
     ensureTaskParticipant(store, candidate, input.session_id);
 
     const existing = store.storage.getClaim(candidate.task_id, normalizedFilePath);
@@ -306,6 +307,27 @@ function ensureTaskParticipant(
     task_id: candidate.task_id,
     session_id,
     agent: candidate.agent,
+  });
+}
+
+function ensureAutoClaimSession(
+  store: MemoryStore,
+  input: AutoClaimFileForSessionInput,
+  candidate: ActiveTaskCandidate,
+): void {
+  if (store.storage.getSession(input.session_id)) return;
+  const agent = normalizeAgent(input.agent ?? candidate.agent ?? input.session_id);
+  store.startSession({
+    id: input.session_id,
+    ide: agent === 'claude' ? 'claude-code' : agent,
+    cwd: input.cwd ?? input.worktree_path ?? null,
+    metadata: {
+      source: 'auto-claim',
+      agent,
+      repo_root: input.repo_root ?? candidate.repo_root,
+      branch: input.branch ?? candidate.branch,
+      worktree_path: input.worktree_path ?? input.cwd,
+    },
   });
 }
 

@@ -296,6 +296,143 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(store.storage.getParticipantAgent(thread.task_id, 'codex@019dd6c0')).toBe('codex');
   });
 
+  it('resolves exact session before repo_root and branch fallbacks', () => {
+    store.startSession({ id: 'codex@exact', ide: 'codex', cwd: '/repo/exact' });
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo/scoped' });
+    const exactThread = TaskThread.open(store, {
+      repo_root: '/repo/exact',
+      branch: 'agent/codex/exact',
+      session_id: 'codex@exact',
+    });
+    exactThread.join('codex@exact', 'codex');
+    const scopedThread = TaskThread.open(store, {
+      repo_root: '/repo/scoped',
+      branch: 'agent/codex/scoped',
+      session_id: 'owner',
+    });
+    scopedThread.join('owner', 'claude');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex@exact',
+      repo_root: '/repo/scoped',
+      branch: 'agent/codex/scoped',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'session_id',
+      task_id: exactThread.task_id,
+    });
+    expect(store.storage.getClaim(exactThread.task_id, 'src/viewer.tsx')?.session_id).toBe(
+      'codex@exact',
+    );
+    expect(store.storage.getClaim(scopedThread.task_id, 'src/viewer.tsx')).toBeUndefined();
+  });
+
+  it('resolves a missing Codex edit session by repo_root and branch', () => {
+    const lifecycleSession = 'codex-lifecycle-session';
+    const editSession = 'mcp-edit-telemetry-session';
+    store.startSession({ id: lifecycleSession, ide: 'codex', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/lifecycle',
+      session_id: lifecycleSession,
+    });
+    thread.join(lifecycleSession, 'codex');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: editSession,
+      agent: 'codex',
+      repo_root: '/repo',
+      branch: 'agent/codex/lifecycle',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'branch_repo_root',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getSession(editSession)).toMatchObject({ id: editSession, ide: 'codex' });
+    expect(store.storage.getParticipantAgent(thread.task_id, editSession)).toBe('codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(editSession);
+  });
+
+  it('resolves a missing OMX edit session by worktree path', () => {
+    const worktreePath = join(dir, 'repo', '.omx', 'agent-worktrees', 'lane');
+    const lifecycleSession = 'codex-worktree-lifecycle';
+    const editSession = 'omx-edit-telemetry-session';
+    store.startSession({ id: lifecycleSession, ide: 'codex', cwd: worktreePath });
+    const thread = TaskThread.open(store, {
+      repo_root: worktreePath,
+      branch: 'agent/codex/worktree',
+      session_id: lifecycleSession,
+    });
+    thread.join(lifecycleSession, 'codex');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: editSession,
+      agent: 'codex',
+      worktree_path: join(worktreePath, 'packages/hooks'),
+      file_path: 'packages/hooks/src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      resolution: 'bound',
+      matched_by: 'worktree',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getSession(editSession)).toMatchObject({ id: editSession, ide: 'codex' });
+    expect(store.storage.getParticipantAgent(thread.task_id, editSession)).toBe('codex');
+    expect(
+      store.storage.getClaim(thread.task_id, 'packages/hooks/src/viewer.tsx')?.session_id,
+    ).toBe(editSession);
+  });
+
+  it('records conflict telemetry when fallback binding finds a different owner', () => {
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/conflict',
+      session_id: 'owner',
+    });
+    thread.join('owner', 'claude');
+    thread.claimFile({ session_id: 'owner', file_path: 'src/viewer.tsx' });
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex-edit-session',
+      agent: 'codex',
+      repo_root: '/repo',
+      branch: 'agent/codex/conflict',
+      file_path: 'src/viewer.tsx',
+      record_conflict: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      previous_claim_session: 'owner',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
+      'codex-edit-session',
+    );
+    const conflicts = store.storage.taskObservationsByKind(thread.task_id, 'claim-conflict');
+    expect(conflicts).toHaveLength(1);
+    expect(metadataOf(conflicts[0])).toMatchObject({
+      source: 'autoClaimFileBeforeEdit',
+      file_path: 'src/viewer.tsx',
+      other_session: 'owner',
+    });
+  });
+
   it('resolves the only active task for the same agent when no branch scope exists', () => {
     store.startSession({ id: 'codex@new', ide: 'codex', cwd: null });
     store.startSession({ id: 'codex@old', ide: 'codex', cwd: '/repo' });
