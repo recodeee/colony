@@ -601,6 +601,37 @@ describe('task_plan_claim_subtask', () => {
     ]);
   });
 
+  it('blocks plan subtask claim when its file is held by an active different owner', async () => {
+    const filePath = 'apps/api/src/widgets.ts';
+    const published = await call<PublishResult>('task_plan_publish', basicPublishArgs());
+    const subtask = published.subtasks[0];
+    if (!subtask) throw new Error('expected subtask');
+
+    store.startSession({ id: 'active-owner', ide: 'claude-code', cwd: repoRoot });
+    const ownerThread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: subtask.branch,
+      session_id: 'active-owner',
+    });
+    ownerThread.join('active-owner', 'claude');
+    ownerThread.claimFile({ session_id: 'active-owner', file_path: filePath });
+
+    const err = await callError('task_plan_claim_subtask', {
+      plan_slug: 'add-widget-page',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+
+    expect(err).toMatchObject({
+      code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
+    });
+    expect(store.storage.getClaim(subtask.task_id, filePath)?.session_id).toBe('active-owner');
+    expect(
+      store.storage.taskObservationsByKind(subtask.task_id, 'plan-subtask-claim'),
+    ).toHaveLength(0);
+  });
+
   it('rejects claim when dependencies are not yet completed', async () => {
     await call<PublishResult>('task_plan_publish', basicPublishArgs());
     const err = await callError('task_plan_claim_subtask', {
