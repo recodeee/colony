@@ -689,6 +689,7 @@ describe('colony health payload', () => {
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
     expect(json).toHaveProperty('queen_wave_health');
     expect(json).toHaveProperty('live_contention_health');
+    expect(json.live_contention_health).toHaveProperty('recommended_actions');
     expect(json).toHaveProperty('adoption_thresholds');
     expect(json).toHaveProperty('action_hints');
     expect(json.action_hints[0]).toHaveProperty('tool_call');
@@ -817,20 +818,43 @@ describe('colony health payload', () => {
               session_id: 'codex-left-session',
               branch: 'agent/codex/left',
               dirty: true,
+              classification: 'active known owner',
             }),
             expect.objectContaining({
               owner: 'claude',
               session_id: 'claude-right-session',
               branch: 'agent/claude/right',
+              classification: 'inactive known owner',
             }),
             expect.objectContaining({
               owner: 'codex',
               session_id: 'codex-main-session',
               branch: 'main',
+              classification: 'active known owner',
             }),
           ]),
         },
       ],
+      recommended_actions: expect.arrayContaining([
+        expect.objectContaining({
+          file_path: 'src/shared.ts',
+          action: 'keep owner codex-left-session',
+          classification: 'active known owner',
+        }),
+        expect.objectContaining({
+          file_path: 'src/shared.ts',
+          action: 'release/weaken owner claude-right-session',
+          classification: 'inactive known owner',
+          command: expect.stringContaining('colony lane takeover claude-right-session'),
+          mcp_tool_hint: expect.stringContaining('task_hand_off'),
+        }),
+        expect.objectContaining({
+          file_path: 'src/shared.ts',
+          action: 'require explicit takeover',
+          reason: 'multiple active owners claim this file',
+          command: expect.stringContaining('colony lane takeover codex-left-session'),
+        }),
+      ]),
     });
 
     expect(payload.readiness_summary.execution_safety).toMatchObject({
@@ -853,12 +877,341 @@ describe('colony health payload', () => {
     expect(text).toContain('dirty_contended_files:      1');
     expect(text).toContain('src/shared.ts (3 owners; protected, dirty)');
     expect(text).toContain(
-      'owner=codex session=codex-left-... branch=agent/codex/left activity=working',
+      'owner=codex session=codex-left-... branch=agent/codex/left activity=working class=active known owner',
     );
     expect(text).toContain(
-      'owner=claude session=claude-righ... branch=agent/claude/right activity=stalled',
+      'owner=claude session=claude-righ... branch=agent/claude/right activity=stalled class=inactive known owner',
     );
-    expect(text).toContain('owner=codex session=codex-main-... branch=main activity=working');
+    expect(text).toContain(
+      'owner=codex session=codex-main-... branch=main activity=working class=active known owner',
+    );
+    expect(text).toContain('recommended actions:');
+    expect(text).toContain('src/shared.ts: release/weaken owner claude-right-session');
+    expect(text).toContain('command: colony lane takeover claude-right-session');
+    expect(text).toContain('tool: owner can call task_hand_off');
+  });
+
+  it('classifies known active and unknown protected contention owners', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 1,
+        },
+        tasks: [
+          { id: 20, repo_root: '/repo', branch: 'main' },
+          { id: 21, repo_root: '/repo', branch: 'agent/unknown/duplicate' },
+        ],
+        claimsByTask: {
+          20: [
+            {
+              task_id: 20,
+              file_path: 'src/protected.ts',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 30_000,
+            },
+          ],
+          21: [
+            {
+              task_id: 21,
+              file_path: 'src/protected.ts',
+              session_id: 'mystery-session',
+              claimed_at: NOW - 20_000,
+            },
+          ],
+        },
+        observationsByTask: { 20: [], 21: [] },
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+        hivemind: {
+          sessions: [
+            hivemindSession({
+              agent: 'codex',
+              branch: 'main',
+              session_key: 'codex-main-session',
+              worktree_path: '/repo',
+              activity: 'working',
+            }),
+          ],
+        },
+        dirty_files_by_worktree: { '/repo': [] },
+      },
+    );
+
+    expect(payload.live_contention_health.top_conflicts[0]?.owners).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          session_id: 'codex-main-session',
+          classification: 'active known owner',
+        }),
+        expect.objectContaining({
+          session_id: 'mystery-session',
+          classification: 'unknown owner',
+        }),
+      ]),
+    );
+    expect(payload.live_contention_health.recommended_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'keep owner codex-main-session',
+          classification: 'active known owner',
+        }),
+        expect.objectContaining({
+          action: 'require explicit takeover',
+          session_id: 'mystery-session',
+          classification: 'unknown owner',
+          command: expect.stringContaining('colony lane takeover mystery-session'),
+        }),
+      ]),
+    );
+  });
+
+  it('recommends release or weaken for inactive protected contention owners', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 1,
+        },
+        tasks: [
+          { id: 30, repo_root: '/repo', branch: 'main' },
+          { id: 31, repo_root: '/repo', branch: 'agent/codex/stale' },
+        ],
+        claimsByTask: {
+          30: [
+            {
+              task_id: 30,
+              file_path: 'src/inactive.ts',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 30_000,
+            },
+          ],
+          31: [
+            {
+              task_id: 31,
+              file_path: 'src/inactive.ts',
+              session_id: 'codex@inactive',
+              claimed_at: NOW - 10 * 60_000,
+            },
+          ],
+        },
+        observationsByTask: { 30: [], 31: [] },
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+        hivemind: {
+          sessions: [
+            hivemindSession({
+              agent: 'codex',
+              branch: 'main',
+              session_key: 'codex-main-session',
+              worktree_path: '/repo',
+              activity: 'working',
+            }),
+          ],
+        },
+        dirty_files_by_worktree: { '/repo': [] },
+      },
+    );
+
+    expect(payload.live_contention_health.recommended_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'release/weaken owner codex@inactive',
+          classification: 'inactive known owner',
+          command: expect.stringContaining('colony lane takeover'),
+          mcp_tool_hint: expect.stringContaining('released_files'),
+        }),
+      ]),
+    );
+  });
+
+  it('requires explicit takeover when protected active owners compete', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 1,
+        },
+        tasks: [
+          { id: 40, repo_root: '/repo', branch: 'main' },
+          { id: 41, repo_root: '/repo', branch: 'agent/codex/feature' },
+        ],
+        claimsByTask: {
+          40: [
+            {
+              task_id: 40,
+              file_path: 'src/active.ts',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 30_000,
+            },
+          ],
+          41: [
+            {
+              task_id: 41,
+              file_path: 'src/active.ts',
+              session_id: 'claude-feature-session',
+              claimed_at: NOW - 20_000,
+            },
+          ],
+        },
+        observationsByTask: { 40: [], 41: [] },
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+        hivemind: {
+          sessions: [
+            hivemindSession({
+              agent: 'codex',
+              branch: 'main',
+              session_key: 'codex-main-session',
+              worktree_path: '/repo',
+              activity: 'working',
+            }),
+            hivemindSession({
+              agent: 'claude',
+              branch: 'agent/codex/feature',
+              session_key: 'claude-feature-session',
+              worktree_path: '/wt/feature',
+              activity: 'working',
+            }),
+          ],
+        },
+        dirty_files_by_worktree: { '/repo': [], '/wt/feature': [] },
+      },
+    );
+
+    expect(payload.live_contention_health.recommended_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'require explicit takeover',
+          session_id: 'codex-main-session',
+          reason: 'multiple active owners claim this file',
+        }),
+        expect.objectContaining({
+          action: 'require explicit takeover',
+          session_id: 'claude-feature-session',
+          reason: 'multiple active owners claim this file',
+        }),
+      ]),
+    );
+  });
+
+  it('keeps recommended actions stable when protected contentions have no dirty files', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 1,
+        },
+        tasks: [
+          { id: 50, repo_root: '/repo', branch: 'main' },
+          { id: 51, repo_root: '/repo', branch: 'agent/codex/clean' },
+        ],
+        claimsByTask: {
+          50: [
+            {
+              task_id: 50,
+              file_path: 'src/clean.ts',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 30_000,
+            },
+          ],
+          51: [
+            {
+              task_id: 51,
+              file_path: 'src/clean.ts',
+              session_id: 'codex-clean-session',
+              claimed_at: NOW - 20_000,
+            },
+          ],
+        },
+        observationsByTask: { 50: [], 51: [] },
+        proposals: [],
+        reinforcements: {},
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 60,
+        codex_sessions_root: NO_CODEX_ROOT,
+        hivemind: {
+          sessions: [
+            hivemindSession({
+              agent: 'codex',
+              branch: 'main',
+              session_key: 'codex-main-session',
+              worktree_path: '/repo',
+              activity: 'working',
+            }),
+            hivemindSession({
+              agent: 'codex',
+              branch: 'agent/codex/clean',
+              session_key: 'codex-clean-session',
+              worktree_path: '/wt/clean',
+              activity: 'idle',
+            }),
+          ],
+        },
+        dirty_files_by_worktree: { '/repo': [], '/wt/clean': [] },
+        worktree_contention: {
+          generated_at: new Date(NOW).toISOString(),
+          repo_root: '/repo',
+          summary: {
+            worktree_count: 2,
+            dirty_worktree_count: 0,
+            dirty_file_count: 0,
+            contention_count: 0,
+          },
+          inspected_roots: [],
+          worktrees: [],
+          contentions: [],
+        } as never,
+      },
+    );
+
+    expect(payload.live_contention_health).toMatchObject({
+      live_file_contentions: 1,
+      protected_file_contentions: 1,
+      dirty_contended_files: 0,
+    });
+    expect(payload.live_contention_health.recommended_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'keep owner codex-main-session' }),
+        expect.objectContaining({
+          action: 'require explicit takeover',
+          reason: 'multiple active owners claim this file',
+        }),
+      ]),
+    );
   });
 
   it('renders claim miss reasons and nearest claim examples in text and JSON output', () => {

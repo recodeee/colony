@@ -254,6 +254,7 @@ interface LiveContentionOwner {
   claim_age_minutes: number;
   claim_strength: string;
   dirty: boolean;
+  classification: LiveContentionOwnerClassification;
 }
 
 interface LiveContentionConflict {
@@ -264,6 +265,24 @@ interface LiveContentionConflict {
   owners: LiveContentionOwner[];
 }
 
+type LiveContentionOwnerClassification =
+  | 'active known owner'
+  | 'inactive known owner'
+  | 'unknown owner'
+  | 'same branch duplicate';
+
+interface LiveContentionRecommendedAction {
+  file_path: string;
+  action: string;
+  owner: string;
+  session_id: string;
+  branch: string;
+  classification: LiveContentionOwnerClassification;
+  reason: string;
+  command?: string;
+  mcp_tool_hint?: string;
+}
+
 interface LiveContentionPayload {
   live_file_contentions: number;
   protected_file_contentions: number;
@@ -272,6 +291,7 @@ interface LiveContentionPayload {
   competing_worktrees: number;
   dirty_contended_files: number;
   top_conflicts: LiveContentionConflict[];
+  recommended_actions: LiveContentionRecommendedAction[];
 }
 
 interface AdoptionSignal {
@@ -1637,8 +1657,18 @@ function formatLiveContention(payload: LiveContentionPayload): string[] {
     );
     for (const owner of conflict.owners) {
       lines.push(
-        `    - owner=${owner.owner} session=${shortSession(owner.session_id)} branch=${owner.branch} activity=${owner.activity}`,
+        `    - owner=${owner.owner} session=${shortSession(owner.session_id)} branch=${owner.branch} activity=${owner.activity} class=${owner.classification}`,
       );
+    }
+  }
+  if (payload.recommended_actions.length > 0) {
+    lines.push('  recommended actions:');
+    for (const action of payload.recommended_actions.slice(0, HEALTH_TOOL_LIMIT)) {
+      lines.push(
+        `    - ${action.file_path}: ${action.action}; owner=${action.owner} session=${shortSession(action.session_id)} reason=${action.reason}`,
+      );
+      if (action.command) lines.push(`      command: ${action.command}`);
+      if (action.mcp_tool_hint) lines.push(`      tool: ${action.mcp_tool_hint}`);
     }
   }
   return lines;
@@ -2635,12 +2665,13 @@ function liveContentionPayload(
       const dirty = worktreePath
         ? (dirtyFilesByWorktree.get(worktreePath)?.has(filePath) ?? false)
         : false;
+      const owner = session?.agent || ownerFromSessionId(claim.session_id);
 
       claimOwners.push({
         file_path: filePath,
         owner_key: `${claim.session_id}\0${task.branch}`,
         owner: {
-          owner: session?.agent || ownerFromSessionId(claim.session_id),
+          owner,
           session_id: claim.session_id,
           branch: task.branch,
           task_id: task.id,
@@ -2650,6 +2681,7 @@ function liveContentionPayload(
           claim_age_minutes: age.age_minutes,
           claim_strength: age.ownership_strength,
           dirty,
+          classification: 'unknown owner',
         },
       });
     }
@@ -2659,15 +2691,16 @@ function liveContentionPayload(
     .map(([filePath, owners]) => {
       const uniqueOwners = uniqueContentionOwners(owners);
       if (uniqueOwners.length <= 1) return null;
+      const classifiedOwners = classifyContentionOwners(uniqueOwners);
       const dirtyWorktrees = uniqueOwners
         .filter((owner) => owner.dirty && owner.worktree_path)
         .map((owner) => owner.worktree_path);
       return {
         file_path: filePath,
-        owner_count: uniqueOwners.length,
-        protected: uniqueOwners.some((owner) => isProtectedBranch(owner.branch)),
+        owner_count: classifiedOwners.length,
+        protected: classifiedOwners.some((owner) => isProtectedBranch(owner.branch)),
         dirty_worktrees: [...new Set(dirtyWorktrees)].sort(),
-        owners: uniqueOwners.sort(compareContentionOwners),
+        owners: classifiedOwners.sort(compareContentionOwners),
       } satisfies LiveContentionConflict;
     })
     .filter((conflict): conflict is LiveContentionConflict => conflict !== null)
@@ -2696,6 +2729,7 @@ function liveContentionPayload(
     ),
     dirty_contended_files: Math.max(dirtyClaimContentions, dirtyWorktreeContentions),
     top_conflicts: conflicts.slice(0, HEALTH_TOOL_LIMIT),
+    recommended_actions: recommendedLiveContentionActions(conflicts).slice(0, HEALTH_TOOL_LIMIT),
   };
 }
 
@@ -2928,6 +2962,117 @@ function uniqueContentionOwners(
     }
   }
   return [...byOwner.values()];
+}
+
+function classifyContentionOwners(owners: LiveContentionOwner[]): LiveContentionOwner[] {
+  const branchCounts = new Map<string, number>();
+  for (const owner of owners) {
+    branchCounts.set(owner.branch, (branchCounts.get(owner.branch) ?? 0) + 1);
+  }
+  return owners.map((owner) => ({
+    ...owner,
+    classification: classifyContentionOwner(owner, branchCounts),
+  }));
+}
+
+function classifyContentionOwner(
+  owner: LiveContentionOwner,
+  branchCounts: Map<string, number>,
+): LiveContentionOwnerClassification {
+  if ((branchCounts.get(owner.branch) ?? 0) > 1) return 'same branch duplicate';
+  if (owner.owner === 'unknown') return 'unknown owner';
+  return isActiveContentionActivity(owner.activity) ? 'active known owner' : 'inactive known owner';
+}
+
+function isActiveContentionActivity(activity: string): boolean {
+  return activity === 'working' || activity === 'thinking' || activity === 'idle';
+}
+
+function recommendedLiveContentionActions(
+  conflicts: LiveContentionConflict[],
+): LiveContentionRecommendedAction[] {
+  const actions: LiveContentionRecommendedAction[] = [];
+  for (const conflict of conflicts.filter((entry) => entry.protected)) {
+    for (const owner of conflict.owners) {
+      if (owner.classification === 'active known owner') {
+        actions.push(keepOwnerAction(conflict, owner));
+      } else if (owner.classification === 'inactive known owner') {
+        actions.push(releaseOrWeakenOwnerAction(conflict, owner, 'owner is known but not active'));
+      } else if (owner.classification === 'same branch duplicate') {
+        actions.push(
+          releaseOrWeakenOwnerAction(conflict, owner, 'duplicate claim on the same branch'),
+        );
+      } else {
+        actions.push(requireTakeoverAction(conflict, owner, 'owner identity is unknown'));
+      }
+    }
+    const activeKnownOwners = conflict.owners.filter(
+      (owner) => owner.classification === 'active known owner',
+    );
+    if (activeKnownOwners.length > 1) {
+      for (const owner of activeKnownOwners) {
+        actions.push(
+          requireTakeoverAction(conflict, owner, 'multiple active owners claim this file'),
+        );
+      }
+    }
+  }
+  return actions;
+}
+
+function keepOwnerAction(
+  conflict: LiveContentionConflict,
+  owner: LiveContentionOwner,
+): LiveContentionRecommendedAction {
+  return {
+    file_path: conflict.file_path,
+    action: `keep owner ${owner.session_id}`,
+    owner: owner.owner,
+    session_id: owner.session_id,
+    branch: owner.branch,
+    classification: owner.classification,
+    reason: 'known active owner on protected contention',
+  };
+}
+
+function releaseOrWeakenOwnerAction(
+  conflict: LiveContentionConflict,
+  owner: LiveContentionOwner,
+  reason: string,
+): LiveContentionRecommendedAction {
+  return {
+    file_path: conflict.file_path,
+    action: `release/weaken owner ${owner.session_id}`,
+    owner: owner.owner,
+    session_id: owner.session_id,
+    branch: owner.branch,
+    classification: owner.classification,
+    reason,
+    command: `colony lane takeover ${shellQuote(owner.session_id)} --file ${shellQuote(
+      conflict.file_path,
+    )} --reason ${shellQuote('protected contention resolution')}`,
+    mcp_tool_hint: `owner can call task_hand_off(task_id=${owner.task_id}, session_id="${owner.session_id}", released_files=["${conflict.file_path}"], summary="release protected contention", next_steps=["claim after release"])`,
+  };
+}
+
+function requireTakeoverAction(
+  conflict: LiveContentionConflict,
+  owner: LiveContentionOwner,
+  reason: string,
+): LiveContentionRecommendedAction {
+  return {
+    file_path: conflict.file_path,
+    action: 'require explicit takeover',
+    owner: owner.owner,
+    session_id: owner.session_id,
+    branch: owner.branch,
+    classification: owner.classification,
+    reason,
+    command: `colony lane takeover ${shellQuote(owner.session_id)} --file ${shellQuote(
+      conflict.file_path,
+    )} --reason ${shellQuote(reason)}`,
+    mcp_tool_hint: `task_claim_file(task_id=${owner.task_id}, session_id="<requester_session_id>", file_path="${conflict.file_path}", note="after explicit takeover")`,
+  };
 }
 
 function compareContentionOwners(left: LiveContentionOwner, right: LiveContentionOwner): number {
