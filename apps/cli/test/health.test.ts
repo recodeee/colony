@@ -590,15 +590,13 @@ describe('colony health payload', () => {
 
     const text = formatColonyHealthOutput(payload);
     expect(text).toContain('Next fixes');
-    expect(text).toContain(
-      'hivemind_context -> attention_inbox: 0% (target 50%+) - After hivemind_context, call attention_inbox',
+    expect(text.indexOf('claim-before-edit: 0%')).toBeLessThan(text.indexOf('stale claims: 1'));
+    expect(text.indexOf('stale claims: 1')).toBeLessThan(
+      text.indexOf('task_post/task_note_working share: 0%'),
     );
-    expect(text).toContain(
-      'task_list -> task_ready_for_agent: 25% (target 30%+) - Keep task_list for browsing/debugging only',
-    );
-    expect(text).toContain(
-      'task_ready_for_agent -> claim: 0% (target 30%+) - When ready work fits',
-    );
+    expect(text).not.toContain('hivemind_context -> attention_inbox: 0%');
+    expect(text).not.toContain('task_list -> task_ready_for_agent: 25%');
+    expect(text).not.toContain('task_ready_for_agent -> claim: 0%');
     expect(text).toContain(
       'claim-before-edit: 0% (target 50%+) - PreToolUse auto-claim hook is not firing',
     );
@@ -615,10 +613,16 @@ describe('colony health payload', () => {
 
     const promptText = formatColonyHealthOutput(payload, { prompts: true });
     expect(promptText).toContain('Codex prompt snippets');
-    expect(promptText).toContain('Goal: make every hivemind_context run clear attention');
-    expect(promptText).toContain('Current: hivemind_context -> attention_inbox 0%');
     expect(promptText).toContain('Inspect: colony coordination sweep --json');
     expect(promptText).toContain('Accept: working notes use branch/task/blocker/next/evidence');
+
+    const verboseText = formatColonyHealthOutput(payload, { verbose: true });
+    expect(verboseText).toContain(
+      'hivemind_context -> attention_inbox: 0% (target 50%+) - After hivemind_context, call attention_inbox',
+    );
+    expect(verboseText).toContain(
+      'task_list -> task_ready_for_agent: 25% (target 30%+) - Keep task_list for browsing/debugging only',
+    );
   });
 
   it('renders actionable Codex prompts for the current failing adoption metrics', () => {
@@ -660,22 +664,6 @@ describe('colony health payload', () => {
       expect(payload.action_hints.map((hint) => hint.metric)).toContain(metric);
     }
 
-    expect(prompts).toContain('Goal: convert ready work into an owned plan subtask');
-    expect(prompts).toContain('Current: task_ready_for_agent -> task_plan_claim_subtask 0%');
-    expect(prompts).toContain('Inspect: mcp__colony__task_ready_for_agent');
-    expect(prompts).toContain(
-      'Accept: selected ready subtasks are claimed and touched files are claimed before implementation',
-    );
-
-    expect(prompts).toContain(
-      'Goal: move agent-to-agent coordination from task_post notes to task_message',
-    );
-    expect(prompts).toContain('Current: 0 task_message calls, 1 task_post calls');
-    expect(prompts).toContain('Inspect: mcp__colony__task_message');
-    expect(prompts).toContain(
-      'Accept: directed coordination uses task_message and unread replies surface in attention_inbox',
-    );
-
     expect(prompts).toContain('Goal: restore pre-edit auto-claim for hook-capable edits');
     expect(prompts).toContain('Current: claim-before-edit 0%, missing 1');
     expect(prompts).toContain('Inspect: mcp__colony__task_claim_file');
@@ -690,13 +678,21 @@ describe('colony health payload', () => {
       'Accept: a plan exists with claimable subtasks and task_ready_for_agent returns exact claim args',
     );
 
-    expect(prompts).toContain(
+    expect(prompts).not.toContain('Goal: convert ready work into an owned plan subtask');
+    expect(prompts).not.toContain(
+      'Goal: move agent-to-agent coordination from task_post notes to task_message',
+    );
+    expect(prompts).not.toContain(
       'Goal: make future-work candidates flow through proposals instead of chat-only notes',
     );
-    expect(prompts).toContain('Current: proposals seen 0, promoted 0');
-    expect(prompts).toContain('Inspect: mcp__colony__task_foraging_report');
-    expect(prompts).toContain(
-      'Accept: task_foraging_report shows pending/promoted work and rediscovered proposals can promote into tasks',
+
+    const verbosePrompts = formatColonyHealthOutput(payload, { prompts: true, verbose: true });
+    expect(verbosePrompts).toContain('Goal: convert ready work into an owned plan subtask');
+    expect(verbosePrompts).toContain(
+      'Goal: move agent-to-agent coordination from task_post notes to task_message',
+    );
+    expect(verbosePrompts).toContain(
+      'Goal: make future-work candidates flow through proposals instead of chat-only notes',
     );
   });
 
