@@ -197,6 +197,8 @@ interface ActionHint {
   current: string;
   target: string;
   action: string;
+  readiness_scope: ReadinessScope;
+  priority: number;
   tool_call?: string;
   command?: string;
   prompt: string;
@@ -225,6 +227,8 @@ interface ReadinessSummaryPayload {
   working_state_migration: ReadinessSummaryItem;
   signal_evaporation: ReadinessSummaryItem;
 }
+
+type ReadinessScope = keyof ReadinessSummaryPayload | 'adoption_followup';
 
 export interface ColonyHealthPayload {
   generated_at: string;
@@ -366,7 +370,7 @@ export function buildColonyHealthPayload(
 
 export function formatColonyHealthOutput(
   payload: ColonyHealthPayload,
-  options: { json?: boolean; prompts?: boolean } = {},
+  options: { json?: boolean; prompts?: boolean; verbose?: boolean } = {},
 ): string {
   if (options.json) return JSON.stringify(payload, null, 2);
 
@@ -514,11 +518,18 @@ export function formatColonyHealthOutput(
     }
   }
 
+  const visibleHints = visibleActionHints(payload, { verbose: Boolean(options.verbose) });
+
   lines.push('', kleur.bold('Next fixes'));
-  if (payload.action_hints.length === 0) {
-    lines.push(kleur.green('  none: tracked thresholds meet targets'));
+  if (visibleHints.length === 0) {
+    if (payload.action_hints.length > 0) {
+      lines.push(kleur.green('  none: readiness bottlenecks meet current targets'));
+      lines.push(kleur.dim('  hidden: lower-priority follow-ups available with --verbose'));
+    } else {
+      lines.push(kleur.green('  none: tracked thresholds meet targets'));
+    }
   } else {
-    payload.action_hints.forEach((hint, index) => {
+    visibleHints.forEach((hint, index) => {
       lines.push(
         `  ${index + 1}. ${hint.metric}: ${hint.current} (target ${hint.target}) - ${hint.action}`,
       );
@@ -529,10 +540,10 @@ export function formatColonyHealthOutput(
 
   if (options.prompts) {
     lines.push('', kleur.bold('Codex prompt snippets'));
-    if (payload.action_hints.length === 0) {
+    if (visibleHints.length === 0) {
       lines.push(kleur.green('  none: tracked thresholds meet targets'));
     } else {
-      payload.action_hints.forEach((hint, index) => {
+      visibleHints.forEach((hint, index) => {
         lines.push(`  ${index + 1}. ${hint.prompt}`);
       });
     }
@@ -569,13 +580,15 @@ function readinessSummaryPayload(
 
   const claimBeforeEdit = payload.task_claim_file_before_edits;
   const executionStatus: ReadinessStatus =
-    claimBeforeEdit.claim_before_edit_ratio !== null
-      ? isAtOrAboveTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
-        ? 'good'
-        : 'bad'
-      : claimBeforeEdit.edit_tool_calls === 0 || claimBeforeEdit.task_claim_file_calls > 0
-        ? 'ok'
-        : 'bad';
+    claimBeforeEdit.codex_rollout_without_bridge || claimBeforeEdit.session_binding_missing > 0
+      ? 'bad'
+      : claimBeforeEdit.claim_before_edit_ratio !== null
+        ? isAtOrAboveTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
+          ? 'good'
+          : 'bad'
+        : claimBeforeEdit.edit_tool_calls === 0 || claimBeforeEdit.task_claim_file_calls > 0
+          ? 'ok'
+          : 'bad';
 
   const queen = payload.queen_wave_health;
   const queenStatus: ReadinessStatus =
@@ -661,24 +674,29 @@ export function registerHealthCommand(program: Command): void {
     .option('--hours <n>', 'Window size in hours', String(DEFAULT_HOURS))
     .option('--json', 'emit structured JSON')
     .option('--prompts', 'emit compact Codex prompt snippets for next fixes')
-    .action(async (opts: { hours: string; json?: boolean; prompts?: boolean }) => {
-      const hours = parseHours(opts.hours);
-      const settings = loadSettings();
-      const { withStorage } = await import('../util/store.js');
-      await withStorage(
-        settings,
-        (storage) => {
-          const payload = buildColonyHealthPayload(storage, {
-            since: Date.now() - hours * 3_600_000,
-            window_hours: hours,
-            claim_stale_minutes: settings.claimStaleMinutes,
-          });
-          const formatOptions = opts.json ? { json: true } : { prompts: Boolean(opts.prompts) };
-          process.stdout.write(`${formatColonyHealthOutput(payload, formatOptions)}\n`);
-        },
-        { readonly: true },
-      );
-    });
+    .option('--verbose', 'show lower-priority health follow-ups in next fixes')
+    .action(
+      async (opts: { hours: string; json?: boolean; prompts?: boolean; verbose?: boolean }) => {
+        const hours = parseHours(opts.hours);
+        const settings = loadSettings();
+        const { withStorage } = await import('../util/store.js');
+        await withStorage(
+          settings,
+          (storage) => {
+            const payload = buildColonyHealthPayload(storage, {
+              since: Date.now() - hours * 3_600_000,
+              window_hours: hours,
+              claim_stale_minutes: settings.claimStaleMinutes,
+            });
+            const formatOptions = opts.json
+              ? { json: true }
+              : { prompts: Boolean(opts.prompts), verbose: Boolean(opts.verbose) };
+            process.stdout.write(`${formatColonyHealthOutput(payload, formatOptions)}\n`);
+          },
+          { readonly: true },
+        );
+      },
+    );
 }
 
 function conversion(calls: ToolCallRow[], fromTool: string, toTool: string): ConversionPayload {
@@ -1009,6 +1027,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_HIVEMIND_TO_ATTENTION)}+`,
       action:
         'After hivemind_context, call attention_inbox to clear handoffs, unread messages, and blockers.',
+      readiness_scope: 'coordination_readiness',
+      priority: 60,
       tool_call:
         'mcp__colony__attention_inbox({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>" })',
       prompt: codexPrompt({
@@ -1030,6 +1050,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_TASK_LIST_TO_READY)}+`,
       action:
         'Keep task_list for browsing/debugging only; call task_ready_for_agent before selecting work.',
+      readiness_scope: 'coordination_readiness',
+      priority: 61,
       tool_call:
         'mcp__colony__task_ready_for_agent({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>" })',
       prompt: codexPrompt({
@@ -1044,6 +1066,9 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
 
   const readyToClaim = payload.conversions.task_ready_for_agent_to_task_plan_claim_subtask;
   if (isBelowTarget(readyToClaim.conversion_rate, TARGET_READY_TO_CLAIM)) {
+    const hasPlanSubtasks =
+      payload.queen_wave_health.active_plans > 0 ||
+      payload.ready_to_claim_vs_claimed.plan_subtasks > 0;
     hints.push({
       metric: 'task_ready_for_agent -> claim',
       status: 'bad',
@@ -1051,6 +1076,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_READY_TO_CLAIM)}+`,
       action:
         'When ready work fits, claim it with task_plan_claim_subtask, then claim touched files before implementation.',
+      readiness_scope: hasPlanSubtasks ? 'queen_plan_readiness' : 'adoption_followup',
+      priority: hasPlanSubtasks ? 30 : 85,
       tool_call:
         'mcp__colony__task_plan_claim_subtask({ agent: "<agent>", session_id: "<session_id>", plan_slug: "<plan_slug>", subtask_index: <index> })',
       prompt: codexPrompt({
@@ -1076,6 +1103,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_TASK_MESSAGE_SHARE)}+`,
       action:
         'Use task_message for directed agent-to-agent coordination; keep task_post for task-thread notes and decisions.',
+      readiness_scope: 'adoption_followup',
+      priority: 80,
       tool_call:
         'mcp__colony__task_message({ agent: "<agent>", session_id: "<session_id>", task_id: <task_id>, to_agent: "<agent|any>", urgency: "needs_reply", content: "<short request>" })',
       prompt: codexPrompt({
@@ -1102,6 +1131,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: 'Codex PreToolUse signals > 0',
       action:
         'Most edit evidence is from Codex rollouts, but no Codex PreToolUse hook or rollout bridge is firing. Install Codex hooks or add a rollout bridge before counting rollout edits as claim-before-edit eligible.',
+      readiness_scope: 'execution_safety',
+      priority: 10,
       command: 'colony install --ide codex  # then restart Codex',
       prompt: codexPrompt({
         goal: 'make Codex edits produce claim-before-edit telemetry before edit tools run',
@@ -1125,6 +1156,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
         : sessionBindingMissing
           ? 'PreToolUse is firing, but session binding is missing. Restart the editor so SessionStart binds the active session before relying on auto-claim.'
           : 'Call task_claim_file for touched files before Edit or Write tool use.',
+      readiness_scope: 'execution_safety',
+      priority: 10,
       tool_call:
         'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
       command: missingHook
@@ -1158,6 +1191,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: 'active plans > 0 for multi-agent work',
       action:
         'Publish a Queen/task plan for multi-agent work so task_ready_for_agent can return claimable subtasks.',
+      readiness_scope: 'queen_plan_readiness',
+      priority: 20,
       tool_call:
         'mcp__colony__queen_plan_goal({ session_id: "<session_id>", repo_root: "<repo_root>", goal_title: "<goal>", problem: "<problem>", acceptance_criteria: ["<done>"] })',
       prompt: codexPrompt({
@@ -1184,6 +1219,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: 'pending or promoted proposals > 0',
       action:
         'Use task_foraging_report before inventing work; propose future work with task_propose and reinforce rediscovered candidates with task_reinforce.',
+      readiness_scope: 'adoption_followup',
+      priority: 90,
       tool_call:
         'mcp__colony__task_foraging_report({ repo_root: "<repo_root>", branch: "<branch>" })',
       prompt: codexPrompt({
@@ -1205,6 +1242,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: '0',
       action:
         'Run colony coordination sweep/rescue, then release, hand off, or reclaim stale ownership.',
+      readiness_scope: 'signal_evaporation',
+      priority: 40,
       tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
       command: 'colony coordination sweep --json',
       prompt: codexPrompt({
@@ -1224,6 +1263,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       current: String(payload.queen_wave_health.stale_claims_blocking_downstream),
       target: '0',
       action: 'Run colony queen sweep/rescue so later waves can become claimable.',
+      readiness_scope: 'queen_plan_readiness',
+      priority: 25,
       tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
       command: 'colony queen sweep --json',
       prompt: codexPrompt({
@@ -1247,6 +1288,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       target: `${formatPercent(TARGET_COLONY_NOTE_SHARE)}+`,
       action:
         'Use task_note_working first for working state; use task_post when task_id is known; use OMX notepad only when Colony is unavailable.',
+      readiness_scope: 'working_state_migration',
+      priority: 50,
       tool_call:
         'mcp__colony__task_note_working({ session_id: "<session_id>", repo_root: "<repo_root>", branch: "<branch>", content: "branch=<branch>; task=<task>; blocker=<blocker>; next=<next>; evidence=<evidence>" })',
       prompt: codexPrompt({
@@ -1260,6 +1303,30 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   return hints;
+}
+
+function visibleActionHints(
+  payload: ColonyHealthPayload,
+  options: { verbose: boolean },
+): ActionHint[] {
+  const byPriority = (hints: ActionHint[]) =>
+    [...hints].sort((a, b) => a.priority - b.priority || a.metric.localeCompare(b.metric));
+
+  if (options.verbose) return byPriority(payload.action_hints);
+
+  const badReadinessScopes = new Set<ReadinessScope>(
+    Object.entries(payload.readiness_summary)
+      .filter(([, item]) => item.status === 'bad')
+      .map(([scope]) => scope as ReadinessScope),
+  );
+  const readinessBottlenecks = payload.action_hints.filter((hint) =>
+    badReadinessScopes.has(hint.readiness_scope),
+  );
+  if (readinessBottlenecks.length > 0) return byPriority(readinessBottlenecks);
+
+  return byPriority(
+    payload.action_hints.filter((hint) => hint.readiness_scope === 'adoption_followup'),
+  );
 }
 
 function adoptionThresholds(
