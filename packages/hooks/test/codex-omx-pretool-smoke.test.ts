@@ -1,9 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { MemoryStore, TaskThread } from '@colony/core';
-import type { ObservationRow } from '@colony/storage';
+import type { ClaimBeforeEditStats, ObservationRow } from '@colony/storage';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runOmxLifecycleEnvelope } from '../src/lifecycle-envelope.js';
 
@@ -11,6 +12,9 @@ const BASE_TS = Date.parse('2026-04-29T10:00:00.000Z');
 const BRANCH = 'agent/codex/pretool-smoke';
 const FILE_PATH = 'src/bridge-target.ts';
 const SESSION_ID = 'codex@fresh-pretool-smoke';
+const HEALTH_WINDOW_MS = 24 * 60 * 60 * 1000;
+const BRIDGE_FAILURE_HINT =
+  'Codex/OMX pre-tool smoke failed: check installer/bridge wiring for Codex PreToolUse -> OMX lifecycle -> Colony pre-tool-use hook.';
 
 let dir: string;
 let repoRoot: string;
@@ -44,6 +48,7 @@ describe('Codex/OMX pre_tool_use smoke', () => {
     const taskId = store.storage.findActiveTaskForSession(SESSION_ID);
     expect(taskId).toBeDefined();
     if (taskId === undefined) throw new Error('task was not bound');
+    expect(existsSync(join(repoRoot, '.git', 'config'))).toBe(true);
 
     vi.setSystemTime(BASE_TS + 30);
     const thread = TaskThread.open(store, {
@@ -112,10 +117,15 @@ describe('Codex/OMX pre_tool_use smoke', () => {
       tool: 'Edit',
       file_path: FILE_PATH,
     });
+    expect(manualClaim?.ts).toBeLessThan(editObservation?.ts ?? 0);
     expect(preToolSignal?.ts).toBeLessThanOrEqual(editObservation?.ts ?? 0);
 
     const shortWindowStats = store.storage.claimBeforeEditStats(BASE_TS + 50);
-    expect(shortWindowStats).toMatchObject({
+    assertBridgeCovered(shortWindowStats);
+
+    const healthWindowStats = store.storage.claimBeforeEditStats(Date.now() - HEALTH_WINDOW_MS);
+    assertBridgeCovered(healthWindowStats);
+    expect(healthWindowStats).toMatchObject({
       edit_tool_calls: 1,
       edits_with_file_path: 1,
       edits_claimed_before: 1,
@@ -124,8 +134,6 @@ describe('Codex/OMX pre_tool_use smoke', () => {
         pre_tool_use_missing: 0,
       },
     });
-    expect(shortWindowStats.edits_claimed_before).toBeGreaterThan(0);
-    expect(shortWindowStats.pre_tool_use_signals ?? 0).toBeGreaterThan(0);
   });
 });
 
@@ -168,9 +176,9 @@ function editEnvelope(
 
 function fakeGitRepo(name: string, branch: string): string {
   const repo = join(dir, name);
-  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(repo, { recursive: true });
+  execFileSync('git', ['init', '-b', branch, repo], { stdio: 'ignore' });
   mkdirSync(join(repo, 'src'), { recursive: true });
-  writeFileSync(join(repo, '.git', 'HEAD'), `ref: refs/heads/${branch}\n`, 'utf8');
   writeFileSync(join(repo, FILE_PATH), 'export const before = 1;\n', 'utf8');
   return repo;
 }
@@ -197,4 +205,19 @@ function firstSessionObservation(sessionId: string, kind: string): ObservationRo
 function parseMetadata(value: string | null | undefined): Record<string, unknown> | null {
   if (!value) return null;
   return JSON.parse(value) as Record<string, unknown>;
+}
+
+function assertBridgeCovered(stats: ClaimBeforeEditStats): void {
+  const missingPreTool = stats.claim_miss_reasons?.pre_tool_use_missing ?? 0;
+  const preToolSignals = stats.pre_tool_use_signals ?? 0;
+  if (missingPreTool > 0 || preToolSignals <= 0 || stats.edits_claimed_before <= 0) {
+    throw new Error(
+      `${BRIDGE_FAILURE_HINT} stats=${JSON.stringify({
+        pre_tool_use_missing: missingPreTool,
+        pre_tool_use_signals: preToolSignals,
+        edits_claimed_before: stats.edits_claimed_before,
+        edits_with_file_path: stats.edits_with_file_path,
+      })}`,
+    );
+  }
 }

@@ -170,7 +170,7 @@ Run this when `pre_tool_use_missing` rises or when validating a Codex/OMX hook i
 pnpm smoke:codex-omx-pretool
 ```
 
-The smoke uses an isolated temp repo and Colony store. It starts a fresh Codex/OMX lifecycle session, binds an active task, records a manual claim for a real file, emits `pre_tool_use`, mutates the file, emits `post_tool_use`, then asserts `pre_tool_use_signals > 0` and `edits_claimed_before > 0` inside a short stats window.
+The smoke uses an isolated temp git repo and Colony store. It starts a fresh Codex/OMX lifecycle session, binds an active task, records a manual claim for a real file path, emits `pre_tool_use`, mutates the file, emits `post_tool_use`, then asserts lifecycle order, claim-before-edit observation order, `pre_tool_use_signals > 0`, `edits_claimed_before > 0`, and no `pre_tool_use_missing` inside the same health window that `colony health` reads.
 
 ---
 
