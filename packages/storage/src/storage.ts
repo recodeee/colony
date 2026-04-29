@@ -240,6 +240,7 @@ export class Storage {
   private coordinationActivityStmt!: Database.Statement;
   private editsWithoutClaimsStmt!: Database.Statement;
   private sessionsEndedWithoutHandoffStmt!: Database.Statement;
+  private taskClaimColumns = new Set<string>();
 
   constructor(dbPath: string, opts: StorageOptions = {}) {
     if (!opts.readonly) mkdirSync(dirname(dbPath), { recursive: true });
@@ -252,6 +253,7 @@ export class Storage {
       this.applyColumnMigrations();
       this.db.exec(POST_MIGRATION_SQL);
     }
+    this.taskClaimColumns = this.tableColumns('task_claims');
     this.prepareTaskEmbeddingStatements(opts.readonly ?? false);
   }
 
@@ -316,14 +318,21 @@ export class Storage {
    */
   private applyColumnMigrations(): void {
     for (const { table, column, sql } of COLUMN_MIGRATIONS) {
-      const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-      if (cols.some((c) => c.name === column)) continue;
+      if (this.tableColumns(table).has(column)) continue;
       this.db.exec(sql);
     }
   }
 
+  private tableColumns(table: string): Set<string> {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return new Set(cols.map((col) => col.name));
+  }
+
   private prepareTaskEmbeddingStatements(readonly: boolean): void {
     const hasTaskEmbeddings = this.tableExists('task_embeddings');
+    const activeClaimPredicate = this.taskClaimColumns.has('state')
+      ? "AND tc.state = 'active'"
+      : '';
     this.getTaskEmbeddingStmt = hasTaskEmbeddings
       ? this.db.prepare(
           'SELECT task_id, model, dim, embedding, observation_count, computed_at FROM task_embeddings WHERE task_id = ?',
@@ -430,7 +439,7 @@ export class Storage {
 	              EXISTS (
 	                SELECT 1 FROM task_claims tc
 	                WHERE tc.session_id = l.session_id
-	                  AND tc.state = 'active'
+	                  ${activeClaimPredicate}
 	              ) AS had_active_claims,
               EXISTS (
                 SELECT 1 FROM observations h
@@ -1108,23 +1117,47 @@ export class Storage {
   getClaim(task_id: number, file_path: string): TaskClaimRow | undefined {
     const exact = this.db
       .prepare('SELECT * FROM task_claims WHERE task_id = ? AND file_path = ?')
-      .get(task_id, file_path) as TaskClaimRow | undefined;
-    if (exact) return exact;
+      .get(task_id, file_path) as Partial<TaskClaimRow> | undefined;
+    const normalizedExactRow = this.normalizeTaskClaimRow(exact);
+    if (normalizedExactRow) return normalizedExactRow;
     const normalized = this.normalizeTaskFilePath(task_id, file_path);
     if (normalized === null || normalized === file_path) return undefined;
     const normalizedExact = this.db
       .prepare('SELECT * FROM task_claims WHERE task_id = ? AND file_path = ?')
-      .get(task_id, normalized) as TaskClaimRow | undefined;
-    if (normalizedExact) return normalizedExact;
+      .get(task_id, normalized) as Partial<TaskClaimRow> | undefined;
+    const normalizedClaim = this.normalizeTaskClaimRow(normalizedExact);
+    if (normalizedClaim) return normalizedClaim;
     return this.listClaims(task_id).find(
       (claim) => this.normalizeTaskFilePath(task_id, claim.file_path) === normalized,
     );
   }
 
   listClaims(task_id: number): TaskClaimRow[] {
-    return this.db
+    const rows = this.db
       .prepare('SELECT * FROM task_claims WHERE task_id = ? ORDER BY claimed_at ASC')
-      .all(task_id) as TaskClaimRow[];
+      .all(task_id) as Partial<TaskClaimRow>[];
+    return rows.map((row) => this.normalizeTaskClaimRow(row)).filter(isTaskClaimRow);
+  }
+
+  private normalizeTaskClaimRow(row: Partial<TaskClaimRow> | undefined): TaskClaimRow | undefined {
+    if (!row) return undefined;
+    if (
+      typeof row.task_id !== 'number' ||
+      typeof row.file_path !== 'string' ||
+      typeof row.session_id !== 'string' ||
+      typeof row.claimed_at !== 'number'
+    ) {
+      return undefined;
+    }
+    return {
+      task_id: row.task_id,
+      file_path: row.file_path,
+      session_id: row.session_id,
+      claimed_at: row.claimed_at,
+      state: row.state === 'handoff_pending' ? 'handoff_pending' : 'active',
+      expires_at: row.expires_at ?? null,
+      handoff_observation_id: row.handoff_observation_id ?? null,
+    };
   }
 
   normalizeTaskFilePath(task_id: number, file_path: string, cwd?: string): string | null {
@@ -1155,13 +1188,15 @@ export class Storage {
    * describe work that's already finished, not live collisions.
    */
   recentClaims(task_id: number, since_ts: number, limit = 50): TaskClaimRow[] {
-    return this.db
+    const activeClaimPredicate = this.taskClaimColumns.has('state') ? "AND state = 'active'" : '';
+    const rows = this.db
       .prepare(
         `SELECT * FROM task_claims
-         WHERE task_id = ? AND claimed_at > ? AND state = 'active'
+         WHERE task_id = ? AND claimed_at > ? ${activeClaimPredicate}
          ORDER BY claimed_at DESC LIMIT ?`,
       )
-      .all(task_id, since_ts, limit) as TaskClaimRow[];
+      .all(task_id, since_ts, limit) as Partial<TaskClaimRow>[];
+    return rows.map((row) => this.normalizeTaskClaimRow(row)).filter(isTaskClaimRow);
   }
 
   setLaneState(p: {
@@ -1248,16 +1283,18 @@ export class Storage {
   }
 
   findClaimBySessionAndFile(session_id: string, file_path: string): TaskClaimRow | undefined {
-    return this.db
-      .prepare(
-        `SELECT *
-         FROM task_claims
-         WHERE session_id = ?
-           AND file_path = ?
-         ORDER BY claimed_at DESC
-         LIMIT 1`,
-      )
-      .get(session_id, file_path) as TaskClaimRow | undefined;
+    return this.normalizeTaskClaimRow(
+      this.db
+        .prepare(
+          `SELECT *
+           FROM task_claims
+           WHERE session_id = ?
+             AND file_path = ?
+           ORDER BY claimed_at DESC
+           LIMIT 1`,
+        )
+        .get(session_id, file_path) as Partial<TaskClaimRow> | undefined,
+    );
   }
 
   takeOverLaneClaim(p: {
@@ -1281,13 +1318,13 @@ export class Storage {
         started_at: now,
         metadata: null,
       });
-	      this.db
-	        .prepare(
-	          `INSERT OR REPLACE INTO task_claims(
-	            task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
-	          ) VALUES (?, ?, ?, ?, 'active', NULL, NULL)`,
-	        )
-	        .run(previous.task_id, previous.file_path, p.requester_session_id, now);
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO task_claims(
+            task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+          ) VALUES (?, ?, ?, ?, 'active', NULL, NULL)`,
+        )
+        .run(previous.task_id, previous.file_path, p.requester_session_id, now);
       const weakenedObservationId = this.insertObservation({
         session_id: previous.session_id,
         kind: 'claim-weakened',
@@ -2762,6 +2799,10 @@ function parseMetadata(raw: string): JsonRecord | null {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isTaskClaimRow(row: TaskClaimRow | undefined): row is TaskClaimRow {
+  return row !== undefined;
 }
 
 function extractHeatFilePaths(meta: JsonRecord): string[] {

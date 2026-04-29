@@ -1,15 +1,22 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ClaimMatchSources, ClaimMissReasons, NearestClaimExample } from '@colony/storage';
+import {
+  type ClaimMatchSources,
+  type ClaimMissReasons,
+  type NearestClaimExample,
+  Storage,
+} from '@colony/storage';
+import Database from 'better-sqlite3';
 import kleur from 'kleur';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildColonyHealthPayload,
   buildHealthFixPlan,
   formatColonyHealthOutput,
   formatHealthFixPlanOutput,
 } from '../src/commands/health.js';
+import { createProgram } from '../src/index.js';
 
 const NOW = 1_800_000_000_000;
 const SINCE = NOW - 24 * 3_600_000;
@@ -76,6 +83,33 @@ afterEach(() => {
 });
 
 describe('colony health payload', () => {
+  it('does not crash on an old database whose task_claims table has no state column', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-old-claims-'));
+    const originalColonyHome = process.env.COLONY_HOME;
+    let output = '';
+    try {
+      process.env.COLONY_HOME = dataDir;
+      seedOldClaimSchemaDatabase(path.join(dataDir, 'data.db'));
+      vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        output += String(chunk);
+        return true;
+      });
+
+      await createProgram().parseAsync(
+        ['node', 'test', 'health', '--json', '--repo-root', dataDir],
+        { from: 'node' },
+      );
+
+      const payload = JSON.parse(output) as { signal_health: { total_claims: number } };
+      expect(payload.signal_health.total_claims).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+      if (originalColonyHome === undefined) delete process.env.COLONY_HOME;
+      else process.env.COLONY_HOME = originalColonyHome;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports adoption ratios and renders a stable human-readable shape', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
@@ -1671,6 +1705,57 @@ function fakeStorage(args: {
       proposals.filter((proposal) => proposal.repo_root === repoRoot && proposal.branch === branch),
     listReinforcements: (proposalId: number) => reinforcements[proposalId] ?? [],
   } as never;
+}
+
+function seedOldClaimSchemaDatabase(dbPath: string): void {
+  const storage = new Storage(dbPath);
+  try {
+    storage.createSession({
+      id: 'old-owner',
+      ide: 'codex',
+      cwd: '/repo',
+      started_at: NOW - 60_000,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'old task',
+      repo_root: '/repo',
+      branch: 'main',
+      created_by: 'old-owner',
+    });
+    storage.claimFile({
+      task_id: task.id,
+      file_path: 'src/claimed.ts',
+      session_id: 'old-owner',
+    });
+  } finally {
+    storage.close();
+  }
+
+  rewriteTaskClaimsAsOldSchema(dbPath);
+}
+
+function rewriteTaskClaimsAsOldSchema(dbPath: string): void {
+  const db = new Database(dbPath);
+  try {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      ALTER TABLE task_claims RENAME TO task_claims_new;
+      CREATE TABLE task_claims (
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        file_path TEXT NOT NULL,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        claimed_at INTEGER NOT NULL,
+        PRIMARY KEY (task_id, file_path)
+      );
+      INSERT INTO task_claims(task_id, file_path, session_id, claimed_at)
+        SELECT task_id, file_path, session_id, claimed_at FROM task_claims_new;
+      DROP TABLE task_claims_new;
+      CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
+    `);
+  } finally {
+    db.close();
+  }
 }
 
 function healthyWindowCalls(): TestToolCall[] {
