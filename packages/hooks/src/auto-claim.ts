@@ -12,6 +12,11 @@ export interface ActiveTaskCandidate {
 }
 
 export type AutoClaimObservationKind = 'claim' | 'auto-claim';
+export type AutoClaimFailureCode =
+  | 'ACTIVE_TASK_NOT_FOUND'
+  | 'AMBIGUOUS_ACTIVE_TASK'
+  | 'SESSION_NOT_FOUND'
+  | 'COLONY_UNAVAILABLE';
 
 export interface AutoClaimFileForSessionInput {
   session_id: string;
@@ -45,7 +50,7 @@ export type AutoClaimFileForSessionResult =
     }
   | {
       ok: false;
-      code: 'ACTIVE_TASK_NOT_FOUND' | 'AMBIGUOUS_ACTIVE_TASK';
+      code: AutoClaimFailureCode;
       error: string;
       candidates: ActiveTaskCandidate[];
     };
@@ -93,81 +98,101 @@ export function autoClaimFileForSession(
     ? (storeOrInput as MemoryStore)
     : (storeOrInput as AutoClaimFileForSessionCall).store;
   const input = maybeInput ?? (storeOrInput as AutoClaimFileForSessionCall);
-  const candidates = activeTaskCandidatesForSession(store, input);
-  if (candidates.length !== 1) {
-    const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
-    return {
-      ok: false,
-      code,
-      error:
-        code === 'ACTIVE_TASK_NOT_FOUND'
-          ? 'no active Colony task matched session/repo/branch'
-          : 'multiple active Colony tasks matched session/repo/branch',
-      candidates,
-    };
-  }
-
-  const candidate = candidates[0];
-  if (!candidate) throw new Error('active task resolution lost its only candidate');
-
-  const existing = store.storage.getClaim(candidate.task_id, input.file_path);
-  if (existing?.session_id === input.session_id) {
-    return {
-      ok: true,
-      status: 'already_claimed',
-      task_id: candidate.task_id,
-      observation_id: null,
-      candidate,
-    };
-  }
-
-  const previousClaimSession = existing?.session_id;
-  const kind = input.observation_kind ?? 'claim';
-  const observationId = store.storage.transaction(() => {
-    if (previousClaimSession && input.record_conflict === true) {
-      store.addObservation({
-        session_id: input.session_id,
-        kind: 'claim-conflict',
-        content: `${input.session_id} edited ${input.file_path} while ${previousClaimSession} held the claim`,
-        task_id: candidate.task_id,
-        metadata: {
-          source: input.source ?? 'autoClaimFileForSession',
-          file_path: input.file_path,
-          ...(input.tool !== undefined ? { tool: input.tool } : {}),
-          other_session: previousClaimSession,
-        },
-      });
+  try {
+    if (!store.storage.getSession(input.session_id)) {
+      return {
+        ok: false,
+        code: 'SESSION_NOT_FOUND',
+        error: `Colony session ${input.session_id} was not found`,
+        candidates: [],
+      };
     }
 
-    store.storage.claimFile({
-      task_id: candidate.task_id,
-      file_path: input.file_path,
-      session_id: input.session_id,
-    });
-    return store.addObservation({
-      session_id: input.session_id,
-      kind,
-      content: claimContent(kind, input),
-      task_id: candidate.task_id,
-      metadata: {
-        kind,
-        source: input.source ?? 'autoClaimFileForSession',
-        file_path: input.file_path,
-        resolved_by: input.resolved_by ?? 'autoClaimFileForSession',
-        ...(input.auto_claimed_before_edit === true ? { auto_claimed_before_edit: true } : {}),
-        ...(input.tool !== undefined ? { tool: input.tool } : {}),
-      },
-    });
-  });
+    const candidates = activeTaskCandidatesForSession(store, input);
+    if (candidates.length !== 1) {
+      const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
+      return {
+        ok: false,
+        code,
+        error:
+          code === 'ACTIVE_TASK_NOT_FOUND'
+            ? 'no active Colony task matched session/repo/branch'
+            : 'multiple active Colony tasks matched session/repo/branch',
+        candidates,
+      };
+    }
 
-  return {
-    ok: true,
-    status: 'claimed',
-    task_id: candidate.task_id,
-    observation_id: observationId,
-    candidate,
-    ...(previousClaimSession !== undefined ? { previous_claim_session: previousClaimSession } : {}),
-  };
+    const candidate = candidates[0];
+    if (!candidate) throw new Error('active task resolution lost its only candidate');
+
+    const existing = store.storage.getClaim(candidate.task_id, input.file_path);
+    if (existing?.session_id === input.session_id) {
+      return {
+        ok: true,
+        status: 'already_claimed',
+        task_id: candidate.task_id,
+        observation_id: null,
+        candidate,
+      };
+    }
+
+    const previousClaimSession = existing?.session_id;
+    const kind = input.observation_kind ?? 'claim';
+    const observationId = store.storage.transaction(() => {
+      if (previousClaimSession && input.record_conflict === true) {
+        store.addObservation({
+          session_id: input.session_id,
+          kind: 'claim-conflict',
+          content: `${input.session_id} edited ${input.file_path} while ${previousClaimSession} held the claim`,
+          task_id: candidate.task_id,
+          metadata: {
+            source: input.source ?? 'autoClaimFileForSession',
+            file_path: input.file_path,
+            ...(input.tool !== undefined ? { tool: input.tool } : {}),
+            other_session: previousClaimSession,
+          },
+        });
+      }
+
+      store.storage.claimFile({
+        task_id: candidate.task_id,
+        file_path: input.file_path,
+        session_id: input.session_id,
+      });
+      return store.addObservation({
+        session_id: input.session_id,
+        kind,
+        content: claimContent(kind, input),
+        task_id: candidate.task_id,
+        metadata: {
+          kind,
+          source: input.source ?? 'autoClaimFileForSession',
+          file_path: input.file_path,
+          resolved_by: input.resolved_by ?? 'autoClaimFileForSession',
+          ...(input.auto_claimed_before_edit === true ? { auto_claimed_before_edit: true } : {}),
+          ...(input.tool !== undefined ? { tool: input.tool } : {}),
+        },
+      });
+    });
+
+    return {
+      ok: true,
+      status: 'claimed',
+      task_id: candidate.task_id,
+      observation_id: observationId,
+      candidate,
+      ...(previousClaimSession !== undefined
+        ? { previous_claim_session: previousClaimSession }
+        : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: 'COLONY_UNAVAILABLE',
+      error: err instanceof Error ? err.message : String(err),
+      candidates: [],
+    };
+  }
 }
 
 function isActiveStatus(status: string): boolean {

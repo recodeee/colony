@@ -6,7 +6,7 @@ import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { autoClaimFileBeforeEdit, autoClaimFileForSession } from '../src/auto-claim.js';
 import { autoClaimFromToolUse, extractTouchedFiles } from '../src/handlers/post-tool-use.js';
-import { claimBeforeEditFromToolUse } from '../src/handlers/pre-tool-use.js';
+import { claimBeforeEditFromToolUse, preToolUse } from '../src/handlers/pre-tool-use.js';
 import { buildConflictPreface } from '../src/handlers/user-prompt-submit.js';
 import { runHook } from '../src/runner.js';
 
@@ -138,6 +138,21 @@ describe('autoClaimFileForSession', () => {
     });
     expect(store.storage.findActiveTaskForSession('A')).toBeUndefined();
   });
+
+  it('returns SESSION_NOT_FOUND when the session row is missing', () => {
+    const result = autoClaimFileForSession(store, {
+      session_id: 'missing',
+      repo_root: '/repo',
+      branch: 'feat/missing',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SESSION_NOT_FOUND',
+      candidates: [],
+    });
+  });
 });
 
 describe('autoClaimFileBeforeEdit', () => {
@@ -206,6 +221,21 @@ describe('autoClaimFileBeforeEdit', () => {
       candidates: [],
     });
     expect(store.storage.findActiveTaskForSession('A')).toBeUndefined();
+  });
+
+  it('returns SESSION_NOT_FOUND when the session row is missing', () => {
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'missing',
+      repo_root: '/repo',
+      branch: 'feat/missing',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SESSION_NOT_FOUND',
+      candidates: [],
+    });
   });
 });
 
@@ -375,7 +405,20 @@ describe('claimBeforeEditFromToolUse', () => {
 
     expect(result.auto_claimed_before_edit).toEqual([]);
     expect(result.edits_missing_claim).toEqual(['src/x.ts']);
-    expect(result.warnings.join('\n')).toContain('ACTIVE_TASK_NOT_FOUND');
+    expect(result.warnings).toEqual([
+      {
+        code: 'ACTIVE_TASK_NOT_FOUND',
+        message:
+          'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+        next_tool: 'task_claim_file',
+        suggested_args: {
+          task_id: '<task_id>',
+          session_id: 'solo',
+          file_path: 'src/x.ts',
+          note: 'pre-edit claim',
+        },
+      },
+    ]);
     expect(store.storage.findActiveTaskForSession('solo')).toBeUndefined();
     const telemetry = store.timeline('solo').filter((row) => row.kind === 'claim-before-edit');
     expect(telemetry).toHaveLength(1);
@@ -405,10 +448,149 @@ describe('claimBeforeEditFromToolUse', () => {
 
     expect(result.auto_claimed_before_edit).toEqual([]);
     expect(result.edits_missing_claim).toEqual(['src/x.ts']);
-    expect(result.warnings.join('\n')).toContain('AMBIGUOUS_ACTIVE_TASK');
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({
+      code: 'AMBIGUOUS_ACTIVE_TASK',
+      message:
+        'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+      next_tool: 'task_claim_file',
+      suggested_args: {
+        task_id: '<candidate.task_id>',
+        session_id: 'A',
+        file_path: 'src/x.ts',
+        note: 'pre-edit claim',
+      },
+    });
+    expect(result.warnings[0]?.candidates).toHaveLength(2);
+    expect(result.warnings[0]?.candidates).toEqual(
+      expect.arrayContaining([
+        {
+          task_id: expect.any(Number),
+          repo_root: '/repo',
+          branch: 'feat/one',
+          status: 'open',
+          updated_at: expect.any(Number),
+        },
+        {
+          task_id: expect.any(Number),
+          repo_root: '/repo',
+          branch: 'feat/two',
+          status: 'open',
+          updated_at: expect.any(Number),
+        },
+      ]),
+    );
+    expect(result.warnings[0]?.candidates?.[0]).toEqual(
+      expect.objectContaining({
+        task_id: expect.any(Number),
+        repo_root: '/repo',
+        branch: expect.stringMatching(/^feat\/(one|two)$/),
+        status: 'open',
+        updated_at: expect.any(Number),
+      }),
+    );
     expect(
       store.storage.listTasks(10).flatMap((task) => store.storage.listClaims(task.id)),
     ).toEqual([]);
+  });
+
+  it('emits SESSION_NOT_FOUND when a pre-edit hook has no session row', () => {
+    const result = claimBeforeEditFromToolUse(store, {
+      session_id: 'missing',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/x.ts' },
+    });
+
+    expect(result.auto_claimed_before_edit).toEqual([]);
+    expect(result.edits_missing_claim).toEqual(['src/x.ts']);
+    expect(result.warnings).toEqual([
+      {
+        code: 'SESSION_NOT_FOUND',
+        message:
+          'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+        next_tool: 'task_claim_file',
+        suggested_args: {
+          task_id: '<task_id>',
+          session_id: 'missing',
+          file_path: 'src/x.ts',
+          note: 'pre-edit claim',
+        },
+      },
+    ]);
+  });
+
+  it('debounces repeated warning output for the same session, file, and code', () => {
+    store.startSession({ id: 'debounce-session', ide: 'codex', cwd: '/repo' });
+
+    const first = claimBeforeEditFromToolUse(store, {
+      session_id: 'debounce-session',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/x.ts' },
+    });
+    const second = claimBeforeEditFromToolUse(store, {
+      session_id: 'debounce-session',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/x.ts' },
+    });
+
+    expect(first.warnings).toHaveLength(1);
+    expect(second.edits_missing_claim).toEqual(['src/x.ts']);
+    expect(second.warnings).toEqual([]);
+    expect(
+      store.timeline('debounce-session').filter((row) => row.kind === 'claim-before-edit'),
+    ).toHaveLength(2);
+  });
+
+  it('formats pre-tool-use warnings as compact JSON lines', () => {
+    store.startSession({ id: 'json-session', ide: 'codex', cwd: '/repo' });
+
+    const context = preToolUse(store, {
+      session_id: 'json-session',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/x.ts' },
+    });
+
+    expect(JSON.parse(context)).toMatchObject({
+      code: 'ACTIVE_TASK_NOT_FOUND',
+      message:
+        'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+      next_tool: 'task_claim_file',
+      suggested_args: {
+        task_id: '<task_id>',
+        session_id: 'json-session',
+        file_path: 'src/x.ts',
+        note: 'pre-edit claim',
+      },
+    });
+  });
+
+  it('emits COLONY_UNAVAILABLE as an advisory warning when pre-tool-use storage fails', () => {
+    const brokenStore = {
+      storage: {
+        getSession() {
+          throw new Error('db unavailable');
+        },
+      },
+    } as unknown as MemoryStore;
+
+    const context = preToolUse(brokenStore, {
+      session_id: 'A',
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/x.ts' },
+    });
+
+    expect(JSON.parse(context)).toEqual({
+      code: 'COLONY_UNAVAILABLE',
+      message:
+        'Missing Colony claim before edit. Call task_claim_file for src/x.ts before editing.',
+      next_tool: 'task_claim_file',
+      suggested_args: {
+        task_id: '<task_id>',
+        session_id: 'A',
+        file_path: 'src/x.ts',
+        note: 'pre-edit claim',
+      },
+    });
   });
 });
 

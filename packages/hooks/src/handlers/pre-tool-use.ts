@@ -1,21 +1,65 @@
 import { type MemoryStore, detectRepoBranch } from '@colony/core';
-import { type AutoClaimFileForSessionResult, autoClaimFileBeforeEdit } from '../auto-claim.js';
+import {
+  type ActiveTaskCandidate,
+  type AutoClaimFailureCode,
+  type AutoClaimFileForSessionResult,
+  autoClaimFileBeforeEdit,
+} from '../auto-claim.js';
 import type { HookInput } from '../types.js';
 import { extractTouchedFiles } from './post-tool-use.js';
+
+const CLAIM_WARNING_DEBOUNCE_MS = 60_000;
+const claimWarningDebounceByStore = new WeakMap<MemoryStore, Map<string, number>>();
+
+export interface ClaimBeforeEditFallbackWarning {
+  code: AutoClaimFailureCode;
+  message: string;
+  next_tool: 'task_claim_file';
+  suggested_args: {
+    task_id: number | '<task_id>' | '<candidate.task_id>';
+    session_id: string;
+    file_path: string;
+    note: string;
+  };
+  candidates?: CompactCandidate[];
+}
 
 export interface ClaimBeforeEditResult {
   files: string[];
   edits_with_claim: string[];
   edits_missing_claim: string[];
   auto_claimed_before_edit: string[];
-  warnings: string[];
+  warnings: ClaimBeforeEditFallbackWarning[];
 }
 
 type PreToolUseInput = Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd'>;
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
+type CompactCandidate = Pick<
+  ActiveTaskCandidate,
+  'task_id' | 'repo_root' | 'branch' | 'status' | 'updated_at'
+>;
 
 export function preToolUse(store: MemoryStore, input: HookInput): string {
-  return claimBeforeEditWarning(claimBeforeEditFromToolUse(store, input));
+  try {
+    return claimBeforeEditWarning(claimBeforeEditFromToolUse(store, input));
+  } catch {
+    const toolName = input.tool_name ?? input.tool ?? '';
+    const files = extractTouchedFiles(toolName, input.tool_input);
+    return claimBeforeEditWarning({
+      files,
+      edits_with_claim: [],
+      edits_missing_claim: files,
+      auto_claimed_before_edit: [],
+      warnings: files.map((file_path) =>
+        claimWarning(input.session_id, file_path, {
+          ok: false,
+          code: 'COLONY_UNAVAILABLE',
+          error: 'Colony unavailable for auto-claim',
+          candidates: [],
+        }),
+      ),
+    });
+  }
 }
 
 export function claimBeforeEditFromToolUse(
@@ -69,6 +113,7 @@ export function claimBeforeEditFromToolUse(
     }
 
     result.edits_missing_claim.push(file_path);
+    const warningDebounced = claimWarningDebounced(store, input.session_id, file_path, claim.code);
     recordClaimBeforeEditFailure(store, input.session_id, {
       file_path,
       tool: toolName,
@@ -76,7 +121,7 @@ export function claimBeforeEditFromToolUse(
       error: claim.error,
       candidates: claim.candidates,
     });
-    result.warnings.push(claimWarning(toolName, file_path, claim));
+    if (!warningDebounced) result.warnings.push(claimWarning(input.session_id, file_path, claim));
   }
 
   return result;
@@ -89,10 +134,14 @@ function taskScopeForToolUse(
   repo_root?: string;
   branch?: string;
 } {
-  const session = store.storage.getSession(input.session_id);
-  const cwd = input.cwd ?? session?.cwd ?? undefined;
-  const detected = cwd ? detectRepoBranch(cwd) : null;
-  return detected ? { repo_root: detected.repo_root, branch: detected.branch } : {};
+  try {
+    const session = store.storage.getSession(input.session_id);
+    const cwd = input.cwd ?? session?.cwd ?? undefined;
+    const detected = cwd ? detectRepoBranch(cwd) : null;
+    return detected ? { repo_root: detected.repo_root, branch: detected.branch } : {};
+  } catch {
+    return {};
+  }
 }
 
 function recordClaimBeforeEditFailure(
@@ -101,43 +150,46 @@ function recordClaimBeforeEditFailure(
   metadata: {
     file_path: string;
     tool: string;
-    code: 'ACTIVE_TASK_NOT_FOUND' | 'AMBIGUOUS_ACTIVE_TASK';
+    code: AutoClaimFailureCode;
     error: string;
     candidates: AutoClaimFailure['candidates'];
   },
 ): void {
-  store.addObservation({
-    session_id,
-    kind: 'claim-before-edit',
-    content: `edits_missing_claim: ${metadata.file_path}`,
-    metadata: {
+  if (metadata.code === 'SESSION_NOT_FOUND' || metadata.code === 'COLONY_UNAVAILABLE') return;
+  try {
+    store.addObservation({
+      session_id,
       kind: 'claim-before-edit',
-      source: 'pre-tool-use',
-      outcome: 'edits_missing_claim',
-      file_path: metadata.file_path,
-      tool: metadata.tool,
-      code: metadata.code,
-      error: metadata.error,
-      candidates: compactCandidates(metadata.candidates),
-    },
-  });
+      content: `edits_missing_claim: ${metadata.file_path}`,
+      metadata: {
+        kind: 'claim-before-edit',
+        source: 'pre-tool-use',
+        outcome: 'edits_missing_claim',
+        file_path: metadata.file_path,
+        tool: metadata.tool,
+        code: metadata.code,
+        error: metadata.error,
+        candidates: compactCandidates(metadata.candidates),
+      },
+    });
+  } catch {
+    // Warning output is the fallback path when Colony cannot persist telemetry.
+  }
 }
 
 function compactCandidates(candidates: AutoClaimFailure['candidates']): Array<{
   task_id: number;
-  title: string;
   repo_root: string;
   branch: string;
   status: string;
-  agent: string;
+  updated_at: number;
 }> {
   return candidates.slice(0, 5).map((candidate) => ({
     task_id: candidate.task_id,
-    title: candidate.title,
     repo_root: candidate.repo_root,
     branch: candidate.branch,
     status: candidate.status,
-    agent: candidate.agent,
+    updated_at: candidate.updated_at,
   }));
 }
 
@@ -163,13 +215,54 @@ function recordClaimBeforeEdit(
 }
 
 function claimBeforeEditWarning(result: ClaimBeforeEditResult): string {
-  return result.warnings.join('\n');
+  return result.warnings.map((warning) => JSON.stringify(warning)).join('\n');
 }
 
-function claimWarning(toolName: string, filePath: string, claim: AutoClaimFailure): string {
-  return [
-    `${claim.code}: ${toolName || 'write tool'} target ${filePath}`,
-    claim.error,
-    `candidates=${JSON.stringify(compactCandidates(claim.candidates))}`,
-  ].join('\n');
+function claimWarning(
+  session_id: string,
+  file_path: string,
+  claim: AutoClaimFailure,
+): ClaimBeforeEditFallbackWarning {
+  const candidates = compactCandidates(claim.candidates);
+  return {
+    code: claim.code,
+    message: `Missing Colony claim before edit. Call task_claim_file for ${file_path} before editing.`,
+    next_tool: 'task_claim_file',
+    suggested_args: {
+      task_id: candidates.length > 0 ? '<candidate.task_id>' : '<task_id>',
+      session_id,
+      file_path,
+      note: 'pre-edit claim',
+    },
+    ...(candidates.length > 0 ? { candidates } : {}),
+  };
+}
+
+function claimWarningDebounced(
+  store: MemoryStore,
+  session_id: string,
+  file_path: string,
+  code: AutoClaimFailureCode,
+): boolean {
+  const now = Date.now();
+  const cutoff = now - CLAIM_WARNING_DEBOUNCE_MS;
+  const key = `${session_id}\0${file_path}\0${code}`;
+  const claimWarningDebounce = claimWarningDebounceByStore.get(store) ?? new Map<string, number>();
+  claimWarningDebounceByStore.set(store, claimWarningDebounce);
+  const lastEmittedAt = claimWarningDebounce.get(key);
+  claimWarningDebounce.set(key, now);
+  if (lastEmittedAt !== undefined && lastEmittedAt >= cutoff) return true;
+  try {
+    return store.timeline(session_id, undefined, 20).some((row) => {
+      if (row.kind !== 'claim-before-edit' || row.ts < cutoff) return false;
+      const metadata = row.metadata ?? {};
+      return (
+        metadata.outcome === 'edits_missing_claim' &&
+        metadata.file_path === file_path &&
+        metadata.code === code
+      );
+    });
+  } catch {
+    return false;
+  }
 }
