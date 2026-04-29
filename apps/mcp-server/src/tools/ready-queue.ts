@@ -2,8 +2,10 @@ import {
   type AgentProfile,
   type ClaimHolder,
   type MemoryStore,
+  type McpCapabilityMap,
   type SubtaskInfo,
   claimsForPaths,
+  discoverMcpCapabilities,
   listMessagesForAgent,
   listPlans,
   loadProfile,
@@ -70,6 +72,7 @@ export interface ReadySubtaskWithWarnings extends ReadySubtask {
 export interface ReadyForAgentResult {
   ready: ReadySubtaskWithWarnings[];
   total_available: number;
+  mcp_capability_map: McpCapabilityMap;
   next_action: string;
   next_tool?: 'task_plan_claim_subtask';
   plan_slug?: string;
@@ -209,7 +212,11 @@ export async function buildReadyForAgent(
   );
 
   return buildReadyResult(
-    { ready, total_available: available.length },
+    {
+      ready,
+      total_available: available.length,
+      mcp_capability_map: discoverMcpCapabilities(),
+    },
     claimable,
     args,
     plans.length > 0,
@@ -217,7 +224,7 @@ export async function buildReadyForAgent(
 }
 
 function buildReadyResult(
-  base: Pick<ReadyForAgentResult, 'ready' | 'total_available'>,
+  base: Pick<ReadyForAgentResult, 'ready' | 'total_available' | 'mcp_capability_map'>,
   claimable: RankedSubtask | null,
   args: { session_id: string; agent: string },
   hasPlans: boolean,

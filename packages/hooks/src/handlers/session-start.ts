@@ -1,4 +1,5 @@
 import {
+  quotaSafeOperatingContract,
   type AttentionBudgetOutput,
   type AttentionItem,
   type Embedder,
@@ -93,6 +94,7 @@ export async function sessionStart(
   kickForagingScan(store, input);
 
   const priorPreface = buildPriorPreface(store, input);
+  const quotaSafePreface = buildQuotaSafeOperatingPreface(input);
   const taskPreface = buildTaskPreface(store, input, { includeAttentionItems: false });
   const suggestionPreface = await buildSuggestionPreface(store, input, deps);
   const proposalPreface = buildProposalPreface(store, input);
@@ -102,6 +104,7 @@ export async function sessionStart(
 
   return [
     priorPreface,
+    quotaSafePreface,
     taskPreface,
     suggestionPreface,
     proposalPreface,
@@ -111,6 +114,12 @@ export async function sessionStart(
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+export function buildQuotaSafeOperatingPreface(input: Pick<HookInput, 'cwd'>): string {
+  if (!input.cwd) return '';
+  if (!detectRepoBranch(input.cwd)) return '';
+  return quotaSafeOperatingContract;
 }
 
 /**

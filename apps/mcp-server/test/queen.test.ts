@@ -20,6 +20,7 @@ interface QueenPlanPreview {
   problem: string;
   acceptance_criteria: string[];
   auto_archive: true;
+  mcp_capability_map: { summary: string[]; unknown_servers: string[] };
   subtasks: Array<{
     title: string;
     description: string;
@@ -32,6 +33,7 @@ interface QueenPlanPreview {
 interface QueenPublishResult {
   plan_slug: string;
   spec_task_id: number;
+  mcp_capability_map: { summary: string[]; unknown_servers: string[] };
   subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
   waves: Array<{ wave_index: number; name: string; subtask_indexes: number[] }>;
   claim_instructions: Array<{
@@ -168,6 +170,8 @@ describe('queen_plan_goal', () => {
       'Dry run previews without writes',
     ]);
     expect(result.auto_archive).toBe(true);
+    expect(result.mcp_capability_map.summary).toEqual(expect.any(Array));
+    expect(result.mcp_capability_map.unknown_servers).toEqual(expect.any(Array));
     expect(result.subtasks).toEqual([
       {
         title: 'Update shared infrastructure scope',
@@ -217,6 +221,7 @@ describe('queen_plan_goal', () => {
 
     expect(result.plan_slug).toBe('build-queen-mcp-surface');
     expect(result.spec_task_id).toEqual(expect.any(Number));
+    expect(result.mcp_capability_map.summary).toEqual(expect.any(Array));
     expect(result.subtasks).toHaveLength(2);
     expect(result.subtasks[0]?.branch).toBe('spec/build-queen-mcp-surface/sub-0');
     expect(result.waves.map((wave) => wave.subtask_indexes)).toEqual([[0], [1]]);

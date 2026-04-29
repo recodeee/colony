@@ -117,6 +117,17 @@ describe('colony health payload', () => {
         window_hours: 24,
         now: NOW,
         codex_sessions_root: NO_CODEX_ROOT,
+        mcp_capability_sources: [
+          {
+            id: 'fixture',
+            servers: {
+              colony: { command: 'node', args: ['colony', 'mcp'] },
+              omx: { command: 'omx', args: ['mcp'] },
+              github: { command: 'github-mcp-server' },
+              filesystem: { command: 'mcp-server-filesystem' },
+            },
+          },
+        ],
       },
     );
 
@@ -127,6 +138,12 @@ describe('colony health payload', () => {
       share_of_all_tool_calls: 13 / 17,
       share_of_mcp_tool_calls: 13 / 15,
     });
+    expect(payload.mcp_capability_map.summary).toEqual([
+      'colony: claims, plans',
+      'filesystem: repo-inspection',
+      'github: issues, PRs, repo',
+      'omx: runtime-state',
+    ]);
     expect(payload.conversions.hivemind_context_to_attention_inbox).toMatchObject({
       from_sessions: 2,
       converted_sessions: 1,
@@ -294,6 +311,9 @@ describe('colony health payload', () => {
     expect(text).toContain('working_state_migration');
     expect(text).toContain('signal_evaporation');
     expect(text).toContain('Colony MCP share');
+    expect(text).toContain('MCP capability map');
+    expect(text).toContain('colony: claims, plans');
+    expect(text).toContain('github: issues, PRs, repo');
     expect(text).toContain('hivemind_context -> attention_inbox: 1 / 2 (50%) sessions');
     expect(text).toContain('attention_inbox -> task_ready_for_agent: 1 / 1 (100%) sessions');
     expect(text).toContain('task_list vs task_ready_for_agent');

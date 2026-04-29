@@ -4,11 +4,14 @@ import { defaultSettings, loadSettings } from '@colony/config';
 import {
   type CoordinationSweepResult,
   type HivemindSession,
+  type McpCapabilityMap,
+  type McpConfigSource,
   ProposalSystem,
   type WorktreeContentionReport,
   buildCoordinationSweep,
   classifyClaimAge,
   currentSignalStrength,
+  discoverMcpCapabilities,
   isSignalExpired,
   isStrongClaimAge,
   readHivemind,
@@ -353,6 +356,7 @@ export interface ColonyHealthPayload {
   window_hours: number;
   readiness_summary: ReadinessSummaryPayload;
   colony_mcp_share: SharePayload;
+  mcp_capability_map: McpCapabilityMap;
   conversions: Record<ConversionName, ConversionPayload>;
   task_list_vs_task_ready_for_agent: TaskSelectionPayload;
   task_post_vs_task_message: TaskPostMessagePayload;
@@ -395,6 +399,7 @@ export function buildColonyHealthPayload(
     hivemind?: { sessions: HivemindSession[] };
     dirty_files_by_worktree?: Record<string, string[]>;
     worktree_contention?: WorktreeContentionReport;
+    mcp_capability_sources?: McpConfigSource[];
   },
 ): ColonyHealthPayload {
   const now = options.now ?? Date.now();
@@ -446,6 +451,12 @@ export function buildColonyHealthPayload(
         codex_rollouts: codexCalls.length,
       },
     },
+    mcp_capability_map: discoverMcpCapabilities({
+      now,
+      ...(options.mcp_capability_sources !== undefined
+        ? { sources: options.mcp_capability_sources }
+        : {}),
+    }),
     conversions: Object.fromEntries(conversionEntries) as Record<ConversionName, ConversionPayload>,
     task_list_vs_task_ready_for_agent: taskSelection,
     task_post_vs_task_message: {
@@ -536,6 +547,22 @@ export function formatColonyHealthOutput(
         `  sources:   colony obs ${payload.colony_mcp_share.source_breakdown.colony_observations}, codex rollouts ${payload.colony_mcp_share.source_breakdown.codex_rollouts}`,
       ),
     );
+  }
+
+  lines.push('', kleur.bold('MCP capability map'));
+  if (payload.mcp_capability_map.summary.length === 0) {
+    lines.push(kleur.dim('  none configured'));
+  } else {
+    for (const summary of payload.mcp_capability_map.summary.slice(0, HEALTH_TOOL_LIMIT)) {
+      lines.push(`  ${summary}`);
+    }
+    if (payload.mcp_capability_map.summary.length > HEALTH_TOOL_LIMIT) {
+      lines.push(
+        kleur.dim(
+          `  +${payload.mcp_capability_map.summary.length - HEALTH_TOOL_LIMIT} more configured MCP server(s)`,
+        ),
+      );
+    }
   }
 
   // When the window has tool calls but none look like MCP, the recording layer

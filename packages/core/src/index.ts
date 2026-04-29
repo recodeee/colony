@@ -41,6 +41,19 @@ export type { SearchResult, GetObservationsOptions, Observation, Session } from 
 export { createSessionId } from './ids.js';
 export { inferIdeFromSessionId } from './infer-ide.js';
 export {
+  MCP_CAPABILITY_CATEGORIES,
+  classifyMcpServer,
+  discoverMcpCapabilities,
+  formatMcpCapabilitySummary,
+  readConfiguredMcpSources,
+  type DiscoverMcpCapabilitiesOptions,
+  type McpCapabilityCategory,
+  type McpCapabilityMap,
+  type McpConfigSource,
+  type McpServerCapability,
+  type McpServerConfig,
+} from './mcp-capabilities.js';
+export {
   classifyClaimAge,
   isStrongClaimAge,
   type ClaimAgeClass,

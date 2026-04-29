@@ -15,3 +15,4 @@ export {
   settingsPath,
 } from './loader.js';
 export { settingsDocs, type SettingDoc } from './docs.js';
+export { quotaSafeOperatingContract } from './instructions.js';

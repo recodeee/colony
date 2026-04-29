@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { quotaSafeOperatingContract } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeCode } from '../src/claude-code.js';
 import { codex } from '../src/codex.js';
@@ -13,6 +14,24 @@ let home: string;
 let originalHome: string | undefined;
 let ctx: InstallContext;
 const WRITE_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit|Bash|apply_patch|ApplyPatch|Patch';
+const QUOTA_SAFE_CONTRACT_TERMS = [
+  'hivemind_context',
+  'attention_inbox',
+  'task_ready_for_agent',
+  'task_accept_handoff',
+  'task_plan_claim_subtask',
+  'task_claim_file',
+  'task_note_working',
+  'quota_exhausted',
+  'task_hand_off',
+  'task_relay',
+  'claimed files',
+  'dirty files',
+  'last verification',
+  'Colony',
+  'OMX',
+  'MCP servers',
+];
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'colony-ins-'));
@@ -61,6 +80,23 @@ describe('deepMerge', () => {
 });
 
 describe('claude-code installer', () => {
+  it('wires SessionStart to generated quota-safe instructions', async () => {
+    await claudeCode.install(ctx);
+    const settingsPath = join(home, '.claude', 'settings.json');
+    const parsed = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+      mcpServers: Record<string, { command: string; args?: string[] }>;
+    };
+
+    expect(parsed.hooks.SessionStart?.[0]?.hooks?.[0]?.command).toBe(
+      `${ctx.nodeBin} ${ctx.cliPath} hook run session-start --ide claude-code`,
+    );
+    expect(parsed.mcpServers.colony).toEqual({ command: ctx.nodeBin, args: [ctx.cliPath, 'mcp'] });
+    for (const term of QUOTA_SAFE_CONTRACT_TERMS) {
+      expect(quotaSafeOperatingContract).toContain(term);
+    }
+  });
+
   it('writes hooks + mcpServer for a fresh install and is idempotent', async () => {
     await claudeCode.install(ctx);
     const settingsPath = join(home, '.claude', 'settings.json');
@@ -220,6 +256,27 @@ describe('claude-code installer', () => {
 });
 
 describe('codex installer', () => {
+  it('wires SessionStart to generated quota-safe instructions', async () => {
+    await codex.install(ctx);
+    const configPath = join(home, '.codex', 'config.json');
+    const hooksPath = join(home, '.codex', 'hooks.json');
+    const hooks = JSON.parse(readFileSync(hooksPath, 'utf8')) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+    };
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      mcpServers: Record<string, { command: string; args?: string[] }>;
+    };
+
+    expect(hooks.hooks.SessionStart?.[0]?.matcher).toBe('startup|resume');
+    expect(hooks.hooks.SessionStart?.[0]?.hooks?.[0]?.command).toBe(
+      `${ctx.nodeBin} ${ctx.cliPath} hook run session-start --ide codex`,
+    );
+    expect(config.mcpServers.colony).toEqual({ command: ctx.nodeBin, args: [ctx.cliPath, 'mcp'] });
+    for (const term of QUOTA_SAFE_CONTRACT_TERMS) {
+      expect(quotaSafeOperatingContract).toContain(term);
+    }
+  });
+
   it('writes hooks + mcpServer for a fresh install and is idempotent', async () => {
     await codex.install(ctx);
     const configPath = join(home, '.codex', 'config.json');

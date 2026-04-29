@@ -1,3 +1,4 @@
+import { discoverMcpCapabilities, type McpCapabilityMap } from '@colony/core';
 import {
   type CapabilityHint,
   type Goal,
@@ -31,12 +32,14 @@ interface NormalizedQueenPlan {
   problem: string;
   acceptance_criteria: string[];
   auto_archive: boolean;
+  mcp_capability_map: McpCapabilityMap;
   subtasks: NormalizedSubtask[];
 }
 
 interface PublishedQueenPlan {
   plan_slug: string;
   spec_task_id: number;
+  mcp_capability_map: McpCapabilityMap;
   subtasks: Array<{ subtask_index: number; branch: string; task_id: number; title: string }>;
 }
 
@@ -173,6 +176,7 @@ function normalizePlan(plan: QueenPlan, args: QueenToolInput): NormalizedQueenPl
     problem: plan.problem,
     acceptance_criteria: plan.acceptance_criteria,
     auto_archive: true,
+    mcp_capability_map: discoverMcpCapabilities(),
     subtasks: normalizedSubtasks,
   };
 }
@@ -235,7 +239,10 @@ function publishPlan(args: {
     auto_archive: args.plan.auto_archive,
     plan: args.plan,
   });
-  return withPlanPublishGuidance(result, args.plan.subtasks);
+  return {
+    ...withPlanPublishGuidance(result, args.plan.subtasks),
+    mcp_capability_map: args.plan.mcp_capability_map,
+  };
 }
 
 function normalizeDependsOn(dependsOn: Array<number | string>, subtasks: QueenSubtask[]): number[] {
