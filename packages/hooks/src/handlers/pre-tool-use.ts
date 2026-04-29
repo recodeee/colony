@@ -322,7 +322,7 @@ function currentClaimConflict(
     if (!candidate) return null;
     const claim = store.storage.getClaim(candidate.task_id, file_path);
     if (!claim || claim.session_id === session_id) return null;
-    const classification = classifyClaimAge(claim.claimed_at, {
+    const classification = classifyClaimAge(claim, {
       claim_stale_minutes: store.settings.claimStaleMinutes,
     });
     const warning = `Colony ${classification.ownership_strength} claim on ${file_path} is held by ${claim.session_id}.`;
@@ -384,7 +384,7 @@ function protectedLiveClaimConflict(
           continue;
         }
 
-        const classification = classifyClaimAge(claim.claimed_at, {
+        const classification = classifyClaimAge(claim, {
           claim_stale_minutes: store.settings.claimStaleMinutes,
         });
         if (!isStrongClaimAge(classification)) continue;

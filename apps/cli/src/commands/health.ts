@@ -166,6 +166,8 @@ interface SignalHealthPayload {
   stale_claims: number;
   expired_claims: number;
   weak_claims: number;
+  quota_pending_claims: number;
+  expired_quota_pending_claims: number;
   stale_claim_minutes: number;
   expired_handoffs: number;
   expired_messages: number;
@@ -196,6 +198,7 @@ interface QueenWavePlanSummary {
   blocked_subtasks: number;
   stale_claims_blocking_downstream: number;
   downstream_blockers: QueenDownstreamBlockerReport[];
+  quota_handoffs_blocking_downstream: number;
 }
 
 interface QueenWaveHealthPayload {
@@ -205,6 +208,7 @@ interface QueenWaveHealthPayload {
   claimed_subtasks: number;
   blocked_subtasks: number;
   stale_claims_blocking_downstream: number;
+  quota_handoffs_blocking_downstream: number;
   plans: QueenWavePlanSummary[];
   downstream_blockers: QueenDownstreamBlockerReport[];
 }
@@ -620,6 +624,8 @@ export function formatColonyHealthOutput(
     `  active claims:    ${payload.signal_health.active_claims}`,
     `  stale claims:     ${payload.signal_health.stale_claims} (>${payload.signal_health.stale_claim_minutes}m)`,
     `  expired/weak:     ${payload.signal_health.expired_claims}`,
+    `  quota pending:    ${payload.signal_health.quota_pending_claims}`,
+    `  quota expired:    ${payload.signal_health.expired_quota_pending_claims}`,
     `  expired handoffs: ${payload.signal_health.expired_handoffs}`,
     `  expired messages: ${payload.signal_health.expired_messages}`,
     '',
@@ -645,6 +651,7 @@ export function formatColonyHealthOutput(
     `  claimed subtasks:                   ${payload.queen_wave_health.claimed_subtasks}`,
     `  blocked subtasks:                   ${payload.queen_wave_health.blocked_subtasks}`,
     `  stale claims blocking downstream:   ${payload.queen_wave_health.stale_claims_blocking_downstream}`,
+    `  quota handoffs blocking downstream: ${payload.queen_wave_health.quota_handoffs_blocking_downstream}`,
   );
 
   if (payload.queen_wave_health.plans.length === 0) {
@@ -652,7 +659,7 @@ export function formatColonyHealthOutput(
   } else {
     for (const plan of payload.queen_wave_health.plans.slice(0, HEALTH_TOOL_LIMIT)) {
       lines.push(
-        `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}`,
+        `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}, quota blockers ${plan.quota_handoffs_blocking_downstream}`,
       );
     }
   }
@@ -766,7 +773,10 @@ function readinessSummaryPayload(
 
   const signals = payload.signal_health;
   const signalStatus: ReadinessStatus =
-    signals.stale_claims === 0 && queen.stale_claims_blocking_downstream === 0
+    signals.stale_claims === 0 &&
+    signals.quota_pending_claims === 0 &&
+    queen.stale_claims_blocking_downstream === 0 &&
+    queen.quota_handoffs_blocking_downstream === 0
       ? signals.expired_handoffs === 0 && signals.expired_messages === 0
         ? 'good'
         : 'ok'
@@ -798,7 +808,7 @@ function readinessSummaryPayload(
     },
     signal_evaporation: {
       status: signalStatus,
-      evidence: `${signals.stale_claims} stale claim(s); ${queen.stale_claims_blocking_downstream} downstream blocker(s)`,
+      evidence: `${signals.stale_claims} stale claim(s); ${signals.quota_pending_claims} quota-pending claim(s); ${queen.stale_claims_blocking_downstream} stale downstream blocker(s); ${queen.quota_handoffs_blocking_downstream} quota downstream blocker(s)`,
     },
   };
 }
@@ -1308,15 +1318,23 @@ function signalHealthPayload(
 ): SignalHealthPayload {
   const claims = tasks.flatMap((task) => storage.listClaims(task.id));
   const classified = claims.map((claim) =>
-    classifyClaimAge(claim.claimed_at, {
+    classifyClaimAge(claim, {
       now: options.now,
       claim_stale_minutes: options.stale_claim_minutes,
     }),
   );
   const activeClaims = classified.filter(isStrongClaimAge).length;
-  const staleClaims = classified.filter((claim) => claim.age_class === 'stale').length;
-  const expiredClaims = classified.filter((claim) => claim.age_class === 'expired/weak').length;
+  const staleClaims = classified.filter(
+    (claim) => claim.state === 'active' && claim.age_class === 'stale',
+  ).length;
+  const expiredClaims = classified.filter(
+    (claim) => claim.state === 'active' && claim.age_class === 'expired/weak',
+  ).length;
   const weakClaims = classified.filter((claim) => claim.ownership_strength === 'weak').length;
+  const quotaPendingClaims = classified.filter((claim) => claim.state === 'handoff_pending').length;
+  const expiredQuotaPendingClaims = classified.filter(
+    (claim) => claim.state === 'handoff_pending' && claim.age_class === 'expired/weak',
+  ).length;
   let expiredHandoffs = 0;
   let expiredMessages = 0;
 
@@ -1338,6 +1356,8 @@ function signalHealthPayload(
     stale_claims: staleClaims,
     expired_claims: expiredClaims,
     weak_claims: weakClaims,
+    quota_pending_claims: quotaPendingClaims,
+    expired_quota_pending_claims: expiredQuotaPendingClaims,
     stale_claim_minutes: options.stale_claim_minutes,
     expired_handoffs: expiredHandoffs,
     expired_messages: expiredMessages,
@@ -1865,6 +1885,26 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
+  if (payload.signal_health.quota_pending_claims > 0) {
+    hints.push({
+      metric: 'quota-pending claims',
+      status: 'bad',
+      current: String(payload.signal_health.quota_pending_claims),
+      target: '0',
+      action: 'Accept the quota relay or let the short TTL expire before treating it as ordinary weak ownership.',
+      readiness_scope: 'signal_evaporation',
+      priority: 39,
+      tool_call: 'mcp__colony__attention_inbox({ agent: <agent>, session_id: <session_id>, repo_root: <repo_root> })',
+      command: 'colony inbox --json',
+      prompt: codexPrompt({
+        goal: 'resolve quota-pending ownership without deleting claim history',
+        current: `${payload.signal_health.quota_pending_claims} quota-pending claims`,
+        inspect: 'colony inbox --json, mcp__colony__attention_inbox, task_accept_relay',
+        acceptance: 'quota relay is accepted or expires into weak audit-only ownership',
+      }),
+    });
+  }
+
   if (payload.queen_wave_health.stale_claims_blocking_downstream > 0) {
     hints.push({
       metric: 'stale claims blocking downstream',
@@ -1882,6 +1922,26 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
         inspect:
           'colony queen sweep --json, mcp__colony__rescue_stranded_scan, packages/queen/src/sweep.ts',
         acceptance: 'stale blockers are rescued and later wave subtasks become claimable',
+      }),
+    });
+  }
+
+  if (payload.queen_wave_health.quota_handoffs_blocking_downstream > 0) {
+    hints.push({
+      metric: 'quota handoffs blocking downstream',
+      status: 'bad',
+      current: String(payload.queen_wave_health.quota_handoffs_blocking_downstream),
+      target: '0',
+      action: 'Accept or reroute quota relays before waiting on downstream waves.',
+      readiness_scope: 'queen_plan_readiness',
+      priority: 24,
+      tool_call: 'mcp__colony__attention_inbox({ agent: <agent>, session_id: <session_id>, repo_root: <repo_root> })',
+      command: 'colony inbox --json',
+      prompt: codexPrompt({
+        goal: 'unblock downstream Queen waves held by quota relays',
+        current: `${payload.queen_wave_health.quota_handoffs_blocking_downstream} quota blockers`,
+        inspect: 'colony inbox --json, task_accept_relay, task_decline_relay',
+        acceptance: 'quota relays are accepted, declined, or expired with audit trail intact',
       }),
     });
   }
@@ -2184,6 +2244,7 @@ interface PlanSubtaskHealth {
   claimed_by_session_id: string | null;
   claimed_by_agent: string | null;
   file_scope: string[];
+  quota_handoff_pending: boolean;
   wave_index: number;
   wave_name: string;
 }
@@ -2215,6 +2276,7 @@ function readPlanSubtasks(
       claimed_by_session_id: lifecycle.claimed_by_session_id,
       claimed_by_agent: lifecycle.claimed_by_agent,
       file_scope: readStringArray(initialMeta.file_scope),
+      quota_handoff_pending: lifecycle.quota_handoff_pending,
       wave_index: 0,
       wave_name: 'Wave 1',
     });
@@ -2226,7 +2288,15 @@ function readSubtaskLifecycle(
   rows: ObservationRow[],
   initialMeta: Record<string, unknown>,
   initialTs: number,
-): Pick<PlanSubtaskHealth, 'status' | 'claimed_at' | 'claimed_by_session_id' | 'claimed_by_agent'> {
+): Pick<
+  PlanSubtaskHealth,
+  'status' | 'claimed_at' | 'claimed_by_session_id' | 'claimed_by_agent' | 'quota_handoff_pending'
+> {
+  const quota_handoff_pending = rows.some((row) => {
+    if (row.kind !== 'relay') return false;
+    const meta = parseJsonObject(row.metadata);
+    return meta.reason === 'quota' && meta.status === 'pending';
+  });
   const claimRows = rows
     .filter((row) => row.kind === 'plan-subtask-claim')
     .map((row) => ({ row, metadata: parseJsonObject(row.metadata) }))
@@ -2247,6 +2317,7 @@ function readSubtaskLifecycle(
         status === 'claimed' && typeof resolved.metadata.agent === 'string'
           ? (resolved.metadata.agent as string)
           : null,
+      quota_handoff_pending,
     };
   }
   const initialStatus = initialMeta.status;
@@ -2267,6 +2338,7 @@ function readSubtaskLifecycle(
         initialStatus === 'claimed' && typeof initialMeta.agent === 'string'
           ? (initialMeta.agent as string)
           : null,
+      quota_handoff_pending,
     };
   }
   return {
@@ -2274,6 +2346,7 @@ function readSubtaskLifecycle(
     claimed_at: null,
     claimed_by_session_id: null,
     claimed_by_agent: null,
+    quota_handoff_pending,
   };
 }
 
@@ -2302,6 +2375,9 @@ function queenWaveHealthPayload(
         .length,
       stale_claims_blocking_downstream: downstreamBlockers.length,
       downstream_blockers: downstreamBlockers,
+      quota_handoffs_blocking_downstream: subtasks.filter(
+        (subtask) => subtask.quota_handoff_pending && blocksDownstream(subtask, subtasks),
+      ).length,
     });
   }
 
@@ -2329,6 +2405,10 @@ function queenWaveHealthPayload(
           a.plan_slug.localeCompare(b.plan_slug) ||
           a.subtask_index - b.subtask_index,
       ),
+    quota_handoffs_blocking_downstream: plans.reduce(
+      (sum, plan) => sum + plan.quota_handoffs_blocking_downstream,
+      0,
+    ),
     plans: plans.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug)),
   };
 }
@@ -2382,7 +2462,7 @@ function liveContentionPayload(
       const filePath = normalizeHealthFilePath(claim.file_path);
       if (!filePath) continue;
 
-      const age = classifyClaimAge(claim.claimed_at, {
+      const age = classifyClaimAge(claim, {
         now: options.now,
         claim_stale_minutes: options.stale_claim_minutes,
       });

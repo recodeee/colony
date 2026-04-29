@@ -496,7 +496,7 @@ function compactPreviousClaim(
   ownership_strength: string;
   overlap: 'same_session' | 'strong_active' | 'weak_stale';
 } {
-  const age = classifyClaimAge(claim.claimed_at, { claim_stale_minutes: claimStaleMinutes });
+  const age = classifyClaimAge(claim, { claim_stale_minutes: claimStaleMinutes });
   const sameSession = claim.session_id === currentSessionId;
   return {
     task_id: claim.task_id,

@@ -86,7 +86,7 @@ export function liveFileContentionsForSessionClaims(
   for (const task of tasks) {
     for (const claim of store.storage.listClaims(task.id)) {
       if (claim.session_id !== args.session_id) continue;
-      const age = classifyClaimAge(claim.claimed_at, {
+      const age = classifyClaimAge(claim, {
         now,
         claim_stale_minutes: args.claim_stale_minutes ?? store.settings.claimStaleMinutes,
       });
@@ -125,7 +125,7 @@ function warningForClaim(
   options: LiveFileContentionOptions,
 ): LiveFileContentionWarning | null {
   const now = options.now ?? Date.now();
-  const age = classifyClaimAge(claim.claimed_at, {
+  const age = classifyClaimAge(claim, {
     now,
     claim_stale_minutes: options.claim_stale_minutes ?? store.settings.claimStaleMinutes,
   });

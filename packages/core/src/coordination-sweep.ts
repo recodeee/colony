@@ -343,7 +343,7 @@ function collectClaimBuckets(
         now,
       );
       const ageMinutes = elapsedMinutes(now, claim.claimed_at);
-      const classification = classifyClaimAge(claim.claimed_at, {
+      const classification = classifyClaimAge(claim, {
         now,
         claim_stale_minutes: thresholds.stale_claim_minutes,
       });
@@ -798,7 +798,7 @@ function staleBlockerClaims(
       file_path: claim.file_path,
       session_id: claim.session_id,
       claimed_at: claim.claimed_at,
-      classification: classifyClaimAge(claim.claimed_at, {
+      classification: classifyClaimAge(claim, {
         now,
         claim_stale_minutes: thresholds.stale_claim_minutes,
       }),
@@ -818,6 +818,9 @@ function fallbackClaimRows(
     file_path,
     session_id: owner,
     claimed_at: claimedAt,
+    state: 'active',
+    expires_at: null,
+    handoff_observation_id: null,
   }));
 }
 

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { classifyClaimAge } from '../src/claim-age.js';
 import { MemoryStore } from '../src/memory-store.js';
 import { TASK_THREAD_ERROR_CODES, TaskThread, TaskThreadError } from '../src/task-thread.js';
 
@@ -554,7 +555,7 @@ describe('TaskThread', () => {
     }
   });
 
-  it('relay drops sender claims at emit and re-claims them on accept', () => {
+  it('relay weakens sender claims at emit and re-claims them on accept', () => {
     seed('claude', 'codex');
     const thread = TaskThread.open(store, {
       repo_root: '/r',
@@ -574,26 +575,47 @@ describe('TaskThread', () => {
       base_branch: 'main',
     });
 
-    // Sender's claims dropped at emit time so a third agent can't grab the
-    // file in the gap before the receiver accepts.
-    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')).toBeUndefined();
-    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')).toBeUndefined();
+    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')).toMatchObject({
+      session_id: 'claude',
+      state: 'handoff_pending',
+      handoff_observation_id: relayId,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')).toMatchObject({
+      session_id: 'claude',
+      state: 'handoff_pending',
+      handoff_observation_id: relayId,
+    });
 
     // Snapshot of metadata: inherit_claims captured both files at emit; the
     // receiver re-claims them through that recipe.
     const row = store.storage.getObservation(relayId);
     const meta = JSON.parse(row?.metadata ?? '{}') as {
       worktree_recipe: { inherit_claims: string[]; fetch_files_at: string | null };
+      expires_at: number;
     };
     expect(meta.worktree_recipe.inherit_claims.sort()).toEqual([
       'src/api/tasks.ts',
       'src/viewer.tsx',
     ]);
     expect(meta.worktree_recipe.fetch_files_at).toBeNull();
+    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')?.expires_at).toBe(
+      meta.expires_at,
+    );
+    expect(store.storage.taskObservationsByKind(thread.task_id, 'claim-weakened')).toHaveLength(2);
 
     thread.acceptRelay(relayId, 'codex');
-    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')?.session_id).toBe('codex');
-    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe('codex');
+    expect(store.storage.getClaim(thread.task_id, 'src/api/tasks.ts')).toMatchObject({
+      session_id: 'codex',
+      state: 'active',
+      expires_at: null,
+      handoff_observation_id: null,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')).toMatchObject({
+      session_id: 'codex',
+      state: 'active',
+      expires_at: null,
+      handoff_observation_id: null,
+    });
 
     // Second accept must fail — already accepted.
     try {
@@ -643,7 +665,11 @@ describe('TaskThread', () => {
     ]);
     expect(meta.worktree_recipe.inherit_claims).toEqual(['src/fresh.ts']);
 
-    expect(store.storage.getClaim(thread.task_id, 'src/fresh.ts')).toBeUndefined();
+    expect(store.storage.getClaim(thread.task_id, 'src/fresh.ts')).toMatchObject({
+      session_id: 'claude',
+      state: 'handoff_pending',
+      handoff_observation_id: relayId,
+    });
     expect(store.storage.getClaim(thread.task_id, 'src/stale.ts')?.session_id).toBe('claude');
     expect(store.storage.getClaim(thread.task_id, 'src/expired.ts')?.session_id).toBe('claude');
 
@@ -651,6 +677,46 @@ describe('TaskThread', () => {
     expect(store.storage.getClaim(thread.task_id, 'src/fresh.ts')?.session_id).toBe('codex');
     expect(store.storage.getClaim(thread.task_id, 'src/stale.ts')?.session_id).toBe('claude');
     expect(store.storage.getClaim(thread.task_id, 'src/expired.ts')?.session_id).toBe('claude');
+  });
+
+  it('relay TTL expiry downgrades quota-pending claims without deleting history', () => {
+    const t0 = Date.parse('2026-04-29T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'feat/relay-ttl',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    thread.claimFile({ session_id: 'claude', file_path: 'src/quota.ts' });
+
+    const relayId = thread.relay({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      reason: 'quota',
+      one_line: 'quota cut while editing quota file',
+      base_branch: 'main',
+      expires_in_ms: 5 * 60_000,
+    });
+
+    const pending = store.storage.getClaim(thread.task_id, 'src/quota.ts');
+    expect(pending).toMatchObject({
+      state: 'handoff_pending',
+      handoff_observation_id: relayId,
+    });
+    expect(classifyClaimAge(pending!, { now: t0 + 4 * 60_000 }).age_class).toBe('stale');
+    expect(classifyClaimAge(pending!, { now: t0 + 6 * 60_000 })).toMatchObject({
+      age_class: 'expired/weak',
+      ownership_strength: 'weak',
+      state: 'handoff_pending',
+    });
+
+    expect(store.storage.taskObservationsByKind(thread.task_id, 'claim')).toHaveLength(1);
+    expect(store.storage.taskObservationsByKind(thread.task_id, 'claim-weakened')).toHaveLength(1);
+    expect(store.storage.getClaim(thread.task_id, 'src/quota.ts')?.session_id).toBe('claude');
   });
 
   it('relay flags untracked files when fetch_files_at is omitted', () => {

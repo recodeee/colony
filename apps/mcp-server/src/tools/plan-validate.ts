@@ -132,7 +132,7 @@ function claimsForPaths(store: MemoryStore, repoRoot: string, paths: string[]): 
     if (task.repo_root !== repoRoot) continue;
     for (const claim of store.storage.listClaims(task.id)) {
       if (!wanted.has(claim.file_path)) continue;
-      const age = classifyClaimAge(claim.claimed_at, {
+      const age = classifyClaimAge(claim, {
         claim_stale_minutes: store.settings.claimStaleMinutes,
       });
       if (isStrongClaimAge(age)) rows.push({ ...claim, branch: task.branch });

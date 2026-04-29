@@ -81,6 +81,48 @@ describe('tasks', () => {
     expect(storage.getClaim(task.id, 'src/x.ts')).toBeUndefined();
   });
 
+  it('marks claims handoff_pending without deleting the row', () => {
+    seedSessions('owner', 'successor');
+    const task = storage.findOrCreateTask({
+      title: 'quota relay',
+      repo_root: '/r',
+      branch: 'b',
+      created_by: 'owner',
+    });
+    storage.claimFile({ task_id: task.id, file_path: 'src/x.ts', session_id: 'owner' });
+    const relayId = storage.insertObservation({
+      session_id: 'owner',
+      kind: 'relay',
+      content: 'quota relay',
+      task_id: task.id,
+    });
+    storage.markClaimHandoffPending({
+      task_id: task.id,
+      file_path: 'src/x.ts',
+      session_id: 'owner',
+      expires_at: 1234,
+      handoff_observation_id: relayId,
+    });
+
+    expect(storage.getClaim(task.id, 'src/x.ts')).toMatchObject({
+      session_id: 'owner',
+      state: 'handoff_pending',
+      expires_at: 1234,
+      handoff_observation_id: relayId,
+    });
+
+    storage.claimFile({ task_id: task.id, file_path: 'src/x.ts', session_id: 'successor' });
+    expect(storage.listClaims(task.id)).toEqual([
+      expect.objectContaining({
+        file_path: 'src/x.ts',
+        session_id: 'successor',
+        state: 'active',
+        expires_at: null,
+        handoff_observation_id: null,
+      }),
+    ]);
+  });
+
   it('observations carry task_id and surface via taskObservationsSince', () => {
     seedSessions('s-a', 's-b');
     const task = storage.findOrCreateTask({

@@ -46,6 +46,7 @@ function baseInbox(overrides: Partial<AttentionInbox> = {}): AttentionInbox {
     agent: 'codex',
     summary: {
       pending_handoff_count: 0,
+      expired_quota_handoff_count: 0,
       pending_wake_count: 0,
       unread_message_count: 0,
       paused_lane_count: 0,
@@ -61,6 +62,7 @@ function baseInbox(overrides: Partial<AttentionInbox> = {}): AttentionInbox {
       next_action: 'quiet',
     },
     pending_handoffs: [],
+    expired_quota_handoffs: [],
     pending_wakes: [],
     unread_messages: [],
     coalesced_messages: [],

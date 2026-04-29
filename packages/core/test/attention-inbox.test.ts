@@ -129,6 +129,77 @@ describe('buildAttentionInbox', () => {
     expect(inbox.summary.next_action).toMatch(/blocking task messages/i);
   });
 
+  it('prioritizes active quota handoffs and keeps expired quota handoffs separate', () => {
+    seed('codex-old', 'claude-new');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'agent/codex/quota',
+      session_id: 'codex-old',
+    });
+    thread.join('codex-old', 'codex');
+    thread.join('claude-new', 'claude');
+
+    const normalId = thread.handOff({
+      from_session_id: 'codex-old',
+      from_agent: 'codex',
+      to_agent: 'any',
+      summary: 'normal handoff',
+    });
+    const quotaId = thread.handOff({
+      from_session_id: 'codex-old',
+      from_agent: 'codex',
+      to_agent: 'any',
+      summary: 'quota handoff',
+      reason: 'quota_exhausted',
+      runtime_status: 'blocked_by_runtime_limit',
+      quota_context: {
+        agent: 'codex',
+        session_id: 'codex-old',
+        repo_root: '/r',
+        branch: 'agent/codex/quota',
+        worktree_path: '/r',
+        task_id: thread.task_id,
+        claimed_files: ['src/a.ts'],
+        dirty_files: ['src/a.ts'],
+        last_command: 'pnpm test',
+        last_tool: 'Bash',
+        last_verification: { command: 'pnpm test', result: 'failed: quota' },
+        suggested_next_step: 'resume quota lane',
+        handoff_ttl_ms: 120_000,
+      },
+    });
+    const expiredId = thread.handOff({
+      from_session_id: 'codex-old',
+      from_agent: 'codex',
+      to_agent: 'any',
+      summary: 'expired quota handoff',
+      reason: 'quota_exhausted',
+      runtime_status: 'blocked_by_runtime_limit',
+    });
+    const expired = store.storage.getObservation(expiredId);
+    const expiredMeta = JSON.parse(expired?.metadata ?? '{}') as { expires_at: number };
+    expiredMeta.expires_at = Date.now() - 1;
+    store.storage.updateObservationMetadata(expiredId, JSON.stringify(expiredMeta));
+
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'claude-new',
+      agent: 'claude',
+      task_ids: [thread.task_id],
+    });
+
+    expect(inbox.pending_handoffs.map((h) => h.id)).toEqual([quotaId, normalId]);
+    expect(inbox.pending_handoffs[0]).toMatchObject({
+      reason: 'quota_exhausted',
+      runtime_status: 'blocked_by_runtime_limit',
+      priority: 'high',
+      suggested_next_step: 'resume quota lane',
+    });
+    expect(inbox.expired_quota_handoffs.map((h) => h.id)).toEqual([expiredId]);
+    expect(inbox.summary.pending_handoff_count).toBe(2);
+    expect(inbox.summary.expired_quota_handoff_count).toBe(1);
+    expect(inbox.summary.next_action).toMatch(/quota_exhausted handoff/i);
+  });
+
   it('caps stalled lane rows while preserving the total count', () => {
     const repo = join(dir, 'repo-stalled-lanes');
     const sessionDir = join(repo, '.omx', 'state', 'active-sessions');

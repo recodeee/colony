@@ -427,10 +427,11 @@ export class Storage {
        )
        SELECT l.session_id,
               l.last_observation_ts,
-              EXISTS (
-                SELECT 1 FROM task_claims tc
-                WHERE tc.session_id = l.session_id
-              ) AS had_active_claims,
+	              EXISTS (
+	                SELECT 1 FROM task_claims tc
+	                WHERE tc.session_id = l.session_id
+	                  AND tc.state = 'active'
+	              ) AS had_active_claims,
               EXISTS (
                 SELECT 1 FROM observations h
                 WHERE h.session_id = l.session_id
@@ -1065,9 +1066,32 @@ export class Storage {
     // preserved by the transaction, not by the primary key alone.
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO task_claims(task_id, file_path, session_id, claimed_at) VALUES (?, ?, ?, ?)',
+        `INSERT OR REPLACE INTO task_claims(
+          task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+        ) VALUES (?, ?, ?, ?, 'active', NULL, NULL)`,
       )
       .run(c.task_id, filePath, c.session_id, Date.now());
+  }
+
+  markClaimHandoffPending(c: {
+    task_id: number;
+    file_path: string;
+    session_id: string;
+    expires_at: number;
+    handoff_observation_id: number;
+  }): void {
+    const filePaths = this.matchingClaimFilePaths(c.task_id, c.file_path);
+    if (filePaths.length === 0) return;
+    const stmt = this.db.prepare(
+      `UPDATE task_claims
+       SET state = 'handoff_pending',
+           expires_at = ?,
+           handoff_observation_id = ?
+       WHERE task_id = ? AND file_path = ? AND session_id = ? AND state = 'active'`,
+    );
+    for (const filePath of filePaths) {
+      stmt.run(c.expires_at, c.handoff_observation_id, c.task_id, filePath, c.session_id);
+    }
   }
 
   releaseClaim(c: { task_id: number; file_path: string; session_id: string }): void {
@@ -1133,7 +1157,9 @@ export class Storage {
   recentClaims(task_id: number, since_ts: number, limit = 50): TaskClaimRow[] {
     return this.db
       .prepare(
-        'SELECT * FROM task_claims WHERE task_id = ? AND claimed_at > ? ORDER BY claimed_at DESC LIMIT ?',
+        `SELECT * FROM task_claims
+         WHERE task_id = ? AND claimed_at > ? AND state = 'active'
+         ORDER BY claimed_at DESC LIMIT ?`,
       )
       .all(task_id, since_ts, limit) as TaskClaimRow[];
   }
@@ -1255,11 +1281,13 @@ export class Storage {
         started_at: now,
         metadata: null,
       });
-      this.db
-        .prepare(
-          'INSERT OR REPLACE INTO task_claims(task_id, file_path, session_id, claimed_at) VALUES (?, ?, ?, ?)',
-        )
-        .run(previous.task_id, previous.file_path, p.requester_session_id, now);
+	      this.db
+	        .prepare(
+	          `INSERT OR REPLACE INTO task_claims(
+	            task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+	          ) VALUES (?, ?, ?, ?, 'active', NULL, NULL)`,
+	        )
+	        .run(previous.task_id, previous.file_path, p.requester_session_id, now);
       const weakenedObservationId = this.insertObservation({
         session_id: previous.session_id,
         kind: 'claim-weakened',

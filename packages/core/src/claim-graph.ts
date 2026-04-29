@@ -107,7 +107,7 @@ export function pairwiseScopeOverlap(
 }
 
 function toClaimHolder(claim: TaskClaimRow, options: ClaimGraphOptions): ClaimHolder {
-  const classification = classifyClaimAge(claim.claimed_at, options);
+  const classification = classifyClaimAge(claim, options);
   return {
     session_id: claim.session_id,
     agent: inferIdeFromSessionId(claim.session_id) ?? null,

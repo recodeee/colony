@@ -425,7 +425,7 @@ function findFileScopedLocalTask(
       return files.some((file) => {
         const claim = store.storage.getClaim(candidate.id, file);
         if (!claim) return false;
-        const age = classifyClaimAge(claim.claimed_at, {
+        const age = classifyClaimAge(claim, {
           claim_stale_minutes: store.settings.claimStaleMinutes,
         });
         return isStrongClaimAge(age);
@@ -561,7 +561,7 @@ function localClaims(
         })
       : store.storage.listClaims(input.taskId);
   const classified = claims.map((claim) => {
-    const age = classifyClaimAge(claim.claimed_at, {
+    const age = classifyClaimAge(claim, {
       claim_stale_minutes: store.settings.claimStaleMinutes,
     });
     return { claim, age };

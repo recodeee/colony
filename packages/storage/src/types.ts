@@ -68,11 +68,16 @@ export interface TaskParticipantRow {
   left_at: number | null;
 }
 
+export type TaskClaimState = 'active' | 'handoff_pending';
+
 export interface TaskClaimRow {
   task_id: number;
   file_path: string;
   session_id: string;
   claimed_at: number;
+  state: TaskClaimState;
+  expires_at: number | null;
+  handoff_observation_id: number | null;
 }
 
 export type LaneRunState = 'active' | 'paused';

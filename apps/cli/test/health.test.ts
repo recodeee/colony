@@ -266,7 +266,9 @@ describe('colony health payload', () => {
       },
       signal_evaporation: {
         status: 'bad',
-        evidence: expect.stringContaining('1 stale claim(s); 0 downstream blocker(s)'),
+        evidence: expect.stringContaining(
+          '1 stale claim(s); 0 quota-pending claim(s); 0 stale downstream blocker(s); 0 quota downstream blocker(s)',
+        ),
       },
     });
     expect(payload.adoption_thresholds.good).toContainEqual(
@@ -531,6 +533,63 @@ describe('colony health payload', () => {
       expired_claims: 1,
       weak_claims: 2,
     });
+  });
+
+  it('reports quota-pending claims separately from ordinary stale claims', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+        tasks: [{ id: 1, repo_root: '/r', branch: 'b' }],
+        observationsByTask: { 1: [] },
+        claimsByTask: {
+          1: [
+            {
+              task_id: 1,
+              file_path: 'src/quota.ts',
+              session_id: 'quota',
+              claimed_at: NOW - 60_000,
+              state: 'handoff_pending',
+              expires_at: NOW + 5 * 60_000,
+              handoff_observation_id: 7,
+            },
+            {
+              task_id: 1,
+              file_path: 'src/quota-expired.ts',
+              session_id: 'quota-old',
+              claimed_at: NOW - 60_000,
+              state: 'handoff_pending',
+              expires_at: NOW - 60_000,
+              handoff_observation_id: 8,
+            },
+          ],
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.signal_health).toMatchObject({
+      total_claims: 2,
+      active_claims: 0,
+      stale_claims: 0,
+      expired_claims: 0,
+      weak_claims: 2,
+      quota_pending_claims: 2,
+      expired_quota_pending_claims: 1,
+    });
+
+    const text = formatColonyHealthOutput(payload);
+    expect(text).toContain('quota pending:    2');
+    expect(text).toContain('quota expired:    1');
   });
 
   it('emits parseable JSON with the same top-level sections', () => {
@@ -853,6 +912,12 @@ describe('colony health payload', () => {
               depends_on: [],
               file_scope: ['src/foundation.ts'],
             }),
+            observation(16, 'relay', NOW - 30_000, {
+              kind: 'relay',
+              reason: 'quota',
+              status: 'pending',
+              expires_at: NOW + 15 * 60_000,
+            }),
           ],
           11: [
             observation(12, 'plan-subtask', NOW - 3_000, {
@@ -898,6 +963,7 @@ describe('colony health payload', () => {
       claimed_subtasks: 1,
       blocked_subtasks: 2,
       stale_claims_blocking_downstream: 1,
+      quota_handoffs_blocking_downstream: 1,
       plans: [
         {
           plan_slug: 'waves',
@@ -906,6 +972,7 @@ describe('colony health payload', () => {
           claimed_subtasks: 1,
           blocked_subtasks: 2,
           stale_claims_blocking_downstream: 1,
+          quota_handoffs_blocking_downstream: 1,
           downstream_blockers: [
             expect.objectContaining({
               task_id: 10,
@@ -941,8 +1008,9 @@ describe('colony health payload', () => {
 
     const text = formatColonyHealthOutput(payload);
     expect(text).toContain('stale claims blocking downstream:   1');
+    expect(text).toContain('quota handoffs blocking downstream: 1');
     expect(text).toContain(
-      'waves: current Wave 1; ready 0, claimed 1, blocked 2, stale blockers 1',
+      'waves: current Wave 1; ready 0, claimed 1, blocked 2, stale blockers 1, quota blockers 1',
     );
     expect(text).toContain('stale downstream blockers:');
     expect(text).toContain(
@@ -1573,7 +1641,15 @@ function fakeStorage(args: {
   observationsByTask?: Record<number, TestObservation[]>;
   claimsByTask?: Record<
     number,
-    Array<{ task_id: number; file_path: string; session_id: string; claimed_at: number }>
+    Array<{
+      task_id: number;
+      file_path: string;
+      session_id: string;
+      claimed_at: number;
+      state?: 'active' | 'handoff_pending';
+      expires_at?: number | null;
+      handoff_observation_id?: number | null;
+    }>
   >;
   proposals?: TestProposal[];
   reinforcements?: Record<number, TestReinforcement[]>;

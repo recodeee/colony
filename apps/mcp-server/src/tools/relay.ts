@@ -16,7 +16,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
     'task_relay',
     [
       'Pass unfinished work to another agent when you are being cut off. Use for quota, rate-limit, or turn-cap exits when no thoughtful handoff is possible; the system auto-synthesizes edits, claims, decisions, and blockers.',
-      'Different from task_hand_off: relays assume the sender is gone, drop sender claims rather than transferring (the receiver re-claims via worktree_recipe.inherit_claims on accept), and bundle a worktree_recipe so a receiver in a different worktree knows how to set up their tree before editing.',
+      'Different from task_hand_off: relays assume the sender is gone, weaken sender claims to handoff_pending with a short TTL rather than leaving strong ownership forever (the receiver re-claims via worktree_recipe.inherit_claims on accept), and bundle a worktree_recipe so a receiver in a different worktree knows how to set up their tree before editing.',
       'Provide fetch_files_at when your work is committed and pushed — receivers can reproduce your tree from git. Omit it when your edits are uncommitted; the relay then flags the touched paths in untracked_files_warning so the receiver knows they may be inheriting dirty work and should coordinate via task_message before editing.',
     ].join(' '),
     {

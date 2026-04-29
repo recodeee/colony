@@ -41,6 +41,7 @@ export type {
   NewTask,
   TaskParticipantRow,
   TaskClaimRow,
+  TaskClaimState,
   TaskLinkRow,
   NewTaskLink,
   LinkedTask,

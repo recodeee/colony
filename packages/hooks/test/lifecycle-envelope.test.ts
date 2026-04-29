@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore } from '@colony/core';
+import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   OMX_LIFECYCLE_SCHEMA,
@@ -108,6 +108,80 @@ describe('OMX lifecycle envelope', () => {
     expect(store.storage.taskObservationsByKind(taskId, 'claim')).toHaveLength(1);
     expect(store.storage.taskObservationsByKind(taskId, 'claim-before-edit')).toHaveLength(1);
     expect(store.storage.taskObservationsByKind(taskId, 'omx-lifecycle')).toHaveLength(1);
+  });
+
+  it('records a first-class quota-exhausted handoff from stop_intent', async () => {
+    const repo = fakeGitRepo('repo-quota', 'agent/codex/quota-stop');
+    const bind = await runOmxLifecycleEnvelope(
+      envelope({
+        event_id: 'evt_quota_bind',
+        event_name: 'task_bind',
+        session_id: 'codex@quota',
+        cwd: repo,
+        repo_root: repo,
+        branch: 'agent/codex/quota-stop',
+      }),
+      { store },
+    );
+    expect(bind.ok).toBe(true);
+    const taskId = store.storage.findActiveTaskForSession('codex@quota');
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task not bound');
+    const thread = new TaskThread(store, taskId);
+    thread.claimFile({ session_id: 'codex@quota', file_path: 'src/runtime.ts' });
+
+    const result = await runOmxLifecycleEnvelope(
+      envelope({
+        event_id: 'evt_quota_stop',
+        event_name: 'stop_intent',
+        session_id: 'codex@quota',
+        cwd: repo,
+        repo_root: repo,
+        branch: 'agent/codex/quota-stop',
+        result: {
+          code: 'quota_exhausted',
+          message: 'Codex quota reached',
+          dirty_files: ['src/runtime.ts'],
+          last_command: 'pnpm test',
+          last_tool: 'Bash',
+          last_verification_command: 'pnpm test',
+          last_verification_result: 'blocked: quota_exhausted',
+        },
+      }),
+      { store },
+    );
+
+    expect(result).toMatchObject({ ok: true, event_id: 'evt_quota_stop', route: 'stop' });
+    const handoff = store.storage.taskObservationsByKind(taskId, 'handoff', 1)[0];
+    expect(handoff).toBeDefined();
+    const meta = JSON.parse(handoff?.metadata ?? '{}');
+    expect(meta).toMatchObject({
+      kind: 'handoff',
+      reason: 'quota_exhausted',
+      runtime_status: 'blocked_by_runtime_limit',
+      status: 'pending',
+      from_session_id: 'codex@quota',
+      from_agent: 'codex',
+      to_agent: 'any',
+      quota_context: {
+        agent: 'codex',
+        session_id: 'codex@quota',
+        repo_root: repo,
+        branch: 'agent/codex/quota-stop',
+        worktree_path: repo,
+        task_id: taskId,
+        claimed_files: ['src/runtime.ts'],
+        dirty_files: ['src/runtime.ts'],
+        last_command: 'pnpm test',
+        last_tool: 'Bash',
+        last_verification: {
+          command: 'pnpm test',
+          result: 'blocked: quota_exhausted',
+        },
+      },
+    });
+    expect(meta.handoff_ttl_ms).toBeGreaterThan(0);
+    expect(meta.quota_context.suggested_next_step).toContain('blocked_by_runtime_limit');
   });
 });
 

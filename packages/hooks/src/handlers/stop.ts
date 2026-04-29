@@ -1,4 +1,10 @@
-import { type HandoffMetadata, type MemoryStore, TaskThread } from '@colony/core';
+import {
+  type HandoffMetadata,
+  type MemoryStore,
+  type QuotaExhaustedHandoffContext,
+  TaskThread,
+  detectRepoBranch,
+} from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
 import type { HookInput } from '../types.js';
 
@@ -35,6 +41,7 @@ export async function stop(store: MemoryStore, input: HookInput): Promise<void> 
   const thread = new TaskThread(store, taskId);
   const agent = deriveAgent(input);
   const lastUpdate = compactOneLine(summary, 180);
+  const quotaContext = buildQuotaHandoffContext(store, input, thread, agent, usageReason);
 
   thread.post({
     session_id: input.session_id,
@@ -52,13 +59,56 @@ export async function stop(store: MemoryStore, input: HookInput): Promise<void> 
     to_agent: 'any',
     summary: AUTO_USAGE_HANDOFF_SUMMARY,
     next_steps: [
-      'Accept this handoff and continue from the latest task timeline/checkpoints.',
+      quotaContext.suggested_next_step,
       lastUpdate
         ? `Last assistant update: ${lastUpdate}`
         : 'Last assistant update unavailable; inspect recent observations for context.',
     ],
     blockers: [usageReason],
+    reason: 'quota_exhausted',
+    runtime_status: 'blocked_by_runtime_limit',
+    quota_context: quotaContext,
   });
+}
+
+function buildQuotaHandoffContext(
+  store: MemoryStore,
+  input: HookInput,
+  thread: TaskThread,
+  agent: string,
+  usageReason: string,
+): QuotaExhaustedHandoffContext {
+  const task = thread.task();
+  const detected = input.cwd ? detectRepoBranch(input.cwd) : null;
+  const metadata = input.metadata ?? {};
+  const result = isRecord(metadata.result) ? metadata.result : {};
+  const claimedFiles = thread
+    .claims()
+    .filter((claim) => claim.session_id === input.session_id)
+    .map((claim) => claim.file_path);
+  return {
+    agent,
+    session_id: input.session_id,
+    repo_root: readString(metadata.repo_root) ?? task?.repo_root ?? detected?.repo_root ?? null,
+    branch: readString(metadata.branch) ?? task?.branch ?? detected?.branch ?? null,
+    worktree_path:
+      readString(metadata.worktree_path) ?? readString(metadata.worktreePath) ?? input.cwd ?? null,
+    task_id: thread.task_id,
+    claimed_files: claimedFiles,
+    dirty_files: readStringList(
+      firstDefined(metadata.dirty_files, metadata.dirtyFiles, result.dirty_files, result.dirtyFiles),
+    ),
+    last_command:
+      readString(firstDefined(metadata.last_command, metadata.lastCommand, result.last_command)) ??
+      null,
+    last_tool:
+      readString(
+        firstDefined(metadata.last_tool, metadata.lastTool, metadata.tool_name, result.last_tool),
+      ) ?? null,
+    last_verification: readVerification(metadata, result),
+    suggested_next_step: `Accept this quota_exhausted handoff, inspect claimed/dirty files, then continue from the latest task timeline. Runtime status: blocked_by_runtime_limit. Cause: ${usageReason}`,
+    handoff_ttl_ms: 2 * 60 * 60 * 1000,
+  };
 }
 
 function detectUsageLimitReason(input: HookInput): string | null {
@@ -106,6 +156,50 @@ function extractStringValues(value: unknown, depth = 0): string[] {
     );
   }
   return [];
+}
+
+function readVerification(
+  metadata: Record<string, unknown>,
+  result: Record<string, unknown>,
+): QuotaExhaustedHandoffContext['last_verification'] {
+  const command = readString(
+    firstDefined(
+      metadata.last_verification_command,
+      metadata.lastVerificationCommand,
+      result.last_verification_command,
+      result.lastVerificationCommand,
+    ),
+  );
+  const verificationResult = readString(
+    firstDefined(
+      metadata.last_verification_result,
+      metadata.lastVerificationResult,
+      result.last_verification_result,
+      result.lastVerificationResult,
+    ),
+  );
+  if (!command && !verificationResult) return null;
+  return {
+    command: command ?? null,
+    result: verificationResult ?? null,
+  };
+}
+
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
+}
+
+function firstDefined(...values: unknown[]): unknown {
+  return values.find((value) => value !== undefined);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function hasPendingAutoUsageHandoff(

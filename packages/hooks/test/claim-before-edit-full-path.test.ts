@@ -296,11 +296,10 @@ function taskLifecycleEvents(taskId: number): Array<Record<string, unknown> & { 
       return metadata ? { ...metadata, id: row.id } : null;
     })
     .filter((metadata): metadata is Record<string, unknown> & { id: number } => metadata !== null)
-    .sort(
-      (a, b) =>
-        Date.parse(String(a.timestamp)) - Date.parse(String(b.timestamp)) ||
-        Number(a.id) - Number(b.id),
-    );
+    .sort((a, b) => {
+      const timestampDelta = Date.parse(String(a.timestamp)) - Date.parse(String(b.timestamp));
+      return timestampDelta || a.id - b.id;
+    });
 }
 
 function firstTaskObservation(taskId: number, kind: string): ObservationRow | undefined {

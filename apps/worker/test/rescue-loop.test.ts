@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe('rescue loop', () => {
-  it('runs, emits a rescue relay, and drops stranded claims', async () => {
+  it('runs, emits a rescue relay, and weakens stranded claims', async () => {
     const task = seedClaimedTask();
     const logs: string[] = [];
     const handle = startRescueLoop({
@@ -44,11 +44,20 @@ describe('rescue loop', () => {
       log: (line) => logs.push(line),
     });
 
-    await waitFor(() => store.storage.listClaims(task.task_id).length === 0);
+    await waitFor(() =>
+      store.storage.listClaims(task.task_id).every((claim) => claim.state === 'handoff_pending'),
+    );
     await handle.stop();
 
     const relays = store.storage.taskObservationsByKind(task.task_id, 'relay', 10);
     expect(relays).toHaveLength(1);
+    expect(store.storage.listClaims(task.task_id)).toEqual([
+      expect.objectContaining({
+        file_path: 'apps/api/stale.ts',
+        state: 'handoff_pending',
+        handoff_observation_id: relays[0]?.id,
+      }),
+    ]);
     expect(handle.lastScan()?.rescued).toHaveLength(1);
     expect(logs.some((line) => /rescue scan stranded=1 rescued=1/.test(line))).toBe(true);
   });
