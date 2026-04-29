@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.colony.local/colony-omx-lifecycle-v1.schema.json",
+  "title": "colony-omx-lifecycle-v1",
+  "description": "Transport-neutral lifecycle event envelope shared by OMX runtime emitters and Colony coordination consumers. Tool inputs are summarized and must not include secrets or full file contents.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_name",
+    "session_id",
+    "agent",
+    "cwd",
+    "repo_root",
+    "branch",
+    "timestamp",
+    "source"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable idempotency key for this logical event envelope. Retries must reuse the same event_id, and Colony should dedupe repeated event_id deliveries."
+    },
+    "parent_event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional predecessor event id. post_tool_use should set this to the matching pre_tool_use event_id when the post event uses its own event_id."
+    },
+    "event_name": {
+      "enum": [
+        "session_start",
+        "task_bind",
+        "pre_tool_use",
+        "post_tool_use",
+        "claim_result",
+        "stop_intent",
+        "finish_result"
+      ]
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Agent family or actor name, for example codex, claude, or worker id."
+    },
+    "cwd": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_root": {
+      "type": "string",
+      "minLength": 1
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Transport-neutral producer id, for example omx, codex-hook, or colony."
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool_input": {
+      "$ref": "#/$defs/tool_input"
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_name": {
+            "enum": ["pre_tool_use", "post_tool_use"]
+          }
+        },
+        "required": ["event_name"]
+      },
+      "then": {
+        "required": ["tool_name", "tool_input"]
+      }
+    }
+  ],
+  "$defs": {
+    "tool_input": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Sanitized tool input summary. Raw content fields such as old_string, new_string, content, patch, or file contents are intentionally not accepted.",
+      "properties": {
+        "operation": {
+          "enum": ["replace", "multi_replace", "write", "patch", "command", "unknown"]
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/path_ref"
+          }
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Redacted or low-risk command text. Secrets and large inline payloads must be removed before emission."
+        },
+        "command_redacted": {
+          "type": "boolean"
+        },
+        "input_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "edit_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "file_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "added_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "removed_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redacted": {
+          "type": "boolean",
+          "description": "True when raw tool input was summarized or content was omitted."
+        }
+      }
+    },
+    "path_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "role", "kind"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": ["target", "source", "destination", "input", "output", "unknown"]
+        },
+        "kind": {
+          "enum": ["file", "directory", "pseudo"]
+        },
+        "pseudo": {
+          "enum": ["dev_null"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "pseudo"
+              }
+            },
+            "required": ["kind"]
+          },
+          "then": {
+            "required": ["pseudo"],
+            "properties": {
+              "path": {
+                "const": "/dev/null"
+              },
+              "pseudo": {
+                "const": "dev_null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "path": {
+                "const": "/dev/null"
+              }
+            },
+            "required": ["path"]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "pseudo"
+              },
+              "pseudo": {
+                "const": "dev_null"
+              }
+            },
+            "required": ["pseudo"]
+          }
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "code", "message", "next_action", "candidates"],
+      "properties": {
+        "status": {
+          "enum": ["ok", "warning", "error"]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "next_action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/result_candidate"
+          }
+        }
+      }
+    },
+    "result_candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "file_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repo_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "minProperties": 1
+    }
+  }
+}

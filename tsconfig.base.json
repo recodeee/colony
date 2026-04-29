@@ -23,6 +23,7 @@
     "paths": {
       "@colony/compress": ["./packages/compress/src/index.ts"],
       "@colony/config": ["./packages/config/src/index.ts"],
+      "@colony/contracts": ["./packages/contracts/src/index.ts"],
       "@colony/core": ["./packages/core/src/index.ts"],
       "@colony/embedding": ["./packages/embedding/src/index.ts"],
       "@colony/foraging": ["./packages/foraging/src/index.ts"],

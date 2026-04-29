@@ -1,0 +1,28 @@
+{
+  "name": "@colony/contracts",
+  "version": "0.6.0",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schemas/colony-omx-lifecycle-v1.schema.json": "./schemas/colony-omx-lifecycle-v1.schema.json",
+    "./fixtures/colony-omx-lifecycle-v1/*": "./fixtures/colony-omx-lifecycle-v1/*"
+  },
+  "files": ["dist", "schemas", "fixtures"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

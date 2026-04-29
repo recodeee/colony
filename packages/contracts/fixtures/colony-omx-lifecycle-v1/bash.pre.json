@@ -1,0 +1,33 @@
+{
+  "event_id": "evt_bash_pre_001",
+  "event_name": "pre_tool_use",
+  "session_id": "sess_colony_omx_lifecycle_v1",
+  "agent": "codex",
+  "cwd": "/workspace/colony",
+  "repo_root": "/workspace/colony",
+  "branch": "agent/codex/lifecycle-contract",
+  "timestamp": "2026-04-29T10:03:00.000Z",
+  "source": "omx",
+  "tool_name": "Bash",
+  "tool_input": {
+    "operation": "command",
+    "command": "pnpm --filter @colony/contracts test",
+    "command_redacted": false,
+    "input_summary": "Run the focused contract validation test suite.",
+    "paths": [
+      {
+        "path": "packages/contracts/test/lifecycle-schema.test.ts",
+        "role": "input",
+        "kind": "file"
+      }
+    ],
+    "redacted": false
+  },
+  "result": {
+    "status": "ok",
+    "code": "READ_ONLY_COMMAND",
+    "message": "Bash command does not mutate repo files.",
+    "next_action": "Run command and record post_tool_use result.",
+    "candidates": []
+  }
+}

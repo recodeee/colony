@@ -1,0 +1,33 @@
+{
+  "event_id": "evt_codex_multiedit_pre_001",
+  "event_name": "pre_tool_use",
+  "session_id": "sess_colony_omx_lifecycle_v1",
+  "agent": "codex",
+  "cwd": "/workspace/colony",
+  "repo_root": "/workspace/colony",
+  "branch": "agent/codex/lifecycle-contract",
+  "timestamp": "2026-04-29T10:02:00.000Z",
+  "source": "omx",
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "operation": "multi_replace",
+    "paths": [
+      {
+        "path": "packages/hooks/src/handlers/post-tool-use.ts",
+        "role": "target",
+        "kind": "file"
+      }
+    ],
+    "input_summary": "Apply two replacements in one file; raw edit strings omitted.",
+    "edit_count": 2,
+    "file_count": 1,
+    "redacted": true
+  },
+  "result": {
+    "status": "ok",
+    "code": "CLAIM_PRESENT",
+    "message": "All MultiEdit target paths were claimed before edit.",
+    "next_action": "Allow MultiEdit and keep the event id stable for retries.",
+    "candidates": []
+  }
+}

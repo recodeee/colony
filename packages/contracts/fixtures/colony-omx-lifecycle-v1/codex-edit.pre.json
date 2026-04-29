@@ -1,0 +1,41 @@
+{
+  "event_id": "evt_codex_edit_pre_001",
+  "event_name": "pre_tool_use",
+  "session_id": "sess_colony_omx_lifecycle_v1",
+  "agent": "codex",
+  "cwd": "/workspace/colony",
+  "repo_root": "/workspace/colony",
+  "branch": "agent/codex/lifecycle-contract",
+  "timestamp": "2026-04-29T10:00:00.000Z",
+  "source": "omx",
+  "tool_name": "Edit",
+  "tool_input": {
+    "operation": "replace",
+    "paths": [
+      {
+        "path": "packages/hooks/src/handlers/pre-tool-use.ts",
+        "role": "target",
+        "kind": "file"
+      }
+    ],
+    "input_summary": "Replace one code region; raw old_string and new_string omitted.",
+    "edit_count": 1,
+    "file_count": 1,
+    "redacted": true
+  },
+  "result": {
+    "status": "warning",
+    "code": "CLAIM_BEFORE_EDIT_REQUIRED",
+    "message": "File claim must exist before Edit executes.",
+    "next_action": "Call Colony task_claim_file for each target path before running Edit.",
+    "candidates": [
+      {
+        "task_id": 6,
+        "file_path": "packages/hooks/src/handlers/pre-tool-use.ts",
+        "repo_root": "/workspace/colony",
+        "branch": "agent/codex/lifecycle-contract",
+        "reason": "Target path belongs to the active Colony task."
+      }
+    ]
+  }
+}

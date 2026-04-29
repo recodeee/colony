@@ -1,0 +1,40 @@
+{
+  "event_id": "evt_apply_patch_dev_null_pre_001",
+  "event_name": "pre_tool_use",
+  "session_id": "sess_colony_omx_lifecycle_v1",
+  "agent": "codex",
+  "cwd": "/workspace/colony",
+  "repo_root": "/workspace/colony",
+  "branch": "agent/codex/lifecycle-contract",
+  "timestamp": "2026-04-29T10:05:00.000Z",
+  "source": "omx",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "operation": "patch",
+    "paths": [
+      {
+        "path": "/dev/null",
+        "role": "source",
+        "kind": "pseudo",
+        "pseudo": "dev_null"
+      },
+      {
+        "path": "packages/contracts/fixtures/colony-omx-lifecycle-v1/new-file.json",
+        "role": "destination",
+        "kind": "file"
+      }
+    ],
+    "input_summary": "Create a new file; /dev/null is represented as a pseudo-path source.",
+    "file_count": 1,
+    "added_lines": 24,
+    "removed_lines": 0,
+    "redacted": true
+  },
+  "result": {
+    "status": "ok",
+    "code": "PSEUDO_PATH_REPRESENTED",
+    "message": "/dev/null is explicit pseudo-path metadata, not a real filesystem target.",
+    "next_action": "Consumers should not attempt to claim or stat /dev/null as a repo file.",
+    "candidates": []
+  }
+}
