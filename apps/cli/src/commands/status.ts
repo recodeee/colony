@@ -1,8 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { loadSettings, resolveDataDir, settingsPath } from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
+import {
+  collectGitGuardexColonyClaims,
+  formatGitGuardexLanesOutput,
+  type GitGuardexColonyClaim,
+  type GitGuardexLanesPayload,
+  readGitGuardexLanes,
+} from '../lib/gitguardex.js';
 import { dataDbPath, withStorage } from '../util/store.js';
 
 interface WorkerState {
@@ -15,6 +22,33 @@ interface WorkerState {
   lastBatchMs?: number | null;
   lastError?: string | null;
   startedAt?: number;
+}
+
+interface StatusPayload {
+  settings: {
+    path: string;
+    exists: boolean;
+  };
+  data_dir: string;
+  db: {
+    path: string;
+    status: 'ok' | 'fail';
+    observations: number;
+    sessions: number;
+    error: string | null;
+  };
+  ides: string[];
+  embedding: {
+    provider: string;
+    model: string;
+    worker_state: WorkerState | null;
+  };
+  worker: {
+    status: 'running' | 'stale_pidfile' | 'not_running';
+    pid: number | null;
+    port: number;
+  };
+  gitguardex_lanes: GitGuardexLanesPayload;
 }
 
 function readWorkerState(dir: string): WorkerState | null {
@@ -56,46 +90,90 @@ export function registerStatusCommand(program: Command): void {
   program
     .command('status')
     .description('Show colony wiring, data, and worker state')
-    .action(async () => {
+    .option('--json', 'emit structured JSON')
+    .option('--repo-root <path>', 'repo root for GitGuardex lane status (defaults to cwd)')
+    .action(async (opts: { json?: boolean; repoRoot?: string }) => {
       const sp = settingsPath();
       const settings = loadSettings();
       const dir = resolveDataDir(settings.dataDir);
       const dbPath = dataDbPath(settings);
+      const repoRoot = resolve(opts.repoRoot ?? process.cwd());
 
-      process.stdout.write(`${kleur.bold('colony status')}\n\n`);
-      process.stdout.write(
-        `settings:   ${sp} ${existsSync(sp) ? kleur.green('✓') : kleur.yellow('default')}\n`,
-      );
-      process.stdout.write(`data dir:   ${dir}\n`);
-
-      // DB
       let obsCount = 0;
       let sessCount = 0;
+      let dbError: string | null = null;
+      let colonyClaims: GitGuardexColonyClaim[] = [];
       try {
         await withStorage(settings, (s) => {
           obsCount = s.countObservations();
           sessCount = s.listSessions(10_000).length;
+          const tasks = s.listTasks(2000);
+          colonyClaims = collectGitGuardexColonyClaims(tasks, (taskId) => s.listClaims(taskId));
         });
-        process.stdout.write(
-          `db:         ${dbPath} ${kleur.green('✓')} (${obsCount} observations, ${sessCount} sessions)\n`,
-        );
       } catch (err) {
-        process.stdout.write(`db:         ${dbPath} ${kleur.red('fail')} ${String(err)}\n`);
+        dbError = String(err);
         process.exitCode = 1;
       }
 
-      // IDEs
       const enabled = Object.entries(settings.ides)
         .filter(([, v]) => v)
         .map(([k]) => k);
-      process.stdout.write(
-        `ides:       ${enabled.length ? enabled.join(', ') : kleur.dim('none installed — try `colony install`')}\n`,
-      );
-
-      // Embedding
       const state = readWorkerState(dir);
       const provider = settings.embedding.provider;
       const model = settings.embedding.model;
+      const pid = readPid(dir);
+      const workerStatus = pid && isAlive(pid) ? 'running' : pid ? 'stale_pidfile' : 'not_running';
+      const gitguardexLanes = readGitGuardexLanes({
+        cwd: repoRoot,
+        colony_claims: colonyClaims,
+      });
+      const payload: StatusPayload = {
+        settings: {
+          path: sp,
+          exists: existsSync(sp),
+        },
+        data_dir: dir,
+        db: {
+          path: dbPath,
+          status: dbError === null ? 'ok' : 'fail',
+          observations: obsCount,
+          sessions: sessCount,
+          error: dbError,
+        },
+        ides: enabled,
+        embedding: {
+          provider,
+          model,
+          worker_state: state,
+        },
+        worker: {
+          status: workerStatus,
+          pid,
+          port: settings.workerPort,
+        },
+        gitguardex_lanes: gitguardexLanes,
+      };
+
+      if (opts.json === true) {
+        process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+        return;
+      }
+
+      process.stdout.write(`${kleur.bold('colony status')}\n\n`);
+      process.stdout.write(
+        `settings:   ${sp} ${payload.settings.exists ? kleur.green('✓') : kleur.yellow('default')}\n`,
+      );
+      process.stdout.write(`data dir:   ${dir}\n`);
+      if (payload.db.status === 'ok') {
+        process.stdout.write(
+          `db:         ${dbPath} ${kleur.green('✓')} (${obsCount} observations, ${sessCount} sessions)\n`,
+        );
+      } else {
+        process.stdout.write(`db:         ${dbPath} ${kleur.red('fail')} ${payload.db.error}\n`);
+      }
+      process.stdout.write(
+        `ides:       ${enabled.length ? enabled.join(', ') : kleur.dim('none installed — try `colony install`')}\n`,
+      );
       process.stdout.write(`embedding:  ${provider} / ${model}\n`);
       if (provider === 'none') {
         process.stdout.write(`backfill:   ${kleur.dim('disabled (provider=none)')}\n`);
@@ -117,21 +195,20 @@ export function registerStatusCommand(program: Command): void {
           `backfill:   ${kleur.dim('no worker state yet — run `colony start`')}\n`,
         );
       }
-
-      // Worker
-      const pid = readPid(dir);
-      if (pid && isAlive(pid)) {
+      if (workerStatus === 'running' && pid) {
         const uptime = state?.startedAt ? fmtAgo(state.startedAt).replace(' ago', '') : '?';
         process.stdout.write(
           `worker:     ${kleur.green('running')} (pid ${pid}, up ${uptime})  http://127.0.0.1:${settings.workerPort}\n`,
         );
-      } else if (pid) {
+      } else if (workerStatus === 'stale_pidfile' && pid) {
         process.stdout.write(`worker:     ${kleur.red('stale pidfile')} (pid ${pid})\n`);
       } else {
         process.stdout.write(
           `worker:     ${kleur.dim('not running')} — starts automatically on next hook\n`,
         );
       }
+      process.stdout.write(`\n${kleur.bold('GitGuardex lanes')}\n`);
+      process.stdout.write(`${formatGitGuardexLanesOutput(gitguardexLanes).join('\n')}\n`);
     });
 }
 

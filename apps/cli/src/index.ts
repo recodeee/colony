@@ -3,8 +3,10 @@ import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { maybeReexecAfterAutoBuild } from './auto-build.js';
+import { registerAgentsCommand } from './commands/agents.js';
 import { registerBackfillCommand } from './commands/backfill.js';
 import { registerBridgeCommand } from './commands/bridge.js';
+import { registerCockpitCommand } from './commands/cockpit.js';
 import { registerCompressCommands } from './commands/compress.js';
 import { registerConfigCommand } from './commands/config.js';
 import { registerCoordinationCommand } from './commands/coordination.js';
@@ -41,6 +43,8 @@ export function createProgram(): Command {
     .description('Cross-agent persistent memory with compressed storage.')
     .version(__COLONY_VERSION__);
 
+  registerAgentsCommand(program);
+  registerCockpitCommand(program);
   registerInstallCommand(program);
   registerLaneCommand(program);
   registerUninstallCommand(program);

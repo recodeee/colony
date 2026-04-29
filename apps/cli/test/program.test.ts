@@ -10,7 +10,9 @@ describe('Colony CLI program', () => {
     const program = createProgram();
     const names = program.commands.map((c) => c.name()).sort();
     const expected = [
+      'agents',
       'bridge',
+      'cockpit',
       'coordination',
       'doctor',
       'foraging',
@@ -52,11 +54,15 @@ describe('Colony CLI program', () => {
         -h, --help                          display help for command
 
       Commands:
+        agents                              Launch plan sub-task agents through
+                                            executors
+        cockpit [options]                   Open a GitGuardex cockpit for
+                                            Colony-managed plan lanes
         install [options]                   Register hooks + MCP server for an IDE
         lane                                Pause, resume, and take over contended
                                             lanes
         uninstall [options]                 Remove IDE integration
-        status                              Show colony wiring, data, and worker
+        status [options]                    Show colony wiring, data, and worker
                                             state
         health [options]                    Show Colony adoption ratios from local DB
                                             evidence
