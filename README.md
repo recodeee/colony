@@ -131,6 +131,8 @@ pnpm smoke:codex-omx-pretool
 | `colony uninstall --ide <name>` | Remove installed hooks and MCP config. |
 | `pnpm smoke:codex-omx-pretool` | Run a fresh Codex/OMX lifecycle smoke that binds a task, claims a real file, emits `pre_tool_use`, performs one edit, emits `post_tool_use`, and asserts claim-before-edit coverage. |
 
+Installed Codex and Claude SessionStart hooks also inject the quota-safe operating contract: start with `hivemind_context`, then `attention_inbox`, then `task_ready_for_agent`; accept handoffs, claim subtasks/files before edits, keep `task_note_working` current, run focused verification, and emit a `quota_exhausted` handoff before quota/session stop with claimed files, dirty files, branch, last verification, and next step. Colony remains the coordination truth, OMX keeps runtime memory summaries, and available MCP servers provide repo/GitHub/CI/docs context.
+
 ---
 
 ## Health: the product feedback loop

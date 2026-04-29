@@ -106,6 +106,32 @@ afterEach(() => {
 });
 
 describe('SessionStart predictive suggestion preface', () => {
+  it.each(['codex', 'claude-code'])(
+    'injects the quota-safe Colony operating contract for %s generated instructions',
+    async (ide) => {
+      const preface = await sessionStart(store, { session_id: `S-${ide}`, ide, cwd: repo });
+
+      expect(preface).toContain('## Quota-safe Colony operating contract');
+      expect(preface).toContain('Call hivemind_context.');
+      expect(preface).toContain('Call attention_inbox.');
+      expect(preface).toContain('Call task_ready_for_agent.');
+      expect(preface).toContain('Accept a pending handoff with task_accept_handoff');
+      expect(preface).toContain('Claim the subtask with task_plan_claim_subtask');
+      expect(preface).toContain('Claim each touched file with task_claim_file before edits.');
+      expect(preface).toContain('Write task_note_working');
+      expect(preface).toContain('Update task_note_working after meaningful progress.');
+      expect(preface).toContain('Run focused verification for the touched behavior.');
+      expect(preface).toContain('Emit a quota_exhausted handoff with task_hand_off or task_relay.');
+      expect(preface).toContain(
+        'claimed files, dirty files, branch, last verification, and next step',
+      );
+      expect(preface).toContain('Do not leave strong claims without a handoff or TTL.');
+      expect(preface).toContain('Coordination truth lives in Colony.');
+      expect(preface).toContain('Use OMX for runtime memory summaries.');
+      expect(preface).toContain('Use available MCP servers for repo, GitHub, CI, and docs context');
+    },
+  );
+
   it('includes a suggestion section when similarity, sample, and file-confidence thresholds pass', async () => {
     const similar = similarTasks(4, 0.82);
     const { deps, embedder } = depsFor(similar);
