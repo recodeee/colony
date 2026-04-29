@@ -20,6 +20,7 @@ export const DEFAULT_PROTECTED_FILES = [
   'packages/storage/src/schema.ts',
   'packages/storage/src/types.ts',
   'apps/cli/src/commands/health.ts',
+  'apps/cli/test/health.test.ts',
   'packages/hooks/src/auto-claim.ts',
 ] as const;
 

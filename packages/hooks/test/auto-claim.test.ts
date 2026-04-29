@@ -424,7 +424,7 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(conflicts).toHaveLength(0);
   });
 
-  it('recommends takeover when auto-claim finds an unknown owner', () => {
+  it('supersedes inactive clean claims during auto-claim', () => {
     store.startSession({ id: 'unknown-owner', ide: 'unknown', cwd: '/repo' });
     const thread = TaskThread.open(store, {
       repo_root: '/repo',
@@ -433,6 +433,7 @@ describe('autoClaimFileBeforeEdit', () => {
     });
     thread.join('unknown-owner', 'unknown');
     thread.claimFile({ session_id: 'unknown-owner', file_path: 'src/viewer.tsx' });
+    store.endSession('unknown-owner');
 
     const result = autoClaimFileBeforeEdit(store, {
       session_id: 'codex-edit-session',
@@ -444,11 +445,12 @@ describe('autoClaimFileBeforeEdit', () => {
     });
 
     expect(result).toMatchObject({
-      ok: false,
-      code: 'CLAIM_TAKEOVER_RECOMMENDED',
+      ok: true,
+      status: 'claimed',
+      previous_claim_session: 'unknown-owner',
     });
     expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
-      'unknown-owner',
+      'codex-edit-session',
     );
   });
 

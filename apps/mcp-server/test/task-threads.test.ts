@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -183,19 +184,75 @@ describe('task threads — file claims', () => {
     expect(store.storage.getClaim(second.task_id, 'src/protected.ts')).toBeUndefined();
   });
 
-  it('recommends takeover when a scoped claim belongs to an unknown owner', async () => {
+  it('supersedes an inactive clean scoped owner without creating duplicate contention', async () => {
     const repoRoot = mkdtempSync(join(dir, 'repo-'));
     const repoAlias = `${repoRoot}/../${basename(repoRoot)}`;
-    store.startSession({ id: 'unknown-owner', ide: 'unknown', cwd: repoRoot });
+    const filePath = 'apps/cli/src/commands/health.ts';
+    store.startSession({ id: 'inactive-owner', ide: 'codex', cwd: repoRoot });
     store.startSession({ id: 'requester', ide: 'codex', cwd: repoRoot });
 
     const first = TaskThread.open(store, {
       repo_root: repoRoot,
       branch: 'main',
-      session_id: 'unknown-owner',
+      session_id: 'inactive-owner',
     });
-    first.join('unknown-owner', 'unknown');
-    first.claimFile({ session_id: 'unknown-owner', file_path: 'src/protected.ts' });
+    first.join('inactive-owner', 'codex');
+    first.claimFile({ session_id: 'inactive-owner', file_path: filePath });
+    store.endSession('inactive-owner');
+    const second = TaskThread.open(store, {
+      repo_root: repoAlias,
+      branch: 'main',
+      session_id: 'requester',
+    });
+    second.join('requester', 'codex');
+
+    const result = await call<{ claim_status: string; claim_task_id: number }>('task_claim_file', {
+      task_id: second.task_id,
+      session_id: 'requester',
+      file_path: filePath,
+    });
+
+    expect(result).toMatchObject({
+      claim_status: 'superseded_inactive_owner',
+      claim_task_id: first.task_id,
+    });
+    expect(store.storage.getClaim(first.task_id, filePath)).toMatchObject({
+      session_id: 'requester',
+      file_path: filePath,
+    });
+    expect(store.storage.getClaim(second.task_id, filePath)).toBeUndefined();
+  });
+
+  it('blocks a dirty inactive scoped owner until handoff or rescue', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    const repoAlias = `${repoRoot}/../${basename(repoRoot)}`;
+    const filePath = 'apps/cli/src/commands/health.ts';
+    const dirtyWorktree = join(repoRoot, '.omx', 'agent-worktrees', 'owner');
+    mkdirSync(join(dirtyWorktree, 'apps', 'cli', 'src', 'commands'), { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: dirtyWorktree, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], {
+      cwd: dirtyWorktree,
+      stdio: 'ignore',
+    });
+    execFileSync('git', ['config', 'user.name', 'Test User'], {
+      cwd: dirtyWorktree,
+      stdio: 'ignore',
+    });
+    writeFileSync(join(dirtyWorktree, 'README.md'), 'base\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: dirtyWorktree, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'base'], { cwd: dirtyWorktree, stdio: 'ignore' });
+    writeFileSync(join(dirtyWorktree, filePath), 'dirty\n');
+    store.startSession({ id: 'inactive-owner', ide: 'codex', cwd: dirtyWorktree });
+    store.startSession({ id: 'requester', ide: 'codex', cwd: repoRoot });
+
+    const first = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'main',
+      session_id: 'inactive-owner',
+    });
+    first.join('inactive-owner', 'codex');
+    first.claimFile({ session_id: 'inactive-owner', file_path: filePath });
+    store.endSession('inactive-owner');
     const second = TaskThread.open(store, {
       repo_root: repoAlias,
       branch: 'main',
@@ -206,15 +263,17 @@ describe('task threads — file claims', () => {
     const err = await callError('task_claim_file', {
       task_id: second.task_id,
       session_id: 'requester',
-      file_path: 'src/protected.ts',
+      file_path: filePath,
     });
 
     expect(err).toMatchObject({
       code: 'CLAIM_TAKEOVER_RECOMMENDED',
-      owner_session_id: 'unknown-owner',
+      owner_session_id: 'inactive-owner',
       owner_active: false,
+      owner_dirty: true,
     });
-    expect(store.storage.getClaim(second.task_id, 'src/protected.ts')).toBeUndefined();
+    expect(store.storage.getClaim(first.task_id, filePath)?.session_id).toBe('inactive-owner');
+    expect(store.storage.getClaim(second.task_id, filePath)).toBeUndefined();
   });
 
   it('blocks a scoped claim when an active different owner holds it', async () => {
@@ -249,6 +308,60 @@ describe('task threads — file claims', () => {
       owner_active: true,
     });
     expect(store.storage.getClaim(second.task_id, 'src/protected.ts')).toBeUndefined();
+  });
+
+  it('treats protected files as stricter than ordinary same-agent claims', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    const repoAlias = `${repoRoot}/../${basename(repoRoot)}`;
+    store.startSession({ id: 'active-owner', ide: 'codex', cwd: repoRoot });
+    store.startSession({ id: 'requester', ide: 'codex', cwd: repoRoot });
+
+    const first = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'main',
+      session_id: 'active-owner',
+    });
+    first.join('active-owner', 'codex');
+    first.claimFile({ session_id: 'active-owner', file_path: 'src/ordinary.ts' });
+    first.claimFile({ session_id: 'active-owner', file_path: 'apps/cli/src/commands/health.ts' });
+    const second = TaskThread.open(store, {
+      repo_root: repoAlias,
+      branch: 'main',
+      session_id: 'requester',
+    });
+    second.join('requester', 'codex');
+
+    const ordinary = await call<{ claim_status: string; claim_task_id: number }>(
+      'task_claim_file',
+      {
+        task_id: second.task_id,
+        session_id: 'requester',
+        file_path: 'src/ordinary.ts',
+      },
+    );
+    const protectedErr = await callError('task_claim_file', {
+      task_id: second.task_id,
+      session_id: 'requester',
+      file_path: 'apps/cli/src/commands/health.ts',
+    });
+
+    expect(ordinary).toMatchObject({
+      claim_status: 'refreshed_same_lane',
+      claim_task_id: first.task_id,
+    });
+    expect(protectedErr).toMatchObject({
+      code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
+      owner_session_id: 'active-owner',
+      owner_active: true,
+    });
+    expect(store.storage.getClaim(first.task_id, 'src/ordinary.ts')?.session_id).toBe('requester');
+    expect(store.storage.getClaim(second.task_id, 'src/ordinary.ts')).toBeUndefined();
+    expect(
+      store.storage.getClaim(first.task_id, 'apps/cli/src/commands/health.ts')?.session_id,
+    ).toBe('active-owner');
+    expect(
+      store.storage.getClaim(second.task_id, 'apps/cli/src/commands/health.ts'),
+    ).toBeUndefined();
   });
 });
 

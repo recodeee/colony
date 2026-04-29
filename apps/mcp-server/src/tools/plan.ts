@@ -159,14 +159,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(
-                {
-                  ...withPlanPublishGuidance(result, ordered.subtasks, {
-                    wave_names: ordered.waveNames,
-                  }),
-                  plan_validation: validation,
-                },
-              ),
+              text: JSON.stringify({
+                ...withPlanPublishGuidance(result, ordered.subtasks, {
+                  wave_names: ordered.waveNames,
+                }),
+                plan_validation: validation,
+              }),
             },
           ],
         };
@@ -246,60 +244,93 @@ export function register(server: McpServer, ctx: ToolContext): void {
       // so two concurrent claims serialize through SQLite's write lock; the
       // first commit wins, the second reads its current lifecycle and rejects.
       try {
-        store.storage.transaction(() => {
-          const fresh = readSubtaskByBranch(store, branch);
-          if (!fresh) {
-            const err: CodedError = new Error(`no sub-task at ${branch}`);
-            err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
-            throw err;
-          }
-          if (fresh.info.status !== 'available') {
-            const err: CodedError = new Error(
-              `sub-task is ${fresh.info.status}${
-                fresh.info.claimed_by_session_id ? ` by ${fresh.info.claimed_by_session_id}` : ''
-              }`,
-            );
-            err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
-            throw err;
-          }
-          store.addObservation({
-            session_id: args.session_id,
-            task_id: fresh.task_id,
-            kind: 'plan-subtask-claim',
-            content: `${args.agent} claimed sub-task ${args.subtask_index} of plan ${args.plan_slug}`,
-            metadata: {
-              status: 'claimed',
+        const claimBlock = store.storage.transaction(
+          (): {
+            code: 'CLAIM_TAKEOVER_RECOMMENDED' | 'CLAIM_HELD_BY_ACTIVE_OWNER';
+            message: string;
+          } | null => {
+            const fresh = readSubtaskByBranch(store, branch);
+            if (!fresh) {
+              const err: CodedError = new Error(`no sub-task at ${branch}`);
+              err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+              throw err;
+            }
+            if (fresh.info.status !== 'available') {
+              const err: CodedError = new Error(
+                `sub-task is ${fresh.info.status}${
+                  fresh.info.claimed_by_session_id ? ` by ${fresh.info.claimed_by_session_id}` : ''
+                }`,
+              );
+              err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+              throw err;
+            }
+            for (const file of fresh.info.file_scope) {
+              const guarded = guardedClaimFile(store, {
+                task_id: fresh.task_id,
+                file_path: file,
+                session_id: args.session_id,
+                agent: args.agent,
+                dryRun: true,
+              });
+              if (guarded.status === 'takeover_recommended') {
+                return {
+                  code: 'CLAIM_TAKEOVER_RECOMMENDED',
+                  message:
+                    guarded.recommendation ?? 'release or take over inactive claim before claiming',
+                };
+              }
+              if (guarded.status === 'blocked_active_owner') {
+                return {
+                  code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
+                  message:
+                    guarded.recommendation ??
+                    'request handoff or explicit takeover before claiming',
+                };
+              }
+            }
+            store.addObservation({
               session_id: args.session_id,
-              agent: args.agent,
-              plan_slug: args.plan_slug,
-              subtask_index: args.subtask_index,
-            },
-          });
-          const thread = new TaskThread(store, fresh.task_id);
-          thread.join(args.session_id, args.agent);
-          for (const file of fresh.info.file_scope) {
-            const guarded = guardedClaimFile(store, {
               task_id: fresh.task_id,
-              file_path: file,
-              session_id: args.session_id,
-              agent: args.agent,
+              kind: 'plan-subtask-claim',
+              content: `${args.agent} claimed sub-task ${args.subtask_index} of plan ${args.plan_slug}`,
+              metadata: {
+                status: 'claimed',
+                session_id: args.session_id,
+                agent: args.agent,
+                plan_slug: args.plan_slug,
+                subtask_index: args.subtask_index,
+              },
             });
-            if (guarded.status === 'takeover_recommended') {
-              const err: CodedError = new Error(
-                guarded.recommendation ?? 'release or take over inactive claim before claiming',
-              );
-              err.__code = 'CLAIM_TAKEOVER_RECOMMENDED';
-              throw err;
+            const thread = new TaskThread(store, fresh.task_id);
+            thread.join(args.session_id, args.agent);
+            for (const file of fresh.info.file_scope) {
+              const guarded = guardedClaimFile(store, {
+                task_id: fresh.task_id,
+                file_path: file,
+                session_id: args.session_id,
+                agent: args.agent,
+              });
+              if (guarded.status === 'takeover_recommended') {
+                const err: CodedError = new Error(
+                  guarded.recommendation ?? 'release or take over inactive claim before claiming',
+                );
+                err.__code = 'CLAIM_TAKEOVER_RECOMMENDED';
+                throw err;
+              }
+              if (guarded.status === 'blocked_active_owner') {
+                const err: CodedError = new Error(
+                  guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
+                );
+                err.__code = 'CLAIM_HELD_BY_ACTIVE_OWNER';
+                throw err;
+              }
             }
-            if (guarded.status === 'blocked_active_owner') {
-              const err: CodedError = new Error(
-                guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
-              );
-              err.__code = 'CLAIM_HELD_BY_ACTIVE_OWNER';
-              throw err;
-            }
-          }
-        });
+            return null;
+          },
+        );
+        if (claimBlock) {
+          return mcpErrorResponse(claimBlock.code, claimBlock.message);
+        }
       } catch (err) {
         const code = (err as CodedError).__code;
         if (

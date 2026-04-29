@@ -1,12 +1,18 @@
 import { resolve } from 'node:path';
 import type { TaskClaimRow, TaskRow } from '@colony/storage';
 import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
+import { normalizeClaimFilePath } from './live-file-contention.js';
 import type { MemoryStore } from './memory-store.js';
+import {
+  readWorktreeContentionReport,
+  type WorktreeContentionReport,
+} from './worktree-contention.js';
 
 export type GuardedClaimStatus =
   | 'claimed'
   | 'refreshed_same_session'
   | 'refreshed_same_lane'
+  | 'superseded_inactive_owner'
   | 'takeover_recommended'
   | 'blocked_active_owner'
   | 'invalid_path'
@@ -20,6 +26,7 @@ export interface GuardedClaimResult {
   owner_session_id?: string;
   owner_agent?: string | undefined;
   owner_active?: boolean;
+  owner_dirty?: boolean;
   recommendation?: string;
 }
 
@@ -30,6 +37,8 @@ export function guardedClaimFile(
     file_path: string;
     session_id: string;
     agent?: string;
+    worktreeContention?: WorktreeContentionReport | null;
+    dryRun?: boolean;
   },
 ): GuardedClaimResult {
   const task = store.storage.getTask(args.task_id);
@@ -41,13 +50,9 @@ export function guardedClaimFile(
     return { status: 'invalid_path', task_id: args.task_id, file_path: args.file_path };
   }
 
-  const existing = findScopedClaim(store, task, filePath);
-  if (!existing) {
-    store.storage.claimFile({
-      task_id: args.task_id,
-      file_path: filePath,
-      session_id: args.session_id,
-    });
+  const scopedClaims = findScopedClaims(store, task, filePath);
+  if (scopedClaims.length === 0) {
+    claimFileUnlessDryRun(store, { ...args, file_path: filePath });
     return {
       status: 'claimed',
       task_id: args.task_id,
@@ -56,84 +61,146 @@ export function guardedClaimFile(
     };
   }
 
-  const owner = claimOwner(store, existing.claim);
   const requesterAgent = normalizeAgent(
     args.agent ??
       store.storage.getParticipantAgent(args.task_id, args.session_id) ??
       store.storage.getSession(args.session_id)?.ide,
   );
-  const sameSession = existing.claim.session_id === args.session_id;
-  const sameLane =
-    !sameSession &&
-    owner.active &&
-    owner.agent !== undefined &&
-    requesterAgent !== undefined &&
-    owner.agent === requesterAgent;
+  const protectedFile = isProtectedFile(store, filePath);
+  const claims = scopedClaims.map((entry) => ({
+    ...entry,
+    owner: claimOwner(store, entry.task, entry.claim, filePath, args.worktreeContention),
+  }));
 
-  if (!owner.strong && existing.claim.task_id === args.task_id) {
-    store.storage.claimFile({
-      task_id: args.task_id,
-      file_path: filePath,
-      session_id: args.session_id,
+  const blockingActive = claims.find((entry) => {
+    if (entry.claim.session_id === args.session_id) return false;
+    if (!entry.owner.active) return false;
+    return !sameReusableLane({
+      protectedFile,
+      ownerAgent: entry.owner.agent,
+      requesterAgent,
     });
+  });
+  if (blockingActive) {
     return {
-      status: 'claimed',
+      status: 'blocked_active_owner',
       task_id: args.task_id,
       file_path: filePath,
-      claim_task_id: args.task_id,
-      owner_session_id: existing.claim.session_id,
-      owner_agent: owner.agent,
-      owner_active: false,
+      claim_task_id: blockingActive.claim.task_id,
+      owner_session_id: blockingActive.claim.session_id,
+      owner_agent: blockingActive.owner.agent,
+      owner_active: true,
+      owner_dirty: blockingActive.owner.dirty,
+      recommendation: `request handoff or explicit takeover from active owner ${blockingActive.claim.session_id} before claiming ${filePath}`,
     };
   }
 
-  if (sameSession || sameLane) {
-    store.storage.claimFile({
-      task_id: existing.claim.task_id,
-      file_path: existing.claim.file_path,
-      session_id: args.session_id,
-    });
-    return {
-      status: sameSession ? 'refreshed_same_session' : 'refreshed_same_lane',
-      task_id: args.task_id,
-      file_path: filePath,
-      claim_task_id: existing.claim.task_id,
-      owner_session_id: existing.claim.session_id,
-      owner_agent: owner.agent,
-      owner_active: owner.active,
-    };
-  }
-
-  if (!owner.active || !owner.strong) {
+  const dirtyOwner = claims.find(
+    (entry) => entry.claim.session_id !== args.session_id && entry.owner.dirty,
+  );
+  if (dirtyOwner) {
     return {
       status: 'takeover_recommended',
       task_id: args.task_id,
       file_path: filePath,
-      claim_task_id: existing.claim.task_id,
-      owner_session_id: existing.claim.session_id,
-      owner_agent: owner.agent,
-      owner_active: false,
-      recommendation: `release or take over inactive claim ${existing.claim.session_id} on ${filePath} before claiming`,
+      claim_task_id: dirtyOwner.claim.task_id,
+      owner_session_id: dirtyOwner.claim.session_id,
+      owner_agent: dirtyOwner.owner.agent,
+      owner_active: dirtyOwner.owner.active,
+      owner_dirty: true,
+      recommendation: `dirty worktree still has ${filePath}; require handoff or rescue from ${dirtyOwner.claim.session_id} before claiming`,
     };
   }
 
+  const sameSessionClaim = claims.find((entry) => entry.claim.session_id === args.session_id);
+  if (sameSessionClaim) {
+    claimFileUnlessDryRun(store, {
+      ...args,
+      task_id: sameSessionClaim.claim.task_id,
+      file_path: sameSessionClaim.claim.file_path,
+    });
+    return {
+      status: 'refreshed_same_session',
+      task_id: args.task_id,
+      file_path: filePath,
+      claim_task_id: sameSessionClaim.claim.task_id,
+      owner_session_id: sameSessionClaim.claim.session_id,
+      owner_agent: sameSessionClaim.owner.agent,
+      owner_active: sameSessionClaim.owner.active,
+      owner_dirty: sameSessionClaim.owner.dirty,
+    };
+  }
+
+  const sameLaneClaim = claims.find((entry) =>
+    sameReusableLane({
+      protectedFile,
+      ownerAgent: entry.owner.agent,
+      requesterAgent,
+    }),
+  );
+  if (sameLaneClaim) {
+    claimFileUnlessDryRun(store, {
+      ...args,
+      task_id: sameLaneClaim.claim.task_id,
+      file_path: sameLaneClaim.claim.file_path,
+    });
+    return {
+      status: 'refreshed_same_lane',
+      task_id: args.task_id,
+      file_path: filePath,
+      claim_task_id: sameLaneClaim.claim.task_id,
+      owner_session_id: sameLaneClaim.claim.session_id,
+      owner_agent: sameLaneClaim.owner.agent,
+      owner_active: sameLaneClaim.owner.active,
+      owner_dirty: sameLaneClaim.owner.dirty,
+    };
+  }
+
+  const takeoverClaim = claims[0];
+  if (takeoverClaim) {
+    claimFileUnlessDryRun(store, {
+      ...args,
+      task_id: takeoverClaim.claim.task_id,
+      file_path: takeoverClaim.claim.file_path,
+    });
+    return {
+      status: 'superseded_inactive_owner',
+      task_id: args.task_id,
+      file_path: filePath,
+      claim_task_id: takeoverClaim.claim.task_id,
+      owner_session_id: takeoverClaim.claim.session_id,
+      owner_agent: takeoverClaim.owner.agent,
+      owner_active: false,
+      owner_dirty: false,
+    };
+  }
+
+  claimFileUnlessDryRun(store, { ...args, file_path: filePath });
   return {
-    status: 'blocked_active_owner',
+    status: 'claimed',
     task_id: args.task_id,
     file_path: filePath,
-    claim_task_id: existing.claim.task_id,
-    owner_session_id: existing.claim.session_id,
-    owner_agent: owner.agent,
-    owner_active: true,
-    recommendation: `request handoff or explicit takeover from active owner ${existing.claim.session_id} before claiming ${filePath}`,
+    claim_task_id: args.task_id,
   };
 }
 
-function findScopedClaim(
+function claimFileUnlessDryRun(
+  store: MemoryStore,
+  args: { task_id: number; file_path: string; session_id: string; dryRun?: boolean },
+): void {
+  if (args.dryRun === true) return;
+  store.storage.claimFile({
+    task_id: args.task_id,
+    file_path: args.file_path,
+    session_id: args.session_id,
+  });
+}
+
+function findScopedClaims(
   store: MemoryStore,
   task: TaskRow,
   filePath: string,
-): { task: TaskRow; claim: TaskClaimRow } | null {
+): Array<{ task: TaskRow; claim: TaskClaimRow }> {
   const tasks = store.storage
     .listTasks(1_000_000)
     .filter(
@@ -145,20 +212,24 @@ function findScopedClaim(
         candidate.status !== 'auto-archived',
     );
 
+  const matches: Array<{ task: TaskRow; claim: TaskClaimRow }> = [];
   for (const candidate of tasks) {
     for (const claim of store.storage.listClaims(candidate.id)) {
       if (claim.state !== 'active') continue;
       const normalized = store.storage.normalizeTaskFilePath(candidate.id, claim.file_path);
-      if (normalized === filePath) return { task: candidate, claim };
+      if (normalized === filePath) matches.push({ task: candidate, claim });
     }
   }
-  return null;
+  return matches.sort(compareScopedClaims);
 }
 
 function claimOwner(
   store: MemoryStore,
+  task: TaskRow,
   claim: TaskClaimRow,
-): { agent: string | undefined; active: boolean; strong: boolean } {
+  filePath: string,
+  worktreeContention: WorktreeContentionReport | null | undefined,
+): { agent: string | undefined; active: boolean; strong: boolean; dirty: boolean } {
   const session = store.storage.getSession(claim.session_id);
   const agent = normalizeAgent(
     store.storage.getParticipantAgent(claim.task_id, claim.session_id) ?? session?.ide,
@@ -168,8 +239,65 @@ function claimOwner(
       claim_stale_minutes: store.settings.claimStaleMinutes,
     }),
   );
-  const active = Boolean(session && session.ended_at === null && agent !== undefined && strong);
-  return { agent, active, strong };
+  const active = Boolean(session && session.ended_at === null && strong);
+  const dirty = dirtyWorktreeHasClaimedFile(task, filePath, worktreeContention);
+  return { agent, active, strong, dirty };
+}
+
+function sameReusableLane(args: {
+  protectedFile: boolean;
+  ownerAgent: string | undefined;
+  requesterAgent: string | undefined;
+}): boolean {
+  return (
+    !args.protectedFile &&
+    args.ownerAgent !== undefined &&
+    args.requesterAgent !== undefined &&
+    args.ownerAgent === args.requesterAgent
+  );
+}
+
+function dirtyWorktreeHasClaimedFile(
+  task: TaskRow,
+  filePath: string,
+  worktreeContention: WorktreeContentionReport | null | undefined,
+): boolean {
+  const report = worktreeContention ?? safeReadWorktreeContention(task.repo_root);
+  if (!report) return false;
+  const normalizedFilePath = normalizeClaimFilePath(filePath);
+  return report.worktrees.some(
+    (worktree) =>
+      worktree.branch === task.branch &&
+      worktree.dirty_files.some(
+        (dirty) => normalizeClaimFilePath(dirty.path) === normalizedFilePath,
+      ),
+  );
+}
+
+function safeReadWorktreeContention(repoRoot: string): WorktreeContentionReport | null {
+  try {
+    return readWorktreeContentionReport({ repoRoot });
+  } catch {
+    return null;
+  }
+}
+
+function isProtectedFile(store: MemoryStore, filePath: string): boolean {
+  const normalizedFilePath = normalizeClaimFilePath(filePath);
+  return store.settings.protected_files.some(
+    (protectedFile) => normalizeClaimFilePath(protectedFile) === normalizedFilePath,
+  );
+}
+
+function compareScopedClaims(
+  left: { task: TaskRow; claim: TaskClaimRow },
+  right: { task: TaskRow; claim: TaskClaimRow },
+): number {
+  if (left.claim.claimed_at !== right.claim.claimed_at) {
+    return right.claim.claimed_at - left.claim.claimed_at;
+  }
+  if (left.task.id !== right.task.id) return left.task.id - right.task.id;
+  return left.claim.session_id.localeCompare(right.claim.session_id);
 }
 
 function normalizeAgent(agent: string | undefined): string | undefined {

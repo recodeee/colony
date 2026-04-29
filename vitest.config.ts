@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 
@@ -30,5 +30,18 @@ export default defineConfig({
         external: [/better-sqlite3/],
       },
     },
+    exclude: [
+      ...configDefaults.exclude,
+      'apps/mcp-server/mcp-server/**',
+      'packages/config/config/**',
+      'packages/core/core/**',
+      'packages/hooks/hooks/**',
+      'packages/storage/storage/**',
+      'config/**',
+      'core/**',
+      'hooks/**',
+      'mcp-server/**',
+      'storage/**',
+    ],
   },
 });
