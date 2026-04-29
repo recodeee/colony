@@ -25,6 +25,7 @@ export interface ClaimBeforeEditFallbackWarning {
     note: string;
   };
   candidates?: CompactCandidate[];
+  creation_guidance?: string;
 }
 
 export interface ClaimBeforeEditResult {
@@ -35,7 +36,10 @@ export interface ClaimBeforeEditResult {
   warnings: ClaimBeforeEditFallbackWarning[];
 }
 
-type PreToolUseInput = Pick<HookInput, 'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd'>;
+type PreToolUseInput = Pick<
+  HookInput,
+  'session_id' | 'tool_name' | 'tool' | 'tool_input' | 'cwd' | 'ide'
+>;
 type AutoClaimFailure = Extract<AutoClaimFileForSessionResult, { ok: false }>;
 type CompactCandidate = Pick<
   ActiveTaskCandidate,
@@ -137,12 +141,18 @@ function taskScopeForToolUse(
 ): {
   repo_root?: string;
   branch?: string;
+  cwd?: string;
+  agent?: string;
 } {
   try {
     const session = store.storage.getSession(input.session_id);
     const cwd = input.cwd ?? session?.cwd ?? undefined;
     const detected = cwd ? detectRepoBranch(cwd) : null;
-    return detected ? { repo_root: detected.repo_root, branch: detected.branch } : {};
+    return {
+      ...(detected ? { repo_root: detected.repo_root, branch: detected.branch } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
+      ...(input.ide !== undefined ? { agent: input.ide } : {}),
+    };
   } catch {
     return {};
   }
@@ -275,6 +285,9 @@ function claimWarning(
       note: 'pre-edit claim',
     },
     ...(candidates.length > 0 ? { candidates } : {}),
+    ...(claim.creation_guidance !== undefined
+      ? { creation_guidance: claim.creation_guidance }
+      : {}),
   };
 }
 

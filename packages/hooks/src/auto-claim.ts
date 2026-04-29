@@ -1,5 +1,5 @@
-import { resolve } from 'node:path';
-import type { MemoryStore } from '@colony/core';
+import { isAbsolute, relative, resolve } from 'node:path';
+import { type MemoryStore, detectRepoBranch } from '@colony/core';
 
 export interface ActiveTaskCandidate {
   task_id: number;
@@ -9,6 +9,12 @@ export interface ActiveTaskCandidate {
   status: string;
   updated_at: number;
   agent: string;
+}
+
+type ActiveTaskMatch = 'session_id' | 'branch_repo_root' | 'cwd' | 'agent';
+
+interface MatchedActiveTaskCandidate extends ActiveTaskCandidate {
+  matched_by: ActiveTaskMatch;
 }
 
 export type AutoClaimObservationKind = 'claim' | 'auto-claim';
@@ -22,6 +28,8 @@ export interface AutoClaimFileForSessionInput {
   session_id: string;
   repo_root?: string;
   branch?: string;
+  cwd?: string;
+  agent?: string;
   file_path: string;
   note?: string;
   source?: string;
@@ -52,35 +60,15 @@ export type AutoClaimFileForSessionResult =
       ok: false;
       code: AutoClaimFailureCode;
       error: string;
+      creation_guidance?: string;
       candidates: ActiveTaskCandidate[];
     };
 
 export function activeTaskCandidatesForSession(
   store: MemoryStore,
-  opts: { session_id: string; repo_root?: string; branch?: string },
+  opts: { session_id: string; repo_root?: string; branch?: string; cwd?: string; agent?: string },
 ): ActiveTaskCandidate[] {
-  const candidates: ActiveTaskCandidate[] = [];
-  for (const task of store.storage.listTasks(2000)) {
-    if (opts.repo_root !== undefined && resolve(task.repo_root) !== resolve(opts.repo_root)) {
-      continue;
-    }
-    if (opts.branch !== undefined && task.branch !== opts.branch) continue;
-    if (!isActiveStatus(task.status)) continue;
-    const participant = store.storage
-      .listParticipants(task.id)
-      .find((row) => row.session_id === opts.session_id && row.left_at === null);
-    if (!participant) continue;
-    candidates.push({
-      task_id: task.id,
-      title: task.title,
-      repo_root: task.repo_root,
-      branch: task.branch,
-      status: task.status,
-      updated_at: task.updated_at,
-      agent: participant.agent,
-    });
-  }
-  return candidates.sort((a, b) => b.updated_at - a.updated_at);
+  return activeTaskMatchesForSession(store, opts).map(({ matched_by: _matched_by, ...row }) => row);
 }
 
 export function autoClaimFileForSession(
@@ -118,12 +106,19 @@ export function autoClaimFileForSession(
           code === 'ACTIVE_TASK_NOT_FOUND'
             ? 'no active Colony task matched session/repo/branch'
             : 'multiple active Colony tasks matched session/repo/branch',
+        ...(code === 'ACTIVE_TASK_NOT_FOUND'
+          ? {
+              creation_guidance:
+                'Create or join a Colony task for this session with cwd/repo_root/branch, then retry the edit or call task_claim_file with an explicit task_id.',
+            }
+          : {}),
         candidates,
       };
     }
 
     const candidate = candidates[0];
     if (!candidate) throw new Error('active task resolution lost its only candidate');
+    ensureTaskParticipant(store, candidate, input.session_id);
 
     const existing = store.storage.getClaim(candidate.task_id, input.file_path);
     if (existing?.session_id === input.session_id) {
@@ -197,6 +192,149 @@ export function autoClaimFileForSession(
 
 function isActiveStatus(status: string): boolean {
   return !['completed', 'archived', 'auto-archived', 'abandoned'].includes(status.toLowerCase());
+}
+
+function ensureTaskParticipant(
+  store: MemoryStore,
+  candidate: ActiveTaskCandidate,
+  session_id: string,
+): void {
+  const boundAgent = store.storage.getParticipantAgent(candidate.task_id, session_id);
+  if (boundAgent) return;
+  store.storage.addTaskParticipant({
+    task_id: candidate.task_id,
+    session_id,
+    agent: candidate.agent,
+  });
+}
+
+function activeTaskMatchesForSession(
+  store: MemoryStore,
+  opts: { session_id: string; repo_root?: string; branch?: string; cwd?: string; agent?: string },
+): MatchedActiveTaskCandidate[] {
+  const session = store.storage.getSession(opts.session_id);
+  const cwd = opts.cwd ?? session?.cwd ?? undefined;
+  const detected = cwd ? detectRepoBranch(cwd) : null;
+  const scopedRepoRoot = opts.repo_root ?? detected?.repo_root;
+  const scopedBranch = opts.branch ?? detected?.branch;
+  const agent = normalizeAgent(opts.agent ?? session?.ide ?? opts.session_id);
+  const tasks = store.storage.listTasks(2000).filter((task) => isActiveStatus(task.status));
+
+  const sessionMatches = matchesForTasks(
+    store,
+    tasks.filter((task) => taskMatchesScope(task, scopedRepoRoot, scopedBranch)),
+    agent,
+    'session_id',
+    (participants) =>
+      participants.find((row) => row.session_id === opts.session_id && row.left_at === null),
+  );
+  if (sessionMatches.length > 0) return sortCandidates(sessionMatches);
+
+  if (scopedRepoRoot !== undefined && scopedBranch !== undefined) {
+    const branchMatches = matchesForTasks(
+      store,
+      tasks.filter((task) => taskMatchesScope(task, scopedRepoRoot, scopedBranch)),
+      agent,
+      'branch_repo_root',
+    );
+    if (branchMatches.length > 0) return sortCandidates(branchMatches);
+  }
+
+  if (cwd !== undefined) {
+    const cwdMatches = matchesForTasks(
+      store,
+      tasks.filter((task) => samePathOrChild(task.repo_root, cwd)),
+      agent,
+      'cwd',
+    );
+    if (cwdMatches.length > 0) return sortCandidates(cwdMatches);
+  }
+
+  if (scopedBranch !== undefined) return [];
+
+  const agentMatches = matchesForTasks(
+    store,
+    scopedRepoRoot === undefined
+      ? tasks
+      : tasks.filter((task) => resolve(task.repo_root) === resolve(scopedRepoRoot)),
+    agent,
+    'agent',
+    (participants) =>
+      participants.find((row) => row.left_at === null && normalizeAgent(row.agent) === agent),
+  );
+  return sortCandidates(agentMatches);
+}
+
+function matchesForTasks(
+  store: MemoryStore,
+  tasks: Array<{
+    id: number;
+    title: string;
+    repo_root: string;
+    branch: string;
+    status: string;
+    updated_at: number;
+  }>,
+  fallbackAgent: string,
+  matched_by: ActiveTaskMatch,
+  participantSelector?: (
+    participants: Array<{ session_id: string; agent: string; left_at: number | null }>,
+  ) => { agent: string } | undefined,
+): MatchedActiveTaskCandidate[] {
+  return tasks
+    .map((task) => {
+      const participants = store.storage.listParticipants(task.id);
+      const participant = participantSelector?.(participants);
+      if (participantSelector && !participant) return null;
+      const agent =
+        participant?.agent ??
+        participants.find(
+          (row) => row.left_at === null && normalizeAgent(row.agent) === fallbackAgent,
+        )?.agent ??
+        fallbackAgent;
+      return {
+        task_id: task.id,
+        title: task.title,
+        repo_root: task.repo_root,
+        branch: task.branch,
+        status: task.status,
+        updated_at: task.updated_at,
+        agent,
+        matched_by,
+      };
+    })
+    .filter((row): row is MatchedActiveTaskCandidate => row !== null);
+}
+
+function taskMatchesScope(
+  task: { repo_root: string; branch: string },
+  repo_root: string | undefined,
+  branch: string | undefined,
+): boolean {
+  if (repo_root !== undefined && resolve(task.repo_root) !== resolve(repo_root)) return false;
+  if (branch !== undefined && task.branch !== branch) return false;
+  return true;
+}
+
+function samePathOrChild(repoRoot: string, cwd: string): boolean {
+  const rel = relative(resolve(repoRoot), resolve(cwd));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function normalizeAgent(value: string | undefined): string {
+  const raw = (value ?? 'agent').toLowerCase();
+  const prefix = raw.includes('@')
+    ? raw.split('@')[0]
+    : raw.includes('/')
+      ? raw.split('/')[0]
+      : raw;
+  if (prefix === 'claude-code') return 'claude';
+  if (prefix === 'claude' || prefix === 'codex') return prefix;
+  return prefix || 'agent';
+}
+
+function sortCandidates<T extends ActiveTaskCandidate>(candidates: T[]): T[] {
+  return candidates.sort((a, b) => b.updated_at - a.updated_at);
 }
 
 export function autoClaimFileBeforeEdit(

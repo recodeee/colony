@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -36,6 +36,11 @@ function metadataOf(
   return typeof row.metadata === 'string'
     ? (JSON.parse(row.metadata) as Record<string, unknown>)
     : row.metadata;
+}
+
+function fakeGitCheckout(path: string, branch: string): void {
+  mkdirSync(join(path, '.git'), { recursive: true });
+  writeFileSync(join(path, '.git', 'HEAD'), `ref: refs/heads/${branch}\n`, 'utf8');
 }
 
 beforeEach(() => {
@@ -180,6 +185,85 @@ describe('autoClaimFileBeforeEdit', () => {
     });
   });
 
+  it('resolves a Codex/OMX session by repo_root and branch when it is not joined yet', () => {
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo' });
+    store.startSession({ id: 'codex@019dd6c0', ide: 'codex', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'main',
+      session_id: 'owner',
+    });
+    thread.join('owner', 'claude');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex@019dd6c0',
+      repo_root: '/repo',
+      branch: 'main',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe(
+      'codex@019dd6c0',
+    );
+    expect(store.storage.getParticipantAgent(thread.task_id, 'codex@019dd6c0')).toBe('codex');
+  });
+
+  it('resolves the only active task for the same agent when no branch scope exists', () => {
+    store.startSession({ id: 'codex@new', ide: 'codex', cwd: null });
+    store.startSession({ id: 'codex@old', ide: 'codex', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'agent/codex/solo',
+      session_id: 'codex@old',
+    });
+    thread.join('codex@old', 'codex');
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex@new',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'claimed',
+      task_id: thread.task_id,
+    });
+    expect(store.storage.getClaim(thread.task_id, 'src/viewer.tsx')?.session_id).toBe('codex@new');
+  });
+
+  it('does not guess when multiple active tasks match the same agent fallback', () => {
+    store.startSession({ id: 'codex@new', ide: 'codex', cwd: null });
+    for (const branch of ['agent/codex/one', 'agent/codex/two']) {
+      store.startSession({ id: branch, ide: 'codex', cwd: '/repo' });
+      const thread = TaskThread.open(store, {
+        repo_root: '/repo',
+        branch,
+        session_id: branch,
+      });
+      thread.join(branch, 'codex');
+    }
+
+    const result = autoClaimFileBeforeEdit(store, {
+      session_id: 'codex@new',
+      file_path: 'src/viewer.tsx',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'AMBIGUOUS_ACTIVE_TASK',
+    });
+    if (result.ok) throw new Error('expected ambiguous active task');
+    expect(result.candidates).toHaveLength(2);
+    expect(
+      store.storage.listTasks(10).flatMap((task) => store.storage.listClaims(task.id)),
+    ).toEqual([]);
+  });
+
   it('returns AMBIGUOUS_ACTIVE_TASK when multiple active tasks match', () => {
     store.startSession({ id: 'A', ide: 'codex', cwd: '/repo' });
     for (const branch of ['feat/one', 'feat/two']) {
@@ -218,6 +302,7 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(result).toMatchObject({
       ok: false,
       code: 'ACTIVE_TASK_NOT_FOUND',
+      creation_guidance: expect.stringContaining('Create or join a Colony task'),
       candidates: [],
     });
     expect(store.storage.findActiveTaskForSession('A')).toBeUndefined();
@@ -350,6 +435,41 @@ describe('claimBeforeEditFromToolUse', () => {
     expect(store.storage.taskObservationsByKind(task_id, 'claim-before-edit')).toHaveLength(1);
   });
 
+  it('auto-claims a Codex/OMX edit by cwd branch when the session is not joined yet', () => {
+    const repo = join(dir, 'repo');
+    fakeGitCheckout(repo, 'agent/codex/omx');
+    store.startSession({ id: 'owner', ide: 'claude-code', cwd: repo });
+    store.startSession({ id: 'codex@019dd6c0', ide: 'codex', cwd: join(repo, 'packages/hooks') });
+    const thread = TaskThread.open(store, {
+      repo_root: repo,
+      branch: 'agent/codex/omx',
+      session_id: 'owner',
+    });
+    thread.join('owner', 'claude');
+
+    const result = claimBeforeEditFromToolUse(store, {
+      session_id: 'codex@019dd6c0',
+      ide: 'codex',
+      cwd: join(repo, 'packages/hooks'),
+      tool_name: 'Edit',
+      tool_input: { file_path: 'packages/hooks/src/viewer.tsx' },
+    });
+
+    expect(result).toMatchObject({
+      edits_with_claim: [],
+      edits_missing_claim: [],
+      auto_claimed_before_edit: ['packages/hooks/src/viewer.tsx'],
+      warnings: [],
+    });
+    expect(
+      store.storage.getClaim(thread.task_id, 'packages/hooks/src/viewer.tsx')?.session_id,
+    ).toBe('codex@019dd6c0');
+    expect(store.storage.claimBeforeEditStats(0)).toMatchObject({
+      pre_tool_use_signals: 1,
+      auto_claimed_before_edit: 1,
+    });
+  });
+
   it('records already-claimed edits without duplicating the claim', () => {
     const task_id = seedTwoSessionTask();
     const thread = new TaskThread(store, task_id);
@@ -423,6 +543,8 @@ describe('claimBeforeEditFromToolUse', () => {
           file_path: 'src/x.ts',
           note: 'pre-edit claim',
         },
+        creation_guidance:
+          'Create or join a Colony task for this session with cwd/repo_root/branch, then retry the edit or call task_claim_file with an explicit task_id.',
       },
     ]);
     expect(store.storage.findActiveTaskForSession('solo')).toBeUndefined();
