@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import type { BridgePolicyMode } from '@colony/config';
 import {
   type ClaimAgeClass,
@@ -5,6 +6,8 @@ import {
   type MemoryStore,
   classifyClaimAge,
   detectRepoBranch,
+  isStrongClaimAge,
+  normalizeClaimFilePath,
 } from '@colony/core';
 import {
   type ActiveTaskCandidate,
@@ -18,6 +21,8 @@ import { extractTouchedFiles } from './post-tool-use.js';
 
 const CLAIM_WARNING_DEBOUNCE_MS = 60_000;
 const CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID = 'colony-pre-tool-use-diagnostics';
+const ALL_TASKS_LIMIT = 1_000_000;
+const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 const claimWarningDebounceByStore = new WeakMap<MemoryStore, Map<string, number>>();
 
 export interface ClaimBeforeEditFallbackWarning {
@@ -27,7 +32,9 @@ export interface ClaimBeforeEditFallbackWarning {
   policy_mode?: BridgePolicyMode;
   conflict?: boolean;
   conflict_strength?: ConflictStrength;
+  protected?: boolean;
   owner?: string | null;
+  owner_branch?: string | null;
   next_tool: 'task_claim_file';
   /** Concrete invocation string the agent can copy verbatim. */
   next_call: string;
@@ -76,6 +83,8 @@ interface ClaimConflictInfo {
   file_path: string;
   task_id: number;
   owner: string;
+  owner_branch?: string;
+  protected?: boolean;
   conflict_strength: ClaimOwnershipStrength;
   claimed_at: number;
   age_minutes: number;
@@ -144,6 +153,34 @@ export function claimBeforeEditFromToolUse(
   if (files.length === 0) return result;
 
   for (const file_path of files) {
+    const protectedConflict = protectedLiveClaimConflict(store, input.session_id, scope, file_path);
+    if (protectedConflict) {
+      result.conflicts.push(protectedConflict);
+      result.edits_missing_claim.push(file_path);
+      result.blocked_conflicts.push(protectedConflict);
+      recordClaimBeforeEditFailure(store, input.session_id, {
+        task_id: protectedConflict.task_id,
+        file_path,
+        tool: toolName,
+        code: 'LIVE_FILE_CONTENTION',
+        error: protectedConflict.warning,
+        candidates: [],
+        policy_mode: policyMode,
+        conflict: protectedConflict,
+        extracted_paths: files,
+      });
+      result.warnings.push(
+        claimWarning(input.session_id, file_path, toolName, policyMode, {
+          ok: false,
+          code: 'LIVE_FILE_CONTENTION',
+          error: protectedConflict.warning,
+          candidates: [],
+          conflict: protectedConflict,
+        }),
+      );
+      continue;
+    }
+
     const conflict = currentClaimConflict(store, input.session_id, scope, file_path);
     if (conflict) result.conflicts.push(conflict);
 
@@ -242,12 +279,7 @@ export function claimBeforeEditFromToolUse(
 function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookResult {
   const context = claimBeforeEditWarning(result);
   const extracted_paths = result.extracted_paths;
-  const blocked =
-    result.policy_mode === 'block-on-conflict' &&
-    result.warnings.some(
-      (warning) =>
-        warning.code === 'LIVE_FILE_CONTENTION' && warning.conflict_strength === 'strong',
-    );
+  const blocked = result.blocked_conflicts.length > 0;
   if (blocked) {
     const reason =
       context ||
@@ -298,6 +330,8 @@ function currentClaimConflict(
       file_path,
       task_id: candidate.task_id,
       owner: claim.session_id,
+      owner_branch: candidate.branch,
+      protected: false,
       conflict_strength: classification.ownership_strength,
       claimed_at: claim.claimed_at,
       age_minutes: classification.age_minutes,
@@ -307,6 +341,135 @@ function currentClaimConflict(
   } catch {
     return null;
   }
+}
+
+function protectedLiveClaimConflict(
+  store: MemoryStore,
+  session_id: string,
+  scope: {
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
+  file_path: string,
+): ClaimConflictInfo | null {
+  try {
+    const normalizedFilePath = normalizeClaimFilePath(file_path);
+    if (!normalizedFilePath) return null;
+
+    const candidate = singleActiveTaskCandidate(store, session_id, scope);
+    const repoRoot = candidate?.repo_root ?? scope.repo_root;
+    if (!repoRoot) return null;
+    const normalizedRepoRoot = resolve(repoRoot);
+    const tasks = store.storage.listTasks(ALL_TASKS_LIMIT);
+    const conflicts: ClaimConflictInfo[] = [];
+
+    for (const task of tasks) {
+      if (resolve(task.repo_root) !== normalizedRepoRoot) continue;
+      if (!isProtectedBranch(task.branch)) continue;
+      for (const claim of store.storage.listClaims(task.id)) {
+        if (normalizeClaimFilePath(claim.file_path) !== normalizedFilePath) continue;
+        if (claim.session_id === session_id) continue;
+        if (candidate?.task_id === task.id) continue;
+        if (
+          takeoverAssignsClaimToSession(store, {
+            task_id: task.id,
+            file_path: normalizedFilePath,
+            target_session_id: claim.session_id,
+            assigned_session_id: session_id,
+          })
+        ) {
+          continue;
+        }
+
+        const classification = classifyClaimAge(claim.claimed_at, {
+          claim_stale_minutes: store.settings.claimStaleMinutes,
+        });
+        if (!isStrongClaimAge(classification)) continue;
+        conflicts.push({
+          file_path: normalizedFilePath,
+          task_id: task.id,
+          owner: claim.session_id,
+          owner_branch: task.branch,
+          protected: true,
+          conflict_strength: classification.ownership_strength,
+          claimed_at: claim.claimed_at,
+          age_minutes: classification.age_minutes,
+          age_class: classification.age_class,
+          warning: `Protected Colony ${classification.ownership_strength} claim on ${normalizedFilePath} is held by ${claim.session_id} on ${task.branch}. Run colony lane takeover before editing.`,
+        });
+      }
+    }
+
+    return conflicts.sort(compareClaimConflicts)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function singleActiveTaskCandidate(
+  store: MemoryStore,
+  session_id: string,
+  scope: {
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
+): ActiveTaskCandidate | null {
+  const candidates = activeTaskCandidatesForSession(store, { session_id, ...scope });
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
+}
+
+function takeoverAssignsClaimToSession(
+  store: MemoryStore,
+  args: {
+    task_id: number;
+    file_path: string;
+    target_session_id: string;
+    assigned_session_id: string;
+  },
+): boolean {
+  return store.storage.taskObservationsByKind(args.task_id, 'lane-takeover').some((row) => {
+    const metadata = parseObservationMetadata(row.metadata);
+    if (!metadata) return false;
+    return (
+      metadata.target_session_id === args.target_session_id &&
+      metadata.assigned_session_id === args.assigned_session_id &&
+      normalizeClaimFilePath(readString(metadata.file_path) ?? '') === args.file_path
+    );
+  });
+}
+
+function parseObservationMetadata(
+  metadata: string | Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!metadata) return null;
+  if (typeof metadata === 'object') return metadata;
+  try {
+    const parsed = JSON.parse(metadata);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function compareClaimConflicts(left: ClaimConflictInfo, right: ClaimConflictInfo): number {
+  if (left.conflict_strength !== right.conflict_strength) {
+    return left.conflict_strength === 'strong' ? -1 : 1;
+  }
+  if (left.claimed_at !== right.claimed_at) return right.claimed_at - left.claimed_at;
+  if (left.task_id !== right.task_id) return left.task_id - right.task_id;
+  return left.owner.localeCompare(right.owner);
+}
+
+function isProtectedBranch(branch: string): boolean {
+  return PROTECTED_BRANCHES.has(branch);
 }
 
 function taskScopeForToolUse(
@@ -430,7 +593,9 @@ function recordClaimBeforeEditFailure(
         policy_mode: metadata.policy_mode,
         conflict: metadata.conflict !== undefined,
         conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
+        protected: metadata.conflict?.protected ?? false,
         owner: metadata.conflict?.owner ?? null,
+        owner_branch: metadata.conflict?.owner_branch ?? null,
         warning: metadata.conflict?.warning ?? metadata.error,
         ...(sessionBindingMissing
           ? { session_binding_missing: true, original_session_id: session_id }
@@ -490,7 +655,9 @@ function recordClaimBeforeEdit(
       extracted_paths: metadata.extracted_paths ?? [metadata.file_path],
       conflict: metadata.conflict !== undefined,
       conflict_strength: metadata.conflict?.conflict_strength ?? 'none',
+      protected: metadata.conflict?.protected ?? false,
       owner: metadata.conflict?.owner ?? null,
+      owner_branch: metadata.conflict?.owner_branch ?? null,
       warning: metadata.conflict?.warning ?? null,
     },
   });
@@ -530,11 +697,14 @@ function claimWarning(
   const message =
     claim.code === 'LIVE_FILE_CONTENTION' && conflict
       ? [
-          `Colony ${conflict.conflict_strength} claim conflict before ${tool} on ${file_path}.`,
+          `${conflict.protected ? 'Protected Colony' : 'Colony'} ${conflict.conflict_strength} claim conflict before ${tool} on ${file_path}.`,
           `owner=${conflict.owner}`,
+          conflict.owner_branch ? `owner_branch=${conflict.owner_branch}` : '',
           `policy=${policyMode}`,
           `warning=${conflict.warning}`,
-        ].join('\n')
+        ]
+          .filter(Boolean)
+          .join('\n')
       : [
           `Missing Colony claim before ${tool} on ${file_path}.`,
           `reason=${claim.code}: ${claim.error}`,
@@ -552,7 +722,9 @@ function claimWarning(
           policy_mode: policyMode,
           conflict: true,
           conflict_strength: conflict.conflict_strength,
+          protected: conflict.protected ?? false,
           owner: conflict.owner,
+          owner_branch: conflict.owner_branch ?? null,
         }
       : {}),
     next_tool: 'task_claim_file',
