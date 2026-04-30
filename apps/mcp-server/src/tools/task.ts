@@ -171,9 +171,16 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(reply_to !== undefined ? { reply_to } : {}),
       });
       const recommendation = proposalRecommendationForPost(kind, content);
+      const directedMessageSuggestion = taskMessageSuggestionForPost(store, {
+        task_id,
+        session_id,
+        kind,
+        content,
+      });
       return jsonReply({
         id,
         hint: taskPostHint(content),
+        ...(directedMessageSuggestion ?? {}),
         ...(recommendation ? { recommendation } : {}),
       });
     }),
@@ -540,6 +547,70 @@ function taskPostHint(content: string): string {
   const fallback = 'If you do not know task_id, use task_note_working.';
   if (!looksLikeDirectedCoordination(content)) return fallback;
   return `For directed agent coordination, use task_message. ${fallback}`;
+}
+
+function taskMessageSuggestionForPost(
+  store: ToolContext['store'],
+  post: { task_id: number; session_id: string; kind: string; content: string },
+):
+  | {
+      suggested_tool: 'mcp__colony__task_message';
+      suggested_call: string;
+      suggested_args: {
+        task_id: number;
+        session_id: string;
+        agent: string;
+        to_agent: 'claude' | 'codex';
+        urgency: 'needs_reply';
+        content: string;
+      };
+    }
+  | undefined {
+  if (post.kind !== 'blocker') return undefined;
+  const toAgent = directedPostTargetAgent(post.content);
+  if (!toAgent) return undefined;
+
+  const args = {
+    task_id: post.task_id,
+    session_id: post.session_id,
+    agent: postingAgentForSession(store, post.task_id, post.session_id),
+    to_agent: toAgent,
+    urgency: 'needs_reply' as const,
+    content: '<short directed request>',
+  };
+  return {
+    suggested_tool: 'mcp__colony__task_message',
+    suggested_call: `mcp__colony__task_message({ agent: ${JSON.stringify(
+      args.agent,
+    )}, session_id: ${JSON.stringify(args.session_id)}, task_id: ${
+      args.task_id
+    }, to_agent: ${JSON.stringify(args.to_agent)}, urgency: "needs_reply", content: ${JSON.stringify(
+      args.content,
+    )} })`,
+    suggested_args: args,
+  };
+}
+
+function directedPostTargetAgent(content: string): 'claude' | 'codex' | null {
+  const normalized = normalizePostContent(content).toLowerCase();
+  const target =
+    normalized.match(/\bto_agent\s*[:=]\s*["']?(claude|codex)\b/)?.[1] ??
+    normalized.match(/\btarget(?:_agent)?\s*[:=]\s*["']?(claude|codex)\b/)?.[1] ??
+    normalized.match(/(^|[^a-z0-9_@])@?(claude|codex)(?=$|[^a-z0-9_])/)?.[2];
+  return target === 'claude' || target === 'codex' ? target : null;
+}
+
+function postingAgentForSession(
+  store: ToolContext['store'],
+  task_id: number,
+  session_id: string,
+): string {
+  const participant = store.storage
+    .listParticipants(task_id)
+    .find((row) => row.session_id === session_id && row.left_at === null);
+  if (participant?.agent) return participant.agent;
+  const identity = detectMcpClientIdentity(process.env, { session_id });
+  return identity.inferred_agent === 'unbound' ? 'unknown' : identity.inferred_agent;
 }
 
 function proposalRecommendationForPost(
