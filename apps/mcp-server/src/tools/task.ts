@@ -342,6 +342,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
       if (guarded.status === 'task_not_found') {
         return mcpErrorResponse('TASK_NOT_FOUND', `task ${task_id} not found`);
       }
+      new TaskThread(store, task_id).join(session_id, agentForTaskClaim(session_id));
       const id = store.addObservation({
         session_id,
         kind: 'claim',
@@ -569,6 +570,11 @@ function taskListRoutingForSession(
 
 function isTool(tool: string, name: string): boolean {
   return tool === name || tool === `colony.${name}` || tool === `mcp__colony__${name}`;
+}
+
+function agentForTaskClaim(session_id: string): string {
+  const identity = detectMcpClientIdentity(process.env, { session_id });
+  return identity.inferred_agent === 'unbound' ? 'unknown' : identity.inferred_agent;
 }
 
 interface ActiveTaskCandidate {
