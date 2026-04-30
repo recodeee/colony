@@ -168,8 +168,7 @@ describe('colony health next fixes', () => {
 
     const claimHint = payload.action_hints.find((hint) => hint.metric === 'claim-before-edit');
     expect(claimHint).toMatchObject({
-      current:
-        `Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals. (${evidence})`,
+      current: `Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals. (${evidence})`,
       target: 'pre_tool_use before file mutation',
       action:
         'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
@@ -185,9 +184,7 @@ describe('colony health next fixes', () => {
     expect(readiness).toContain(
       'root cause: Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.',
     );
-    expect(readiness).toContain(
-      `evidence: ${evidence}`,
-    );
+    expect(readiness).toContain(`evidence: ${evidence}`);
     expect(readiness).toContain(
       'action: Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
     );
@@ -212,6 +209,57 @@ describe('colony health next fixes', () => {
         'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
     });
     expect(json.task_claim_file_before_edits.root_cause.evidence).toBe(evidence);
+  });
+
+  it('reports lifecycle bridge missing when manual claims are high but no hook-capable edits were recorded', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          ...calls(1043, 100, 'session-a', 'mcp__colony__task_claim_file'),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    const evidence = 'task_claim_file_calls=1043, hook_capable_edits=0, pre_tool_use_signals=0';
+    expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
+      kind: 'lifecycle_bridge_missing',
+      summary:
+        'Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded.',
+      evidence,
+      action:
+        'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
+      command:
+        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+    });
+
+    const hint = payload.action_hints.find((entry) => entry.metric === 'claim-before-edit');
+    expect(hint).toMatchObject({
+      current:
+        'Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded. (task_claim_file_calls=1043, hook_capable_edits=0, pre_tool_use_signals=0)',
+      target: 'pre_tool_use before file mutation',
+      priority: 5,
+    });
+
+    const readiness = outputSection(formatColonyHealthOutput(payload), 'Readiness summary');
+    expect(readiness).toContain(
+      'root cause: Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded.',
+    );
+    expect(readiness).toContain(`evidence: ${evidence}`);
   });
 
   it('does not ask for bridge wiring when pre_tool_use covers write edits', () => {

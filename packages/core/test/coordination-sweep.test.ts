@@ -60,13 +60,62 @@ describe('buildCoordinationSweep stale claim cleanup', () => {
     expect(store.storage.getClaim(taskId, filePath)?.session_id).toBe('codex@dirty');
     expect(store.storage.taskObservationsByKind(taskId, 'coordination-sweep')).toHaveLength(0);
   });
+
+  it('releases same-branch duplicate claims to audit-only history', () => {
+    seedStaleClaim('agent/codex/duplicate', 'src/shared.ts', 'codex@left', '/repo');
+    seedStaleClaim('agent/codex/duplicate', 'src/shared.ts', 'codex@right', '/repo-alias');
+
+    const dryRun = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      repo_roots: ['/repo', '/repo-alias'],
+      now: NOW,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(dryRun.summary).toMatchObject({
+      same_branch_duplicate_claim_count: 2,
+      released_same_branch_duplicate_claim_count: 0,
+    });
+    expect(dryRun.same_branch_duplicate_claims.map((claim) => claim.session_id).sort()).toEqual([
+      'codex@left',
+      'codex@right',
+    ]);
+    expect(dryRun.recommended_action).toContain('--release-same-branch-duplicates');
+
+    const applied = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      repo_roots: ['/repo', '/repo-alias'],
+      now: NOW,
+      release_same_branch_duplicates: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(applied.summary).toMatchObject({
+      active_claim_count: 0,
+      same_branch_duplicate_claim_count: 0,
+      released_same_branch_duplicate_claim_count: 2,
+    });
+    expect(applied.released_same_branch_duplicate_claims).toHaveLength(2);
+    expect(applied.recommended_action).toContain('released 2 same-branch duplicate claim(s)');
+    for (const task of store.storage.listTasks(10)) {
+      expect(store.storage.listClaims(task.id)).toHaveLength(0);
+      expect(store.storage.taskObservationsByKind(task.id, 'coordination-sweep')).toHaveLength(1);
+    }
+  });
 });
 
-function seedStaleClaim(branch: string, filePath: string, sessionId: string): void {
+function seedStaleClaim(
+  branch: string,
+  filePath: string,
+  sessionId: string,
+  repoRoot = '/repo',
+): void {
   vi.setSystemTime(NOW - 300 * MINUTE_MS);
-  store.startSession({ id: sessionId, ide: 'codex', cwd: '/repo' });
+  store.startSession({ id: sessionId, ide: 'codex', cwd: repoRoot });
   const thread = TaskThread.open(store, {
-    repo_root: '/repo',
+    repo_root: repoRoot,
     branch,
     title: branch,
     session_id: sessionId,
@@ -102,6 +151,22 @@ function dirtyWorktreeReport(branch: string, filePath: string): WorktreeContenti
       worktree_count: 1,
       dirty_worktree_count: 1,
       dirty_file_count: 1,
+      contention_count: 0,
+    },
+  };
+}
+
+function emptyWorktreeContention(): WorktreeContentionReport {
+  return {
+    generated_at: new Date(NOW).toISOString(),
+    repo_root: '/repo',
+    inspected_roots: [],
+    worktrees: [],
+    contentions: [],
+    summary: {
+      worktree_count: 0,
+      dirty_worktree_count: 0,
+      dirty_file_count: 0,
       contention_count: 0,
     },
   };

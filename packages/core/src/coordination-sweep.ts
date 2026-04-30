@@ -12,15 +12,15 @@ import {
   classifyClaimAge,
   isStrongClaimAge,
 } from './claim-age.js';
-import { readHivemind, type HivemindSnapshot } from './hivemind.js';
+import { type HivemindSnapshot, readHivemind } from './hivemind.js';
 import type { MemoryStore } from './memory-store.js';
 import { PheromoneSystem } from './pheromone.js';
 import { type SubtaskInfo, listPlans } from './plan.js';
 import { ProposalSystem } from './proposal-system.js';
 import { type HandoffMetadata, parseMessage } from './task-thread.js';
 import {
-  readWorktreeContentionReport,
   type WorktreeContentionReport,
+  readWorktreeContentionReport,
 } from './worktree-contention.js';
 
 const HOT_FILE_NOISE_FLOOR = 0.1;
@@ -36,6 +36,7 @@ export interface CoordinationSweepOptions {
   stale_hot_file_min_original_strength?: number;
   release_stale_blockers?: boolean;
   release_safe_stale_claims?: boolean;
+  release_same_branch_duplicates?: boolean;
   hivemind?: HivemindSnapshot;
   worktree_contention?: WorktreeContentionReport;
 }
@@ -61,8 +62,10 @@ export interface CoordinationSweepResult {
     stale_hot_file_count: number;
     blocked_downstream_task_count: number;
     stale_downstream_blocker_count: number;
+    same_branch_duplicate_claim_count: number;
     released_stale_blocker_claim_count: number;
     requeued_stale_blocker_count: number;
+    released_same_branch_duplicate_claim_count: number;
     released_stale_claim_count: number;
     downgraded_stale_claim_count: number;
     skipped_dirty_claim_count: number;
@@ -82,7 +85,9 @@ export interface CoordinationSweepResult {
   stale_hot_files: StaleHotFileSignal[];
   blocked_downstream_tasks: BlockedDownstreamTaskSignal[];
   stale_downstream_blockers: StaleDownstreamBlockerSignal[];
+  same_branch_duplicate_claims: SameBranchDuplicateClaimSignal[];
   released_stale_downstream_blockers: ReleasedStaleDownstreamBlocker[];
+  released_same_branch_duplicate_claims: ReleasedSameBranchDuplicateClaim[];
   released_stale_claims: ReleasedStaleClaim[];
   downgraded_stale_claims: DowngradedStaleClaim[];
   skipped_dirty_claims: SkippedDirtyClaim[];
@@ -238,6 +243,13 @@ export interface StaleDownstreamBlockerSignal {
   cleanup_summary: string;
 }
 
+export interface SameBranchDuplicateClaimSignal
+  extends Omit<ClaimSignal, 'cleanup_action' | 'weak_reason' | 'cleanup_summary'> {
+  duplicate_session_ids: string[];
+  cleanup_action: 'release_same_branch_duplicate';
+  cleanup_summary: string;
+}
+
 export interface ReleasedStaleDownstreamBlocker {
   plan_slug: string;
   task_id: number;
@@ -245,6 +257,17 @@ export interface ReleasedStaleDownstreamBlocker {
   released_claim_count: number;
   audit_observation_id: number;
   requeue_observation_id: number;
+}
+
+export interface ReleasedSameBranchDuplicateClaim {
+  task_id: number;
+  branch: string;
+  file_path: string;
+  session_id: string;
+  duplicate_session_ids: string[];
+  cleanup_action: 'release_same_branch_duplicate';
+  reason: 'same_branch_duplicate';
+  audit_observation_id: number;
 }
 
 export interface ReleasedStaleClaim {
@@ -305,34 +328,52 @@ export function buildCoordinationSweep(
     now,
     thresholds,
   );
+  const sameBranchDuplicateClaims = collectSameBranchDuplicateClaims(
+    [...claimBuckets.active_claims, ...claimBuckets.stale_claims],
+    { group_across_repo_roots: repoRoots !== null },
+  );
+  const released_same_branch_duplicate_claims =
+    opts.release_same_branch_duplicates === true
+      ? releaseSameBranchDuplicateClaims(store, sameBranchDuplicateClaims, now)
+      : [];
+  const duplicateCleanupKeys = new Set(
+    released_same_branch_duplicate_claims.map((claim) => staleClaimKey(claim)),
+  );
+  const activeClaims = filterClaimSignals(claimBuckets.active_claims, duplicateCleanupKeys);
+  const staleClaims = filterClaimSignals(claimBuckets.stale_claims, duplicateCleanupKeys);
+  const expiredWeakClaims = filterClaimSignals(
+    claimBuckets.expired_weak_claims,
+    duplicateCleanupKeys,
+  ) as ExpiredWeakClaimSignal[];
+  const remainingSameBranchDuplicateClaims =
+    opts.release_same_branch_duplicates === true ? [] : sameBranchDuplicateClaims;
   const staleClaimCleanupContext = staleClaimCleanupContextFor(store, opts, now);
   const staleClaimCleanup =
     opts.release_safe_stale_claims === true
-      ? releaseSafeStaleClaims(store, claimBuckets.stale_claims, stale_downstream_blockers, {
+      ? releaseSafeStaleClaims(store, staleClaims, stale_downstream_blockers, {
           now,
           ...staleClaimCleanupContext,
         })
-      : emptyStaleClaimCleanup(claimBuckets.stale_claims, stale_downstream_blockers, {
+      : emptyStaleClaimCleanup(staleClaims, stale_downstream_blockers, {
           ...staleClaimCleanupContext,
         });
   const released_stale_downstream_blockers =
     opts.release_stale_blockers === true
       ? releaseStaleDownstreamBlockers(store, stale_downstream_blockers, now)
       : [];
-  const remainingStaleClaims = filterRemainingStaleClaims(
-    claimBuckets.stale_claims,
-    staleClaimCleanup,
-  );
+  const remainingStaleClaims = filterRemainingStaleClaims(staleClaims, staleClaimCleanup);
   const remainingExpiredWeakClaims = filterRemainingStaleClaims(
-    claimBuckets.expired_weak_claims,
+    expiredWeakClaims,
     staleClaimCleanup,
   ) as ExpiredWeakClaimSignal[];
   const recommended_action = suggestClaimCleanup({
-    ...claimBuckets,
+    fresh_claims: activeClaims,
     stale_claims: remainingStaleClaims,
     expired_weak_claims: remainingExpiredWeakClaims,
     stale_downstream_blocker_count: stale_downstream_blockers.length,
+    same_branch_duplicate_claim_count: remainingSameBranchDuplicateClaims.length,
     released_stale_blocker_count: released_stale_downstream_blockers.length,
+    released_same_branch_duplicate_claim_count: released_same_branch_duplicate_claims.length,
     released_stale_claim_count: staleClaimCleanup.released_stale_claims.length,
     downgraded_stale_claim_count: staleClaimCleanup.downgraded_stale_claims.length,
     skipped_dirty_claim_count: staleClaimCleanup.skipped_dirty_claims.length,
@@ -340,7 +381,9 @@ export function buildCoordinationSweep(
   const recommended_actions = recommendedActions({
     recommended_action,
     stale_downstream_blockers,
+    same_branch_duplicate_claims: remainingSameBranchDuplicateClaims,
     skipped_dirty_claims: staleClaimCleanup.skipped_dirty_claims,
+    released_same_branch_duplicate_claims,
     released_stale_claims: staleClaimCleanup.released_stale_claims,
     downgraded_stale_claims: staleClaimCleanup.downgraded_stale_claims,
   });
@@ -350,8 +393,8 @@ export function buildCoordinationSweep(
     repo_root: opts.repo_root ?? null,
     thresholds,
     summary: {
-      active_claim_count: claimBuckets.active_claims.length,
-      fresh_claim_count: claimBuckets.fresh_claims.length,
+      active_claim_count: activeClaims.length,
+      fresh_claim_count: activeClaims.length,
       stale_claim_count: remainingStaleClaims.length,
       expired_weak_claim_count: remainingExpiredWeakClaims.length,
       expired_handoff_count: expired_handoffs.length,
@@ -360,17 +403,19 @@ export function buildCoordinationSweep(
       stale_hot_file_count: stale_hot_files.length,
       blocked_downstream_task_count: blocked_downstream_tasks.length,
       stale_downstream_blocker_count: stale_downstream_blockers.length,
+      same_branch_duplicate_claim_count: remainingSameBranchDuplicateClaims.length,
       released_stale_blocker_claim_count: released_stale_downstream_blockers.reduce(
         (sum, row) => sum + row.released_claim_count,
         0,
       ),
       requeued_stale_blocker_count: released_stale_downstream_blockers.length,
+      released_same_branch_duplicate_claim_count: released_same_branch_duplicate_claims.length,
       released_stale_claim_count: staleClaimCleanup.released_stale_claims.length,
       downgraded_stale_claim_count: staleClaimCleanup.downgraded_stale_claims.length,
       skipped_dirty_claim_count: staleClaimCleanup.skipped_dirty_claims.length,
     },
-    active_claims: claimBuckets.active_claims,
-    fresh_claims: claimBuckets.fresh_claims,
+    active_claims: activeClaims,
+    fresh_claims: activeClaims,
     stale_claims: remainingStaleClaims,
     expired_weak_claims: remainingExpiredWeakClaims,
     top_stale_branches: topStaleBranches(remainingStaleClaims),
@@ -383,7 +428,9 @@ export function buildCoordinationSweep(
     stale_hot_files,
     blocked_downstream_tasks,
     stale_downstream_blockers,
+    same_branch_duplicate_claims: remainingSameBranchDuplicateClaims,
     released_stale_downstream_blockers,
+    released_same_branch_duplicate_claims,
     released_stale_claims: staleClaimCleanup.released_stale_claims,
     downgraded_stale_claims: staleClaimCleanup.downgraded_stale_claims,
     skipped_dirty_claims: staleClaimCleanup.skipped_dirty_claims,
@@ -569,21 +616,78 @@ function topStaleBranches(staleClaims: StaleClaimSignal[]): StaleClaimBranchSumm
     .slice(0, 10);
 }
 
+function collectSameBranchDuplicateClaims(
+  claims: ClaimSignal[],
+  opts: { group_across_repo_roots: boolean },
+): SameBranchDuplicateClaimSignal[] {
+  const byBranchFile = new Map<string, ClaimSignal[]>();
+  for (const claim of claims) {
+    const key = opts.group_across_repo_roots
+      ? `${claim.branch}\u0000${claim.file_path}`
+      : `${claim.repo_root}\u0000${claim.branch}\u0000${claim.file_path}`;
+    const bucket = byBranchFile.get(key) ?? [];
+    bucket.push(claim);
+    byBranchFile.set(key, bucket);
+  }
+
+  const out: SameBranchDuplicateClaimSignal[] = [];
+  for (const bucket of byBranchFile.values()) {
+    const sessionIds = [...new Set(bucket.map((claim) => claim.session_id))].sort();
+    if (sessionIds.length <= 1) continue;
+    for (const claim of bucket) {
+      out.push({
+        task_id: claim.task_id,
+        task_title: claim.task_title,
+        repo_root: claim.repo_root,
+        branch: claim.branch,
+        file_path: claim.file_path,
+        session_id: claim.session_id,
+        claimed_at: claim.claimed_at,
+        age_minutes: claim.age_minutes,
+        age_class: claim.age_class,
+        ownership_strength: claim.ownership_strength,
+        original_strength: claim.original_strength,
+        current_strength: claim.current_strength,
+        latest_deposited_at: claim.latest_deposited_at,
+        duplicate_session_ids: sessionIds.filter((sessionId) => sessionId !== claim.session_id),
+        cleanup_action: 'release_same_branch_duplicate',
+        cleanup_summary:
+          'would release same-branch duplicate advisory claim; audit observations stay intact',
+      });
+    }
+  }
+  return out.sort(
+    (a, b) =>
+      a.branch.localeCompare(b.branch) ||
+      a.file_path.localeCompare(b.file_path) ||
+      a.session_id.localeCompare(b.session_id) ||
+      a.repo_root.localeCompare(b.repo_root),
+  );
+}
+
 function suggestClaimCleanup(args: {
   fresh_claims: FreshClaimSignal[];
   stale_claims: StaleClaimSignal[];
   expired_weak_claims: ExpiredWeakClaimSignal[];
   stale_downstream_blocker_count: number;
+  same_branch_duplicate_claim_count: number;
   released_stale_blocker_count: number;
+  released_same_branch_duplicate_claim_count: number;
   released_stale_claim_count: number;
   downgraded_stale_claim_count: number;
   skipped_dirty_claim_count: number;
 }): string {
+  if (args.released_same_branch_duplicate_claim_count > 0) {
+    return `applied: released ${args.released_same_branch_duplicate_claim_count} same-branch duplicate claim(s) to audit-only; audit observations stay intact`;
+  }
   if (args.released_stale_claim_count > 0 || args.downgraded_stale_claim_count > 0) {
     return `applied: released ${args.released_stale_claim_count} expired/weak stale claim(s), downgraded ${args.downgraded_stale_claim_count} inactive stale claim(s) to audit-only; audit observations stay intact`;
   }
   if (args.released_stale_blocker_count > 0) {
     return `applied: released/requeued ${args.released_stale_blocker_count} stale downstream blocker(s); audit observations stay intact`;
+  }
+  if (args.same_branch_duplicate_claim_count > 0) {
+    return `dry-run: release ${args.same_branch_duplicate_claim_count} same-branch duplicate claim(s) with --release-same-branch-duplicates; audit observations stay intact`;
   }
   if (args.stale_downstream_blocker_count > 0) {
     return `dry-run: release/requeue ${args.stale_downstream_blocker_count} stale downstream blocker(s) with --release-stale-blockers; audit observations stay intact`;
@@ -612,7 +716,7 @@ interface StaleClaimCleanupResult {
 }
 
 function staleClaimCleanupContextFor(
-  store: MemoryStore,
+  _store: MemoryStore,
   opts: CoordinationSweepOptions,
   now: number,
 ): StaleClaimCleanupContext {
@@ -738,6 +842,56 @@ function releaseSafeStaleClaims(
   };
 }
 
+function releaseSameBranchDuplicateClaims(
+  store: MemoryStore,
+  claims: SameBranchDuplicateClaimSignal[],
+  now: number,
+): ReleasedSameBranchDuplicateClaim[] {
+  const released: ReleasedSameBranchDuplicateClaim[] = [];
+  for (const claim of claims) {
+    const auditId = store.storage.transaction(() => {
+      const observationId = store.addObservation({
+        session_id: 'coordination-sweep',
+        task_id: claim.task_id,
+        kind: 'coordination-sweep',
+        content: `Coordination sweep released same-branch duplicate claim ${claim.file_path} on ${claim.branch} from ${claim.session_id}; audit history retained.`,
+        metadata: {
+          kind: 'coordination-sweep',
+          action: 'release-same-branch-duplicate',
+          task_id: claim.task_id,
+          file_path: claim.file_path,
+          branch: claim.branch,
+          repo_root: claim.repo_root,
+          owner_session_id: claim.session_id,
+          duplicate_session_ids: claim.duplicate_session_ids,
+          claimed_at: claim.claimed_at,
+          age_minutes: claim.age_minutes,
+          age_class: claim.age_class,
+          now,
+        },
+      });
+      store.storage.releaseClaim({
+        task_id: claim.task_id,
+        file_path: claim.file_path,
+        session_id: claim.session_id,
+      });
+      store.storage.touchTask(claim.task_id, now);
+      return observationId;
+    });
+    released.push({
+      task_id: claim.task_id,
+      branch: claim.branch,
+      file_path: claim.file_path,
+      session_id: claim.session_id,
+      duplicate_session_ids: claim.duplicate_session_ids,
+      cleanup_action: 'release_same_branch_duplicate',
+      reason: 'same_branch_duplicate',
+      audit_observation_id: auditId,
+    });
+  }
+  return released;
+}
+
 function skippedStaleClaims(
   staleClaims: StaleClaimSignal[],
   staleDownstreamBlockers: StaleDownstreamBlockerSignal[],
@@ -795,6 +949,11 @@ function skippedStaleClaims(
   );
 }
 
+function filterClaimSignals<T extends ClaimSignal>(claims: T[], removedKeys: Set<string>): T[] {
+  if (removedKeys.size === 0) return claims;
+  return claims.filter((claim) => !removedKeys.has(staleClaimKey(claim)));
+}
+
 function filterRemainingStaleClaims<T extends StaleClaimSignal>(
   staleClaims: T[],
   cleanup: StaleClaimCleanupResult,
@@ -809,20 +968,31 @@ function filterRemainingStaleClaims<T extends StaleClaimSignal>(
 function recommendedActions(args: {
   recommended_action: string;
   stale_downstream_blockers: StaleDownstreamBlockerSignal[];
+  same_branch_duplicate_claims: SameBranchDuplicateClaimSignal[];
   skipped_dirty_claims: SkippedDirtyClaim[];
+  released_same_branch_duplicate_claims: ReleasedSameBranchDuplicateClaim[];
   released_stale_claims: ReleasedStaleClaim[];
   downgraded_stale_claims: DowngradedStaleClaim[];
 }): string[] {
   const actions = new Set<string>([args.recommended_action]);
   if (args.stale_downstream_blockers.length > 0) {
     actions.add(
-      `rescue stale downstream blocker(s): run colony coordination sweep --release-stale-blockers after owner/rescue review`,
+      'rescue stale downstream blocker(s): run colony coordination sweep --release-stale-blockers after owner/rescue review',
+    );
+  }
+  if (args.same_branch_duplicate_claims.length > 0) {
+    actions.add(
+      'release same-branch duplicate claim(s): run colony coordination sweep --release-same-branch-duplicates after confirming branch/file duplicates',
     );
   }
   if (args.skipped_dirty_claims.some((claim) => claim.reason === 'dirty_worktree')) {
     actions.add('dirty stale claim(s) skipped: require handoff or rescue before release');
   }
-  if (args.released_stale_claims.length > 0 || args.downgraded_stale_claims.length > 0) {
+  if (
+    args.released_same_branch_duplicate_claims.length > 0 ||
+    args.released_stale_claims.length > 0 ||
+    args.downgraded_stale_claims.length > 0
+  ) {
     actions.add('audit history retained in coordination-sweep observations');
   }
   return [...actions];

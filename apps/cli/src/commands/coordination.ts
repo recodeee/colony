@@ -11,6 +11,7 @@ interface SweepOpts {
   repoRoot?: string;
   dryRun?: boolean;
   releaseStaleBlockers?: boolean;
+  releaseSameBranchDuplicates?: boolean;
   json?: boolean;
 }
 
@@ -28,30 +29,38 @@ export function registerCoordinationCommand(program: Command): void {
       '--release-stale-blockers',
       'release stale downstream blocker claims and requeue blocker subtasks; audit history retained',
     )
+    .option(
+      '--release-same-branch-duplicates',
+      'release same-branch duplicate claims to audit-only; audit history retained',
+    )
     .option('--json', 'emit sweep result as JSON')
     .action(async (opts: SweepOpts) => {
       const repoRoot = resolve(opts.repoRoot ?? process.cwd());
       const repoRoots = repoRootAliases(repoRoot);
+      const releaseSameBranchDuplicates =
+        opts.releaseSameBranchDuplicates === true && opts.dryRun !== true;
       const settings = loadSettings();
       await withStore(settings, (store) => {
         const result = buildCoordinationSweep(store, {
           repo_root: repoRoot,
           repo_roots: repoRoots,
           release_stale_blockers: opts.releaseStaleBlockers === true,
+          release_same_branch_duplicates: releaseSameBranchDuplicates,
           release_safe_stale_claims: opts.json === true && opts.dryRun !== true,
         });
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(
-              { ...result, dry_run: opts.dryRun === true },
-              null,
-              2,
-            )}\n`,
+            `${JSON.stringify({ ...result, dry_run: opts.dryRun === true }, null, 2)}\n`,
           );
           return;
         }
         process.stdout.write(
-          `${renderCoordinationSweep(result, { dryRun: opts.releaseStaleBlockers !== true })}\n`,
+          `${renderCoordinationSweep(result, {
+            appliedModes: appliedSweepModes({
+              releaseStaleBlockers: opts.releaseStaleBlockers === true,
+              releaseSameBranchDuplicates,
+            }),
+          })}\n`,
         );
       });
     });
@@ -88,7 +97,7 @@ function gitOriginSlug(repoRoot: string): string | null {
 
 function renderCoordinationSweep(
   result: CoordinationSweepResult,
-  opts: { dryRun: boolean },
+  opts: { appliedModes: string[] },
 ): string {
   const total = staleSignalCount(result);
   const lines: string[] = [];
@@ -99,9 +108,7 @@ function renderCoordinationSweep(
     lines.push(kleur.bold(`Coordination sweep: ${total} stale biological signal(s)`));
   }
   lines.push(`  repo: ${result.repo_root ?? 'all'}`);
-  lines.push(
-    opts.dryRun ? '  mode: dry-run, read-only' : '  mode: release-stale-blockers, audit-retaining',
-  );
+  lines.push(`  mode: ${renderSweepMode(opts.appliedModes)}`);
   lines.push('  audit: observations retained; advisory claims only');
   lines.push(`  recommended action: ${result.recommended_action}`);
   lines.push(
@@ -112,6 +119,9 @@ function renderCoordinationSweep(
   );
   lines.push(
     `  decayed proposals: ${result.summary.decayed_proposal_count}  stale hot files: ${result.summary.stale_hot_file_count}  blocked downstream: ${result.summary.blocked_downstream_task_count}`,
+  );
+  lines.push(
+    `  same-branch duplicates: ${result.summary.same_branch_duplicate_claim_count}  released same-branch duplicates: ${result.summary.released_same_branch_duplicate_claim_count}`,
   );
   lines.push(
     `  stale downstream blockers: ${result.summary.stale_downstream_blocker_count}  released stale blocker claims: ${result.summary.released_stale_blocker_claim_count}  requeued blockers: ${result.summary.requeued_stale_blocker_count}`,
@@ -185,6 +195,13 @@ function renderCoordinationSweep(
   );
   renderSection(
     lines,
+    'Same-branch duplicate claims',
+    result.same_branch_duplicate_claims,
+    (claim) =>
+      `task #${claim.task_id} ${claim.branch} ${claim.file_path} held by ${claim.session_id}, duplicate owner(s) ${claim.duplicate_session_ids.join(', ')} -> ${claim.cleanup_summary}`,
+  );
+  renderSection(
+    lines,
     'Stale downstream blockers',
     result.stale_downstream_blockers,
     (blocker) =>
@@ -196,6 +213,13 @@ function renderCoordinationSweep(
     result.released_stale_downstream_blockers,
     (blocker) =>
       `${blocker.plan_slug}/sub-${blocker.subtask_index} task #${blocker.task_id} released ${blocker.released_claim_count} claim(s), audit #${blocker.audit_observation_id}, requeue #${blocker.requeue_observation_id}`,
+  );
+  renderSection(
+    lines,
+    'Released same-branch duplicate claims',
+    result.released_same_branch_duplicate_claims,
+    (claim) =>
+      `task #${claim.task_id} ${claim.branch} ${claim.file_path} held by ${claim.session_id} -> audit-only, audit #${claim.audit_observation_id}`,
   );
   renderSection(
     lines,
@@ -222,9 +246,25 @@ function renderCoordinationSweep(
   return lines.join('\n');
 }
 
+function appliedSweepModes(opts: {
+  releaseStaleBlockers: boolean;
+  releaseSameBranchDuplicates: boolean;
+}): string[] {
+  const modes: string[] = [];
+  if (opts.releaseStaleBlockers) modes.push('release-stale-blockers');
+  if (opts.releaseSameBranchDuplicates) modes.push('release-same-branch-duplicates');
+  return modes;
+}
+
+function renderSweepMode(appliedModes: string[]): string {
+  if (appliedModes.length === 0) return 'dry-run, read-only';
+  return `${appliedModes.join(', ')}, audit-retaining`;
+}
+
 function staleSignalCount(result: CoordinationSweepResult): number {
   return (
     result.summary.stale_claim_count +
+    result.summary.same_branch_duplicate_claim_count +
     result.summary.expired_handoff_count +
     result.summary.expired_message_count +
     result.summary.decayed_proposal_count +

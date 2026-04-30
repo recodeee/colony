@@ -1,5 +1,10 @@
 import { loadSettings } from '@colony/config';
-import type { IngestOmxRuntimeSummaryResult, MemoryStore, OmxRuntimeSummaryInput } from '@colony/core';
+import {
+  type IngestOmxRuntimeSummaryResult,
+  type MemoryStore,
+  type OmxRuntimeSummaryInput,
+  inferIdeFromSessionId,
+} from '@colony/core';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { withStore } from '../util/store.js';
@@ -88,30 +93,6 @@ function agentFromSession(sessionId: string): string | undefined {
   const ide = inferIdeFromSessionId(sessionId);
   if (ide === 'claude-code') return 'claude';
   return ide;
-}
-
-function inferIdeFromSessionId(sessionId: string): string | undefined {
-  const parts = sessionId.split(/[@\-:/_]/).map((part) => part.toLowerCase());
-  const first = parts[0];
-  if (!first) return undefined;
-  const candidate = first === 'agent' && parts[1] ? parts[1] : first;
-  switch (candidate) {
-    case 'claude':
-    case 'claudecode':
-      return 'claude-code';
-    case 'codex':
-      return 'codex';
-    case 'gemini':
-      return 'gemini';
-    case 'cursor':
-      return 'cursor';
-    case 'windsurf':
-      return 'windsurf';
-    case 'aider':
-      return 'aider';
-    default:
-      return undefined;
-  }
 }
 
 export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps = {}): void {
@@ -221,8 +202,7 @@ export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps 
       const settings = loadSettings();
       await withStore(settings, async (store) => {
         const ingest =
-          deps.ingestOmxRuntimeSummary ??
-          (await import('@colony/core')).ingestOmxRuntimeSummary;
+          deps.ingestOmxRuntimeSummary ?? (await import('@colony/core')).ingestOmxRuntimeSummary;
         const result = ingest(store, payload, {
           repoRoot: opts.repoRoot?.trim() || process.cwd(),
           ...(opts.sessionId?.trim() ? { sessionId: opts.sessionId.trim() } : {}),
@@ -237,7 +217,9 @@ export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps 
             `${kleur.green('ok')} observation=${result.observation_id ?? '-'} warnings=${result.warnings?.length ?? 0}\n`,
           );
         } else {
-          process.stderr.write(`${kleur.red('error')} ${result.error ?? 'summary ingest failed'}\n`);
+          process.stderr.write(
+            `${kleur.red('error')} ${result.error ?? 'summary ingest failed'}\n`,
+          );
         }
 
         if (!result.ok) process.exitCode = 1;

@@ -95,9 +95,13 @@ const mocks = vi.hoisted(() => ({
   runOmxLifecycleEnvelope: vi.fn(),
 }));
 
-vi.mock('@colony/config', () => ({
-  loadSettings: mocks.loadSettings,
-}));
+vi.mock('@colony/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@colony/config')>();
+  return {
+    ...actual,
+    loadSettings: mocks.loadSettings,
+  };
+});
 
 vi.mock('../src/util/store.js', () => ({
   withStore: mocks.withStore,
@@ -153,6 +157,45 @@ describe('bridge status --json', () => {
       },
     );
     expect(output.join('')).toBe(`${JSON.stringify(payload)}\n`);
+    expect(JSON.parse(output.join(''))).toEqual(payload);
+  });
+
+  it('infers bridge status agent with the shared core session-id classifier', async () => {
+    mocks.buildBridgeStatusPayload.mockResolvedValue(payload);
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerBridgeCommand(program, {
+      buildBridgeStatusPayload: mocks.buildBridgeStatusPayload,
+    });
+
+    await program.parseAsync(
+      [
+        'node',
+        'test',
+        'bridge',
+        'status',
+        '--json',
+        '--repo-root',
+        '/repo',
+        '--session-id',
+        'agent/claude/fix-unknown-ide-owner-infer-2026-04-24-21-21',
+      ],
+      { from: 'node' },
+    );
+
+    expect(mocks.buildBridgeStatusPayload).toHaveBeenCalledWith(
+      { kind: 'store' },
+      {
+        session_id: 'agent/claude/fix-unknown-ide-owner-infer-2026-04-24-21-21',
+        agent: 'claude',
+        repo_root: '/repo',
+      },
+    );
     expect(JSON.parse(output.join(''))).toEqual(payload);
   });
 });

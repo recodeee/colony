@@ -20,17 +20,17 @@ import {
   signalMetadataFromProposal,
 } from '@colony/core';
 import {
-  sweepQueenPlans,
   type QueenReplacementAgent,
   type QueenReplacementRecommendation,
+  sweepQueenPlans,
 } from '@colony/queen';
 import type {
   ClaimBeforeEditStats,
   ClaimMatchSources,
   ClaimMissReasons,
   NearestClaimExample,
-  OmxRuntimeSummaryStats,
   ObservationRow,
+  OmxRuntimeSummaryStats,
   ProposalRow,
   ReinforcementRow,
   Storage,
@@ -57,6 +57,8 @@ const LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS = 10;
 const LIFECYCLE_BRIDGE_NEAR_ZERO_PRE_TOOL_USE_SIGNAL_RATIO = 0.05;
 const LIFECYCLE_BRIDGE_ROOT_CAUSE =
   'Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.';
+const LIFECYCLE_BRIDGE_MISSING_NO_HOOK_EDITS_ROOT_CAUSE =
+  'Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded.';
 const OLD_TELEMETRY_POLLUTION_ROOT_CAUSE =
   '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.';
 const LIFECYCLE_BRIDGE_ACTION =
@@ -1306,10 +1308,7 @@ function omxRuntimeBridgePayload(
   };
 }
 
-function omxRuntimeSummaryStats(
-  storage: unknown,
-  since: number,
-): OmxRuntimeSummaryStats {
+function omxRuntimeSummaryStats(storage: unknown, since: number): OmxRuntimeSummaryStats {
   const maybe = storage as Partial<Pick<Storage, 'omxRuntimeSummaryStats'>>;
   return (
     maybe.omxRuntimeSummaryStats?.(since) ?? {
@@ -1434,6 +1433,15 @@ function lifecycleBridgeRootCause(input: {
 }): RootCauseSummary | null {
   if (input.task_claim_file_calls < LIFECYCLE_BRIDGE_MISSING_MIN_TASK_CLAIM_FILE_CALLS) {
     return null;
+  }
+  if (input.hook_capable_edits === 0 && input.pre_tool_use_signals === 0) {
+    return {
+      kind: 'lifecycle_bridge_missing',
+      summary: LIFECYCLE_BRIDGE_MISSING_NO_HOOK_EDITS_ROOT_CAUSE,
+      evidence: `task_claim_file_calls=${input.task_claim_file_calls}, hook_capable_edits=0, pre_tool_use_signals=0`,
+      action: LIFECYCLE_BRIDGE_ACTION,
+      command: LIFECYCLE_BRIDGE_COMMAND,
+    };
   }
   if (input.hook_capable_edits < LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS) {
     return null;
@@ -1805,10 +1813,7 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       }),
     });
   }
-  if (
-    liveContention.live_file_contentions === 0 &&
-    liveContention.dirty_contended_files > 0
-  ) {
+  if (liveContention.live_file_contentions === 0 && liveContention.dirty_contended_files > 0) {
     hints.push({
       metric: 'dirty contended files',
       status: 'bad',
@@ -2664,7 +2669,12 @@ function queenWaveHealthPayload(
       quota_handoffs_blocking_downstream: subtasks.filter(
         (subtask) => subtask.quota_handoff_pending && blocksDownstream(subtask, subtasks),
       ).length,
-      replacement_recommendation: planReplacementRecommendation(storage, planSlug, subtasks, options),
+      replacement_recommendation: planReplacementRecommendation(
+        storage,
+        planSlug,
+        subtasks,
+        options,
+      ),
     });
   }
 
@@ -2697,8 +2707,8 @@ function queenWaveHealthPayload(
       0,
     ),
     replacement_recommendation:
-      plans.find((plan) => plan.replacement_recommendation !== null)
-        ?.replacement_recommendation ?? null,
+      plans.find((plan) => plan.replacement_recommendation !== null)?.replacement_recommendation ??
+      null,
     plans: plans.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug)),
   };
 }
@@ -3018,12 +3028,6 @@ function staleDownstreamBlockers(
 function readNumberArray(value: unknown): number[] {
   return Array.isArray(value)
     ? value.filter((item): item is number => typeof item === 'number')
-    : [];
-}
-
-function readStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
     : [];
 }
 

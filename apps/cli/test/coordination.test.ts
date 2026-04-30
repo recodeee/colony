@@ -187,9 +187,7 @@ describe('colony coordination CLI', () => {
       }),
     ]);
     expect(json.recommended_actions).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('rescue stale downstream blocker'),
-      ]),
+      expect.arrayContaining([expect.stringContaining('rescue stale downstream blocker')]),
     );
     expect(json.suggested_cleanup_action).toContain('release/requeue 1 stale downstream blocker');
     expect(json.recommended_action).toBe(json.suggested_cleanup_action);
@@ -381,9 +379,12 @@ describe('colony coordination CLI', () => {
     const settings = loadSettings();
     await withStore(settings, (store) => {
       const mainTaskId = taskIdByBranch(store, 'main');
-      expect(store.storage.listClaims(mainTaskId).map((claim) => claim.file_path).sort()).toEqual([
-        'src/fresh.ts',
-      ]);
+      expect(
+        store.storage
+          .listClaims(mainTaskId)
+          .map((claim) => claim.file_path)
+          .sort(),
+      ).toEqual(['src/fresh.ts']);
       expect(store.storage.taskObservationsByKind(mainTaskId, 'coordination-sweep')).toHaveLength(
         3,
       );
@@ -392,7 +393,108 @@ describe('colony coordination CLI', () => {
     });
   });
 
+  it('bulk releases same-branch duplicate claims through an explicit flag', async () => {
+    await seedSameBranchDuplicateClaims();
+
+    await createProgram().parseAsync(
+      ['node', 'test', 'coordination', 'sweep', '--repo-root', repoRoot, '--json', '--dry-run'],
+      { from: 'node' },
+    );
+
+    const dryRun = JSON.parse(output) as {
+      dry_run: boolean;
+      summary: {
+        same_branch_duplicate_claim_count: number;
+        released_same_branch_duplicate_claim_count: number;
+      };
+      same_branch_duplicate_claims: Array<{ session_id: string }>;
+      recommended_action: string;
+    };
+
+    expect(dryRun.dry_run).toBe(true);
+    expect(dryRun.summary).toMatchObject({
+      same_branch_duplicate_claim_count: 2,
+      released_same_branch_duplicate_claim_count: 0,
+    });
+    expect(dryRun.same_branch_duplicate_claims.map((claim) => claim.session_id).sort()).toEqual([
+      'codex@dup-left',
+      'codex@dup-right',
+    ]);
+    expect(dryRun.recommended_action).toContain('--release-same-branch-duplicates');
+
+    output = '';
+    await createProgram().parseAsync(
+      [
+        'node',
+        'test',
+        'coordination',
+        'sweep',
+        '--repo-root',
+        repoRoot,
+        '--json',
+        '--release-same-branch-duplicates',
+      ],
+      { from: 'node' },
+    );
+
+    const applied = JSON.parse(output) as {
+      dry_run: boolean;
+      summary: {
+        same_branch_duplicate_claim_count: number;
+        released_same_branch_duplicate_claim_count: number;
+      };
+      released_same_branch_duplicate_claims: Array<{ session_id: string; reason: string }>;
+    };
+
+    expect(applied.dry_run).toBe(false);
+    expect(applied.summary).toMatchObject({
+      same_branch_duplicate_claim_count: 0,
+      released_same_branch_duplicate_claim_count: 2,
+    });
+    expect(applied.released_same_branch_duplicate_claims).toEqual([
+      expect.objectContaining({ session_id: 'codex@dup-left', reason: 'same_branch_duplicate' }),
+      expect.objectContaining({ session_id: 'codex@dup-right', reason: 'same_branch_duplicate' }),
+    ]);
+
+    const settings = loadSettings();
+    await withStore(settings, (store) => {
+      const tasks = store.storage
+        .listTasks(20)
+        .filter((task) => task.branch === 'agent/codex/duplicate');
+      expect(tasks).toHaveLength(2);
+      for (const task of tasks) {
+        expect(store.storage.listClaims(task.id)).toHaveLength(0);
+        expect(store.storage.taskObservationsByKind(task.id, 'coordination-sweep')).toHaveLength(1);
+      }
+    });
+  });
 });
+
+async function seedSameBranchDuplicateClaims(): Promise<void> {
+  const settings = loadSettings();
+  await withStore(settings, (store) => {
+    setMinutesAgo(5);
+    store.startSession({ id: 'codex@dup-left', ide: 'codex', cwd: repoRoot });
+    store.startSession({ id: 'codex@dup-right', ide: 'codex', cwd: repoRoot });
+    const left = TaskThread.open(store, {
+      repo_root: storedRepoRoot,
+      branch: 'agent/codex/duplicate',
+      title: 'duplicate left',
+      session_id: 'codex@dup-left',
+    });
+    const right = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/codex/duplicate',
+      title: 'duplicate right',
+      session_id: 'codex@dup-right',
+    });
+    left.join('codex@dup-left', 'codex');
+    right.join('codex@dup-right', 'codex');
+    left.claimFile({ session_id: 'codex@dup-left', file_path: 'src/shared.ts' });
+    right.claimFile({ session_id: 'codex@dup-right', file_path: 'src/shared.ts' });
+    vi.setSystemTime(NOW);
+  });
+}
 
 async function seedSweepSignals(): Promise<void> {
   const settings = loadSettings();
