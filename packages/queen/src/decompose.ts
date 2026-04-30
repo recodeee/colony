@@ -186,6 +186,7 @@ export function orderedPlanFromWaves(input: QueenOrderedPlanInput): QueenOrdered
 
     const firstIndexInWave = subtasks.length;
     const subtaskIndexes: number[] = [];
+    const earlierInWave: Array<{ index: number; file_scope: string[] }> = [];
 
     for (const subtask of wave.subtasks) {
       const { depends_on: explicitDependsOn = [], ...draft } = subtask;
@@ -197,11 +198,16 @@ export function orderedPlanFromWaves(input: QueenOrderedPlanInput): QueenOrdered
         }
       }
 
+      const overlapDeps = earlierInWave
+        .filter((earlier) => sharedFiles(earlier.file_scope, draft.file_scope).length > 0)
+        .map((earlier) => earlier.index);
       subtasks.push({
         ...draft,
-        depends_on: uniqueSorted([...explicitDependsOn, ...previousWaveIndexes]),
+        depends_on: uniqueSorted([...explicitDependsOn, ...previousWaveIndexes, ...overlapDeps]),
       });
-      subtaskIndexes.push(subtasks.length - 1);
+      const subtaskIndex = subtasks.length - 1;
+      subtaskIndexes.push(subtaskIndex);
+      earlierInWave.push({ index: subtaskIndex, file_scope: draft.file_scope });
     }
 
     waves.push({
@@ -224,7 +230,7 @@ export function orderedPlanFromWaves(input: QueenOrderedPlanInput): QueenOrdered
       scheduler: 'none',
       wave_dependency: 'previous_wave',
     },
-    waves,
+    waves: normalizePlanWaves(waves, subtasks),
     subtasks,
   };
 }
@@ -732,7 +738,7 @@ function sameWaveOverlapErrors(groups: DraftGroup[], waveName: string): string[]
       const a = groups[i];
       const b = groups[j];
       if (!a || !b) continue;
-      const shared = a.files.filter((file) => b.files.includes(file));
+      const shared = sharedFiles(a.files, b.files);
       if (shared.length > 0) {
         errors.push(
           `wave ${waveName} puts overlapping sub-tasks ${a.title} and ${b.title} together: ${shared.join(', ')}`,
@@ -741,6 +747,59 @@ function sameWaveOverlapErrors(groups: DraftGroup[], waveName: string): string[]
     }
   }
   return errors;
+}
+
+function normalizePlanWaves(waves: QueenPlanWave[], subtasks: QueenSubtask[]): QueenPlanWave[] {
+  if (!planWavesHaveScopeOverlap(waves, subtasks)) return waves;
+  const waveIndexes = dependencyWaveIndexesForSubtasks(subtasks);
+  const maxWave = waveIndexes.length > 0 ? Math.max(...waveIndexes) : -1;
+  const normalized: QueenPlanWave[] = [];
+  for (let waveIndex = 0; waveIndex <= maxWave; waveIndex++) {
+    const subtaskIndexes = waveIndexes
+      .map((candidate, subtaskIndex) => (candidate === waveIndex ? subtaskIndex : -1))
+      .filter((subtaskIndex) => subtaskIndex >= 0);
+    if (subtaskIndexes.length === 0) continue;
+    normalized.push({
+      id: `wave-${waveIndex + 1}`,
+      title: `Wave ${waveIndex + 1}`,
+      subtask_indexes: subtaskIndexes,
+    });
+  }
+  return normalized;
+}
+
+function planWavesHaveScopeOverlap(waves: QueenPlanWave[], subtasks: QueenSubtask[]): boolean {
+  return waves.some((wave) => {
+    for (let i = 0; i < wave.subtask_indexes.length; i++) {
+      for (let j = i + 1; j < wave.subtask_indexes.length; j++) {
+        const left = subtasks[wave.subtask_indexes[i] ?? -1];
+        const right = subtasks[wave.subtask_indexes[j] ?? -1];
+        if (!left || !right) continue;
+        if (sharedFiles(left.file_scope, right.file_scope).length > 0) return true;
+      }
+    }
+    return false;
+  });
+}
+
+function dependencyWaveIndexesForSubtasks(subtasks: QueenSubtask[]): number[] {
+  const memo = new Map<number, number>();
+
+  function waveFor(index: number): number {
+    const cached = memo.get(index);
+    if (cached !== undefined) return cached;
+    const deps = subtasks[index]?.depends_on ?? [];
+    const wave = deps.length === 0 ? 0 : Math.max(...deps.map((dep) => waveFor(dep) + 1));
+    memo.set(index, wave);
+    return wave;
+  }
+
+  return subtasks.map((_, index) => waveFor(index));
+}
+
+function sharedFiles(left: string[], right: string[]): string[] {
+  const rightSet = new Set(right);
+  return [...new Set(left.filter((file) => rightSet.has(file)))];
 }
 
 function assertDependencyOrder(subtasks: QueenSubtask[]): void {

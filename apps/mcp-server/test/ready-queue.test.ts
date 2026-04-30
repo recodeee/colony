@@ -74,6 +74,18 @@ interface ReadyResult {
   ready: ReadyEntry[];
   total_available: number;
   mcp_capability_map: { summary: string[]; unknown_servers: string[] };
+  ready_scope_overlap_warnings: Array<{
+    code: 'ready_scope_overlap';
+    severity: 'warning';
+    plan_slug: string;
+    wave_index: number | null;
+    wave_name: string;
+    file_path: string;
+    protected: boolean;
+    subtask_indexes: number[];
+    titles: string[];
+    message: string;
+  }>;
   next_action: string;
   next_tool?: 'task_plan_claim_subtask' | 'rescue_stranded_scan';
   plan_slug?: string;
@@ -221,6 +233,52 @@ function releaseSubtaskClaim(
       subtask_index: subtaskIndex,
       released_files: claims.map((claim) => claim.file_path),
     },
+  });
+}
+
+function seedReadyPlanDirectly(args: {
+  slug: string;
+  subtasks: Array<{ title: string; file_scope: string[]; depends_on: number[] }>;
+}): void {
+  const parent = TaskThread.open(store, {
+    repo_root: repoRoot,
+    branch: `spec/${args.slug}`,
+    session_id: 'planner',
+    title: args.slug,
+  });
+  store.addObservation({
+    session_id: 'planner',
+    task_id: parent.task_id,
+    kind: 'plan-config',
+    content: `legacy plan ${args.slug}`,
+    metadata: { plan_slug: args.slug, source: 'test-fixture' },
+  });
+
+  args.subtasks.forEach((subtask, index) => {
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: `spec/${args.slug}/sub-${index}`,
+      session_id: 'planner',
+    });
+    store.addObservation({
+      session_id: 'planner',
+      task_id: thread.task_id,
+      kind: 'plan-subtask',
+      content: `${subtask.title}\n\n${subtask.title} description`,
+      metadata: {
+        parent_plan_slug: args.slug,
+        parent_plan_title: args.slug,
+        parent_spec_task_id: parent.task_id,
+        subtask_index: index,
+        title: subtask.title,
+        description: `${subtask.title} description`,
+        file_scope: subtask.file_scope,
+        depends_on: subtask.depends_on,
+        spec_row_id: null,
+        capability_hint: 'infra_work',
+        status: 'available',
+      },
+    });
   });
 }
 
@@ -741,6 +799,55 @@ describe('task_ready_for_agent', () => {
 
     expect(result.ready.map((entry) => entry.title)).toEqual(['Build API', 'Build page']);
     expect(result.ready[0]?.fit_score).toBeGreaterThan(result.ready[1]?.fit_score ?? 0);
+  });
+
+  it('warns when existing ready subtasks overlap on a protected central file', async () => {
+    seedReadyPlanDirectly({
+      slug: 'legacy-health-overlap',
+      subtasks: [
+        {
+          title: 'Add health warning one',
+          file_scope: ['apps/cli/src/commands/health.ts'],
+          depends_on: [],
+        },
+        {
+          title: 'Add health warning two',
+          file_scope: ['apps/cli/src/commands/health.ts'],
+          depends_on: [],
+        },
+        {
+          title: 'Add unrelated API helper',
+          file_scope: ['apps/mcp-server/src/tools/unrelated.ts'],
+          depends_on: [],
+        },
+      ],
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index).sort((a, b) => a - b)).toEqual([
+      0, 1, 2,
+    ]);
+    expect(result.ready_scope_overlap_warnings).toEqual([
+      {
+        code: 'ready_scope_overlap',
+        severity: 'warning',
+        plan_slug: 'legacy-health-overlap',
+        wave_index: 0,
+        wave_name: 'Wave 1',
+        file_path: 'apps/cli/src/commands/health.ts',
+        protected: true,
+        subtask_indexes: [0, 1],
+        titles: ['Add health warning one', 'Add health warning two'],
+        message:
+          'legacy-health-overlap has 2 ready subtasks touching protected apps/cli/src/commands/health.ts; serialize with depends_on before parallel claims.',
+      },
+    ]);
   });
 
   it('routes large ready work away from Codex after recent Codex quota history', async () => {

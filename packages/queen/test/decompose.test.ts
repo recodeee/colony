@@ -491,6 +491,74 @@ describe('orderedPlanFromWaves', () => {
     expectNoCommanderFields(plan);
   });
 
+  it('serializes protected central file overlap inside one requested wave', () => {
+    const plan = orderedPlanFromWaves({
+      slug: 'queen-health-overlap',
+      title: 'Queen health overlap',
+      problem: 'Two useful health tasks must not both claim the central health command at once.',
+      acceptance_criteria: ['Health command work is serialized'],
+      waves: [
+        {
+          id: 'wave-1',
+          title: 'Health command work',
+          subtasks: [
+            fileSubtask('Add health hint A', 'apps/cli/src/commands/health.ts', 'infra_work'),
+            fileSubtask('Add health hint B', 'apps/cli/src/commands/health.ts', 'infra_work'),
+            fileSubtask('Add API helper', 'apps/mcp-server/src/tools/health-helper.ts', 'api_work'),
+          ],
+        },
+      ],
+    });
+
+    expect(plan.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [0], []]);
+    expect(plan.waves.map((wave) => wave.subtask_indexes)).toEqual([[0, 2], [1]]);
+    expect(pairwiseScopeOverlap(plan)).toEqual([]);
+  });
+
+  it('serializes ordinary same-file overlap inside one requested wave', () => {
+    const plan = orderedPlanFromWaves({
+      slug: 'queen-ordinary-overlap',
+      title: 'Queen ordinary overlap',
+      problem: 'Ordinary same-file work still needs one owner at a time.',
+      acceptance_criteria: ['Shared file work is serialized'],
+      waves: [
+        {
+          title: 'Core work',
+          subtasks: [
+            fileSubtask('Update core path A', 'packages/core/src/shared.ts', 'infra_work'),
+            fileSubtask('Update core path B', 'packages/core/src/shared.ts', 'infra_work'),
+          ],
+        },
+      ],
+    });
+
+    expect(plan.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [0]]);
+    expect(plan.waves.map((wave) => wave.subtask_indexes)).toEqual([[0], [1]]);
+    expect(pairwiseScopeOverlap(plan)).toEqual([]);
+  });
+
+  it('keeps non-overlapping same-wave subtasks parallel', () => {
+    const plan = orderedPlanFromWaves({
+      slug: 'queen-no-overlap',
+      title: 'Queen no overlap',
+      problem: 'Different files can stay parallel.',
+      acceptance_criteria: ['Independent files stay in one wave'],
+      waves: [
+        {
+          title: 'Parallel work',
+          subtasks: [
+            fileSubtask('Update CLI command', 'apps/cli/src/commands/plans.ts', 'infra_work'),
+            fileSubtask('Update MCP tool', 'apps/mcp-server/src/tools/plan.ts', 'api_work'),
+          ],
+        },
+      ],
+    });
+
+    expect(plan.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], []]);
+    expect(plan.waves.map((wave) => wave.subtask_indexes)).toEqual([[0, 1]]);
+    expect(pairwiseScopeOverlap(plan)).toEqual([]);
+  });
+
   it('represents the current Colony adoption fixes as ordered Queen waves', () => {
     const plan = colonyAdoptionFixesPlan;
 
@@ -539,6 +607,19 @@ function agentSubtask(agent: number, capability_hint: CapabilityHint): QueenWave
     title: `Planning label Agent ${agent} task`,
     description: `Agent ${agent} is a planning label, not a runtime assignment.`,
     file_scope: [`agents/agent-${agent}.md`],
+    capability_hint,
+  };
+}
+
+function fileSubtask(
+  title: string,
+  file: string,
+  capability_hint: CapabilityHint,
+): QueenWaveSubtask {
+  return {
+    title,
+    description: `${title}.`,
+    file_scope: [file],
     capability_hint,
   };
 }

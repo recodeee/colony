@@ -3,6 +3,7 @@ import {
   type ClaimHolder,
   type McpCapabilityMap,
   type MemoryStore,
+  type PlanInfo,
   type SubtaskInfo,
   claimsForPaths,
   discoverMcpCapabilities,
@@ -76,10 +77,24 @@ export interface ReadySubtaskWithWarnings extends ReadySubtask {
   negative_warnings: CompactNegativeWarning[];
 }
 
+export interface ReadyScopeOverlapWarning {
+  code: 'ready_scope_overlap';
+  severity: 'warning';
+  plan_slug: string;
+  wave_index: number | null;
+  wave_name: string;
+  file_path: string;
+  protected: boolean;
+  subtask_indexes: number[];
+  titles: string[];
+  message: string;
+}
+
 export interface ReadyForAgentResult {
   ready: ReadySubtaskWithWarnings[];
   total_available: number;
   mcp_capability_map: McpCapabilityMap;
+  ready_scope_overlap_warnings: ReadyScopeOverlapWarning[];
   next_action: string;
   next_tool?: 'task_plan_claim_subtask' | 'rescue_stranded_scan';
   plan_slug?: string;
@@ -244,6 +259,7 @@ export async function buildReadyForAgent(
       ready,
       total_available: available.length,
       mcp_capability_map: discoverMcpCapabilities(),
+      ready_scope_overlap_warnings: readyScopeOverlapWarnings(store, plans),
     },
     claimable,
     args,
@@ -253,7 +269,10 @@ export async function buildReadyForAgent(
 }
 
 function buildReadyResult(
-  base: Pick<ReadyForAgentResult, 'ready' | 'total_available' | 'mcp_capability_map'>,
+  base: Pick<
+    ReadyForAgentResult,
+    'ready' | 'total_available' | 'mcp_capability_map' | 'ready_scope_overlap_warnings'
+  >,
   claimable: RankedSubtask | null,
   args: { session_id: string; agent: string },
   hasPlans: boolean,
@@ -361,6 +380,60 @@ function readyWarningQueries(entry: ReadySubtask): string[] {
     entry.title,
   ].filter((query) => query.length > 0);
   return [...new Set(queries)].map((query) => query.slice(0, 800));
+}
+
+function readyScopeOverlapWarnings(
+  store: MemoryStore,
+  plans: PlanInfo[],
+): ReadyScopeOverlapWarning[] {
+  const warnings: ReadyScopeOverlapWarning[] = [];
+  for (const plan of plans) {
+    const subtasksByFile = new Map<string, SubtaskInfo[]>();
+    for (const subtask of plan.next_available) {
+      for (const file of subtask.file_scope) {
+        const bucket = subtasksByFile.get(file) ?? [];
+        bucket.push(subtask);
+        subtasksByFile.set(file, bucket);
+      }
+    }
+
+    for (const [filePath, subtasks] of subtasksByFile) {
+      if (subtasks.length < 2) continue;
+      const waveIndexes = [...new Set(subtasks.map((subtask) => subtask.wave_index))];
+      const protectedFile = isProtectedReadyFile(store, filePath);
+      warnings.push({
+        code: 'ready_scope_overlap',
+        severity: 'warning',
+        plan_slug: plan.plan_slug,
+        wave_index: waveIndexes.length === 1 ? (waveIndexes[0] ?? null) : null,
+        wave_name: waveIndexes.length === 1 ? (subtasks[0]?.wave_name ?? 'Wave 1') : 'mixed waves',
+        file_path: filePath,
+        protected: protectedFile,
+        subtask_indexes: subtasks.map((subtask) => subtask.subtask_index),
+        titles: subtasks.map((subtask) => subtask.title),
+        message: `${plan.plan_slug} has ${subtasks.length} ready subtasks touching ${protectedFile ? 'protected ' : ''}${filePath}; serialize with depends_on before parallel claims.`,
+      });
+    }
+  }
+
+  return warnings.sort(
+    (left, right) =>
+      left.plan_slug.localeCompare(right.plan_slug) ||
+      left.file_path.localeCompare(right.file_path) ||
+      (left.subtask_indexes[0] ?? -1) - (right.subtask_indexes[0] ?? -1),
+  );
+}
+
+function isProtectedReadyFile(store: MemoryStore, filePath: string): boolean {
+  const normalized = normalizeReadyFile(filePath);
+  return (
+    store.settings.protected_files.some((file) => normalizeReadyFile(file) === normalized) ||
+    isProtectedFile(filePath)
+  );
+}
+
+function normalizeReadyFile(filePath: string): string {
+  return filePath.replaceAll('\\', '/').replace(/^\/+/, '').replace(/\/+/g, '/');
 }
 
 function compactTitleQuery(title: string): string {

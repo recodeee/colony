@@ -117,7 +117,10 @@ function emptyWorktreeReport(repoRoot: string): WorktreeContentionReport {
   };
 }
 
-function finding(result: ValidateResult, code: string): ValidateResult['summary']['findings'][number] {
+function finding(
+  result: ValidateResult,
+  code: string,
+): ValidateResult['summary']['findings'][number] {
   const found = result.summary.findings.find((candidate) => candidate.code === code);
   if (!found) throw new Error(`missing finding ${code}`);
   return found;
@@ -160,6 +163,27 @@ describe('task_plan_validate', () => {
         shared: ['apps/api/src/widgets.ts'],
       },
     ]);
+  });
+
+  it('warns when independent sub-tasks overlap on a protected central file', async () => {
+    planValidationRuntime.protectedFilePatterns = ['apps/cli/src/commands/health.ts'];
+    const result = await callValidate([
+      subtask('Health hint one', ['apps/cli/src/commands/health.ts']),
+      subtask('Health hint two', ['apps/cli/src/commands/health.ts']),
+    ]);
+
+    expect(result.partition_clean).toBe(false);
+    expect(result.pairwise_overlaps).toEqual([
+      { a: 0, b: 1, shared: ['apps/cli/src/commands/health.ts'] },
+    ]);
+    expect(finding(result, 'parallel_file_scope_overlap')).toMatchObject({
+      severity: 'warning',
+      message: 'parallel sub-tasks share protected file: apps/cli/src/commands/health.ts',
+      subtask_index: 0,
+      file_path: 'apps/cli/src/commands/health.ts',
+      detail:
+        'sub-tasks 0 and 1 should be serialized with depends_on or split through a shared refactor',
+    });
   });
 
   it('reports a live-claim collision for a currently held scoped file', async () => {

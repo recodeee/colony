@@ -9,6 +9,7 @@ export type PlanValidationSeverity = 'error' | 'warning' | 'info';
 
 export type PlanValidationFindingCode =
   | 'file_already_claimed'
+  | 'parallel_file_scope_overlap'
   | 'stale_blocker_exists'
   | 'quota_risk_runtime_assigned'
   | 'dirty_worktree_touches_planned_file'
@@ -39,6 +40,7 @@ export interface PlanValidationFinding {
   agent?: string;
   capability_hint?: CapabilityHint;
   detail?: string;
+  related_subtask_indices?: number[];
 }
 
 export interface PlanValidationSummary {
@@ -84,6 +86,7 @@ export function buildPlanValidationSummary(args: {
   const now = args.runtime?.now?.() ?? Date.now();
   const findings = [
     ...fileClaimFindings(args.subtasks, args.live_claims ?? liveClaims(args.store, args.repo_root)),
+    ...parallelScopeOverlapFindings(args.store, args.subtasks, args.runtime),
     ...staleBlockerFindings(args.store, args.repo_root, args.subtasks, now),
     ...quotaRiskFindings(args.store, args.repo_root, args.subtasks, args.runtime),
     ...dirtyWorktreeFindings(args.repo_root, args.subtasks, args.runtime),
@@ -122,6 +125,39 @@ function fileClaimFindings(
           task_id: claim.task_id,
           branch: claim.branch,
           session_id: claim.session_id,
+        });
+      }
+    }
+  }
+  return findings;
+}
+
+function parallelScopeOverlapFindings(
+  store: MemoryStore,
+  subtasks: PlanValidationSubtaskInput[],
+  runtime?: PlanValidationRuntime,
+): PlanValidationFinding[] {
+  const findings: PlanValidationFinding[] = [];
+  const protectedPatterns = runtime?.protectedFilePatterns ?? store.settings.protected_files;
+  for (let i = 0; i < subtasks.length; i++) {
+    for (let j = i + 1; j < subtasks.length; j++) {
+      const a = subtasks[i];
+      const b = subtasks[j];
+      if (!a || !b) continue;
+      if (hasDependencyPath(subtasks, i, j) || hasDependencyPath(subtasks, j, i)) continue;
+
+      for (const filePath of intersect(a.file_scope, b.file_scope)) {
+        const protectedFile = protectedPatterns.some((pattern) =>
+          matchesPattern(filePath, pattern),
+        );
+        findings.push({
+          code: 'parallel_file_scope_overlap',
+          severity: 'warning',
+          message: `parallel sub-tasks share ${protectedFile ? 'protected ' : ''}file: ${filePath}`,
+          subtask_index: i,
+          file_path: filePath,
+          related_subtask_indices: [i, j],
+          detail: `sub-tasks ${i} and ${j} should be serialized with depends_on or split through a shared refactor`,
         });
       }
     }
@@ -230,7 +266,9 @@ function omxNoteFindings(
   const byFile = subtaskIndexByFile(subtasks);
   const findings: PlanValidationFinding[] = [];
   for (const note of notes) {
-    const files = note.file_paths?.length ? note.file_paths : [...planned].filter((file) => note.content.includes(file));
+    const files = note.file_paths?.length
+      ? note.file_paths
+      : [...planned].filter((file) => note.content.includes(file));
     for (const file of files) {
       if (!planned.has(file)) continue;
       const finding: PlanValidationFinding = {
@@ -308,7 +346,10 @@ function quotaRiskRuntimesFromStore(
       .filter((session) => session.cwd === repoRoot)
       .map((session) => [session.id, session]),
   );
-  const runtimes = new Map<string, NonNullable<PlanValidationRuntime['quotaRiskRuntimes']>[number]>();
+  const runtimes = new Map<
+    string,
+    NonNullable<PlanValidationRuntime['quotaRiskRuntimes']>[number]
+  >();
   for (const task of store.storage.listTasks(2000)) {
     if (task.repo_root !== repoRoot) continue;
     for (const row of store.storage.taskTimeline(task.id, 100)) {
@@ -360,7 +401,9 @@ function readContention(
   runtime?: PlanValidationRuntime,
 ): WorktreeContentionReport | null {
   try {
-    return runtime?.readWorktreeContention?.(repoRoot) ?? readWorktreeContentionReport({ repoRoot });
+    return (
+      runtime?.readWorktreeContention?.(repoRoot) ?? readWorktreeContentionReport({ repoRoot })
+    );
   } catch {
     return null;
   }
@@ -376,6 +419,29 @@ function subtaskIndexByFile(subtasks: PlanValidationSubtaskInput[]): Map<string,
     for (const file of subtasks[i]?.file_scope ?? []) if (!byFile.has(file)) byFile.set(file, i);
   }
   return byFile;
+}
+
+function hasDependencyPath(
+  subtasks: PlanValidationSubtaskInput[],
+  from: number,
+  to: number,
+): boolean {
+  const visited = new Set<number>();
+  const stack = [from];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined || visited.has(current)) continue;
+    visited.add(current);
+    const deps = subtasks[current]?.depends_on ?? [];
+    if (deps.includes(to)) return true;
+    stack.push(...deps.filter((dep) => dep >= 0 && dep < subtasks.length));
+  }
+  return false;
+}
+
+function intersect(left: string[], right: string[]): string[] {
+  const rightSet = new Set(right);
+  return [...new Set(left.filter((value) => rightSet.has(value)))];
 }
 
 function matchingPlannedFile(content: string, planned: Set<string>): string | null {
