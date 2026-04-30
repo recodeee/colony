@@ -52,13 +52,14 @@ const TARGET_READY_TO_CLAIM = 0.3;
 const TARGET_CLAIM_BEFORE_EDIT = 0.5;
 const TARGET_COLONY_NOTE_SHARE = 0.7;
 const TARGET_TASK_MESSAGE_SHARE = 0.2;
+const RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE = 5;
 const LIFECYCLE_BRIDGE_MISSING_MIN_TASK_CLAIM_FILE_CALLS = 10;
 const LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS = 10;
 const LIFECYCLE_BRIDGE_NEAR_ZERO_PRE_TOOL_USE_SIGNAL_RATIO = 0.05;
 const LIFECYCLE_BRIDGE_ROOT_CAUSE =
   'Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.';
 const LIFECYCLE_BRIDGE_MISSING_NO_HOOK_EDITS_ROOT_CAUSE =
-  'Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded.';
+  'Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry.';
 const OLD_TELEMETRY_POLLUTION_ROOT_CAUSE =
   '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.';
 const LIFECYCLE_BRIDGE_ACTION =
@@ -1399,7 +1400,7 @@ function claimBeforeEditPayload(
     recent_pre_tool_use_missing: recentClaimMissReasons.pre_tool_use_missing,
     recent_pre_tool_use_signals: recentPreToolUseSignals,
     recent_claim_before_edit_rate:
-      recent.recent_stats.edit_tool_calls === 0
+      recent.recent_stats.edits_with_file_path < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE
         ? null
         : ratio(recent.recent_stats.edits_claimed_before, recent.recent_stats.edits_with_file_path),
     session_binding_missing: sessionBindingMissing,
@@ -1682,7 +1683,13 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
 }
 
 function formatRecentClaimBeforeEdit(payload: ClaimBeforeEditPayload): string {
-  return `  recent ${payload.recent_window_hours}h: hook_capable_edits=${payload.recent_hook_capable_edits}, pre_tool_use_signals=${payload.recent_pre_tool_use_signals}, pre_tool_use_missing=${payload.recent_pre_tool_use_missing}, claim-before-edit=${formatPercent(payload.recent_claim_before_edit_rate)}`;
+  const claimBeforeEdit =
+    payload.recent_claim_before_edit_rate === null &&
+    payload.recent_hook_capable_edits > 0 &&
+    payload.recent_hook_capable_edits < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE
+      ? 'insufficient sample'
+      : formatPercent(payload.recent_claim_before_edit_rate);
+  return `  recent ${payload.recent_window_hours}h: hook_capable_edits=${payload.recent_hook_capable_edits}, pre_tool_use_signals=${payload.recent_pre_tool_use_signals}, pre_tool_use_missing=${payload.recent_pre_tool_use_missing}, claim-before-edit=${claimBeforeEdit}`;
 }
 
 function formatClaimMatchSources(payload: ClaimBeforeEditPayload): string[] {

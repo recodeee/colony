@@ -239,7 +239,7 @@ describe('colony health next fixes', () => {
     expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
       kind: 'lifecycle_bridge_missing',
       summary:
-        'Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded.',
+        'Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry.',
       evidence,
       action:
         'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
@@ -250,14 +250,14 @@ describe('colony health next fixes', () => {
     const hint = payload.action_hints.find((entry) => entry.metric === 'claim-before-edit');
     expect(hint).toMatchObject({
       current:
-        'Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded. (task_claim_file_calls=1043, hook_capable_edits=0, pre_tool_use_signals=0)',
+        'Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry. (task_claim_file_calls=1043, hook_capable_edits=0, pre_tool_use_signals=0)',
       target: 'pre_tool_use before file mutation',
       priority: 5,
     });
 
     const readiness = outputSection(formatColonyHealthOutput(payload), 'Readiness summary');
     expect(readiness).toContain(
-      'root cause: Lifecycle bridge missing: many task_claim_file calls, no hook-capable edits recorded.',
+      'root cause: Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry.',
     );
     expect(readiness).toContain(`evidence: ${evidence}`);
   });

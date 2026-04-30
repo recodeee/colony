@@ -183,7 +183,7 @@ describe('bridge status --json', () => {
         '--repo-root',
         '/repo',
         '--session-id',
-        'agent/claude/fix-unknown-ide-owner-infer-2026-04-24-21-21',
+        'agent/codex/foo',
       ],
       { from: 'node' },
     );
@@ -191,8 +191,8 @@ describe('bridge status --json', () => {
     expect(mocks.buildBridgeStatusPayload).toHaveBeenCalledWith(
       { kind: 'store' },
       {
-        session_id: 'agent/claude/fix-unknown-ide-owner-infer-2026-04-24-21-21',
-        agent: 'claude',
+        session_id: 'agent/codex/foo',
+        agent: 'codex',
         repo_root: '/repo',
       },
     );

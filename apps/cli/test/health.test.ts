@@ -429,7 +429,12 @@ describe('colony health payload', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
-          call(index + 1, 'codex-old-session', 'mcp__colony__task_claim_file', SINCE + 1_000 + index),
+          call(
+            index + 1,
+            'codex-old-session',
+            'mcp__colony__task_claim_file',
+            SINCE + 1_000 + index,
+          ),
         ),
         claimBeforeEdit: badClaimBeforeEditStats(),
         claimBeforeEditStatsBySince: (since) =>
@@ -442,27 +447,34 @@ describe('colony health payload', () => {
     expect(payload.task_claim_file_before_edits).toMatchObject({
       old_telemetry_pollution: true,
       recent_window_hours: 1,
-      recent_hook_capable_edits: 2,
+      recent_hook_capable_edits: 5,
       recent_pre_tool_use_missing: 0,
-      recent_pre_tool_use_signals: 2,
+      recent_pre_tool_use_signals: 5,
       recent_claim_before_edit_rate: 1,
     });
     expect(payload.readiness_summary.execution_safety.root_cause?.summary).toBe(
       '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.',
     );
     expect(formatColonyHealthOutput(payload)).not.toContain('Lifecycle bridge missing');
-    expect(payload.action_hints).toContainEqual(expect.objectContaining({
-      metric: 'old claim-before-edit telemetry',
-      current:
-        '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.',
-    }));
+    expect(payload.action_hints).toContainEqual(
+      expect.objectContaining({
+        metric: 'old claim-before-edit telemetry',
+        current:
+          '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.',
+      }),
+    );
   });
 
   it('keeps lifecycle bridge missing when bad edits are fresh', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
-          call(index + 1, 'codex-fresh-session', 'mcp__colony__task_claim_file', NOW - 60_000 + index),
+          call(
+            index + 1,
+            'codex-fresh-session',
+            'mcp__colony__task_claim_file',
+            NOW - 60_000 + index,
+          ),
         ),
         claimBeforeEdit: badClaimBeforeEditStats(),
         claimBeforeEditStatsBySince: () => badClaimBeforeEditStats(),
@@ -483,7 +495,12 @@ describe('colony health payload', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
-          call(index + 1, 'codex-old-session', 'mcp__colony__task_claim_file', SINCE + 1_000 + index),
+          call(
+            index + 1,
+            'codex-old-session',
+            'mcp__colony__task_claim_file',
+            SINCE + 1_000 + index,
+          ),
         ),
         claimBeforeEdit: badClaimBeforeEditStats(),
         claimBeforeEditStatsBySince: (since) =>
@@ -507,12 +524,36 @@ describe('colony health payload', () => {
     expect(text).not.toContain('Lifecycle bridge missing');
   });
 
+  it('reports recent claim-before-edit as insufficient sample below RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [],
+        claimBeforeEdit: emptyClaimBeforeEditStats(),
+        claimBeforeEditStatsBySince: () => ({
+          edit_tool_calls: 1,
+          edits_with_file_path: 1,
+          edits_claimed_before: 1,
+          pre_tool_use_signals: 1,
+        }),
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.task_claim_file_before_edits.recent_claim_before_edit_rate).toBeNull();
+    expect(formatColonyHealthOutput(payload)).toContain('claim-before-edit=insufficient sample');
+  });
+
   it('prioritizes dirty contended files over old claim-before-edit telemetry', () => {
     const recentSince = NOW - 3_600_000;
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
-          call(index + 1, 'codex-old-session', 'mcp__colony__task_claim_file', SINCE + 1_000 + index),
+          call(
+            index + 1,
+            'codex-old-session',
+            'mcp__colony__task_claim_file',
+            SINCE + 1_000 + index,
+          ),
         ),
         claimBeforeEdit: badClaimBeforeEditStats(),
         claimBeforeEditStatsBySince: (since) =>
@@ -551,7 +592,12 @@ describe('colony health payload', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
-          call(index + 1, 'codex-old-session', 'mcp__colony__task_claim_file', SINCE + 1_000 + index),
+          call(
+            index + 1,
+            'codex-old-session',
+            'mcp__colony__task_claim_file',
+            SINCE + 1_000 + index,
+          ),
         ),
         claimBeforeEdit: badClaimBeforeEditStats(),
         claimBeforeEditStatsBySince: (since) =>
@@ -633,9 +679,7 @@ describe('colony health payload', () => {
     expect(text).toContain('1. live file contentions');
     expect(text).toContain('2. stale claims');
     expect(text).toContain('3. old claim-before-edit telemetry');
-    expect(text.indexOf('1. live file contentions')).toBeLessThan(
-      text.indexOf('2. stale claims'),
-    );
+    expect(text.indexOf('1. live file contentions')).toBeLessThan(text.indexOf('2. stale claims'));
     expect(text.indexOf('2. stale claims')).toBeLessThan(
       text.indexOf('3. old claim-before-edit telemetry'),
     );
@@ -2378,7 +2422,8 @@ function fakeStorage(args: {
   const reinforcements = args.reinforcements ?? healthyReinforcements();
   return {
     toolCallsSince: () => args.calls,
-    claimBeforeEditStats: (since: number) => args.claimBeforeEditStatsBySince?.(since) ?? args.claimBeforeEdit,
+    claimBeforeEditStats: (since: number) =>
+      args.claimBeforeEditStatsBySince?.(since) ?? args.claimBeforeEdit,
     omxRuntimeSummaryStats: () =>
       args.omxRuntimeStats ?? {
         status: 'unavailable',
@@ -2498,14 +2543,14 @@ function badClaimBeforeEditStats(): ClaimBeforeEditStats {
 
 function cleanClaimBeforeEditStats(): ClaimBeforeEditStats {
   return {
-    edit_tool_calls: 2,
-    edits_with_file_path: 2,
-    edits_claimed_before: 2,
+    edit_tool_calls: 5,
+    edits_with_file_path: 5,
+    edits_claimed_before: 5,
     claim_miss_reasons: {
       pre_tool_use_missing: 0,
       no_claim_for_file: 0,
     },
-    pre_tool_use_signals: 2,
+    pre_tool_use_signals: 5,
   };
 }
 
