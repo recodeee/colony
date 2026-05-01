@@ -63,6 +63,7 @@ export type RelayTarget = 'claude' | 'codex' | 'any';
 export type RelayReason = 'quota' | 'rate-limit' | 'turn-cap' | 'manual' | 'unspecified';
 
 export const TASK_THREAD_ERROR_CODES = {
+  TASK_NOT_FOUND: 'TASK_NOT_FOUND',
   OBSERVATION_NOT_ON_TASK: 'OBSERVATION_NOT_ON_TASK',
   NOT_HANDOFF: 'NOT_HANDOFF',
   NOT_WAKE_REQUEST: 'NOT_WAKE_REQUEST',
@@ -85,6 +86,10 @@ export const TASK_THREAD_ERROR_CODES = {
   NOT_PARTICIPANT: 'NOT_PARTICIPANT',
   NOT_TARGET_AGENT: 'NOT_TARGET_AGENT',
   NOT_RELAY: 'NOT_RELAY',
+  CLAIM_NOT_FOUND: 'CLAIM_NOT_FOUND',
+  CLAIM_NOT_QUOTA_PENDING: 'CLAIM_NOT_QUOTA_PENDING',
+  CLAIM_BATON_MISSING: 'CLAIM_BATON_MISSING',
+  CLAIM_BATON_CONFLICT: 'CLAIM_BATON_CONFLICT',
   INVALID_CLAIM_PATH: 'INVALID_CLAIM_PATH',
 } as const;
 
@@ -191,6 +196,14 @@ export interface HandoffMetadata {
    * they are the best fit even though anyone could accept.
    */
   suggested_candidates?: CandidateScore[];
+  quota_claim_declines?: QuotaClaimDecline[];
+}
+
+export interface QuotaClaimDecline {
+  session_id: string;
+  reason: string | null;
+  declined_at: number;
+  file_paths: string[];
 }
 
 export interface QuotaExhaustedHandoffContext {
@@ -378,6 +391,7 @@ export interface RelayMetadata {
   accepted_by_session_id: string | null;
   accepted_at: number | null;
   expires_at: number;
+  quota_claim_declines?: QuotaClaimDecline[];
 }
 
 export interface RelayObservation {
@@ -396,6 +410,48 @@ export interface RelayArgs {
   to_session_id?: string;
   fetch_files_at?: string;
   expires_in_ms?: number;
+}
+
+export interface QuotaClaimResolveArgs {
+  session_id: string;
+  file_path?: string | undefined;
+  handoff_observation_id?: number | undefined;
+  reason?: string | undefined;
+  now?: number | undefined;
+}
+
+export interface QuotaClaimAcceptResult {
+  status: 'accepted';
+  task_id: number;
+  handoff_observation_id: number;
+  baton_kind: 'handoff' | 'relay';
+  accepted_by_session_id: string;
+  accepted_files: string[];
+  previous_session_ids: string[];
+  audit_observation_id: number;
+}
+
+export interface QuotaClaimDeclineResult {
+  status: 'declined';
+  task_id: number;
+  handoff_observation_id: number;
+  baton_kind: 'handoff' | 'relay';
+  declined_by_session_id: string;
+  declined_files: string[];
+  still_visible: true;
+  audit_observation_id: number;
+}
+
+export interface QuotaClaimReleaseExpiredResult {
+  status: 'released_expired';
+  task_id: number;
+  released_claims: Array<{
+    file_path: string;
+    previous_session_id: string;
+    handoff_observation_id: number | null;
+    state: 'weak_expired';
+  }>;
+  audit_observation_ids: number[];
 }
 
 /** True when this message was sent as a broadcast (`to_agent='any'`,
@@ -1528,6 +1584,365 @@ export class TaskThread {
           meta.from_session_id !== session_id &&
           (meta.to_session_id === session_id || meta.to_agent === 'any' || meta.to_agent === agent),
       );
+  }
+
+  acceptQuotaClaim(args: QuotaClaimResolveArgs): QuotaClaimAcceptResult {
+    const now = args.now ?? Date.now();
+    const resolved = this.resolveQuotaClaimBaton(args);
+    this.assertQuotaBatonPending(resolved, now);
+    this.assertCanResolveQuotaBaton(resolved.meta, args.session_id);
+    const acceptedFiles = resolved.claims.map((claim) => claim.file_path);
+    const previousSessionIds = Array.from(
+      new Set(resolved.claims.map((claim) => claim.session_id)),
+    );
+
+    return this.store.storage.transaction(() => {
+      for (const claim of resolved.claims) {
+        this.store.storage.claimFile({
+          task_id: this.task_id,
+          file_path: claim.file_path,
+          session_id: args.session_id,
+        });
+      }
+      resolved.meta.status = 'accepted';
+      resolved.meta.accepted_by_session_id = args.session_id;
+      resolved.meta.accepted_at = now;
+      this.store.storage.updateObservationMetadata(resolved.obs.id, JSON.stringify(resolved.meta));
+      const audit_observation_id = this.store.addObservation({
+        session_id: args.session_id,
+        kind: 'note',
+        content: `accepted quota-pending claim${acceptedFiles.length === 1 ? '' : 's'} ${acceptedFiles.join(
+          ', ',
+        )} from ${previousSessionIds.join(', ')} via ${resolved.kind} #${resolved.obs.id}`,
+        task_id: this.task_id,
+        reply_to: resolved.obs.id,
+        metadata: {
+          kind: 'note',
+          audit: 'quota_claim_accept',
+          handoff_observation_id: resolved.obs.id,
+          baton_kind: resolved.kind,
+          accepted_files: acceptedFiles,
+          previous_session_ids: previousSessionIds,
+        },
+      });
+      this.store.storage.touchTask(this.task_id, now);
+      return {
+        status: 'accepted',
+        task_id: this.task_id,
+        handoff_observation_id: resolved.obs.id,
+        baton_kind: resolved.kind,
+        accepted_by_session_id: args.session_id,
+        accepted_files: acceptedFiles,
+        previous_session_ids: previousSessionIds,
+        audit_observation_id,
+      };
+    });
+  }
+
+  declineQuotaClaim(args: QuotaClaimResolveArgs): QuotaClaimDeclineResult {
+    const now = args.now ?? Date.now();
+    const resolved = this.resolveQuotaClaimBaton(args);
+    this.assertQuotaBatonPending(resolved, now);
+    this.assertCanResolveQuotaBaton(resolved.meta, args.session_id);
+    const declinedFiles = resolved.claims.map((claim) => claim.file_path);
+
+    return this.store.storage.transaction(() => {
+      resolved.meta.quota_claim_declines = [
+        ...(resolved.meta.quota_claim_declines ?? []),
+        {
+          session_id: args.session_id,
+          reason: args.reason ?? null,
+          declined_at: now,
+          file_paths: declinedFiles,
+        },
+      ];
+      resolved.meta.to_agent = 'any';
+      resolved.meta.to_session_id = null;
+      this.store.storage.updateObservationMetadata(resolved.obs.id, JSON.stringify(resolved.meta));
+      const audit_observation_id = this.store.addObservation({
+        session_id: args.session_id,
+        kind: 'decline',
+        content: args.reason
+          ? `declined quota-pending claim${declinedFiles.length === 1 ? '' : 's'} ${declinedFiles.join(
+              ', ',
+            )} from ${resolved.kind} #${resolved.obs.id}: ${args.reason}`
+          : `declined quota-pending claim${declinedFiles.length === 1 ? '' : 's'} ${declinedFiles.join(
+              ', ',
+            )} from ${resolved.kind} #${resolved.obs.id}`,
+        task_id: this.task_id,
+        reply_to: resolved.obs.id,
+        metadata: {
+          kind: 'decline',
+          declined_quota_claim: true,
+          handoff_observation_id: resolved.obs.id,
+          baton_kind: resolved.kind,
+          declined_files: declinedFiles,
+          reason: args.reason ?? null,
+          relay_still_visible: true,
+        },
+      });
+      this.store.storage.touchTask(this.task_id, now);
+      return {
+        status: 'declined',
+        task_id: this.task_id,
+        handoff_observation_id: resolved.obs.id,
+        baton_kind: resolved.kind,
+        declined_by_session_id: args.session_id,
+        declined_files: declinedFiles,
+        still_visible: true,
+        audit_observation_id,
+      };
+    });
+  }
+
+  releaseExpiredQuotaClaims(args: QuotaClaimResolveArgs): QuotaClaimReleaseExpiredResult {
+    const now = args.now ?? Date.now();
+    this.assertTaskExists();
+    this.assertParticipant(args.session_id);
+    const normalizedFilePath = this.normalizeOptionalClaimPath(args.file_path);
+    const claims = this.claims().filter((claim) => {
+      if (claim.state !== 'handoff_pending') return false;
+      if (typeof claim.expires_at !== 'number' || now < claim.expires_at) return false;
+      if (normalizedFilePath !== null && claim.file_path !== normalizedFilePath) return false;
+      if (
+        args.handoff_observation_id !== undefined &&
+        claim.handoff_observation_id !== args.handoff_observation_id
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    return this.store.storage.transaction(() => {
+      const audit_observation_ids: number[] = [];
+      const seenBatons = new Set<number>();
+      for (const claim of claims) {
+        if (claim.handoff_observation_id !== null) seenBatons.add(claim.handoff_observation_id);
+        if (claim.handoff_observation_id !== null) {
+          this.store.storage.markClaimWeakExpired({
+            task_id: this.task_id,
+            file_path: claim.file_path,
+            session_id: claim.session_id,
+            handoff_observation_id: claim.handoff_observation_id,
+          });
+        }
+        audit_observation_ids.push(
+          this.store.addObservation({
+            session_id: args.session_id,
+            kind: 'claim-weakened',
+            content: `claim ${claim.file_path} downgraded to weak_expired from quota-pending owner ${claim.session_id}`,
+            task_id: this.task_id,
+            reply_to: claim.handoff_observation_id,
+            metadata: {
+              kind: 'claim-weakened',
+              file_path: claim.file_path,
+              previous_session_id: claim.session_id,
+              ownership_strength: 'weak',
+              state: 'weak_expired',
+              reason: 'quota_pending_expired',
+              handoff_observation_id: claim.handoff_observation_id,
+              previous_claimed_at: claim.claimed_at,
+              expires_at: claim.expires_at,
+            },
+          }),
+        );
+      }
+      for (const batonId of seenBatons) {
+        this.expireQuotaBatonIfPending(batonId, now);
+      }
+      this.store.storage.touchTask(this.task_id, now);
+      return {
+        status: 'released_expired',
+        task_id: this.task_id,
+        released_claims: claims.map((claim) => ({
+          file_path: claim.file_path,
+          previous_session_id: claim.session_id,
+          handoff_observation_id: claim.handoff_observation_id,
+          state: 'weak_expired' as const,
+        })),
+        audit_observation_ids,
+      };
+    });
+  }
+
+  private assertTaskExists(): void {
+    if (!this.task()) throw taskError(TASK_THREAD_ERROR_CODES.TASK_NOT_FOUND, 'task not found');
+  }
+
+  private assertParticipant(session_id: string): string {
+    const agent = this.store.storage.getParticipantAgent(this.task_id, session_id);
+    if (!agent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_PARTICIPANT,
+        'session is not a participant on this task',
+      );
+    }
+    return agent;
+  }
+
+  private assertCanResolveQuotaBaton(
+    meta: HandoffMetadata | RelayMetadata,
+    session_id: string,
+  ): void {
+    const agent = this.assertParticipant(session_id);
+    if (meta.to_session_id && meta.to_session_id !== session_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_SESSION,
+        'quota claim is addressed to a different session',
+      );
+    }
+    if (meta.to_agent !== 'any' && meta.to_agent !== agent) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.NOT_TARGET_AGENT,
+        `quota claim is for ${meta.to_agent}, not ${agent}`,
+      );
+    }
+  }
+
+  private normalizeOptionalClaimPath(file_path: string | undefined): string | null {
+    if (file_path === undefined) return null;
+    const normalized = this.store.storage.normalizeTaskFilePath(this.task_id, file_path);
+    if (normalized === null) {
+      throw taskError(TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH, 'claim path is not claimable');
+    }
+    return normalized;
+  }
+
+  private resolveQuotaClaimBaton(args: QuotaClaimResolveArgs): {
+    obs: ObservationRow;
+    kind: 'handoff' | 'relay';
+    meta: HandoffMetadata | RelayMetadata;
+    claims: TaskClaimRow[];
+  } {
+    this.assertTaskExists();
+    const normalizedFilePath = this.normalizeOptionalClaimPath(args.file_path);
+    const claim =
+      normalizedFilePath !== null
+        ? this.store.storage.getClaim(this.task_id, normalizedFilePath)
+        : undefined;
+    if (normalizedFilePath !== null && !claim) {
+      this.throwTerminalBatonStatus(args.handoff_observation_id);
+      throw taskError(TASK_THREAD_ERROR_CODES.CLAIM_NOT_FOUND, 'quota claim not found');
+    }
+    if (claim && claim.state !== 'handoff_pending') {
+      this.throwTerminalBatonStatus(args.handoff_observation_id);
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.CLAIM_NOT_QUOTA_PENDING,
+        `claim is ${claim.state}, not handoff_pending`,
+      );
+    }
+    if (
+      claim?.handoff_observation_id !== null &&
+      claim?.handoff_observation_id !== undefined &&
+      args.handoff_observation_id !== undefined &&
+      claim.handoff_observation_id !== args.handoff_observation_id
+    ) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.CLAIM_BATON_CONFLICT,
+        'claim belongs to a different handoff/relay',
+      );
+    }
+    const batonId = args.handoff_observation_id ?? claim?.handoff_observation_id;
+    if (!batonId) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.CLAIM_BATON_MISSING,
+        'quota claim has no handoff/relay observation',
+      );
+    }
+    const obs = this.store.storage.getObservation(batonId);
+    if (!obs?.task_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.OBSERVATION_NOT_ON_TASK,
+        'handoff/relay observation is not on a task',
+      );
+    }
+    if (obs.task_id !== this.task_id) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.TASK_MISMATCH,
+        `handoff/relay belongs to task ${obs.task_id}, not ${this.task_id}`,
+      );
+    }
+    const kind = obs.kind === 'handoff' ? 'handoff' : obs.kind === 'relay' ? 'relay' : null;
+    if (kind === null) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.CLAIM_BATON_MISSING,
+        `observation ${batonId} is not a handoff or relay`,
+      );
+    }
+    const meta = kind === 'handoff' ? parseHandoff(obs.metadata, obs.ts) : parseRelay(obs.metadata);
+    if (!meta) {
+      throw taskError(TASK_THREAD_ERROR_CODES.METADATA_MISSING, 'handoff/relay metadata missing');
+    }
+    const claims = this.claims().filter(
+      (candidate) =>
+        candidate.state === 'handoff_pending' && candidate.handoff_observation_id === batonId,
+    );
+    if (
+      normalizedFilePath !== null &&
+      !claims.some((candidate) => candidate.file_path === normalizedFilePath)
+    ) {
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.CLAIM_BATON_CONFLICT,
+        'claim does not belong to this handoff/relay',
+      );
+    }
+    if (claims.length === 0) {
+      if (meta.status !== 'pending') this.throwBatonStatus(meta, kind);
+      throw taskError(TASK_THREAD_ERROR_CODES.CLAIM_NOT_FOUND, 'quota claim not found');
+    }
+    return { obs, kind, meta, claims };
+  }
+
+  private assertQuotaBatonPending(
+    resolved: {
+      obs: ObservationRow;
+      kind: 'handoff' | 'relay';
+      meta: HandoffMetadata | RelayMetadata;
+    },
+    now: number,
+  ): void {
+    if (resolved.meta.status !== 'pending') this.throwBatonStatus(resolved.meta, resolved.kind);
+    if (now >= resolved.meta.expires_at) {
+      resolved.meta.status = 'expired';
+      this.store.storage.updateObservationMetadata(resolved.obs.id, JSON.stringify(resolved.meta));
+      throw taskError(
+        resolved.kind === 'handoff'
+          ? TASK_THREAD_ERROR_CODES.HANDOFF_EXPIRED
+          : TASK_THREAD_ERROR_CODES.RELAY_EXPIRED,
+        `${resolved.kind} expired`,
+      );
+    }
+  }
+
+  private throwTerminalBatonStatus(handoff_observation_id: number | undefined): void {
+    if (handoff_observation_id === undefined) return;
+    const obs = this.store.storage.getObservation(handoff_observation_id);
+    if (!obs || obs.task_id !== this.task_id) return;
+    if (obs.kind === 'handoff') {
+      const meta = parseHandoff(obs.metadata, obs.ts);
+      if (meta && meta.status !== 'pending') this.throwBatonStatus(meta, 'handoff');
+    } else if (obs.kind === 'relay') {
+      const meta = parseRelay(obs.metadata);
+      if (meta && meta.status !== 'pending') this.throwBatonStatus(meta, 'relay');
+    }
+  }
+
+  private throwBatonStatus(
+    meta: HandoffMetadata | RelayMetadata,
+    kind: 'handoff' | 'relay',
+  ): never {
+    throw taskError(statusErrorCode(meta.status, kind), `${kind} is ${meta.status}`);
+  }
+
+  private expireQuotaBatonIfPending(batonId: number, now: number): void {
+    const obs = this.store.storage.getObservation(batonId);
+    if (!obs || obs.task_id !== this.task_id) return;
+    const kind = obs.kind === 'handoff' ? 'handoff' : obs.kind === 'relay' ? 'relay' : null;
+    if (!kind) return;
+    const meta = kind === 'handoff' ? parseHandoff(obs.metadata, obs.ts) : parseRelay(obs.metadata);
+    if (!meta || meta.status !== 'pending' || now < meta.expires_at) return;
+    meta.status = 'expired';
+    this.store.storage.updateObservationMetadata(batonId, JSON.stringify(meta));
   }
 
   private synthesizeRelayState(

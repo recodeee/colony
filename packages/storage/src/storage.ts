@@ -271,6 +271,7 @@ export class Storage {
       this.db.exec(SCHEMA_SQL);
       this.applyTableMigrations();
       this.applyColumnMigrations();
+      this.migrateTaskClaimWeakExpiredState();
       this.db.exec(POST_MIGRATION_SQL);
     }
     this.taskClaimColumns = this.tableColumns('task_claims');
@@ -317,6 +318,50 @@ export class Storage {
         DROP TABLE proposal_reinforcements_old;
         CREATE INDEX IF NOT EXISTS idx_reinforcements_proposal
           ON proposal_reinforcements(proposal_id);
+        COMMIT;
+      `);
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK;');
+      } catch {
+        // Keep the original migration error visible.
+      }
+      throw err;
+    } finally {
+      this.db.pragma('foreign_keys = ON');
+    }
+  }
+
+  private migrateTaskClaimWeakExpiredState(): void {
+    if (!this.tableExists('task_claims')) return;
+    const row = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'task_claims'")
+      .get() as { sql: string | null } | undefined;
+    if (row?.sql?.includes("'weak_expired'")) return;
+
+    this.db.pragma('foreign_keys = OFF');
+    try {
+      this.db.exec(`
+        BEGIN;
+        DROP INDEX IF EXISTS idx_task_claims_session;
+        ALTER TABLE task_claims RENAME TO task_claims_old;
+        CREATE TABLE task_claims (
+          task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          file_path TEXT NOT NULL,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          claimed_at INTEGER NOT NULL,
+          state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending','weak_expired')),
+          expires_at INTEGER,
+          handoff_observation_id INTEGER REFERENCES observations(id) ON DELETE SET NULL,
+          PRIMARY KEY (task_id, file_path)
+        );
+        INSERT INTO task_claims(
+          task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+        )
+          SELECT task_id, file_path, session_id, claimed_at, state, expires_at, handoff_observation_id
+          FROM task_claims_old;
+        DROP TABLE task_claims_old;
+        CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
         COMMIT;
       `);
     } catch (err) {
@@ -1192,6 +1237,28 @@ export class Storage {
     }
   }
 
+  markClaimWeakExpired(c: {
+    task_id: number;
+    file_path: string;
+    session_id: string;
+    handoff_observation_id: number;
+  }): void {
+    const filePaths = this.matchingClaimFilePaths(c.task_id, c.file_path);
+    if (filePaths.length === 0) return;
+    const stmt = this.db.prepare(
+      `UPDATE task_claims
+       SET state = 'weak_expired'
+       WHERE task_id = ?
+         AND file_path = ?
+         AND session_id = ?
+         AND state = 'handoff_pending'
+         AND handoff_observation_id = ?`,
+    );
+    for (const filePath of filePaths) {
+      stmt.run(c.task_id, filePath, c.session_id, c.handoff_observation_id);
+    }
+  }
+
   releaseClaim(c: { task_id: number; file_path: string; session_id: string }): void {
     const filePaths = this.matchingClaimFilePaths(c.task_id, c.file_path);
     if (filePaths.length === 0) return;
@@ -1243,7 +1310,12 @@ export class Storage {
       file_path: row.file_path,
       session_id: row.session_id,
       claimed_at: row.claimed_at,
-      state: row.state === 'handoff_pending' ? 'handoff_pending' : 'active',
+      state:
+        row.state === 'handoff_pending'
+          ? 'handoff_pending'
+          : row.state === 'weak_expired'
+            ? 'weak_expired'
+            : 'active',
       expires_at: row.expires_at ?? null,
       handoff_observation_id: row.handoff_observation_id ?? null,
     };
@@ -2972,7 +3044,9 @@ function parseJson(value: string | null): unknown {
 function parseStringArray(value: string | null): string[] {
   const parsed = parseJson(value);
   if (!Array.isArray(parsed)) return [];
-  return parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
+  return parsed.filter(
+    (entry): entry is string => typeof entry === 'string' && entry.trim() !== '',
+  );
 }
 
 function sanitizeMatch(q: string): string {

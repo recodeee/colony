@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS task_claims (
   file_path TEXT NOT NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   claimed_at INTEGER NOT NULL,
-  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending')),
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending','weak_expired')),
   expires_at INTEGER,
   handoff_observation_id INTEGER REFERENCES observations(id) ON DELETE SET NULL,
   PRIMARY KEY (task_id, file_path)
@@ -257,7 +257,7 @@ export const COLUMN_MIGRATIONS: ReadonlyArray<{ table: string; column: string; s
   {
     table: 'task_claims',
     column: 'state',
-    sql: "ALTER TABLE task_claims ADD COLUMN state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending'))",
+    sql: "ALTER TABLE task_claims ADD COLUMN state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','handoff_pending','weak_expired'))",
   },
   {
     table: 'task_claims',

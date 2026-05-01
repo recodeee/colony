@@ -2,7 +2,7 @@ import { defaultSettings } from '@colony/config';
 
 export type ClaimAgeClass = 'fresh' | 'stale' | 'expired/weak';
 export type ClaimOwnershipStrength = 'strong' | 'weak';
-export type ClaimLifecycleState = 'active' | 'handoff_pending';
+export type ClaimLifecycleState = 'active' | 'handoff_pending' | 'weak_expired';
 
 export interface ClaimAgeInput {
   claimed_at: number;
@@ -47,11 +47,14 @@ export function classifyClaimAge(
   const expiredAfterMinutes = staleAfterMinutes * 2;
   const ageMinutes = Math.max(0, Math.floor((now - input.claimed_at) / MINUTE_MS));
 
-  if (input.state === 'handoff_pending') {
+  if (input.state === 'handoff_pending' || input.state === 'weak_expired') {
     return {
       age_minutes: ageMinutes,
       age_class:
-        typeof input.expires_at === 'number' && now >= input.expires_at ? 'expired/weak' : 'stale',
+        input.state === 'weak_expired' ||
+        (typeof input.expires_at === 'number' && now >= input.expires_at)
+          ? 'expired/weak'
+          : 'stale',
       ownership_strength: 'weak',
       stale_after_minutes: staleAfterMinutes,
       expired_after_minutes: expiredAfterMinutes,

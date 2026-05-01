@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -1024,7 +1024,6 @@ describe('task threads — handoff lifecycle', () => {
       session_id: sessionA,
       file_path: 'src/auth.ts',
     });
-
     const { relay_observation_id } = await call<{ relay_observation_id: number; status: string }>(
       'task_relay',
       {
@@ -1072,6 +1071,253 @@ describe('task threads — handoff lifecycle', () => {
       session_id: sessionB,
     });
     expect(retry.code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_ACCEPTED);
+  });
+
+  it('task_claim_quota_accept transfers quota-pending claims and marks the relay accepted', async () => {
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/auth.ts',
+    });
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/api.ts',
+    });
+
+    const { relay_observation_id } = await call<{ relay_observation_id: number }>('task_relay', {
+      task_id,
+      session_id: sessionA,
+      agent: 'claude',
+      reason: 'quota',
+      one_line: 'finish auth middleware',
+      base_branch: 'main',
+    });
+
+    const accepted = await call<{
+      status: string;
+      accepted_files: string[];
+      audit_observation_id: number;
+    }>('task_claim_quota_accept', {
+      task_id,
+      session_id: sessionB,
+      file_path: 'src/auth.ts',
+    });
+
+    expect(accepted).toMatchObject({
+      status: 'accepted',
+    });
+    expect(accepted.accepted_files).toEqual(expect.arrayContaining(['src/auth.ts', 'src/api.ts']));
+    expect(accepted.accepted_files).toHaveLength(2);
+    expect(store.storage.getClaim(task_id, 'src/auth.ts')).toMatchObject({
+      session_id: sessionB,
+      state: 'active',
+      expires_at: null,
+      handoff_observation_id: null,
+    });
+    expect(store.storage.getClaim(task_id, 'src/api.ts')).toMatchObject({
+      session_id: sessionB,
+      state: 'active',
+      expires_at: null,
+      handoff_observation_id: null,
+    });
+    const relay = store.storage.getObservation(relay_observation_id);
+    const relayMeta = JSON.parse(relay?.metadata ?? '{}');
+    expect(relayMeta.status).toBe('accepted');
+    expect(relayMeta.accepted_by_session_id).toBe(sessionB);
+    expect(store.storage.getObservation(accepted.audit_observation_id)).toMatchObject({
+      kind: 'note',
+      reply_to: relay_observation_id,
+    });
+  });
+
+  it('task_claim_quota_decline records a reason without cancelling the relay', async () => {
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+    store.startSession({ id: 'C', ide: 'gemini', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'feat/handoff',
+      session_id: 'C',
+    });
+    thread.join('C', 'gemini');
+
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/auth.ts',
+    });
+    const { relay_observation_id } = await call<{ relay_observation_id: number }>('task_relay', {
+      task_id,
+      session_id: sessionA,
+      agent: 'claude',
+      reason: 'quota',
+      one_line: 'needs replacement owner',
+      base_branch: 'main',
+      to_session_id: sessionB,
+    });
+
+    const declined = await call<{ status: string; still_visible: boolean }>(
+      'task_claim_quota_decline',
+      {
+        task_id,
+        session_id: sessionB,
+        file_path: 'src/auth.ts',
+        reason: 'not enough context left',
+      },
+    );
+
+    expect(declined).toMatchObject({ status: 'declined', still_visible: true });
+    expect(store.storage.getClaim(task_id, 'src/auth.ts')).toMatchObject({
+      session_id: sessionA,
+      state: 'handoff_pending',
+      handoff_observation_id: relay_observation_id,
+    });
+    const relay = store.storage.getObservation(relay_observation_id);
+    const relayMeta = JSON.parse(relay?.metadata ?? '{}');
+    expect(relayMeta).toMatchObject({
+      status: 'pending',
+      to_agent: 'any',
+      to_session_id: null,
+      quota_claim_declines: [
+        expect.objectContaining({ session_id: sessionB, reason: 'not enough context left' }),
+      ],
+    });
+    expect(new TaskThread(store, task_id).pendingRelaysFor('C', 'gemini').map((r) => r.id)).toEqual(
+      [relay_observation_id],
+    );
+  });
+
+  it('task_claim_quota_release_expired downgrades expired quota claims to weak_expired', async () => {
+    const t0 = Date.parse('2026-05-01T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/auth.ts',
+    });
+    const { relay_observation_id } = await call<{ relay_observation_id: number }>('task_relay', {
+      task_id,
+      session_id: sessionA,
+      agent: 'claude',
+      reason: 'quota',
+      one_line: 'expired cleanup',
+      base_branch: 'main',
+      expires_in_minutes: 1,
+    });
+
+    vi.setSystemTime(t0 + 2 * 60_000);
+    const released = await call<{
+      status: string;
+      released_claims: Array<{ file_path: string; state: string }>;
+    }>('task_claim_quota_release_expired', {
+      task_id,
+      session_id: sessionB,
+      file_path: 'src/auth.ts',
+    });
+
+    expect(released).toMatchObject({
+      status: 'released_expired',
+      released_claims: [{ file_path: 'src/auth.ts', state: 'weak_expired' }],
+    });
+    expect(store.storage.getClaim(task_id, 'src/auth.ts')).toMatchObject({
+      session_id: sessionA,
+      state: 'weak_expired',
+      handoff_observation_id: relay_observation_id,
+    });
+    const relay = store.storage.getObservation(relay_observation_id);
+    const relayMeta = JSON.parse(relay?.metadata ?? '{}');
+    expect(relayMeta.status).toBe('expired');
+  });
+
+  it('task_claim_quota_accept rejects already accepted quota relays', async () => {
+    const { task_id, sessionA, sessionB } = seedTwoSessionTask();
+
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/auth.ts',
+    });
+    const { relay_observation_id } = await call<{ relay_observation_id: number }>('task_relay', {
+      task_id,
+      session_id: sessionA,
+      agent: 'claude',
+      reason: 'quota',
+      one_line: 'accept once',
+      base_branch: 'main',
+    });
+
+    await call('task_claim_quota_accept', {
+      task_id,
+      session_id: sessionB,
+      handoff_observation_id: relay_observation_id,
+    });
+    const retry = await callError('task_claim_quota_accept', {
+      task_id,
+      session_id: sessionB,
+      handoff_observation_id: relay_observation_id,
+    });
+    expect(retry.code).toBe(TASK_THREAD_ERROR_CODES.ALREADY_ACCEPTED);
+  });
+
+  it('task_claim_quota_accept reports missing tasks', async () => {
+    const missing = await callError('task_claim_quota_accept', {
+      task_id: 999_999,
+      session_id: 'missing',
+      file_path: 'src/missing.ts',
+    });
+    expect(missing.code).toBe(TASK_THREAD_ERROR_CODES.TASK_NOT_FOUND);
+  });
+
+  it('task_claim_quota_accept rejects wrong targets and mismatched baton ids', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+    store.startSession({ id: 'C', ide: 'gemini', cwd: '/repo' });
+    const thread = TaskThread.open(store, {
+      repo_root: '/repo',
+      branch: 'feat/handoff',
+      session_id: 'C',
+    });
+    thread.join('C', 'gemini');
+
+    await call('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'src/auth.ts',
+    });
+    await call<{ relay_observation_id: number }>('task_relay', {
+      task_id,
+      session_id: sessionA,
+      agent: 'claude',
+      reason: 'quota',
+      one_line: 'codex only',
+      base_branch: 'main',
+      to_agent: 'codex',
+    });
+
+    const refused = await callError('task_claim_quota_accept', {
+      task_id,
+      session_id: 'C',
+      file_path: 'src/auth.ts',
+    });
+    expect(refused.code).toBe(TASK_THREAD_ERROR_CODES.NOT_TARGET_AGENT);
+
+    const { id: noteId } = await call<{ id: number }>('task_post', {
+      task_id,
+      session_id: sessionA,
+      kind: 'note',
+      content: 'not the relay',
+    });
+    const conflict = await callError('task_claim_quota_accept', {
+      task_id,
+      session_id: 'C',
+      file_path: 'src/auth.ts',
+      handoff_observation_id: noteId,
+    });
+    expect(conflict.code).toBe(TASK_THREAD_ERROR_CODES.CLAIM_BATON_CONFLICT);
   });
 
   it('task_decline_relay cancels a pending relay and prevents subsequent accept', async () => {

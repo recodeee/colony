@@ -68,7 +68,7 @@ export interface TaskParticipantRow {
   left_at: number | null;
 }
 
-export type TaskClaimState = 'active' | 'handoff_pending';
+export type TaskClaimState = 'active' | 'handoff_pending' | 'weak_expired';
 
 export interface TaskClaimRow {
   task_id: number;

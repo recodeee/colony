@@ -11,7 +11,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { detectMcpClientIdentity } from './heartbeat.js';
-import { mcpErrorResponse } from './shared.js';
+import { mcpError, mcpErrorResponse } from './shared.js';
 
 const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const TASK_LIST_HINT =
@@ -368,6 +368,81 @@ export function register(server: McpServer, ctx: ToolContext): void {
         overlap: previousClaim?.overlap ?? 'none',
         previous_claim: previousClaim,
       });
+    }),
+  );
+
+  server.tool(
+    'task_claim_quota_accept',
+    'Resolve quota-pending claim ownership by accepting the linked quota handoff/relay. Transfers all pending claims on that baton to the replacement session, marks the relay/handoff accepted, and writes an audit note.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      file_path: z.string().min(1).optional(),
+      handoff_observation_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Linked handoff or relay observation id. Optional when file_path identifies it.'),
+    },
+    wrapHandler('task_claim_quota_accept', async (args) => {
+      try {
+        const result = new TaskThread(store, args.task_id).acceptQuotaClaim(args);
+        return jsonReply(result);
+      } catch (err) {
+        return mcpError(err);
+      }
+    }),
+  );
+
+  server.tool(
+    'task_claim_quota_decline',
+    'Decline a quota-pending claim without cancelling the linked relay. Records the reason, retargets the baton to any recipient, and leaves the claim visible for another agent.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      file_path: z.string().min(1).optional(),
+      handoff_observation_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Linked handoff or relay observation id. Optional when file_path identifies it.'),
+      reason: z.string().optional(),
+    },
+    wrapHandler('task_claim_quota_decline', async (args) => {
+      try {
+        const result = new TaskThread(store, args.task_id).declineQuotaClaim(args);
+        return jsonReply(result);
+      } catch (err) {
+        return mcpError(err);
+      }
+    }),
+  );
+
+  server.tool(
+    'task_claim_quota_release_expired',
+    'Release expired quota-pending claims from active blocker status. Downgrades matching handoff_pending claims to weak_expired, marks expired relays/handoffs expired, and keeps audit history.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      file_path: z.string().min(1).optional(),
+      handoff_observation_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe(
+          'Linked handoff or relay observation id. Optional to release all expired quota claims on the task.',
+        ),
+    },
+    wrapHandler('task_claim_quota_release_expired', async (args) => {
+      try {
+        const result = new TaskThread(store, args.task_id).releaseExpiredQuotaClaims(args);
+        return jsonReply(result);
+      } catch (err) {
+        return mcpError(err);
+      }
     }),
   );
 
