@@ -23,6 +23,7 @@ import { registerLifecycleCommands } from './commands/lifecycle.js';
 import { registerMcpCommand } from './commands/mcp.js';
 import { registerNoteCommand } from './commands/note.js';
 import { registerObserveCommand } from './commands/observe.js';
+import { registerOpenSpecCommand } from './commands/openspec.js';
 import { registerPlanCommand } from './commands/plan.js';
 import { registerPlansCommand } from './commands/plans.js';
 import { registerQueenCommand } from './commands/queen.js';
@@ -68,6 +69,7 @@ export function createProgram(): Command {
   registerBackfillCommand(program);
   registerNoteCommand(program);
   registerObserveCommand(program);
+  registerOpenSpecCommand(program);
   registerPlanCommand(program);
   registerPlansCommand(program);
   registerDebriefCommand(program);

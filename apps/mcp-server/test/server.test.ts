@@ -59,6 +59,7 @@ describe('MCP server', () => {
       'hivemind',
       'hivemind_context',
       'list_sessions',
+      'openspec_sync_status',
       'queen_plan_goal',
       'recall_session',
       'rescue_stranded_run',
@@ -139,6 +140,9 @@ describe('MCP server', () => {
     expect(byName.get('task_note_working')?.inputSchema.properties).toHaveProperty('pointer');
     expect(byName.get('task_note_working')?.inputSchema.properties).toHaveProperty(
       'allow_omx_notepad_fallback',
+    );
+    expect(byName.get('openspec_sync_status')?.description).toContain(
+      'Report drift between Colony task state and OpenSpec durable artifacts',
     );
     expect(byName.get('task_message')?.inputSchema.required).toEqual([
       'task_id',

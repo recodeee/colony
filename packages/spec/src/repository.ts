@@ -122,6 +122,12 @@ export class SpecRepository {
       kind: SPEC_OBSERVATION_KINDS.SPEC_DELTA,
       content: `Opened change ${input.slug}; base_root_hash=${change.baseRootHash}`,
       task_id: thread.task_id,
+      metadata: {
+        openspec_change_path: changePath,
+        openspec_change_slug: input.slug,
+        openspec_plan_slug: null,
+        openspec_task_id: null,
+      },
     });
 
     return { change, task_id: thread.task_id, path: changePath };

@@ -24,6 +24,7 @@ describe('Colony CLI program', () => {
       'mcp',
       'note',
       'observe',
+      'openspec',
       'plan',
       'plans',
       'queen',
@@ -98,6 +99,7 @@ describe('Colony CLI program', () => {
                                             handoff notes
         observe [options]                   Live dashboard of collaboration state.
                                             Run in a spare terminal during a session.
+        openspec                            Inspect Colony and OpenSpec drift
         plan                                Create and operate OpenSpec-like Colony
                                             plan workspaces
         plans                               Prepare safe launch packets for published

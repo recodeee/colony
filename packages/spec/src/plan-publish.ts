@@ -87,6 +87,9 @@ export function publishPlan(args: PublishPlanInput): PublishPlanResult {
     content: `plan ${args.slug} config: auto_archive=${args.auto_archive ?? false}`,
     metadata: {
       plan_slug: args.slug,
+      openspec_change_path: opened.path,
+      openspec_plan_slug: args.slug,
+      openspec_task_id: null,
       auto_archive: args.auto_archive ?? false,
     },
   });
@@ -113,6 +116,9 @@ export function publishPlan(args: PublishPlanInput): PublishPlanResult {
         file_scope: subtask.file_scope,
         depends_on: subtask.depends_on ?? [],
         spec_row_id: subtask.spec_row_id ?? null,
+        openspec_change_path: opened.path,
+        openspec_plan_slug: args.slug,
+        openspec_task_id: subtask.spec_row_id ?? null,
         capability_hint: subtask.capability_hint ?? null,
         status: 'available',
       },

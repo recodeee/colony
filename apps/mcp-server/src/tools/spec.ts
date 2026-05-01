@@ -4,6 +4,7 @@ import {
   SyncEngine,
   type SyncStrategy,
   computeFailureSignature,
+  openspecSyncStatus,
   parseSpec,
   resolveTaskContext,
   serializeSpec,
@@ -41,6 +42,25 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         ],
       };
+    }),
+  );
+
+  server.tool(
+    'openspec_sync_status',
+    'Report drift between Colony task state and OpenSpec durable artifacts, including stale checkboxes, missing PR evidence, and exact repair actions.',
+    {
+      repo_root: z.string().min(1),
+      stale_after_hours: z.number().positive().optional(),
+      limit: z.number().int().positive().max(200).optional(),
+    },
+    wrapHandler('openspec_sync_status', async ({ repo_root, stale_after_hours, limit }) => {
+      const status = openspecSyncStatus({
+        store,
+        repoRoot: repo_root,
+        staleAfterMs: (stale_after_hours ?? 24) * 60 * 60_000,
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(status) }] };
     }),
   );
 

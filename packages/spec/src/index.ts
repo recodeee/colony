@@ -50,6 +50,17 @@ export {
   type PublishPlanSubtaskInput,
 } from './plan-publish.js';
 export {
+  formatOpenSpecSyncStatus,
+  openspecSyncStatus,
+  type OpenSpecSyncIssue,
+  type OpenSpecSyncIssueCode,
+  type OpenSpecSyncSeverity,
+  type OpenSpecSyncStatus,
+  type OpenSpecSyncStatusInput,
+  type OpenSpecSyncTaskState,
+  type OpenSpecTaskSyncMetadata,
+} from './openspec-sync-status.js';
+export {
   hasDependencyPath,
   validateOrderedPlan,
   type OrderedPlanSubtaskInput,
