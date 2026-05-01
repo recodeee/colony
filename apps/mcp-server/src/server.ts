@@ -25,6 +25,7 @@ import * as relay from './tools/relay.js';
 import * as rescue from './tools/rescue.js';
 import * as search from './tools/search.js';
 import * as spec from './tools/spec.js';
+import * as startupPanel from './tools/startup-panel.js';
 import * as suggest from './tools/suggest.js';
 import * as task from './tools/task.js';
 
@@ -98,6 +99,7 @@ export function buildServer(
   queen.register(server, ctx);
   planValidate.register(server, ctx);
   readyQueue.register(server, ctx);
+  startupPanel.register(server, ctx);
   recall.register(server, ctx);
   suggest.register(server, ctx);
   rescue.register(server, ctx);

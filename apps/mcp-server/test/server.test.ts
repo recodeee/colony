@@ -70,6 +70,7 @@ describe('MCP server', () => {
       'spec_change_add_delta',
       'spec_change_open',
       'spec_read',
+      'startup_panel',
       'task_accept_handoff',
       'task_accept_relay',
       'task_claim_file',
@@ -198,6 +199,11 @@ describe('MCP server', () => {
     expect(readyDescription.toLowerCase()).toContain('claim');
     expect(readyDescription.toLowerCase()).toContain('work');
     expect(readyDescription.toLowerCase().indexOf('next task')).toBeLessThan(80);
+    const startupDescription = byName.get('startup_panel')?.description ?? '';
+    expect(startupDescription).toMatch(/^Compact startup\/resume panel\./);
+    expect(startupDescription).toContain('active task');
+    expect(startupDescription).toContain('ready work');
+    expect(startupDescription).toContain('exact next MCP call');
     const taskListDescription = byName.get('task_list')?.description ?? '';
     expect(taskListDescription).toMatch(/^Browse task threads;/);
     expect(taskListDescription).toContain('use task_ready_for_agent when choosing work to claim');
