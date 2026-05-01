@@ -902,6 +902,35 @@ describe('task_ready_for_agent', () => {
     });
   });
 
+  it('keeps legacy quota accept args valid after ready queue exposes rich claim args', async () => {
+    const { taskId, relayId, filePath } = openQuotaRelayTask({});
+    new TaskThread(store, taskId).join('agent-session', 'codex');
+
+    const accepted = await call<
+      QuotaAcceptResult & {
+        accepted_files: string[];
+        handoff_observation_id: number;
+      }
+    >('task_claim_quota_accept', {
+      task_id: taskId,
+      session_id: 'agent-session',
+      file_path: filePath,
+    });
+
+    expect(accepted).toMatchObject({
+      status: 'accepted',
+      task_id: taskId,
+      quota_observation_id: relayId,
+      handoff_observation_id: relayId,
+      files: [filePath],
+      accepted_files: [filePath],
+    });
+    expect(store.storage.getClaim(taskId, filePath)).toMatchObject({
+      session_id: 'agent-session',
+      state: 'active',
+    });
+  });
+
   it('continues an already claimed sub-task without fabricating a new claim call', async () => {
     await call('task_plan_publish', {
       ...publishArgs(

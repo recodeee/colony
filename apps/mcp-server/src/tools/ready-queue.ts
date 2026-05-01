@@ -81,13 +81,15 @@ export interface ReadySubtaskWithWarnings extends ReadySubtask {
 }
 
 export interface TaskClaimQuotaAcceptArgs {
-  repo_root: string;
-  branch: string;
+  repo_root?: string | undefined;
+  branch?: string | undefined;
   task_id: number;
-  quota_observation_id: number;
+  quota_observation_id?: number | undefined;
+  handoff_observation_id?: number | undefined;
   session_id: string;
-  agent: string;
-  files: string[];
+  agent?: string | undefined;
+  files?: string[] | undefined;
+  file_path?: string | undefined;
 }
 
 export interface QuotaRelayReady {
@@ -209,13 +211,15 @@ export function register(server: McpServer, ctx: ToolContext): void {
     'task_claim_quota_accept',
     'Claim quota-stopped work surfaced by task_ready_for_agent. Accepts the underlying quota handoff/relay when still live, or directly re-claims expired handoff_pending files with audit metadata.',
     {
-      repo_root: z.string().min(1),
-      branch: z.string().min(1),
+      repo_root: z.string().min(1).optional(),
+      branch: z.string().min(1).optional(),
       task_id: z.number().int().positive(),
-      quota_observation_id: z.number().int().positive(),
+      quota_observation_id: z.number().int().positive().optional(),
+      handoff_observation_id: z.number().int().positive().optional(),
       session_id: z.string().min(1),
-      agent: z.string().min(1),
-      files: z.array(z.string().min(1)).min(1),
+      agent: z.string().min(1).optional(),
+      files: z.array(z.string().min(1)).min(1).optional(),
+      file_path: z.string().min(1).optional(),
     },
     wrapHandler('task_claim_quota_accept', async (args: TaskClaimQuotaAcceptArgs) => {
       try {
@@ -924,96 +928,203 @@ function claimQuotaAccept(
   task_id: number;
   quota_observation_id: number;
   files: string[];
+  accepted_files?: string[];
+  handoff_observation_id?: number;
+  baton_kind?: 'handoff' | 'relay';
+  accepted_by_session_id?: string;
+  previous_session_ids?: string[];
+  audit_observation_id?: number;
 } {
-  const task = store.storage.getTask(args.task_id);
-  if (!task) throw new Error(`task ${args.task_id} not found`);
-  if (task.repo_root !== args.repo_root) {
-    throw new Error(`task ${args.task_id} repo_root is ${task.repo_root}, not ${args.repo_root}`);
+  if (!usesReadyQueueAcceptShape(args)) {
+    const accepted = new TaskThread(store, args.task_id).acceptQuotaClaim({
+      session_id: args.session_id,
+      ...(args.file_path !== undefined ? { file_path: args.file_path } : {}),
+      ...(args.handoff_observation_id !== undefined
+        ? { handoff_observation_id: args.handoff_observation_id }
+        : {}),
+    });
+    return {
+      ...accepted,
+      quota_observation_id: accepted.handoff_observation_id,
+      files: accepted.accepted_files,
+    };
   }
-  if (task.branch !== args.branch) {
-    throw new Error(`task ${args.task_id} branch is ${task.branch}, not ${args.branch}`);
-  }
-  const obs = store.storage.getObservation(args.quota_observation_id);
-  if (!obs || obs.task_id !== args.task_id || !isQuotaRelayKind(obs.kind)) {
-    throw new Error(`observation ${args.quota_observation_id} is not a quota handoff/relay`);
-  }
-  const meta = parseMeta(obs.metadata);
+
+  const normalized = normalizeQuotaAcceptArgs(store, args);
+  const { obs, meta, pendingClaims } = normalized;
   if (!isQuotaReadyObservation(obs, meta)) {
-    throw new Error(`observation ${args.quota_observation_id} is not quota-stopped work`);
+    throw new Error(`observation ${normalized.quota_observation_id} is not quota-stopped work`);
   }
-  if (!quotaObservationVisible(meta, args.session_id, args.agent)) {
-    throw new Error(`observation ${args.quota_observation_id} is not addressed to ${args.agent}`);
+  if (!quotaObservationVisible(meta, normalized.session_id, normalized.agent)) {
+    throw new Error(
+      `observation ${normalized.quota_observation_id} is not addressed to ${normalized.agent}`,
+    );
   }
-  const pendingClaims = matchingQuotaPendingClaims(store, args);
   if (pendingClaims.length === 0) {
     throw new Error(
-      `no handoff_pending quota claims match observation ${args.quota_observation_id}`,
+      `no handoff_pending quota claims match observation ${normalized.quota_observation_id}`,
     );
   }
 
-  const thread = new TaskThread(store, args.task_id);
-  thread.join(args.session_id, args.agent);
+  const thread = new TaskThread(store, normalized.task_id);
+  thread.join(normalized.session_id, normalized.agent);
   const expiresAt = readNumber(meta.expires_at) ?? latestClaimExpiresAt(pendingClaims);
   const status = readString(meta.status);
   if (status === 'pending' && (expiresAt === null || Date.now() <= expiresAt)) {
-    if (obs.kind === 'handoff') {
-      thread.acceptHandoff(args.quota_observation_id, args.session_id);
-    } else {
-      thread.acceptRelay(args.quota_observation_id, args.session_id);
-    }
+    const accepted = thread.acceptQuotaClaim({
+      session_id: normalized.session_id,
+      handoff_observation_id: normalized.quota_observation_id,
+      ...(normalized.file_path !== undefined ? { file_path: normalized.file_path } : {}),
+    });
     return {
       status: 'accepted',
-      task_id: args.task_id,
-      quota_observation_id: args.quota_observation_id,
-      files: args.files,
+      task_id: normalized.task_id,
+      quota_observation_id: normalized.quota_observation_id,
+      files: accepted.accepted_files,
     };
   }
 
   store.storage.transaction(() => {
     for (const claim of pendingClaims) {
       store.storage.claimFile({
-        task_id: args.task_id,
+        task_id: normalized.task_id,
         file_path: claim.file_path,
-        session_id: args.session_id,
+        session_id: normalized.session_id,
       });
     }
     store.addObservation({
-      session_id: args.session_id,
-      task_id: args.task_id,
+      session_id: normalized.session_id,
+      task_id: normalized.task_id,
       kind: QUOTA_RELAY_CLAIM_KIND,
-      reply_to: args.quota_observation_id,
-      content: `claimed expired quota-pending files from ${obs.kind} #${args.quota_observation_id}: ${args.files.join(', ')}`,
+      reply_to: normalized.quota_observation_id,
+      content: `claimed expired quota-pending files from ${obs.kind} #${normalized.quota_observation_id}: ${normalized.files.join(', ')}`,
       metadata: {
         kind: QUOTA_RELAY_CLAIM_KIND,
-        quota_observation_id: args.quota_observation_id,
+        quota_observation_id: normalized.quota_observation_id,
         quota_observation_kind: obs.kind,
-        files: args.files,
-        accepted_by_session_id: args.session_id,
-        accepted_by_agent: args.agent,
+        files: normalized.files,
+        accepted_by_session_id: normalized.session_id,
+        accepted_by_agent: normalized.agent,
         expired_at: expiresAt,
       },
     });
-    store.storage.touchTask(args.task_id);
+    store.storage.touchTask(normalized.task_id);
   });
 
   return {
     status: 'claimed_expired_quota',
-    task_id: args.task_id,
-    quota_observation_id: args.quota_observation_id,
-    files: args.files,
+    task_id: normalized.task_id,
+    quota_observation_id: normalized.quota_observation_id,
+    files: normalized.files,
   };
 }
 
-function matchingQuotaPendingClaims(
+function usesReadyQueueAcceptShape(args: TaskClaimQuotaAcceptArgs): boolean {
+  return (
+    args.quota_observation_id !== undefined ||
+    args.repo_root !== undefined ||
+    args.branch !== undefined ||
+    args.agent !== undefined ||
+    args.files !== undefined
+  );
+}
+
+function normalizeQuotaAcceptArgs(
   store: MemoryStore,
   args: TaskClaimQuotaAcceptArgs,
-): TaskClaimRow[] {
-  const requested = new Set(args.files);
-  return store.storage
+): {
+  task_id: number;
+  quota_observation_id: number;
+  session_id: string;
+  agent: string;
+  files: string[];
+  file_path?: string;
+  obs: ObservationRow & { kind: 'handoff' | 'relay' };
+  meta: Record<string, unknown>;
+  pendingClaims: TaskClaimRow[];
+} {
+  const task = store.storage.getTask(args.task_id);
+  if (!task) throw new Error(`task ${args.task_id} not found`);
+  if (args.repo_root !== undefined && task.repo_root !== args.repo_root) {
+    throw new Error(`task ${args.task_id} repo_root is ${task.repo_root}, not ${args.repo_root}`);
+  }
+  if (args.branch !== undefined && task.branch !== args.branch) {
+    throw new Error(`task ${args.task_id} branch is ${task.branch}, not ${args.branch}`);
+  }
+
+  const normalizedFilePath =
+    args.file_path !== undefined
+      ? store.storage.normalizeTaskFilePath(args.task_id, args.file_path)
+      : null;
+  if (args.file_path !== undefined && normalizedFilePath === null) {
+    throw new Error('claim path is not claimable');
+  }
+  const claimForFile =
+    normalizedFilePath !== null ? store.storage.getClaim(args.task_id, normalizedFilePath) : null;
+  if (normalizedFilePath !== null && !claimForFile) {
+    throw new Error('quota claim not found');
+  }
+  if (claimForFile && claimForFile.state !== 'handoff_pending') {
+    throw new Error(`claim is ${claimForFile.state}, not handoff_pending`);
+  }
+
+  const quotaObservationId =
+    args.quota_observation_id ??
+    args.handoff_observation_id ??
+    claimForFile?.handoff_observation_id;
+  if (quotaObservationId === null || quotaObservationId === undefined) {
+    throw new Error('quota claim has no handoff/relay observation');
+  }
+
+  const obs = store.storage.getObservation(quotaObservationId);
+  const obsKind = obs?.kind;
+  if (
+    !obs ||
+    obs.task_id !== args.task_id ||
+    typeof obsKind !== 'string' ||
+    !isQuotaRelayKind(obsKind)
+  ) {
+    throw new Error(`observation ${quotaObservationId} is not a quota handoff/relay`);
+  }
+  const meta = parseMeta(obs.metadata);
+  const allPendingClaims = store.storage
     .listClaims(args.task_id)
-    .filter((claim) => requested.has(claim.file_path))
     .filter((claim) => claim.state === 'handoff_pending')
-    .filter((claim) => claim.handoff_observation_id === args.quota_observation_id);
+    .filter((claim) => claim.handoff_observation_id === quotaObservationId);
+  if (
+    normalizedFilePath !== null &&
+    !allPendingClaims.some((claim) => claim.file_path === normalizedFilePath)
+  ) {
+    throw new Error('claim does not belong to this handoff/relay');
+  }
+  const requestedFiles =
+    args.files !== undefined
+      ? new Set(
+          args.files.map((file) => store.storage.normalizeTaskFilePath(args.task_id, file) ?? file),
+        )
+      : null;
+  const pendingClaims =
+    requestedFiles === null
+      ? allPendingClaims
+      : allPendingClaims.filter((claim) => requestedFiles.has(claim.file_path));
+  const agent =
+    args.agent ??
+    store.storage.getParticipantAgent(args.task_id, args.session_id) ??
+    store.storage.getSession(args.session_id)?.ide ??
+    'unknown';
+  const files = [...new Set(pendingClaims.map((claim) => claim.file_path))].sort();
+
+  return {
+    task_id: args.task_id,
+    quota_observation_id: quotaObservationId,
+    session_id: args.session_id,
+    agent,
+    files,
+    ...(normalizedFilePath !== null ? { file_path: normalizedFilePath } : {}),
+    obs: { ...obs, kind: obsKind },
+    meta,
+    pendingClaims,
+  };
 }
 
 function quotaRelayClaimReason(task: TaskRow, blocksDownstream: boolean): string {
