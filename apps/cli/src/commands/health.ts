@@ -734,6 +734,7 @@ export function formatColonyHealthOutput(
     `  active sessions:     ${payload.omx_runtime_bridge.active_sessions}`,
     `  recent edit paths:   ${payload.omx_runtime_bridge.recent_edit_paths.length ? payload.omx_runtime_bridge.recent_edit_paths.join(', ') : 'none'}`,
     `  malformed summaries: ${payload.omx_runtime_bridge.malformed_summary_count}`,
+    ...formatMalformedSummaryExamples(payload.omx_runtime_bridge.malformed_summary_examples),
     '',
     kleur.bold('Search calls per session'),
     `  total: ${payload.search_calls_per_session.total_search_calls}`,
@@ -994,6 +995,35 @@ function formatReadinessStatus(status: ReadinessStatus): string {
   if (status === 'good') return kleur.green(label);
   if (status === 'bad') return kleur.red(label);
   return kleur.yellow(label);
+}
+
+function formatMalformedSummaryExamples(
+  examples: OmxRuntimeBridgePayload['malformed_summary_examples'],
+): string[] {
+  if (examples.length === 0) return [];
+  const lines = ['  malformed summary examples:'];
+  for (const example of examples) {
+    lines.push(
+      `    ${example.path} (modified ${example.modified_time ?? 'unknown'}): ${example.error}`,
+      `      schema: ${formatJsonPrimitive(example.schema_value)}`,
+      `      missing required fields: ${example.missing_required_fields.length ? example.missing_required_fields.join(', ') : 'none'}`,
+      `      invalid field types: ${formatMalformedFieldTypes(example.invalid_field_types)}`,
+    );
+  }
+  return lines;
+}
+
+function formatMalformedFieldTypes(
+  fields: OmxRuntimeBridgePayload['malformed_summary_examples'][number]['invalid_field_types'],
+): string {
+  if (fields.length === 0) return 'none';
+  return fields
+    .map((field) => `${field.field} expected ${field.expected} got ${field.actual}`)
+    .join('; ');
+}
+
+function formatJsonPrimitive(value: string | number | boolean | null): string {
+  return value === null ? 'null' : String(value);
 }
 
 export function registerHealthCommand(program: Command): void {

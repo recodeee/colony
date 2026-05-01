@@ -6,10 +6,13 @@ import type { MemoryStore } from './memory-store.js';
 const FIELD_LIMIT = 240;
 const NOTE_LIMIT = 320;
 const FILE_LIMIT = 8;
+const MALFORMED_SUMMARY_EXAMPLE_LIMIT = 5;
+const MALFORMED_SUMMARY_ERROR_LIMIT = 20;
 export const COLONY_RUNTIME_SUMMARY_SCHEMA = 'colony-runtime-summary-v1';
 export const DEFAULT_OMX_RUNTIME_SUMMARY_STALE_MS = 15 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
+type JsonPrimitive = string | number | boolean | null;
 
 export interface OmxRuntimeSummaryInput {
   session_id?: string;
@@ -18,6 +21,7 @@ export interface OmxRuntimeSummaryInput {
   branch?: string;
   task_id?: number;
   timestamp?: string | number;
+  last_seen_at?: unknown;
   quota_warning?: unknown;
   runtime_model_error?: unknown;
   runtime_error?: unknown;
@@ -70,6 +74,22 @@ export interface IngestOmxRuntimeSummaryFileResult {
 
 export type OmxRuntimeBridgeStatus = 'available' | 'stale' | 'unavailable';
 
+export interface OmxRuntimeMalformedSummaryFieldType {
+  field: string;
+  expected: string;
+  actual: string;
+}
+
+export interface OmxRuntimeMalformedSummaryExample {
+  path: string;
+  error: string;
+  schema_value: JsonPrimitive;
+  missing_required_fields: string[];
+  invalid_field_types: OmxRuntimeMalformedSummaryFieldType[];
+  modified_time: string | null;
+  modified_time_ms: number | null;
+}
+
 export interface OmxRuntimeSummaryHealthStats {
   status: OmxRuntimeBridgeStatus;
   summaries_ingested: number;
@@ -78,6 +98,8 @@ export interface OmxRuntimeSummaryHealthStats {
   active_sessions: number;
   recent_edit_paths: string[];
   malformed_summary_count: number;
+  malformed_summary_examples: OmxRuntimeMalformedSummaryExample[];
+  malformed_summary_errors: string[];
   sources: string[];
 }
 
@@ -110,7 +132,7 @@ export function normalizeOmxRuntimeSummary(
     branch,
     task_id:
       typeof input.task_id === 'number' && Number.isInteger(input.task_id) ? input.task_id : null,
-    ts: timestampMs(input.timestamp),
+    ts: timestampMs(input.last_seen_at ?? input.timestamp),
     quota_warning: compactText(input.quota_warning, FIELD_LIMIT),
     runtime_model_error: runtimeModelError,
     last_prompt_summary: compactText(input.last_prompt_summary, FIELD_LIMIT),
@@ -254,17 +276,43 @@ export function discoverOmxRuntimeSummaryStats(
   let latestSummaryTs: number | null = null;
   let warningCount = 0;
   let malformedSummaryCount = 0;
+  const malformedSummaryExamples: OmxRuntimeMalformedSummaryExample[] = [];
+  const malformedSummaryErrors: string[] = [];
+
+  function recordMalformed(example: OmxRuntimeMalformedSummaryExample): void {
+    malformedSummaryCount++;
+    warningCount++;
+    sources.add(example.path);
+    if (malformedSummaryExamples.length < MALFORMED_SUMMARY_EXAMPLE_LIMIT) {
+      malformedSummaryExamples.push(example);
+    }
+    if (malformedSummaryErrors.length < MALFORMED_SUMMARY_ERROR_LIMIT) {
+      malformedSummaryErrors.push(example.error);
+    }
+  }
 
   for (const path of paths) {
-    if (!existsSync(path) || !statSync(path).isFile()) continue;
-    const parsed = safeJson(readFileSync(path, 'utf8'));
-    const records = Array.isArray(parsed) ? parsed : [parsed];
+    if (!existsSync(path)) continue;
+    const fileStat = statSync(path);
+    if (!fileStat.isFile()) continue;
+    const source = summaryDiagnosticSource(path, fileStat.mtimeMs);
+    const parsed = parseJson(readFileSync(path, 'utf8'));
+    if (!parsed.ok) {
+      recordMalformed(
+        malformedSummaryExample(source, {
+          error: `${path}: invalid JSON: ${parsed.error}`,
+          schemaValue: null,
+          missingRequiredFields: [],
+          invalidFieldTypes: [],
+        }),
+      );
+      continue;
+    }
+    const records = Array.isArray(parsed.value) ? parsed.value : [parsed.value];
     for (const record of records) {
-      const validation = validateColonyRuntimeSummaryRecord(record, path);
+      const validation = validateColonyRuntimeSummaryRecord(record, source);
       if (!validation.ok) {
-        malformedSummaryCount++;
-        warningCount++;
-        sources.add(path);
+        recordMalformed(validation.example);
         continue;
       }
       for (const input of validation.summaries) {
@@ -302,6 +350,8 @@ export function discoverOmxRuntimeSummaryStats(
     active_sessions: sessionIds.size,
     recent_edit_paths: editPaths.slice(0, FILE_LIMIT),
     malformed_summary_count: malformedSummaryCount,
+    malformed_summary_examples: malformedSummaryExamples,
+    malformed_summary_errors: malformedSummaryErrors,
     sources: [...sources],
   };
 }
@@ -315,6 +365,8 @@ export function mergeOmxRuntimeSummaryStats(
   const sessions = new Set<string>();
   const paths: string[] = [];
   const sources: string[] = [];
+  const malformedSummaryExamples: OmxRuntimeMalformedSummaryExample[] = [];
+  const malformedSummaryErrors: string[] = [];
   let summariesIngested = 0;
   let latestSummaryTs: number | null = null;
   let warningCount = 0;
@@ -337,6 +389,14 @@ export function mergeOmxRuntimeSummaryStats(
     for (const filePath of stat.recent_edit_paths ?? []) {
       if (!paths.includes(filePath)) paths.push(filePath);
     }
+    for (const example of stat.malformed_summary_examples ?? []) {
+      if (malformedSummaryExamples.length >= MALFORMED_SUMMARY_EXAMPLE_LIMIT) break;
+      malformedSummaryExamples.push(example);
+    }
+    for (const error of stat.malformed_summary_errors ?? []) {
+      if (malformedSummaryErrors.length >= MALFORMED_SUMMARY_ERROR_LIMIT) break;
+      malformedSummaryErrors.push(error);
+    }
     if (typeof stat.active_sessions === 'number' && stat.active_sessions > 0) {
       for (let i = 0; i < stat.active_sessions; i++) sessions.add(`stat:${sources.length}:${i}`);
     }
@@ -355,21 +415,49 @@ export function mergeOmxRuntimeSummaryStats(
     active_sessions: sessions.size,
     recent_edit_paths: paths.slice(0, FILE_LIMIT),
     malformed_summary_count: malformedSummaryCount,
+    malformed_summary_examples: malformedSummaryExamples,
+    malformed_summary_errors: malformedSummaryErrors,
     sources,
   };
 }
 
+interface SummaryDiagnosticSource {
+  path: string;
+  modifiedTime: string | null;
+  modifiedTimeMs: number | null;
+}
+
 function validateColonyRuntimeSummaryRecord(
   record: unknown,
-  path: string,
-): { ok: true; summaries: OmxRuntimeSummaryInput[] } | { ok: false; error: string } {
-  if (!isRecord(record)) return { ok: false, error: `${path}: expected object` };
-  const schema = shortString(record.schema ?? record.schema_version);
-  if (schema !== COLONY_RUNTIME_SUMMARY_SCHEMA) {
-    return { ok: false, error: `${path}: expected schema ${COLONY_RUNTIME_SUMMARY_SCHEMA}` };
+  source: SummaryDiagnosticSource,
+):
+  | { ok: true; summaries: OmxRuntimeSummaryInput[] }
+  | { ok: false; example: OmxRuntimeMalformedSummaryExample } {
+  if (!isRecord(record)) {
+    return {
+      ok: false,
+      example: malformedSummaryExample(source, {
+        error: `${source.path}: expected object`,
+        schemaValue: null,
+        missingRequiredFields: [],
+        invalidFieldTypes: [{ field: '$', expected: 'object', actual: typeDescription(record) }],
+      }),
+    };
   }
   const candidates = summaryCandidates(record);
-  if (candidates.length === 0) return { ok: false, error: `${path}: missing summary object` };
+  const details = validateSummaryRecordDetails(record, candidates);
+  const error = summaryValidationError(source.path, details, candidates.length);
+  if (error) {
+    return {
+      ok: false,
+      example: malformedSummaryExample(source, {
+        error,
+        schemaValue: details.schemaValue,
+        missingRequiredFields: details.missingRequiredFields,
+        invalidFieldTypes: details.invalidFieldTypes,
+      }),
+    };
+  }
   return { ok: true, summaries: candidates };
 }
 
@@ -378,6 +466,7 @@ function summaryCandidates(record: JsonRecord): OmxRuntimeSummaryInput[] {
     repo_root: record.repo_root,
     branch: record.branch,
     timestamp: record.timestamp,
+    last_seen_at: record.last_seen_at,
   };
   const raw =
     Array.isArray(record.summaries) && record.summaries.length > 0
@@ -390,6 +479,152 @@ function summaryCandidates(record: JsonRecord): OmxRuntimeSummaryInput[] {
   return raw
     .filter(isRecord)
     .map((entry) => compactObject({ ...inherited, ...entry }) as OmxRuntimeSummaryInput);
+}
+
+function summaryDiagnosticSource(path: string, modifiedTimeMs: number): SummaryDiagnosticSource {
+  return {
+    path,
+    modifiedTime: Number.isFinite(modifiedTimeMs) ? new Date(modifiedTimeMs).toISOString() : null,
+    modifiedTimeMs: Number.isFinite(modifiedTimeMs) ? modifiedTimeMs : null,
+  };
+}
+
+function malformedSummaryExample(
+  source: SummaryDiagnosticSource,
+  input: {
+    error: string;
+    schemaValue: JsonPrimitive;
+    missingRequiredFields: string[];
+    invalidFieldTypes: OmxRuntimeMalformedSummaryFieldType[];
+  },
+): OmxRuntimeMalformedSummaryExample {
+  return {
+    path: source.path,
+    error: input.error,
+    schema_value: input.schemaValue,
+    missing_required_fields: input.missingRequiredFields,
+    invalid_field_types: input.invalidFieldTypes,
+    modified_time: source.modifiedTime,
+    modified_time_ms: source.modifiedTimeMs,
+  };
+}
+
+function validateSummaryRecordDetails(
+  record: JsonRecord,
+  candidates: OmxRuntimeSummaryInput[],
+): {
+  schemaValue: JsonPrimitive;
+  schema: string | null;
+  missingRequiredFields: string[];
+  invalidFieldTypes: OmxRuntimeMalformedSummaryFieldType[];
+} {
+  const missing = new Set<string>();
+  const invalid: OmxRuntimeMalformedSummaryFieldType[] = [];
+  const rawSchema = record.schema ?? record.schema_version;
+  const schemaValue = schemaValueFromRecord(record);
+  const schema = shortString(rawSchema) ?? null;
+
+  if (!hasOwn(record, 'schema') && !hasOwn(record, 'schema_version')) {
+    missing.add('schema');
+  } else if (typeof rawSchema !== 'string') {
+    invalid.push({ field: 'schema', expected: 'string', actual: typeDescription(rawSchema) });
+  } else if (!rawSchema.trim()) {
+    missing.add('schema');
+  }
+
+  for (const candidate of candidates) {
+    validateRequiredString(candidate, 'session_id', missing, invalid);
+    validateRequiredString(candidate, 'repo_root', missing, invalid);
+    validateLastSeenAt(candidate, missing, invalid);
+  }
+
+  return {
+    schemaValue,
+    schema,
+    missingRequiredFields: [...missing],
+    invalidFieldTypes: invalid,
+  };
+}
+
+function summaryValidationError(
+  path: string,
+  details: ReturnType<typeof validateSummaryRecordDetails>,
+  candidateCount: number,
+): string | null {
+  if (details.missingRequiredFields.length > 0) {
+    return `${path}: missing required fields: ${details.missingRequiredFields.join(', ')}`;
+  }
+  if (details.invalidFieldTypes.length > 0) {
+    const summary = details.invalidFieldTypes
+      .map((item) => `${item.field} expected ${item.expected} got ${item.actual}`)
+      .join('; ');
+    return `${path}: invalid field types: ${summary}`;
+  }
+  if (details.schema !== COLONY_RUNTIME_SUMMARY_SCHEMA) {
+    return `${path}: expected schema ${COLONY_RUNTIME_SUMMARY_SCHEMA}, got ${formatSchemaValue(details.schemaValue)}`;
+  }
+  if (candidateCount === 0) return `${path}: missing summary object`;
+  return null;
+}
+
+function validateRequiredString(
+  record: OmxRuntimeSummaryInput,
+  field: 'session_id' | 'repo_root',
+  missing: Set<string>,
+  invalid: OmxRuntimeMalformedSummaryFieldType[],
+): void {
+  if (!hasOwn(record, field)) {
+    missing.add(field);
+    return;
+  }
+  const value = record[field];
+  if (typeof value !== 'string') {
+    invalid.push({ field, expected: 'non-empty string', actual: typeDescription(value) });
+    return;
+  }
+  if (!value.trim()) missing.add(field);
+}
+
+function validateLastSeenAt(
+  record: OmxRuntimeSummaryInput,
+  missing: Set<string>,
+  invalid: OmxRuntimeMalformedSummaryFieldType[],
+): void {
+  const value = record.last_seen_at ?? record.timestamp;
+  if (value === undefined) {
+    missing.add('last_seen_at');
+    return;
+  }
+  if (!isValidTimestampValue(value)) {
+    invalid.push({
+      field: 'last_seen_at',
+      expected: 'valid ISO timestamp string or epoch milliseconds',
+      actual: typeDescription(value),
+    });
+  }
+}
+
+function isValidTimestampValue(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'string') return Number.isFinite(Date.parse(value));
+  return false;
+}
+
+function schemaValueFromRecord(record: JsonRecord): JsonPrimitive {
+  const value = record.schema ?? record.schema_version ?? record.version ?? null;
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+  return null;
+}
+
+function formatSchemaValue(value: JsonPrimitive): string {
+  if (value === null) return 'null';
+  return String(value);
+}
+
+function hasOwn(record: object, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, field);
 }
 
 function runtimeBridgeStatus(input: {
@@ -523,12 +758,20 @@ function compactObject(input: Record<string, unknown>): Record<string, unknown> 
   );
 }
 
-function safeJson(raw: string): unknown {
+function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; error: string } {
   try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+    return { ok: true, value: JSON.parse(raw) };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+function safeJson(raw: string): unknown {
+  const parsed = parseJson(raw);
+  return parsed.ok ? parsed.value : null;
 }
 
 function safeRecord(raw: string): OmxRuntimeSummaryInput | null {
@@ -538,6 +781,12 @@ function safeRecord(raw: string): OmxRuntimeSummaryInput | null {
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function typeDescription(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  return typeof value;
 }
 
 function agentFromSession(sessionId: string): string {
