@@ -66,6 +66,7 @@ const LIFECYCLE_BRIDGE_ACTION =
   'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.';
 const LIFECYCLE_BRIDGE_COMMAND =
   'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json';
+const INSUFFICIENT_RUNTIME_METADATA_REASON = 'insufficient runtime metadata or bridge unavailable';
 const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 
 const CONVERSIONS = [
@@ -140,6 +141,9 @@ interface SearchCallsPayload {
 
 interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   status: 'available' | 'not_available' | 'no_data';
+  measurable_edits: number;
+  unmeasurable_edits: number;
+  reason: string | null;
   task_claim_file_calls: number;
   edits_with_claim: number;
   edits_missing_claim: number;
@@ -546,6 +550,7 @@ export function buildColonyHealthPayload(
         recent_stats: recentClaimBeforeEditStats,
         recent_task_claim_file_calls: recentTaskClaimFileCalls,
         recent_window_hours: recentWindowHours,
+        omx_runtime_bridge_status: omxRuntimeStats.status,
         live_file_contentions: liveContention.live_file_contentions,
         dirty_contended_files: liveContention.dirty_contended_files,
       },
@@ -1341,6 +1346,7 @@ function claimBeforeEditPayload(
     recent_stats: ClaimBeforeEditStats;
     recent_task_claim_file_calls: number;
     recent_window_hours: number;
+    omx_runtime_bridge_status: OmxRuntimeBridgePayload['status'];
     live_file_contentions: number;
     dirty_contended_files: number;
   },
@@ -1362,6 +1368,15 @@ function claimBeforeEditPayload(
     editsWithoutClaimBefore,
   );
   const codexRolloutWithoutBridge = codexRolloutEdits > 0 && preToolUseSignals === 0;
+  const measurableEdits = stats.edits_with_file_path;
+  const unmeasurableEdits =
+    Math.max(stats.edit_tool_calls - stats.edits_with_file_path, 0) + codexRolloutEdits;
+  const reason =
+    measurableEdits > 0 &&
+    measurableEdits < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE &&
+    (recent.omx_runtime_bridge_status === 'unavailable' || unmeasurableEdits > 0)
+      ? INSUFFICIENT_RUNTIME_METADATA_REASON
+      : null;
   const status =
     stats.edit_tool_calls === 0
       ? 'no_data'
@@ -1398,6 +1413,9 @@ function claimBeforeEditPayload(
   return {
     ...stats,
     status,
+    measurable_edits: measurableEdits,
+    unmeasurable_edits: unmeasurableEdits,
+    reason,
     task_claim_file_calls: taskClaimFileCalls,
     edits_with_claim: stats.edits_claimed_before,
     edits_missing_claim: editsWithoutClaimBefore,
@@ -1649,6 +1667,7 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   const lines = [`  task_claim_file calls: ${payload.task_claim_file_calls}`];
   if (payload.status === 'no_data') {
     lines.push(kleur.dim('  n/a (no edit tool observations in window)'));
+    lines.push(...formatClaimBeforeEditMeasurement(payload));
     lines.push(formatRecentClaimBeforeEdit(payload));
     lines.push(...formatEditSourceBreakdown(payload));
     if (payload.install_hint) lines.push(kleur.yellow(`  ${payload.install_hint}`));
@@ -1658,6 +1677,7 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
     lines.push(
       `  not available (${payload.edits_with_file_path} / ${payload.edit_tool_calls} edit calls include file_path metadata)`,
     );
+    lines.push(...formatClaimBeforeEditMeasurement(payload));
     lines.push(formatRecentClaimBeforeEdit(payload));
     lines.push(...formatEditSourceBreakdown(payload));
     if (payload.install_hint) lines.push(kleur.yellow(`  ${payload.install_hint}`));
@@ -1678,6 +1698,7 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   lines.push(
     `  telemetry: edits_with_claim=${payload.edits_with_claim}, edits_missing_claim=${payload.edits_missing_claim}, auto_claimed_before_edit=${payload.auto_claimed_before_edit}, pre_tool_use_signals=${payload.pre_tool_use_signals}`,
   );
+  lines.push(...formatClaimBeforeEditMeasurement(payload));
   lines.push(formatRecentClaimBeforeEdit(payload));
   lines.push(...formatClaimMatchSources(payload));
   lines.push(...formatClaimMissReasons(payload.claim_miss_reasons));
@@ -1691,6 +1712,14 @@ function formatClaimBeforeEdit(payload: ClaimBeforeEditPayload): string[] {
   } else if (payload.session_binding_missing > 0 && payload.install_hint) {
     lines.push(kleur.yellow(`  ${payload.install_hint}`));
   }
+  return lines;
+}
+
+function formatClaimBeforeEditMeasurement(payload: ClaimBeforeEditPayload): string[] {
+  const lines = [
+    `  measurement: measurable_edits=${payload.measurable_edits}, unmeasurable_edits=${payload.unmeasurable_edits}`,
+  ];
+  if (payload.reason) lines.push(`  reason: ${payload.reason}`);
   return lines;
 }
 
@@ -1873,6 +1902,28 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
+  if (payload.omx_runtime_bridge.status === 'unavailable') {
+    hints.push({
+      metric: 'OMX runtime bridge',
+      status: 'bad',
+      current: 'unavailable',
+      target: 'runtime summary/lifecycle bridge available',
+      action:
+        'Wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
+      readiness_scope: 'execution_safety',
+      priority: 4,
+      command: LIFECYCLE_BRIDGE_COMMAND,
+      prompt: codexPrompt({
+        goal: 'wire the OMX runtime summary and lifecycle bridge',
+        current: 'OMX runtime bridge unavailable in colony health',
+        inspect:
+          'colony health --json, colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/hooks/src/lifecycle-envelope.ts',
+        acceptance:
+          'omx_runtime_bridge.status is available and lifecycle pre_tool_use appears before file mutation',
+      }),
+    });
+  }
+
   const hivemindToAttention = payload.conversions.hivemind_context_to_attention_inbox;
   if (isBelowTarget(hivemindToAttention.conversion_rate, TARGET_HIVEMIND_TO_ATTENTION)) {
     hints.push({
@@ -1920,7 +1971,13 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   const readyToClaim = payload.conversions.task_ready_for_agent_to_task_plan_claim_subtask;
-  if (isBelowTarget(readyToClaim.conversion_rate, TARGET_READY_TO_CLAIM)) {
+  const queenReadyWithoutClaims =
+    payload.ready_to_claim_vs_claimed.ready_to_claim > 0 &&
+    payload.ready_to_claim_vs_claimed.claimed === 0;
+  if (
+    isBelowTarget(readyToClaim.conversion_rate, TARGET_READY_TO_CLAIM) &&
+    !queenReadyWithoutClaims
+  ) {
     const hasPlanSubtasks =
       payload.queen_wave_health.active_plans > 0 ||
       payload.ready_to_claim_vs_claimed.plan_subtasks > 0;
@@ -1976,6 +2033,12 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   const claimBeforeEdit = payload.task_claim_file_before_edits;
   const preToolUseMissing = claimBeforeEdit.claim_miss_reasons.pre_tool_use_missing;
   const preToolUseMissingDominates = isDominantPreToolUseMiss(claimBeforeEdit.claim_miss_reasons);
+  const bridgeUnavailable = payload.omx_runtime_bridge.status === 'unavailable';
+  const highTaskClaimFileAdoption =
+    claimBeforeEdit.task_claim_file_calls >=
+    Math.max(RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE, claimBeforeEdit.measurable_edits);
+  const suppressGenericTaskClaimAdvice =
+    bridgeUnavailable || claimBeforeEdit.reason !== null || highTaskClaimFileAdoption;
   if (claimBeforeEdit.root_cause?.kind === 'lifecycle_bridge_missing') {
     hints.push({
       metric: 'claim-before-edit',
@@ -2021,6 +2084,7 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   } else if (
     !claimBeforeEdit.old_telemetry_pollution &&
+    !suppressGenericTaskClaimAdvice &&
     preToolUseMissingDominates &&
     isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
   ) {
@@ -2072,6 +2136,7 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   } else if (
     !claimBeforeEdit.old_telemetry_pollution &&
+    !suppressGenericTaskClaimAdvice &&
     isBelowTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
   ) {
     const missingHook =
@@ -2109,6 +2174,27 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
           'mcp__colony__task_claim_file, packages/hooks/src/handlers/pre-tool-use.ts, packages/hooks/src/auto-claim.ts, packages/hooks/test/auto-claim.test.ts',
         acceptance:
           'claim-before-edit reaches target and agents still manually call task_claim_file until hooks are proven',
+      }),
+    });
+  }
+
+  if (queenReadyWithoutClaims) {
+    hints.push({
+      metric: 'Queen ready subtask claim',
+      status: 'bad',
+      current: `${payload.ready_to_claim_vs_claimed.ready_to_claim} ready, ${payload.ready_to_claim_vs_claimed.claimed} claimed`,
+      target: 'ready subtasks claimed',
+      action:
+        'Claim the ready Queen subtask with task_plan_claim_subtask before starting implementation.',
+      readiness_scope: 'queen_plan_readiness',
+      priority: 7,
+      tool_call:
+        'mcp__colony__task_plan_claim_subtask({ agent: "<agent>", session_id: "<session_id>", plan_slug: "<plan_slug>", subtask_index: <index> })',
+      prompt: codexPrompt({
+        goal: 'claim ready Queen work before starting implementation',
+        current: `${payload.ready_to_claim_vs_claimed.ready_to_claim} ready Queen subtask(s), 0 claimed`,
+        inspect: 'mcp__colony__task_ready_for_agent, mcp__colony__task_plan_claim_subtask',
+        acceptance: 'ready Queen subtasks are claimed or intentionally deferred with evidence',
       }),
     });
   }
@@ -2191,14 +2277,14 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
 
   if (payload.signal_health.quota_pending_claims > 0) {
     hints.push({
-      metric: 'quota-pending claims',
+      metric: 'quota relay accept/release',
       status: 'bad',
       current: String(payload.signal_health.quota_pending_claims),
       target: '0',
       action:
-        'Accept the quota relay or let the short TTL expire before treating it as ordinary weak ownership.',
+        'Accept the quota relay, decline/reroute it, or release expired quota-pending claims before treating the lane as ordinary weak ownership.',
       readiness_scope: 'signal_evaporation',
-      priority: 39,
+      priority: 6,
       tool_call:
         'mcp__colony__attention_inbox({ agent: <agent>, session_id: <session_id>, repo_root: <repo_root> })',
       command: 'colony inbox --json',
@@ -2303,6 +2389,22 @@ function visibleActionHints(
 ): ActionHint[] {
   const byPriority = (hints: ActionHint[]) =>
     [...hints].sort((a, b) => a.priority - b.priority || a.metric.localeCompare(b.metric));
+  const directBlockerHints = (hints: ActionHint[]) =>
+    hints.filter(
+      (hint) =>
+        hint.metric === 'OMX runtime bridge' ||
+        hint.metric === 'quota relay accept/release' ||
+        hint.metric === 'Queen ready subtask claim',
+    );
+  const uniqueHints = (hints: ActionHint[]) => {
+    const seen = new Set<string>();
+    return hints.filter((hint) => {
+      const key = `${hint.metric}:${hint.current}:${hint.target}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
 
   if (options.verbose) return byPriority(payload.action_hints);
 
@@ -2314,7 +2416,13 @@ function visibleActionHints(
   const readinessBottlenecks = payload.action_hints.filter((hint) =>
     badReadinessScopes.has(hint.readiness_scope),
   );
-  if (readinessBottlenecks.length > 0) return byPriority(readinessBottlenecks);
+  if (readinessBottlenecks.length > 0) {
+    return byPriority(
+      uniqueHints([...readinessBottlenecks, ...directBlockerHints(payload.action_hints)]),
+    );
+  }
+  const directBlockers = directBlockerHints(payload.action_hints);
+  if (directBlockers.length > 0) return byPriority(directBlockers);
 
   return byPriority(
     payload.action_hints.filter((hint) => hint.readiness_scope === 'adoption_followup'),
