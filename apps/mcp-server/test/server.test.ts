@@ -74,6 +74,8 @@ describe('MCP server', () => {
       'task_accept_relay',
       'task_claim_file',
       'task_claim_quota_accept',
+      'task_claim_quota_decline',
+      'task_claim_quota_release_expired',
       'task_decline_handoff',
       'task_decline_relay',
       'task_foraging_report',

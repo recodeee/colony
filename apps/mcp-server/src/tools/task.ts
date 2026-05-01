@@ -372,6 +372,36 @@ export function register(server: McpServer, ctx: ToolContext): void {
   );
 
   server.tool(
+    'task_claim_quota_accept',
+    'Resolve quota-pending claim ownership by accepting the linked quota handoff/relay. Transfers all pending claims on that baton to the replacement session, marks the relay/handoff accepted, and writes an audit note.',
+    {
+      task_id: z.number().int().positive(),
+      session_id: z.string().min(1),
+      agent: z.string().min(1).optional(),
+      file_path: z.string().min(1).optional(),
+      handoff_observation_id: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Linked handoff or relay observation id. Optional when file_path identifies it.'),
+    },
+    wrapHandler('task_claim_quota_accept', async (args) => {
+      try {
+        if (!store.storage.getTask(args.task_id)) {
+          return mcpErrorResponse('TASK_NOT_FOUND', `task ${args.task_id} not found`);
+        }
+        const thread = new TaskThread(store, args.task_id);
+        thread.join(args.session_id, args.agent ?? agentForTaskClaim(args.session_id));
+        const result = thread.acceptQuotaClaim(args);
+        return jsonReply(result);
+      } catch (err) {
+        return mcpError(err);
+      }
+    }),
+  );
+
+  server.tool(
     'task_claim_quota_decline',
     'Decline a quota-pending claim without cancelling the linked relay. Records the reason, retargets the baton to any recipient, and leaves the claim visible for another agent.',
     {

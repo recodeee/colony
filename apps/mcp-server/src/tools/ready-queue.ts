@@ -5,7 +5,6 @@ import {
   type MemoryStore,
   type PlanInfo,
   type SubtaskInfo,
-  TaskThread,
   claimsForPaths,
   discoverMcpCapabilities,
   listMessagesForAgent,
@@ -17,7 +16,7 @@ import type { ObservationRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
-import { type CompactNegativeWarning, mcpError, searchNegativeWarnings } from './shared.js';
+import { type CompactNegativeWarning, searchNegativeWarnings } from './shared.js';
 
 const DEFAULT_LIMIT = 5;
 const RELEASE_DENSITY_WINDOW_MS = 60 * 60 * 1000;
@@ -32,7 +31,6 @@ const CAPABLE_AGENT_SCORE = 0.5;
 const PLAN_SUBTASK_KIND = 'plan-subtask';
 const PLAN_SUBTASK_CLAIM_KIND = 'plan-subtask-claim';
 const QUOTA_RELAY_READY_KIND = 'quota_relay_ready';
-const QUOTA_RELAY_CLAIM_KIND = 'quota-relay-claim';
 export const NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE =
   'No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, or use task_list only for browsing.';
 export const NO_PLAN_NEXT_ACTION = 'Publish a Queen/task plan for multi-agent work.';
@@ -81,15 +79,10 @@ export interface ReadySubtaskWithWarnings extends ReadySubtask {
 }
 
 export interface TaskClaimQuotaAcceptArgs {
-  repo_root?: string | undefined;
-  branch?: string | undefined;
   task_id: number;
-  quota_observation_id?: number | undefined;
-  handoff_observation_id?: number | undefined;
   session_id: string;
-  agent?: string | undefined;
-  files?: string[] | undefined;
-  file_path?: string | undefined;
+  agent: string;
+  handoff_observation_id: number;
 }
 
 export interface QuotaRelayReady {
@@ -204,29 +197,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
           ...(limit !== undefined ? { limit } : {}),
         }),
       );
-    }),
-  );
-
-  server.tool(
-    'task_claim_quota_accept',
-    'Claim quota-stopped work surfaced by task_ready_for_agent. Accepts the underlying quota handoff/relay when still live, or directly re-claims expired handoff_pending files with audit metadata.',
-    {
-      repo_root: z.string().min(1).optional(),
-      branch: z.string().min(1).optional(),
-      task_id: z.number().int().positive(),
-      quota_observation_id: z.number().int().positive().optional(),
-      handoff_observation_id: z.number().int().positive().optional(),
-      session_id: z.string().min(1),
-      agent: z.string().min(1).optional(),
-      files: z.array(z.string().min(1)).min(1).optional(),
-      file_path: z.string().min(1).optional(),
-    },
-    wrapHandler('task_claim_quota_accept', async (args: TaskClaimQuotaAcceptArgs) => {
-      try {
-        return jsonReply(claimQuotaAccept(store, args));
-      } catch (err) {
-        return mcpError(err);
-      }
     }),
   );
 }
@@ -412,7 +382,7 @@ function codexMcpCall(args: TaskPlanClaimArgs): string {
 }
 
 function quotaMcpCall(args: TaskClaimQuotaAcceptArgs): string {
-  return `mcp__colony__task_claim_quota_accept({ agent: ${JSON.stringify(args.agent)}, session_id: ${JSON.stringify(args.session_id)}, repo_root: ${JSON.stringify(args.repo_root)}, branch: ${JSON.stringify(args.branch)}, task_id: ${args.task_id}, quota_observation_id: ${args.quota_observation_id}, files: ${JSON.stringify(args.files)} })`;
+  return `mcp__colony__task_claim_quota_accept({ session_id: ${JSON.stringify(args.session_id)}, agent: ${JSON.stringify(args.agent)}, task_id: ${args.task_id}, handoff_observation_id: ${args.handoff_observation_id} })`;
 }
 
 function readyNextAction(
@@ -905,230 +875,16 @@ function quotaRelayReadyItems(
       quota_observation_kind: obs.kind,
       task_active: group.task.status === 'open',
       claim_args: {
-        repo_root: group.task.repo_root,
-        branch: group.task.branch,
         task_id: group.task.id,
-        quota_observation_id: group.quota_observation_id,
         session_id: args.session_id,
         agent: args.agent,
-        files,
+        handoff_observation_id: group.quota_observation_id,
       },
       negative_warnings: [],
     });
   }
 
   return ready;
-}
-
-function claimQuotaAccept(
-  store: MemoryStore,
-  args: TaskClaimQuotaAcceptArgs,
-): {
-  status: 'accepted' | 'claimed_expired_quota';
-  task_id: number;
-  quota_observation_id: number;
-  files: string[];
-  accepted_files?: string[];
-  handoff_observation_id?: number;
-  baton_kind?: 'handoff' | 'relay';
-  accepted_by_session_id?: string;
-  previous_session_ids?: string[];
-  audit_observation_id?: number;
-} {
-  if (!usesReadyQueueAcceptShape(args)) {
-    const accepted = new TaskThread(store, args.task_id).acceptQuotaClaim({
-      session_id: args.session_id,
-      ...(args.file_path !== undefined ? { file_path: args.file_path } : {}),
-      ...(args.handoff_observation_id !== undefined
-        ? { handoff_observation_id: args.handoff_observation_id }
-        : {}),
-    });
-    return {
-      ...accepted,
-      quota_observation_id: accepted.handoff_observation_id,
-      files: accepted.accepted_files,
-    };
-  }
-
-  const normalized = normalizeQuotaAcceptArgs(store, args);
-  const { obs, meta, pendingClaims } = normalized;
-  if (!isQuotaReadyObservation(obs, meta)) {
-    throw new Error(`observation ${normalized.quota_observation_id} is not quota-stopped work`);
-  }
-  if (!quotaObservationVisible(meta, normalized.session_id, normalized.agent)) {
-    throw new Error(
-      `observation ${normalized.quota_observation_id} is not addressed to ${normalized.agent}`,
-    );
-  }
-  if (pendingClaims.length === 0) {
-    throw new Error(
-      `no handoff_pending quota claims match observation ${normalized.quota_observation_id}`,
-    );
-  }
-
-  const thread = new TaskThread(store, normalized.task_id);
-  thread.join(normalized.session_id, normalized.agent);
-  const expiresAt = readNumber(meta.expires_at) ?? latestClaimExpiresAt(pendingClaims);
-  const status = readString(meta.status);
-  const canAcceptLive =
-    status === 'pending' &&
-    (expiresAt === null || Date.now() <= expiresAt) &&
-    pendingClaims.every((claim) => claim.state === 'handoff_pending');
-  if (canAcceptLive) {
-    const accepted = thread.acceptQuotaClaim({
-      session_id: normalized.session_id,
-      handoff_observation_id: normalized.quota_observation_id,
-      ...(normalized.file_path !== undefined ? { file_path: normalized.file_path } : {}),
-    });
-    return {
-      status: 'accepted',
-      task_id: normalized.task_id,
-      quota_observation_id: normalized.quota_observation_id,
-      files: accepted.accepted_files,
-    };
-  }
-
-  store.storage.transaction(() => {
-    for (const claim of pendingClaims) {
-      store.storage.claimFile({
-        task_id: normalized.task_id,
-        file_path: claim.file_path,
-        session_id: normalized.session_id,
-      });
-    }
-    store.addObservation({
-      session_id: normalized.session_id,
-      task_id: normalized.task_id,
-      kind: QUOTA_RELAY_CLAIM_KIND,
-      reply_to: normalized.quota_observation_id,
-      content: `claimed expired quota-pending files from ${obs.kind} #${normalized.quota_observation_id}: ${normalized.files.join(', ')}`,
-      metadata: {
-        kind: QUOTA_RELAY_CLAIM_KIND,
-        quota_observation_id: normalized.quota_observation_id,
-        quota_observation_kind: obs.kind,
-        files: normalized.files,
-        accepted_by_session_id: normalized.session_id,
-        accepted_by_agent: normalized.agent,
-        expired_at: expiresAt,
-      },
-    });
-    store.storage.touchTask(normalized.task_id);
-  });
-
-  return {
-    status: 'claimed_expired_quota',
-    task_id: normalized.task_id,
-    quota_observation_id: normalized.quota_observation_id,
-    files: normalized.files,
-  };
-}
-
-function usesReadyQueueAcceptShape(args: TaskClaimQuotaAcceptArgs): boolean {
-  return (
-    args.quota_observation_id !== undefined ||
-    args.repo_root !== undefined ||
-    args.branch !== undefined ||
-    args.agent !== undefined ||
-    args.files !== undefined
-  );
-}
-
-function normalizeQuotaAcceptArgs(
-  store: MemoryStore,
-  args: TaskClaimQuotaAcceptArgs,
-): {
-  task_id: number;
-  quota_observation_id: number;
-  session_id: string;
-  agent: string;
-  files: string[];
-  file_path?: string;
-  obs: ObservationRow & { kind: 'handoff' | 'relay' };
-  meta: Record<string, unknown>;
-  pendingClaims: TaskClaimRow[];
-} {
-  const task = store.storage.getTask(args.task_id);
-  if (!task) throw new Error(`task ${args.task_id} not found`);
-  if (args.repo_root !== undefined && task.repo_root !== args.repo_root) {
-    throw new Error(`task ${args.task_id} repo_root is ${task.repo_root}, not ${args.repo_root}`);
-  }
-  if (args.branch !== undefined && task.branch !== args.branch) {
-    throw new Error(`task ${args.task_id} branch is ${task.branch}, not ${args.branch}`);
-  }
-
-  const normalizedFilePath =
-    args.file_path !== undefined
-      ? store.storage.normalizeTaskFilePath(args.task_id, args.file_path)
-      : null;
-  if (args.file_path !== undefined && normalizedFilePath === null) {
-    throw new Error('claim path is not claimable');
-  }
-  const claimForFile =
-    normalizedFilePath !== null ? store.storage.getClaim(args.task_id, normalizedFilePath) : null;
-  if (normalizedFilePath !== null && !claimForFile) {
-    throw new Error('quota claim not found');
-  }
-  if (claimForFile && !isQuotaClaimReadyState(claimForFile)) {
-    throw new Error(`claim is ${claimForFile.state}, not quota-claimable`);
-  }
-
-  const quotaObservationId =
-    args.quota_observation_id ??
-    args.handoff_observation_id ??
-    claimForFile?.handoff_observation_id;
-  if (quotaObservationId === null || quotaObservationId === undefined) {
-    throw new Error('quota claim has no handoff/relay observation');
-  }
-
-  const obs = store.storage.getObservation(quotaObservationId);
-  const obsKind = obs?.kind;
-  if (
-    !obs ||
-    obs.task_id !== args.task_id ||
-    typeof obsKind !== 'string' ||
-    !isQuotaRelayKind(obsKind)
-  ) {
-    throw new Error(`observation ${quotaObservationId} is not a quota handoff/relay`);
-  }
-  const meta = parseMeta(obs.metadata);
-  const allPendingClaims = store.storage
-    .listClaims(args.task_id)
-    .filter(isQuotaClaimReadyState)
-    .filter((claim) => claim.handoff_observation_id === quotaObservationId);
-  if (
-    normalizedFilePath !== null &&
-    !allPendingClaims.some((claim) => claim.file_path === normalizedFilePath)
-  ) {
-    throw new Error('claim does not belong to this handoff/relay');
-  }
-  const requestedFiles =
-    args.files !== undefined
-      ? new Set(
-          args.files.map((file) => store.storage.normalizeTaskFilePath(args.task_id, file) ?? file),
-        )
-      : null;
-  const pendingClaims =
-    requestedFiles === null
-      ? allPendingClaims
-      : allPendingClaims.filter((claim) => requestedFiles.has(claim.file_path));
-  const agent =
-    args.agent ??
-    store.storage.getParticipantAgent(args.task_id, args.session_id) ??
-    store.storage.getSession(args.session_id)?.ide ??
-    'unknown';
-  const files = [...new Set(pendingClaims.map((claim) => claim.file_path))].sort();
-
-  return {
-    task_id: args.task_id,
-    quota_observation_id: quotaObservationId,
-    session_id: args.session_id,
-    agent,
-    files,
-    ...(normalizedFilePath !== null ? { file_path: normalizedFilePath } : {}),
-    obs: { ...obs, kind: obsKind },
-    meta,
-    pendingClaims,
-  };
 }
 
 function quotaRelayClaimReason(task: TaskRow, blocksDownstream: boolean): string {
@@ -1166,7 +922,9 @@ function quotaObservationVisible(
 
 function quotaObservationClaimableStatus(meta: Record<string, unknown>): boolean {
   const status = readString(meta.status);
-  return status === null || status === 'pending' || status === 'expired';
+  if (status !== null && status !== 'pending') return false;
+  const expiresAt = readNumber(meta.expires_at);
+  return expiresAt === null || Date.now() < expiresAt;
 }
 
 function latestClaimExpiresAt(claims: TaskClaimRow[]): number | null {
