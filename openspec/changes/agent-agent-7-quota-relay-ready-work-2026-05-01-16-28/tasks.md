@@ -17,9 +17,9 @@
 
 ## 3. Completion / Cleanup
 
-- [x] Commit changes: `97620a9`.
-- [ ] Push branch.
-- [ ] Open/update PR.
-- [ ] Record PR URL.
-- [ ] Verify PR state is `MERGED`.
-- [ ] Verify sandbox worktree cleanup.
+- [x] Commit changes: `25f0c8d`.
+- [x] Push branch.
+- [x] Open/update PR: https://github.com/recodeee/colony/pull/337
+- [x] Record PR URL: https://github.com/recodeee/colony/pull/337
+- [x] Verify PR state is `MERGED`: `gh pr view agent/agent-7/quota-relay-ready-work-2026-05-01-16-28 --json number,url,state,mergeCommit,headRefName,baseRefName` returned `state=MERGED`, `mergeCommit=d4e3e7b882ea7f2672a81f339521f4eb9ae36f57`.
+- [x] Verify sandbox worktree cleanup: `git worktree list` no longer lists `colony__agent-7__quota-relay-ready-work-2026-05-01-16-28`, and the local source branch is removed.
