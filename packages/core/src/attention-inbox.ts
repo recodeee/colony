@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import type {
   FileHeatRow,
+  ObservationRow,
   OmxRuntimeWarningRow,
   PausedLaneRow,
   TaskClaimRow,
@@ -27,6 +28,7 @@ import {
 import {
   type HandoffMetadata,
   type HandoffTarget,
+  type RelayMetadata,
   TaskThread,
   type WakeRequestMetadata,
 } from './task-thread.js';
@@ -162,6 +164,52 @@ export interface InboxOmxRuntimeWarning {
   next_action: string;
 }
 
+export interface InboxQuotaPendingAction<TArgs extends Record<string, unknown>> {
+  tool: 'task_claim_quota_accept' | 'task_claim_quota_decline' | 'task_claim_quota_release_expired';
+  args: TArgs;
+  codex_mcp_call: string;
+}
+
+export interface InboxQuotaPendingClaim {
+  kind: 'quota_pending_claim';
+  task_id: number;
+  quota_observation_id: number;
+  quota_observation_kind: 'handoff' | 'relay';
+  claim_state: 'handoff_pending' | 'weak_expired';
+  old_owner: {
+    session_id: string;
+    agent: string | null;
+  };
+  files: string[];
+  age: {
+    milliseconds: number;
+    minutes: number;
+  };
+  expires_at: number | null;
+  expired: boolean;
+  evidence: string[];
+  next: string;
+  suggested_actions: {
+    accept: InboxQuotaPendingAction<{
+      task_id: number;
+      session_id: string;
+      agent: string;
+      handoff_observation_id: number;
+    }>;
+    decline: InboxQuotaPendingAction<{
+      task_id: number;
+      session_id: string;
+      handoff_observation_id: number;
+      reason: string;
+    }>;
+    release_expired: InboxQuotaPendingAction<{
+      task_id: number;
+      session_id: string;
+      handoff_observation_id: number;
+    }>;
+  };
+}
+
 /**
  * Coalesced view: a group of inbox messages that share `(task_id,
  * from_session_id, urgency)`. Lets the preface render "B sent 4 fyi
@@ -207,6 +255,7 @@ export interface AttentionInbox {
   agent: string;
   summary: {
     pending_handoff_count: number;
+    quota_pending_claim_count: number;
     expired_quota_handoff_count: number;
     pending_wake_count: number;
     unread_message_count: number;
@@ -231,6 +280,7 @@ export interface AttentionInbox {
     next_action: string;
   };
   pending_handoffs: InboxHandoff[];
+  quota_pending_claims: InboxQuotaPendingClaim[];
   expired_quota_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
   unread_messages: InboxMessage[];
@@ -276,6 +326,9 @@ export interface AttentionInboxOptions {
   file_heat_limit?: number;
   file_heat_min_heat?: number;
   omx_runtime_warning_limit?: number;
+  /** Include weak_expired quota/audit claims. Defaults false so normal
+   * inboxes do not treat released audit history as active work. */
+  include_audit_claims?: boolean;
   /** Window (ms) for read-receipt surfacing. Receipts older than this drop
    *  out so a long-running session doesn't accumulate stale "B read your
    *  message 3 days ago" hints. Default 6h. */
@@ -325,6 +378,7 @@ export function buildAttentionInbox(
   const expired_quota_handoffs: InboxHandoff[] = [];
   const pending_wakes: InboxWake[] = [];
   const scanned_other_claims: InboxRecentClaim[] = [];
+  const quota_pending_claims = collectQuotaPendingClaims(store, opts, taskIds, now);
   const unread_messages = listMessagesForAgent(store, {
     session_id: opts.session_id,
     agent: opts.agent,
@@ -353,6 +407,7 @@ export function buildAttentionInbox(
     }
     for (const claim of store.storage.recentClaims(task_id, recentSince, recentLimit)) {
       if (claim.session_id === opts.session_id) continue;
+      if (claim.state === 'weak_expired' && opts.include_audit_claims !== true) continue;
       scanned_other_claims.push(
         compactClaim(claim, { now, claim_stale_minutes: claimStaleMinutes }),
       );
@@ -391,6 +446,7 @@ export function buildAttentionInbox(
 
   const summary = {
     pending_handoff_count: pending_handoffs.length,
+    quota_pending_claim_count: quota_pending_claims.length,
     expired_quota_handoff_count: expired_quota_handoffs.length,
     pending_wake_count: pending_wakes.length,
     unread_message_count: unread_messages.length,
@@ -407,6 +463,7 @@ export function buildAttentionInbox(
     blocked,
     next_action: deriveNextAction({
       pending_handoffs,
+      quota_pending_claims,
       expired_quota_handoffs,
       pending_wakes,
       unread_messages,
@@ -427,6 +484,7 @@ export function buildAttentionInbox(
     agent: opts.agent,
     summary,
     pending_handoffs,
+    quota_pending_claims,
     expired_quota_handoffs,
     pending_wakes,
     unread_messages,
@@ -585,8 +643,329 @@ function compactOmxRuntimeWarning(row: OmxRuntimeWarningRow): InboxOmxRuntimeWar
     warnings: row.warnings,
     preview: row.content.slice(0, 240),
     active_file_focus: row.active_file_focus,
-    next_action: 'Review OMX runtime warning before resuming this lane; Colony remains coordination truth.',
+    next_action:
+      'Review OMX runtime warning before resuming this lane; Colony remains coordination truth.',
   };
+}
+
+function collectQuotaPendingClaims(
+  store: MemoryStore,
+  opts: AttentionInboxOptions,
+  taskIds: number[],
+  now: number,
+): InboxQuotaPendingClaim[] {
+  const groups = new Map<
+    string,
+    {
+      task: TaskRow;
+      old_owner_session_id: string;
+      quota_observation_id: number;
+      claims: TaskClaimRow[];
+    }
+  >();
+  for (const task of staleClaimTasks(store, opts, taskIds)) {
+    for (const claim of store.storage.listClaims(task.id)) {
+      if (claim.handoff_observation_id === null) continue;
+      if (claim.state !== 'handoff_pending' && claim.state !== 'weak_expired') continue;
+      if (claim.state === 'weak_expired' && opts.include_audit_claims !== true) continue;
+      if (claim.session_id === opts.session_id) continue;
+      const key = `${task.id}:${claim.session_id}:${claim.handoff_observation_id}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.claims.push(claim);
+      } else {
+        groups.set(key, {
+          task,
+          old_owner_session_id: claim.session_id,
+          quota_observation_id: claim.handoff_observation_id,
+          claims: [claim],
+        });
+      }
+    }
+  }
+
+  const out: InboxQuotaPendingClaim[] = [];
+  for (const group of groups.values()) {
+    const obs = store.storage.getObservation(group.quota_observation_id);
+    if (!obs || obs.task_id !== group.task.id) continue;
+    if (obs.kind !== 'handoff' && obs.kind !== 'relay') continue;
+    const meta = parseQuotaBatonMetadata(obs);
+    if (!meta) continue;
+    if (!isQuotaBaton(meta)) continue;
+    if (!quotaBatonVisible(meta, opts.session_id, opts.agent)) continue;
+    if (!quotaBatonPendingOrAudit(meta, group.claims, opts)) continue;
+
+    const files = [...new Set(group.claims.map((claim) => claim.file_path))].sort();
+    if (files.length === 0) continue;
+    const expiresAt = meta.expires_at ?? latestClaimExpiresAt(group.claims);
+    const expired = expiresAt !== null && now >= expiresAt;
+    const oldOwnerAgent =
+      meta.from_agent ??
+      store.storage.getParticipantAgent(group.task.id, group.old_owner_session_id) ??
+      store.storage.getSession(group.old_owner_session_id)?.ide ??
+      null;
+    const ageMs = Math.max(0, now - obs.ts);
+    const claimState = group.claims.some((claim) => claim.state === 'handoff_pending')
+      ? 'handoff_pending'
+      : 'weak_expired';
+
+    out.push({
+      kind: 'quota_pending_claim',
+      task_id: group.task.id,
+      quota_observation_id: group.quota_observation_id,
+      quota_observation_kind: obs.kind,
+      claim_state: claimState,
+      old_owner: {
+        session_id: group.old_owner_session_id,
+        agent: oldOwnerAgent,
+      },
+      files,
+      age: {
+        milliseconds: ageMs,
+        minutes: Math.floor(ageMs / 60_000),
+      },
+      expires_at: expiresAt,
+      expired,
+      evidence: quotaEvidence(meta),
+      next: quotaNext(meta, { expired, claim_state: claimState }),
+      suggested_actions: quotaSuggestedActions({
+        task_id: group.task.id,
+        session_id: opts.session_id,
+        agent: opts.agent,
+        handoff_observation_id: group.quota_observation_id,
+      }),
+    });
+  }
+
+  return out.sort((a, b) => {
+    if (a.expired !== b.expired) return a.expired ? 1 : -1;
+    return (
+      expirySortValue(a.expires_at) - expirySortValue(b.expires_at) || b.age.minutes - a.age.minutes
+    );
+  });
+}
+
+type QuotaBatonMetadata = {
+  kind: 'handoff' | 'relay';
+  status: string;
+  from_session_id: string;
+  from_agent: string | undefined;
+  to_agent: string | null | undefined;
+  to_session_id: string | null | undefined;
+  reason: string | undefined;
+  summary: string | undefined;
+  one_line: string | undefined;
+  next_steps: string[] | undefined;
+  blockers: string[] | undefined;
+  expires_at: number | undefined;
+  quota_context: HandoffMetadata['quota_context'] | undefined;
+  resumable_state: RelayMetadata['resumable_state'] | undefined;
+  worktree_recipe: RelayMetadata['worktree_recipe'] | undefined;
+};
+
+function parseQuotaBatonMetadata(row: ObservationRow): QuotaBatonMetadata | null {
+  if (!row.metadata) return null;
+  try {
+    const parsed = JSON.parse(row.metadata) as unknown;
+    if (!isRecord(parsed)) return null;
+    const kind = readLiteral(parsed.kind, ['handoff', 'relay'] as const);
+    if (!kind) return null;
+    const status = readString(parsed.status);
+    const fromSession = readString(parsed.from_session_id);
+    if (!status || !fromSession) return null;
+    return {
+      kind,
+      status,
+      from_session_id: fromSession,
+      from_agent: readString(parsed.from_agent) ?? undefined,
+      to_agent: readNullableString(parsed.to_agent),
+      to_session_id: readNullableString(parsed.to_session_id),
+      reason: readString(parsed.reason) ?? undefined,
+      summary: readString(parsed.summary) ?? undefined,
+      one_line: readString(parsed.one_line) ?? undefined,
+      next_steps: readStringArray(parsed.next_steps),
+      blockers: readStringArray(parsed.blockers),
+      expires_at: readFiniteNumber(parsed.expires_at) ?? undefined,
+      quota_context: isRecord(parsed.quota_context)
+        ? (parsed.quota_context as unknown as HandoffMetadata['quota_context'])
+        : undefined,
+      resumable_state: isRecord(parsed.resumable_state)
+        ? (parsed.resumable_state as RelayMetadata['resumable_state'])
+        : undefined,
+      worktree_recipe: isRecord(parsed.worktree_recipe)
+        ? (parsed.worktree_recipe as RelayMetadata['worktree_recipe'])
+        : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isQuotaBaton(meta: QuotaBatonMetadata): boolean {
+  if (meta.kind === 'relay') return meta.reason === 'quota' || hasQuotaText(meta.one_line);
+  return meta.reason === 'quota_exhausted' || hasQuotaText(meta.summary);
+}
+
+function hasQuotaText(value: string | undefined): boolean {
+  return (
+    value !== undefined && /\bquota(?:[-_\s]*(?:exhausted|hit|reached|exceeded))?\b/i.test(value)
+  );
+}
+
+function quotaBatonVisible(meta: QuotaBatonMetadata, sessionId: string, agent: string): boolean {
+  return (
+    meta.from_session_id !== sessionId &&
+    (meta.to_session_id === null ||
+      meta.to_session_id === undefined ||
+      meta.to_session_id === sessionId) &&
+    (meta.to_agent === null ||
+      meta.to_agent === undefined ||
+      meta.to_agent === 'any' ||
+      meta.to_agent === agent)
+  );
+}
+
+function quotaBatonPendingOrAudit(
+  meta: QuotaBatonMetadata,
+  claims: TaskClaimRow[],
+  opts: AttentionInboxOptions,
+): boolean {
+  if (meta.status === 'pending') return true;
+  return (
+    opts.include_audit_claims === true && claims.some((claim) => claim.state === 'weak_expired')
+  );
+}
+
+function quotaEvidence(meta: QuotaBatonMetadata): string[] {
+  const evidence: string[] = [];
+  pushEvidence(evidence, meta.kind === 'relay' ? meta.one_line : meta.summary);
+  pushEvidence(evidence, meta.next_steps?.[0]);
+  pushEvidence(evidence, meta.blockers?.[0] ? `blocker: ${meta.blockers[0]}` : undefined);
+  if (meta.quota_context?.branch) pushEvidence(evidence, `branch: ${meta.quota_context.branch}`);
+  if (meta.quota_context?.last_verification) {
+    const command = meta.quota_context.last_verification.command ?? 'unknown';
+    const result = meta.quota_context.last_verification.result ?? 'unknown';
+    pushEvidence(evidence, `verification: ${command} -> ${result}`);
+  }
+  if (meta.quota_context?.dirty_files && meta.quota_context.dirty_files.length > 0) {
+    pushEvidence(evidence, `dirty_files: ${meta.quota_context.dirty_files.join(', ')}`);
+  }
+  pushEvidence(evidence, meta.resumable_state?.last_handoff_summary ?? undefined);
+  const blocker = meta.resumable_state?.open_blockers?.[0]?.content;
+  pushEvidence(evidence, blocker ? `blocker: ${blocker}` : undefined);
+  if (meta.worktree_recipe?.base_branch) {
+    pushEvidence(evidence, `base_branch: ${meta.worktree_recipe.base_branch}`);
+  }
+  if (meta.worktree_recipe?.fetch_files_at) {
+    pushEvidence(evidence, `fetch_files_at: ${meta.worktree_recipe.fetch_files_at}`);
+  }
+  const warning = meta.worktree_recipe?.untracked_files_warning?.[0];
+  pushEvidence(evidence, warning ? `untracked_warning: ${warning}` : undefined);
+  return evidence.slice(0, 6);
+}
+
+function pushEvidence(evidence: string[], value: string | undefined): void {
+  if (!value) return;
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length === 0) return;
+  evidence.push(compact.length > 240 ? `${compact.slice(0, 237)}...` : compact);
+}
+
+function quotaNext(
+  meta: QuotaBatonMetadata,
+  status: { expired: boolean; claim_state: 'handoff_pending' | 'weak_expired' },
+): string {
+  if (status.claim_state === 'weak_expired') {
+    return 'Audit-only weak_expired quota claim; do not treat as active ownership.';
+  }
+  if (status.expired) {
+    return 'Release expired quota-pending claims with task_claim_quota_release_expired before treating the lane as ordinary stale ownership.';
+  }
+  return (
+    meta.quota_context?.suggested_next_step ??
+    meta.next_steps?.[0] ??
+    meta.one_line ??
+    'Accept or decline quota-pending work before starting unrelated work.'
+  );
+}
+
+function quotaSuggestedActions(args: {
+  task_id: number;
+  session_id: string;
+  agent: string;
+  handoff_observation_id: number;
+}): InboxQuotaPendingClaim['suggested_actions'] {
+  const acceptArgs = {
+    task_id: args.task_id,
+    session_id: args.session_id,
+    agent: args.agent,
+    handoff_observation_id: args.handoff_observation_id,
+  };
+  const declineArgs = {
+    task_id: args.task_id,
+    session_id: args.session_id,
+    handoff_observation_id: args.handoff_observation_id,
+    reason: '...',
+  };
+  const releaseArgs = {
+    task_id: args.task_id,
+    session_id: args.session_id,
+    handoff_observation_id: args.handoff_observation_id,
+  };
+  return {
+    accept: {
+      tool: 'task_claim_quota_accept',
+      args: acceptArgs,
+      codex_mcp_call: `mcp__colony__task_claim_quota_accept(${JSON.stringify(acceptArgs)})`,
+    },
+    decline: {
+      tool: 'task_claim_quota_decline',
+      args: declineArgs,
+      codex_mcp_call: `mcp__colony__task_claim_quota_decline(${JSON.stringify(declineArgs)})`,
+    },
+    release_expired: {
+      tool: 'task_claim_quota_release_expired',
+      args: releaseArgs,
+      codex_mcp_call: `mcp__colony__task_claim_quota_release_expired(${JSON.stringify(releaseArgs)})`,
+    },
+  };
+}
+
+function latestClaimExpiresAt(claims: TaskClaimRow[]): number | null {
+  const values = claims
+    .map((claim) => claim.expires_at)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readNullableString(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (value === undefined) return undefined;
+  return readString(value) ?? undefined;
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readLiteral<const T extends readonly string[]>(
+  value: unknown,
+  allowed: T,
+): T[number] | null {
+  return typeof value === 'string' && allowed.includes(value) ? value : null;
 }
 
 function resolveTaskIds(store: MemoryStore, opts: AttentionInboxOptions): number[] {
@@ -719,6 +1098,7 @@ function collectStaleClaimSignals(
     }
 
     for (const claim of claims) {
+      if (claim.state === 'weak_expired' && opts.include_audit_claims !== true) continue;
       const classification = classifyClaimAge(claim, options);
       if (classification.ownership_strength === 'strong') continue;
 
@@ -907,6 +1287,7 @@ function toInboxLane(session: HivemindSession): InboxLane {
 
 function deriveNextAction(parts: {
   pending_handoffs: InboxHandoff[];
+  quota_pending_claims: InboxQuotaPendingClaim[];
   expired_quota_handoffs: InboxHandoff[];
   pending_wakes: InboxWake[];
   unread_messages: InboxMessage[];
@@ -919,6 +1300,20 @@ function deriveNextAction(parts: {
   read_receipts: ReadReceipt[];
   omx_runtime_warnings: InboxOmxRuntimeWarning[];
 }): string {
+  if (
+    parts.quota_pending_claims.some(
+      (claim) => !claim.expired && claim.claim_state === 'handoff_pending',
+    )
+  ) {
+    return 'Resolve quota-pending work before starting new work: accept, decline, or release the linked quota relay.';
+  }
+  if (
+    parts.quota_pending_claims.some(
+      (claim) => claim.expired && claim.claim_state === 'handoff_pending',
+    )
+  ) {
+    return 'Release expired quota-pending claims before treating the lane as ordinary stale ownership.';
+  }
   if (parts.pending_handoffs.some((h) => h.reason === 'quota_exhausted')) {
     return 'Accept active quota_exhausted handoff first; sender is blocked_by_runtime_limit.';
   }
@@ -971,4 +1366,8 @@ function compareHandoffPriority(a: InboxHandoff, b: InboxHandoff): number {
 
 function handoffPriority(handoff: InboxHandoff): number {
   return handoff.reason === 'quota_exhausted' ? 1 : 0;
+}
+
+function expirySortValue(expiresAt: number | null): number {
+  return expiresAt ?? Number.POSITIVE_INFINITY;
 }

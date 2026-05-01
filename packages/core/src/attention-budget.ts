@@ -3,11 +3,17 @@ import type {
   InboxHandoff,
   InboxLane,
   InboxMessage,
+  InboxQuotaPendingClaim,
   InboxWake,
 } from './attention-inbox.js';
 import type { MessageUrgency } from './task-thread.js';
 
-export type AttentionItemKind = 'task_hand_off' | 'task_wake' | 'task_message' | 'stalled_lane';
+export type AttentionItemKind =
+  | 'task_hand_off'
+  | 'quota_pending_claim'
+  | 'task_wake'
+  | 'task_message'
+  | 'stalled_lane';
 
 export interface AttentionItem {
   kind: AttentionItemKind;
@@ -75,11 +81,25 @@ export function applyAttentionBudget(
 
 function attentionItems(inbox: AttentionInbox): AttentionItem[] {
   return [
+    ...inbox.quota_pending_claims.map(quotaPendingItem),
     ...inbox.pending_handoffs.map(handoffItem),
     ...inbox.pending_wakes.map(wakeItem),
     ...inbox.unread_messages.map(messageItem),
     ...inbox.stalled_lanes.map(stalledLaneItem),
   ];
+}
+
+function quotaPendingItem(claim: InboxQuotaPendingClaim): AttentionItem {
+  const fileText = claim.files.length === 1 ? claim.files[0] : `${claim.files.length} files`;
+  return {
+    kind: 'quota_pending_claim',
+    urgency: 'needs_reply',
+    summary: `${claim.old_owner.agent ?? claim.old_owner.session_id} quota-pending task #${claim.task_id} on ${fileText}: ${claim.next}`,
+    task_id: claim.task_id,
+    observation_id: claim.quota_observation_id,
+    expires_at: claim.expires_at,
+    ts: null,
+  };
 }
 
 function handoffItem(handoff: InboxHandoff): AttentionItem {

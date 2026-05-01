@@ -35,6 +35,8 @@ export function registerInboxCommand(program: Command): void {
     )
     .option('--repo-root <path>', 'repo root to scan for stalled lanes')
     .option('--stalled-lane-limit <n>', 'max stalled lane rows to print in JSON output', '8')
+    .option('--audit', 'include weak_expired quota claims in JSON/text output')
+    .option('--verbose', 'include audit-only weak_expired quota claims')
     .option('--json', 'emit the full inbox as JSON')
     .action(
       async (opts: {
@@ -42,6 +44,8 @@ export function registerInboxCommand(program: Command): void {
         agent?: string;
         repoRoot?: string;
         stalledLaneLimit?: string;
+        audit?: boolean;
+        verbose?: boolean;
         json?: boolean;
       }) => {
         const session = opts.session?.trim() || sessionFromEnv();
@@ -68,6 +72,7 @@ export function registerInboxCommand(program: Command): void {
             file_heat_half_life_ms: settings.fileHeatHalfLifeMinutes * 60_000,
             stalled_lane_limit: Number(opts.stalledLaneLimit ?? 8),
             ...(opts.repoRoot !== undefined ? { repo_root: opts.repoRoot } : {}),
+            ...(opts.audit === true || opts.verbose === true ? { include_audit_claims: true } : {}),
           });
 
           if (opts.json) {
@@ -80,7 +85,7 @@ export function registerInboxCommand(program: Command): void {
             kleur.bold(`Inbox for ${agent}@${session.slice(0, 8)} — ${inbox.summary.next_action}`),
           );
           lines.push(
-            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  wakes: ${inbox.summary.pending_wake_count}  paused lanes: ${inbox.summary.paused_lane_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claim signals: ${inbox.stale_claim_signals.stale_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
+            `  messages: ${inbox.summary.unread_message_count}  handoffs: ${inbox.summary.pending_handoff_count}  quota pending: ${inbox.summary.quota_pending_claim_count}  wakes: ${inbox.summary.pending_wake_count}  paused lanes: ${inbox.summary.paused_lane_count}  stalled lanes: ${inbox.summary.stalled_lane_count}  active claims: ${inbox.summary.recent_other_claim_count}  stale claim signals: ${inbox.stale_claim_signals.stale_claim_count}  hot files: ${inbox.summary.hot_file_count}`,
           );
 
           const blockingMessages = inbox.unread_messages.filter((m) => m.urgency === 'blocking');
@@ -115,6 +120,30 @@ export function registerInboxCommand(program: Command): void {
               );
               lines.push(
                 `    accept: task_accept_handoff(handoff_observation_id=${h.id}, session_id="${session}")`,
+              );
+            }
+          }
+          if (inbox.quota_pending_claims.length > 0) {
+            lines.push('');
+            lines.push(kleur.cyan('Quota-pending work:'));
+            for (const q of inbox.quota_pending_claims) {
+              const mins =
+                q.expires_at === null
+                  ? 'unknown'
+                  : String(Math.max(0, Math.round((q.expires_at - inbox.generated_at) / 60_000)));
+              lines.push(
+                `  #${q.quota_observation_id} task ${q.task_id} from ${q.old_owner.agent ?? q.old_owner.session_id} (${q.age.minutes}m old, ${mins}m left): ${q.files.join(', ')}`,
+              );
+              if (q.evidence.length > 0) lines.push(`    evidence: ${q.evidence[0]}`);
+              lines.push(`    next: ${q.next}`);
+              lines.push(
+                `    accept: task_claim_quota_accept(task_id=${q.task_id}, session_id="${session}", agent="${agent}", handoff_observation_id=${q.quota_observation_id})`,
+              );
+              lines.push(
+                `    decline: task_claim_quota_decline(task_id=${q.task_id}, session_id="${session}", handoff_observation_id=${q.quota_observation_id}, reason="...")`,
+              );
+              lines.push(
+                `    release expired: task_claim_quota_release_expired(task_id=${q.task_id}, session_id="${session}", handoff_observation_id=${q.quota_observation_id})`,
               );
             }
           }

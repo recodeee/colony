@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildAttentionInbox } from '../src/attention-inbox.js';
-import { ingestOmxRuntimeSummary } from '../src/omx-runtime-summary.js';
 import { MemoryStore } from '../src/memory-store.js';
 import { listMessagesForAgent } from '../src/messages.js';
+import { ingestOmxRuntimeSummary } from '../src/omx-runtime-summary.js';
 import { TaskThread } from '../src/task-thread.js';
 
 let dir: string;
@@ -199,6 +199,145 @@ describe('buildAttentionInbox', () => {
     expect(inbox.summary.pending_handoff_count).toBe(2);
     expect(inbox.summary.expired_quota_handoff_count).toBe(1);
     expect(inbox.summary.next_action).toMatch(/quota_exhausted handoff/i);
+  });
+
+  it('surfaces quota-pending relay cards with recovery actions for repo-scoped new agents', () => {
+    const t0 = Date.parse('2026-05-01T10:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    seed('codex-old', 'codex-new');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'agent/codex/quota-relay',
+      session_id: 'codex-old',
+    });
+    thread.join('codex-old', 'codex');
+    thread.claimFile({ session_id: 'codex-old', file_path: 'src/quota.ts' });
+    const relayId = thread.relay({
+      from_session_id: 'codex-old',
+      from_agent: 'codex',
+      reason: 'quota',
+      one_line: 'quota stopped parser work',
+      base_branch: 'main',
+      expires_in_ms: 60 * 60_000,
+    });
+
+    vi.setSystemTime(t0 + 5 * 60_000);
+    const inbox = buildAttentionInbox(store, {
+      session_id: 'codex-new',
+      agent: 'codex',
+      repo_root: '/r',
+      include_stalled_lanes: false,
+      now: Date.now(),
+    });
+
+    expect(inbox.summary.quota_pending_claim_count).toBe(1);
+    expect(inbox.summary.next_action).toMatch(/quota-pending work/i);
+    expect(inbox.quota_pending_claims[0]).toMatchObject({
+      kind: 'quota_pending_claim',
+      task_id: thread.task_id,
+      quota_observation_id: relayId,
+      quota_observation_kind: 'relay',
+      claim_state: 'handoff_pending',
+      old_owner: { session_id: 'codex-old', agent: 'codex' },
+      files: ['src/quota.ts'],
+      age: { minutes: 5 },
+      expires_at: t0 + 60 * 60_000,
+      expired: false,
+      next: 'quota stopped parser work',
+      suggested_actions: {
+        accept: {
+          tool: 'task_claim_quota_accept',
+          args: {
+            task_id: thread.task_id,
+            session_id: 'codex-new',
+            agent: 'codex',
+            handoff_observation_id: relayId,
+          },
+        },
+        decline: {
+          tool: 'task_claim_quota_decline',
+          args: {
+            task_id: thread.task_id,
+            session_id: 'codex-new',
+            handoff_observation_id: relayId,
+            reason: '...',
+          },
+        },
+        release_expired: {
+          tool: 'task_claim_quota_release_expired',
+          args: {
+            task_id: thread.task_id,
+            session_id: 'codex-new',
+            handoff_observation_id: relayId,
+          },
+        },
+      },
+    });
+    expect(inbox.quota_pending_claims[0]?.evidence).toEqual(
+      expect.arrayContaining(['quota stopped parser work', 'base_branch: main']),
+    );
+    expect(inbox.quota_pending_claims[0]?.suggested_actions.accept.codex_mcp_call).toContain(
+      'task_claim_quota_accept',
+    );
+  });
+
+  it('hides weak_expired quota claims unless audit mode is requested', () => {
+    const t0 = Date.parse('2026-05-01T10:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    seed('codex-old', 'codex-new');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'agent/codex/quota-relay-expired',
+      session_id: 'codex-old',
+    });
+    thread.join('codex-old', 'codex');
+    thread.join('codex-new', 'codex');
+    thread.claimFile({ session_id: 'codex-old', file_path: 'src/expired.ts' });
+    const relayId = thread.relay({
+      from_session_id: 'codex-old',
+      from_agent: 'codex',
+      reason: 'quota',
+      one_line: 'quota stopped expired work',
+      base_branch: 'main',
+      expires_in_ms: 60_000,
+    });
+
+    vi.setSystemTime(t0 + 2 * 60_000);
+    thread.releaseExpiredQuotaClaims({
+      session_id: 'codex-new',
+      handoff_observation_id: relayId,
+      now: Date.now(),
+    });
+
+    const normal = buildAttentionInbox(store, {
+      session_id: 'codex-new',
+      agent: 'codex',
+      repo_root: '/r',
+      include_stalled_lanes: false,
+      now: Date.now(),
+    });
+    expect(normal.quota_pending_claims).toEqual([]);
+    expect(normal.stale_claim_signals.stale_claim_count).toBe(0);
+
+    const audit = buildAttentionInbox(store, {
+      session_id: 'codex-new',
+      agent: 'codex',
+      repo_root: '/r',
+      include_stalled_lanes: false,
+      include_audit_claims: true,
+      now: Date.now(),
+    });
+    expect(audit.summary.quota_pending_claim_count).toBe(1);
+    expect(audit.quota_pending_claims[0]).toMatchObject({
+      task_id: thread.task_id,
+      quota_observation_id: relayId,
+      claim_state: 'weak_expired',
+      expired: true,
+      next: 'Audit-only weak_expired quota claim; do not treat as active ownership.',
+    });
+    expect(audit.stale_claim_signals.stale_claim_count).toBe(1);
   });
 
   it('caps stalled lane rows while preserving the total count', () => {

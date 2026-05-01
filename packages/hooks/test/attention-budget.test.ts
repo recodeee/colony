@@ -61,8 +61,10 @@ function baseInbox(overrides: Partial<AttentionInbox> = {}): AttentionInbox {
       omx_runtime_warning_count: 0,
       blocked: false,
       next_action: 'quiet',
+      quota_pending_claim_count: 0,
     },
     pending_handoffs: [],
+    quota_pending_claims: [],
     expired_quota_handoffs: [],
     pending_wakes: [],
     unread_messages: [],
@@ -299,6 +301,72 @@ describe('SessionStart attention budget preface', () => {
       'claude needs your accept on handoff #3: second',
       'claude needs your accept on handoff #1: third',
     ]);
+  });
+
+  it('keeps quota-pending work prominent before a new agent starts work', () => {
+    const inbox = baseInbox({
+      summary: {
+        ...baseInbox().summary,
+        quota_pending_claim_count: 1,
+      },
+      quota_pending_claims: [
+        {
+          kind: 'quota_pending_claim',
+          task_id: 42,
+          quota_observation_id: 7,
+          quota_observation_kind: 'relay',
+          claim_state: 'handoff_pending',
+          old_owner: { session_id: 'codex-old', agent: 'codex' },
+          files: ['src/quota.ts'],
+          age: { milliseconds: 5 * 60_000, minutes: 5 },
+          expires_at: NOW + 20 * 60_000,
+          expired: false,
+          evidence: ['quota stopped parser work'],
+          next: 'resume parser work',
+          suggested_actions: {
+            accept: {
+              tool: 'task_claim_quota_accept',
+              args: {
+                task_id: 42,
+                session_id: 'B',
+                agent: 'codex',
+                handoff_observation_id: 7,
+              },
+              codex_mcp_call: 'mcp__colony__task_claim_quota_accept({})',
+            },
+            decline: {
+              tool: 'task_claim_quota_decline',
+              args: {
+                task_id: 42,
+                session_id: 'B',
+                handoff_observation_id: 7,
+                reason: '...',
+              },
+              codex_mcp_call: 'mcp__colony__task_claim_quota_decline({})',
+            },
+            release_expired: {
+              tool: 'task_claim_quota_release_expired',
+              args: {
+                task_id: 42,
+                session_id: 'B',
+                handoff_observation_id: 7,
+              },
+              codex_mcp_call: 'mcp__colony__task_claim_quota_release_expired({})',
+            },
+          },
+        },
+      ],
+    });
+
+    const budget = applyAttentionBudget(inbox);
+
+    expect(budget.prominent[0]).toMatchObject({
+      kind: 'quota_pending_claim',
+      urgency: 'needs_reply',
+      task_id: 42,
+      observation_id: 7,
+      summary: 'codex quota-pending task #42 on src/quota.ts: resume parser work',
+    });
   });
 
   it('is pure for the same inbox and options', () => {
