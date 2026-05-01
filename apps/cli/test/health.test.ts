@@ -2534,6 +2534,7 @@ describe('colony health payload', () => {
       JSON.stringify({
         schema: 'colony-runtime-summary-v1',
         session_id: 'codex@stale',
+        repo_root: repoRoot,
         timestamp: new Date(NOW - 30 * 60_000).toISOString(),
       }),
     );
@@ -2570,47 +2571,154 @@ describe('colony health payload', () => {
   });
 
   it('shows malformed OMX runtime bridge summaries as warnings', () => {
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-malformed-'));
-    const stateDir = path.join(repoRoot, '.omx', 'state');
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, 'colony-runtime-summary.json'),
-      JSON.stringify({
+    withRuntimeSummaryHealth(
+      (repoRoot) => ({
         schema: 'wrong-schema',
         session_id: 'codex@bad',
-        timestamp: new Date(NOW - 60_000).toISOString(),
+        repo_root: repoRoot,
+        last_seen_at: new Date(NOW - 60_000).toISOString(),
       }),
+      ({ payload, summaryPath }) => {
+        expect(payload.omx_runtime_bridge).toMatchObject({
+          status: 'unavailable',
+          summaries_ingested: 0,
+          warning_count: 1,
+          malformed_summary_count: 1,
+          malformed_summary_errors: [
+            `${summaryPath}: expected schema colony-runtime-summary-v1, got wrong-schema`,
+          ],
+        });
+        expect(payload.omx_runtime_bridge.malformed_summary_examples[0]).toMatchObject({
+          path: summaryPath,
+          error: `${summaryPath}: expected schema colony-runtime-summary-v1, got wrong-schema`,
+          schema_value: 'wrong-schema',
+          missing_required_fields: [],
+          invalid_field_types: [],
+          modified_time: expect.any(String),
+          modified_time_ms: expect.any(Number),
+        });
+        const text = formatColonyHealthOutput(payload);
+        expect(text).toContain('malformed summaries: 1');
+        expect(text).toContain(`${summaryPath} (modified`);
+        expect(text).toContain('schema: wrong-schema');
+        expect(text).toContain('missing required fields: none');
+      },
     );
-    try {
-      const payload = buildColonyHealthPayload(
-        fakeStorage({
-          calls: healthyWindowCalls(),
-          claimBeforeEdit: {
-            edit_tool_calls: 0,
-            edits_with_file_path: 0,
-            edits_claimed_before: 0,
-          },
-        }),
-        {
-          since: SINCE,
-          window_hours: 24,
-          now: NOW,
-          codex_sessions_root: NO_CODEX_ROOT,
-          repo_root: repoRoot,
-          omx_runtime_summary_global_dir: null,
-        },
-      );
+  });
 
+  it('explains invalid JSON in OMX runtime bridge summaries', () => {
+    withRuntimeSummaryHealth('{ "schema": ', ({ payload, summaryPath }) => {
       expect(payload.omx_runtime_bridge).toMatchObject({
         status: 'unavailable',
         summaries_ingested: 0,
         warning_count: 1,
         malformed_summary_count: 1,
       });
-      expect(formatColonyHealthOutput(payload)).toContain('malformed summaries: 1');
-    } finally {
-      fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
+      expect(payload.omx_runtime_bridge.malformed_summary_errors[0]).toContain(
+        `${summaryPath}: invalid JSON:`,
+      );
+      expect(payload.omx_runtime_bridge.malformed_summary_examples[0]).toMatchObject({
+        path: summaryPath,
+        schema_value: null,
+        missing_required_fields: [],
+        invalid_field_types: [],
+        modified_time: expect.any(String),
+        modified_time_ms: expect.any(Number),
+      });
+      expect(formatColonyHealthOutput(payload)).toContain(`${summaryPath}: invalid JSON:`);
+    });
+  });
+
+  it('explains missing schema in OMX runtime bridge summaries', () => {
+    withRuntimeSummaryHealth(
+      (repoRoot) => ({
+        version: 1,
+        runtime: 'omx',
+        session_id: 'codex@missing-schema',
+        repo_root: repoRoot,
+        last_seen_at: new Date(NOW - 60_000).toISOString(),
+      }),
+      ({ payload, summaryPath }) => {
+        expect(payload.omx_runtime_bridge.malformed_summary_examples[0]).toMatchObject({
+          path: summaryPath,
+          error: `${summaryPath}: missing required fields: schema`,
+          schema_value: 1,
+          missing_required_fields: ['schema'],
+          invalid_field_types: [],
+        });
+        expect(payload.omx_runtime_bridge.malformed_summary_errors).toEqual([
+          `${summaryPath}: missing required fields: schema`,
+        ]);
+        expect(formatColonyHealthOutput(payload)).toContain('missing required fields: schema');
+      },
+    );
+  });
+
+  it('explains missing session_id in OMX runtime bridge summaries', () => {
+    withRuntimeSummaryHealth(
+      (repoRoot) => ({
+        schema: 'colony-runtime-summary-v1',
+        repo_root: repoRoot,
+        last_seen_at: new Date(NOW - 60_000).toISOString(),
+      }),
+      ({ payload, summaryPath }) => {
+        expect(payload.omx_runtime_bridge.malformed_summary_examples[0]).toMatchObject({
+          path: summaryPath,
+          error: `${summaryPath}: missing required fields: session_id`,
+          schema_value: 'colony-runtime-summary-v1',
+          missing_required_fields: ['session_id'],
+          invalid_field_types: [],
+        });
+      },
+    );
+  });
+
+  it('explains missing repo_root in OMX runtime bridge summaries', () => {
+    withRuntimeSummaryHealth(
+      () => ({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@missing-repo-root',
+        last_seen_at: new Date(NOW - 60_000).toISOString(),
+      }),
+      ({ payload, summaryPath }) => {
+        expect(payload.omx_runtime_bridge.malformed_summary_examples[0]).toMatchObject({
+          path: summaryPath,
+          error: `${summaryPath}: missing required fields: repo_root`,
+          schema_value: 'colony-runtime-summary-v1',
+          missing_required_fields: ['repo_root'],
+          invalid_field_types: [],
+        });
+      },
+    );
+  });
+
+  it('explains invalid last_seen_at in OMX runtime bridge summaries', () => {
+    withRuntimeSummaryHealth(
+      (repoRoot) => ({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@bad-last-seen',
+        repo_root: repoRoot,
+        last_seen_at: 'not-a-date',
+      }),
+      ({ payload, summaryPath }) => {
+        expect(payload.omx_runtime_bridge.malformed_summary_examples[0]).toMatchObject({
+          path: summaryPath,
+          error: `${summaryPath}: invalid field types: last_seen_at expected valid ISO timestamp string or epoch milliseconds got string`,
+          schema_value: 'colony-runtime-summary-v1',
+          missing_required_fields: [],
+          invalid_field_types: [
+            {
+              field: 'last_seen_at',
+              expected: 'valid ISO timestamp string or epoch milliseconds',
+              actual: 'string',
+            },
+          ],
+        });
+        expect(formatColonyHealthOutput(payload)).toContain(
+          'invalid field types: last_seen_at expected valid ISO timestamp string or epoch milliseconds got string',
+        );
+      },
+    );
   });
 });
 
@@ -2620,6 +2728,48 @@ function outputSection(output: string, heading: string): string {
   const rest = output.slice(start);
   const nextHeading = rest.slice(heading.length).search(/\n[A-Z][^\n]+\n/);
   return nextHeading === -1 ? rest : rest.slice(0, heading.length + nextHeading);
+}
+
+function withRuntimeSummaryHealth(
+  content: string | ((repoRoot: string) => Record<string, unknown>),
+  assertPayload: (args: {
+    payload: ReturnType<typeof buildColonyHealthPayload>;
+    repoRoot: string;
+    summaryPath: string;
+  }) => void,
+): void {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-malformed-'));
+  const stateDir = path.join(repoRoot, '.omx', 'state');
+  const summaryPath = path.join(stateDir, 'colony-runtime-summary.json');
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(
+    summaryPath,
+    typeof content === 'string' ? content : JSON.stringify(content(repoRoot)),
+  );
+  try {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+        repo_root: repoRoot,
+        omx_runtime_summary_global_dir: null,
+      },
+    );
+
+    assertPayload({ payload, repoRoot, summaryPath });
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
 }
 
 function codexRolloutLine(tsMs: number, server: string, tool: string): string {
