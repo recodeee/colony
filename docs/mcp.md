@@ -66,6 +66,24 @@ pointer fields `branch`, `task`, `blocker`, `next`, `evidence`, and
 `colony_observation_id`. If no active task matches, callers may opt into
 `allow_omx_notepad_fallback=true` to write that same tiny pointer.
 
+Working handoff notes use one compact field order:
+
+```text
+branch=<branch> | task=<task> | blocker=<blocker> | next=<next> | evidence=<path|command|PR|spec>
+```
+
+Use `task_note_working` or the CLI helper when posting progress:
+
+```bash
+colony note working --session-id sess_abc --repo-root /abs/repo --next "run focused tests" --evidence "apps/mcp-server/test/task-threads.test.ts"
+```
+
+`branch` and `task` are inferred from the active session/task binding when the
+binding is unambiguous. `next` and `evidence` are required. Evidence must be a
+compact pointer, not pasted logs; long proof text is compacted and returned with
+a warning. Each successful auto note marks the prior live auto handoff note as
+superseded so resume flows read one current state.
+
 ## `search`
 
 Find observations matching a natural-language query.

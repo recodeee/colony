@@ -14,6 +14,13 @@ import {
   loadProfile,
   rankCandidates,
 } from './response-thresholds.js';
+import {
+  type WorkingHandoffNoteInput,
+  type WorkingHandoffNoteResult,
+  buildWorkingHandoffNote,
+  isLiveWorkingHandoffMetadata,
+  supersedeWorkingHandoffMetadata,
+} from './working-note.js';
 
 export type CoordinationKind =
   | 'claim'
@@ -478,6 +485,22 @@ export class TaskThread {
     private store: MemoryStore,
     public readonly task_id: number,
   ) {}
+
+  static buildWorkingHandoffNote(input: WorkingHandoffNoteInput): WorkingHandoffNoteResult {
+    return buildWorkingHandoffNote(input);
+  }
+
+  static isLiveWorkingHandoffMetadata(metadata: string | null | undefined): boolean {
+    return isLiveWorkingHandoffMetadata(metadata);
+  }
+
+  static supersedeWorkingHandoffMetadata(
+    metadata: string | null | undefined,
+    supersededByObservationId: number,
+    supersededAt = Date.now(),
+  ): Record<string, unknown> {
+    return supersedeWorkingHandoffMetadata(metadata, supersededByObservationId, supersededAt);
+  }
 
   /**
    * Find-or-create the task for a (repo_root, branch) pair. The first agent

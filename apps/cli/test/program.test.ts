@@ -94,8 +94,8 @@ describe('Colony CLI program', () => {
         reindex                             Rebuild FTS index
         backfill                            Heal historical rows that predate newer
                                             inference logic.
-        note [options] <text...>            Record a timestamped scratch note into
-                                            the memory timeline
+        note [options] [text...]            Record scratch notes and compact working
+                                            handoff notes
         observe [options]                   Live dashboard of collaboration state.
                                             Run in a spare terminal during a session.
         plan                                Create and operate OpenSpec-like Colony
