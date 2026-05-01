@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore, listPlans } from '@colony/core';
+import { MemoryStore, TaskThread, listPlans } from '@colony/core';
 import {
   type QueenOrderedPlanInput,
   colonyAdoptionFixesPlanInput,
@@ -241,6 +241,157 @@ describe('queen wave health', () => {
       listPlans(store, { repo_root: repoRoot })[0]?.next_available.map((s) => s.subtask_index),
     ).toEqual([1]);
   });
+
+  it('classifies completed plans as ready to archive instead of active work', () => {
+    publishOrderedPlan({
+      store,
+      plan: staleBlockedPlanInput,
+      repo_root: repoRoot,
+      session_id: 'queen-session',
+      agent: 'queen',
+      auto_archive: false,
+    });
+    for (let i = 0; i < staleBlockedPlanInput.waves.flatMap((wave) => wave.subtasks).length; i++) {
+      completePlanSubtask(
+        staleBlockedPlanInput.slug,
+        i,
+        taskIdForSubtask(staleBlockedPlanInput.slug, i),
+        'queen-session',
+      );
+    }
+
+    const payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      completed_plans: 1,
+      orphan_subtasks: 0,
+      inactive_plans_with_remaining_subtasks: 0,
+    });
+    expect(payload.readiness_summary.queen_plan_readiness).toMatchObject({
+      status: 'ok',
+      evidence: expect.stringContaining('completed plans 1'),
+    });
+    expect(payload.queen_wave_health.plan_state_recommendations[0]).toMatchObject({
+      plan_slug: staleBlockedPlanInput.slug,
+      state: 'completed',
+      recommendation: { action: 'archive-completed-plan' },
+    });
+  });
+
+  it('classifies orphan subtasks and recommends sweep repair', () => {
+    seedOrphanSubtasks('orphan-health-plan', 2);
+
+    const payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      orphan_subtasks: 2,
+    });
+    expect(payload.readiness_summary.queen_plan_readiness).toMatchObject({
+      status: 'bad',
+      evidence: expect.stringContaining('orphan subtasks 2'),
+    });
+    expect(payload.queen_wave_health.plan_state_recommendations[0]).toMatchObject({
+      plan_slug: 'orphan-health-plan',
+      state: 'orphan-subtasks',
+      recommendation: { action: 'delete-orphan-subtasks' },
+    });
+    expect(payload.action_hints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metric: 'Queen plan state repair',
+          action: expect.stringContaining('delete orphan subtasks or publish a new plan'),
+        }),
+      ]),
+    );
+  });
+
+  it('classifies inactive plan roots with remaining subtasks', () => {
+    publishOrderedPlan({
+      store,
+      plan: staleBlockedPlanInput,
+      repo_root: repoRoot,
+      session_id: 'queen-session',
+      agent: 'queen',
+      auto_archive: false,
+    });
+    const plan = listPlans(store, { repo_root: repoRoot }).find(
+      (candidate) => candidate.plan_slug === staleBlockedPlanInput.slug,
+    );
+    expect(plan).toBeDefined();
+    setTaskStatus(plan?.spec_task_id ?? -1, 'completed');
+
+    const payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      inactive_plans_with_remaining_subtasks: 1,
+    });
+    expect(payload.readiness_summary.queen_plan_readiness.status).toBe('bad');
+    expect(payload.queen_wave_health.plan_state_recommendations[0]).toMatchObject({
+      plan_slug: staleBlockedPlanInput.slug,
+      state: 'inactive-with-remaining-subtasks',
+      parent_task_status: 'completed',
+      recommendation: { action: 'reactivate-plan' },
+    });
+  });
+
+  it('classifies archived plans with remaining subtasks as replacement-plan work', () => {
+    publishOrderedPlan({
+      store,
+      plan: staleBlockedPlanInput,
+      repo_root: repoRoot,
+      session_id: 'queen-session',
+      agent: 'queen',
+      auto_archive: false,
+    });
+    const plan = listPlans(store, { repo_root: repoRoot }).find(
+      (candidate) => candidate.plan_slug === staleBlockedPlanInput.slug,
+    );
+    expect(plan).toBeDefined();
+    setTaskStatus(plan?.spec_task_id ?? -1, 'archived');
+
+    const payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      archived_plans: 1,
+      archived_plans_with_remaining_subtasks: 1,
+    });
+    expect(payload.readiness_summary.queen_plan_readiness).toMatchObject({
+      status: 'bad',
+      evidence: expect.stringContaining('archived plans with remaining subtasks 1'),
+    });
+    expect(payload.queen_wave_health.plan_state_recommendations[0]).toMatchObject({
+      plan_slug: staleBlockedPlanInput.slug,
+      state: 'archived',
+      recommendation: {
+        action: 'publish-new-plan',
+        command: `colony queen plan --repo-root ${repoRoot} "<goal>"`,
+      },
+    });
+  });
 });
 
 function taskIdForSubtask(planSlug: string, subtaskIndex: number): number {
@@ -334,4 +485,41 @@ function fileScopeForSubtask(taskId: number): string[] {
   return Array.isArray(meta.file_scope)
     ? meta.file_scope.filter((entry): entry is string => typeof entry === 'string')
     : [];
+}
+
+function seedOrphanSubtasks(planSlug: string, count: number): void {
+  for (let i = 0; i < count; i++) {
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: `spec/${planSlug}/sub-${i}`,
+      session_id: 'queen-session',
+    });
+    thread.join('queen-session', 'queen');
+    store.addObservation({
+      session_id: 'queen-session',
+      task_id: thread.task_id,
+      kind: 'plan-subtask',
+      content: `Orphan sub-task ${i}\n\nMissing parent plan root.`,
+      metadata: {
+        parent_plan_slug: planSlug,
+        parent_plan_title: 'Orphan health plan',
+        parent_spec_task_id: 999_999,
+        subtask_index: i,
+        title: `Orphan sub-task ${i}`,
+        description: 'Missing parent plan root.',
+        file_scope: [`apps/orphan-${i}.ts`],
+        depends_on: [],
+        spec_row_id: null,
+        capability_hint: 'api_work',
+        status: 'available',
+      },
+    });
+  }
+}
+
+function setTaskStatus(taskId: number, status: string): void {
+  const storage = store.storage as unknown as {
+    db: { prepare(sql: string): { run(...args: unknown[]): void } };
+  };
+  storage.db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, taskId);
 }

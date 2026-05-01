@@ -84,6 +84,85 @@ describe('sweepQueenPlans', () => {
     expect(ready).toMatchObject({
       reason: 'ready-to-archive',
       completed_subtask_count: 2,
+      recommendation: {
+        action: 'archive-completed-plan',
+        command: 'colony plan close ready-plan --cwd /repo',
+      },
+    });
+  });
+
+  it('recommends deleting orphan subtasks when the plan root is missing', () => {
+    seedOrphanSubtasks('orphan-plan', [{ status: 'available' }, { status: 'completed' }]);
+
+    const result = sweepQueenPlans(store, { now: NOW });
+
+    const orphan = result[0]?.items.find((item) => item.reason === 'plan-state');
+    expect(result[0]).toMatchObject({
+      plan_slug: 'orphan-plan',
+      spec_task_id: null,
+      plan_state: 'orphan-subtasks',
+    });
+    expect(orphan).toMatchObject({
+      reason: 'plan-state',
+      state: 'orphan-subtasks',
+      subtask_count: 2,
+      remaining_subtask_count: 1,
+      recommendation: {
+        action: 'delete-orphan-subtasks',
+      },
+    });
+  });
+
+  it('recommends reactivating inactive plan roots that still have remaining subtasks', () => {
+    const { specTaskId } = seedPlan('inactive-plan', {
+      auto_archive: false,
+      subtasks: [{ status: 'available' }, { status: 'completed' }],
+    });
+    setTaskStatus(specTaskId, 'completed');
+
+    const result = sweepQueenPlans(store, { now: NOW });
+
+    const inactive = result[0]?.items.find((item) => item.reason === 'plan-state');
+    expect(result[0]).toMatchObject({
+      plan_slug: 'inactive-plan',
+      spec_task_id: specTaskId,
+      plan_state: 'inactive-with-remaining-subtasks',
+    });
+    expect(inactive).toMatchObject({
+      reason: 'plan-state',
+      state: 'inactive-with-remaining-subtasks',
+      parent_task_status: 'completed',
+      subtask_count: 2,
+      remaining_subtask_count: 1,
+      recommendation: {
+        action: 'reactivate-plan',
+      },
+    });
+  });
+
+  it('recommends publishing a replacement when an archived plan still has work', () => {
+    const { specTaskId } = seedPlan('archived-plan', {
+      auto_archive: false,
+      subtasks: [{ status: 'available' }, { status: 'completed' }],
+    });
+    setTaskStatus(specTaskId, 'archived');
+
+    const result = sweepQueenPlans(store, { now: NOW });
+
+    const archived = result[0]?.items.find((item) => item.reason === 'plan-state');
+    expect(result[0]).toMatchObject({
+      plan_slug: 'archived-plan',
+      spec_task_id: specTaskId,
+      plan_state: 'archived',
+    });
+    expect(archived).toMatchObject({
+      reason: 'plan-state',
+      state: 'archived',
+      remaining_subtask_count: 1,
+      recommendation: {
+        action: 'publish-new-plan',
+        command: 'colony queen plan --repo-root /repo "<goal>"',
+      },
     });
   });
 
@@ -438,6 +517,66 @@ function seedPlan(
 
   vi.setSystemTime(NOW);
   return { specTaskId: parent.task_id, subtaskTaskIds };
+}
+
+function seedOrphanSubtasks(slug: string, subtasks: SeedSubtask[]): number[] {
+  const subtaskTaskIds: number[] = [];
+  for (let i = 0; i < subtasks.length; i++) {
+    const subtask = subtasks[i];
+    if (!subtask) continue;
+    setMinutesAgo(subtask.created_minutes_ago ?? 300);
+    const thread = TaskThread.open(store, {
+      repo_root: REPO_ROOT,
+      branch: `spec/${slug}/sub-${i}`,
+      session_id: 'queen-publisher',
+    });
+    thread.join('queen-publisher', 'queen');
+    store.addObservation({
+      session_id: 'queen-publisher',
+      task_id: thread.task_id,
+      kind: 'plan-subtask',
+      content: `Sub-task ${i}\n\nSeeded orphan sub-task ${i}.`,
+      metadata: {
+        parent_plan_slug: slug,
+        parent_plan_title: `${slug} title`,
+        parent_spec_task_id: 999_999,
+        subtask_index: i,
+        file_scope: subtask.file_scope ?? [`src/${slug}-${i}.ts`],
+        depends_on: subtask.depends_on ?? [],
+        spec_row_id: null,
+        capability_hint: null,
+        status: 'available',
+      },
+    });
+    subtaskTaskIds.push(thread.task_id);
+
+    if (subtask.status === 'completed') {
+      store.addObservation({
+        session_id: 'queen-publisher',
+        task_id: thread.task_id,
+        kind: 'plan-subtask-claim',
+        content: `completed orphan sub-task ${i}`,
+        metadata: {
+          status: 'completed',
+          session_id: 'queen-publisher',
+          agent: 'queen',
+          plan_slug: slug,
+          subtask_index: i,
+          completed_at: Date.now(),
+        },
+      });
+    }
+  }
+
+  vi.setSystemTime(NOW);
+  return subtaskTaskIds;
+}
+
+function setTaskStatus(taskId: number, status: string): void {
+  const storage = store.storage as unknown as {
+    db: { prepare(sql: string): { run(...args: unknown[]): void } };
+  };
+  storage.db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, taskId);
 }
 
 function setMinutesAgo(minutes: number): void {

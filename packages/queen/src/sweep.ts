@@ -3,10 +3,12 @@ import {
   type MessageTarget,
   type PlanInfo,
   type SubtaskInfo,
+  type SubtaskStatus,
   TaskThread,
   areDepsMet,
   listPlans,
 } from '@colony/core';
+import type { ObservationRow, TaskRow } from '@colony/storage';
 
 export const DEFAULT_STALLED_MINUTES = 60;
 export const DEFAULT_UNCLAIMED_MINUTES = 240;
@@ -14,6 +16,54 @@ export const DEFAULT_UNCLAIMED_MINUTES = 240;
 const MINUTE_MS = 60_000;
 const QUEEN_SESSION_ID = 'queen-sweep';
 const QUEEN_AGENT = 'queen';
+const SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
+const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
+
+type QueenPlanLifecycleState =
+  | 'active'
+  | 'completed'
+  | 'archived'
+  | 'orphan-subtasks'
+  | 'inactive-with-remaining-subtasks';
+type QueenPlanRepairAction =
+  | 'claim-ready-subtasks'
+  | 'archive-completed-plan'
+  | 'delete-orphan-subtasks'
+  | 'reactivate-plan'
+  | 'publish-new-plan'
+  | 'none';
+
+export interface QueenPlanRepairRecommendation {
+  action: QueenPlanRepairAction;
+  summary: string;
+  command: string | null;
+  tool_call: string | null;
+}
+
+interface SweepPlanStateSubtask {
+  task_id: number;
+  subtask_index: number;
+  title: string;
+  status: SubtaskStatus;
+  depends_on: number[];
+  file_scope: string[];
+}
+
+interface SweepPlanStateInfo {
+  plan_slug: string;
+  repo_root: string;
+  parent_task_id: number | null;
+  parent_task_status: string | null;
+  title: string;
+  state: QueenPlanLifecycleState;
+  recommendation: QueenPlanRepairRecommendation;
+  subtask_count: number;
+  completed_subtask_count: number;
+  remaining_subtask_count: number;
+  ready_subtask_count: number;
+  claimed_subtask_count: number;
+  blocked_subtask_count: number;
+}
 
 export interface SweepQueenPlansOptions {
   older_than_minutes?: number;
@@ -24,7 +74,7 @@ export interface SweepQueenPlansOptions {
   now?: number;
 }
 
-export type QueenAttentionReason = 'stalled' | 'unclaimed' | 'ready-to-archive';
+export type QueenAttentionReason = 'stalled' | 'unclaimed' | 'ready-to-archive' | 'plan-state';
 
 export interface QueenSweepWaveRef {
   index: number;
@@ -101,18 +151,35 @@ export interface ReadyToArchiveAttention extends BaseAttention {
   reason: 'ready-to-archive';
   spec_task_id: number;
   completed_subtask_count: number;
+  recommendation: QueenPlanRepairRecommendation;
+}
+
+export interface QueenPlanStateAttention extends BaseAttention {
+  reason: 'plan-state';
+  state: QueenPlanLifecycleState;
+  parent_task_id: number | null;
+  parent_task_status: string | null;
+  subtask_count: number;
+  completed_subtask_count: number;
+  remaining_subtask_count: number;
+  ready_subtask_count: number;
+  claimed_subtask_count: number;
+  blocked_subtask_count: number;
+  recommendation: QueenPlanRepairRecommendation;
 }
 
 export type QueenAttentionItem =
   | StalledSubtaskAttention
   | UnclaimedSubtaskAttention
-  | ReadyToArchiveAttention;
+  | ReadyToArchiveAttention
+  | QueenPlanStateAttention;
 
 export interface QueenPlanAttention {
   plan_slug: string;
   title: string;
   repo_root: string;
-  spec_task_id: number;
+  spec_task_id: number | null;
+  plan_state?: QueenPlanLifecycleState;
   items: QueenAttentionItem[];
   waves?: QueenSweepWaveSummary[];
   validation_summary?: QueenPlanValidationSweepSummary;
@@ -148,11 +215,19 @@ export function sweepQueenPlans(
     ...(opts.repo_root !== undefined ? { repo_root: opts.repo_root } : {}),
     limit: opts.limit ?? 2000,
   });
+  const planStates = listSweepPlanStates(store, {
+    ...(opts.repo_root !== undefined ? { repo_root: opts.repo_root } : {}),
+    limit: opts.limit ?? 2000,
+  });
+  const stateByPlan = new Map(
+    planStates.map((state) => [planKey(state.repo_root, state.plan_slug), state]),
+  );
 
   const attention: QueenPlanAttention[] = [];
   for (const plan of plans) {
     const items: QueenAttentionItem[] = [];
     const waveModel = buildWaveModel(store, plan);
+    const planState = stateByPlan.get(planKey(plan.repo_root, plan.plan_slug));
 
     for (const subtask of plan.subtasks) {
       if (subtask.status === 'claimed') {
@@ -211,6 +286,8 @@ export function sweepQueenPlans(
         repo_root: plan.repo_root,
         spec_task_id: plan.spec_task_id,
         completed_subtask_count: plan.subtasks.length,
+        recommendation:
+          planState?.recommendation ?? completedPlanRecommendation(plan.plan_slug, plan.repo_root),
       });
     }
 
@@ -222,6 +299,7 @@ export function sweepQueenPlans(
         title: plan.title,
         repo_root: plan.repo_root,
         spec_task_id: plan.spec_task_id,
+        ...(planState !== undefined ? { plan_state: planState.state } : {}),
         items,
         ...(waves.length > 0 ? { waves } : {}),
         ...(validationSummary !== null ? { validation_summary: validationSummary } : {}),
@@ -229,7 +307,292 @@ export function sweepQueenPlans(
     }
   }
 
+  for (const state of planStates) {
+    const item = planStateAttention(state);
+    if (!item) continue;
+    const existing = attention.find(
+      (plan) => plan.repo_root === state.repo_root && plan.plan_slug === state.plan_slug,
+    );
+    if (existing) {
+      existing.items.push(item);
+      existing.plan_state = state.state;
+      continue;
+    }
+    attention.push({
+      plan_slug: state.plan_slug,
+      title: state.title,
+      repo_root: state.repo_root,
+      spec_task_id: state.parent_task_id,
+      plan_state: state.state,
+      items: [item],
+    });
+  }
+
   return attention;
+}
+
+function listSweepPlanStates(
+  store: MemoryStore,
+  opts: { repo_root?: string; limit?: number } = {},
+): SweepPlanStateInfo[] {
+  const allTasks = store.storage.listTasks(2000);
+  const rootTasks = new Map<string, TaskRow>();
+  const subtaskTasksByPlan = new Map<string, TaskRow[]>();
+
+  for (const task of allTasks) {
+    if (opts.repo_root && task.repo_root !== opts.repo_root) continue;
+    const rootMatch = task.branch.match(PLAN_ROOT_BRANCH_RE);
+    if (rootMatch?.[1]) {
+      rootTasks.set(planKey(task.repo_root, rootMatch[1]), task);
+      continue;
+    }
+    const subtaskMatch = task.branch.match(SUBTASK_BRANCH_RE);
+    if (!subtaskMatch?.[1]) continue;
+    const key = planKey(task.repo_root, subtaskMatch[1]);
+    const bucket = subtaskTasksByPlan.get(key) ?? [];
+    bucket.push(task);
+    subtaskTasksByPlan.set(key, bucket);
+  }
+
+  const states: SweepPlanStateInfo[] = [];
+  for (const [key, tasks] of subtaskTasksByPlan) {
+    const [repoRoot, planSlug] = splitPlanKey(key);
+    const root = rootTasks.get(key) ?? null;
+    const subtasks = tasks
+      .map((task) => readSweepPlanStateSubtask(store, task, planSlug))
+      .filter((subtask): subtask is SweepPlanStateSubtask => subtask !== null)
+      .sort((a, b) => a.subtask_index - b.subtask_index);
+    if (subtasks.length === 0) continue;
+
+    const completedSubtaskCount = subtasks.filter(
+      (subtask) => subtask.status === 'completed',
+    ).length;
+    const remainingSubtaskCount = subtasks.length - completedSubtaskCount;
+    const readySubtaskCount = subtasks.filter(
+      (subtask) => subtask.status === 'available' && areStateDepsMet(subtask, subtasks),
+    ).length;
+    const claimedSubtaskCount = subtasks.filter((subtask) => subtask.status === 'claimed').length;
+    const blockedSubtaskCount = subtasks.filter(
+      (subtask) =>
+        subtask.status === 'blocked' ||
+        (subtask.status === 'available' && !areStateDepsMet(subtask, subtasks)),
+    ).length;
+    const state = classifySweepPlanState(store, root, remainingSubtaskCount);
+
+    states.push({
+      plan_slug: planSlug,
+      repo_root: repoRoot,
+      parent_task_id: root?.id ?? null,
+      parent_task_status: root?.status ?? null,
+      title: subtasks[0]?.title ?? root?.title ?? planSlug,
+      state,
+      recommendation: sweepPlanRepairRecommendation(state, {
+        plan_slug: planSlug,
+        repo_root: repoRoot,
+        ready_subtask_count: readySubtaskCount,
+        remaining_subtask_count: remainingSubtaskCount,
+        parent_task_status: root?.status ?? null,
+      }),
+      subtask_count: subtasks.length,
+      completed_subtask_count: completedSubtaskCount,
+      remaining_subtask_count: remainingSubtaskCount,
+      ready_subtask_count: readySubtaskCount,
+      claimed_subtask_count: claimedSubtaskCount,
+      blocked_subtask_count: blockedSubtaskCount,
+    });
+  }
+
+  return states
+    .sort(
+      (a, b) =>
+        planStateRank(a.state) - planStateRank(b.state) || a.plan_slug.localeCompare(b.plan_slug),
+    )
+    .slice(0, opts.limit ?? 2000);
+}
+
+function readSweepPlanStateSubtask(
+  store: MemoryStore,
+  task: TaskRow,
+  planSlug: string,
+): SweepPlanStateSubtask | null {
+  const rows = store.storage.taskTimeline(task.id, 500);
+  const initial = rows.find((row) => row.kind === 'plan-subtask');
+  if (!initial) return null;
+  const meta = parseMeta(initial.metadata);
+  const lifecycle = readSweepPlanStateLifecycle(rows, meta);
+  const [titleLine] = initial.content.split('\n\n');
+  return {
+    task_id: task.id,
+    subtask_index: typeof meta.subtask_index === 'number' ? meta.subtask_index : -1,
+    title:
+      typeof meta.parent_plan_title === 'string'
+        ? (meta.parent_plan_title as string)
+        : (titleLine ?? planSlug),
+    status: lifecycle.status,
+    depends_on: numberArrayValue(meta.depends_on),
+    file_scope: stringArrayValue(meta.file_scope),
+  };
+}
+
+function readSweepPlanStateLifecycle(
+  rows: ObservationRow[],
+  initialMeta: Record<string, unknown>,
+): { status: SubtaskStatus } {
+  const initialStatus = isSubtaskStatus(initialMeta.status) ? initialMeta.status : 'available';
+  const claimRows = rows
+    .filter((row) => row.kind === 'plan-subtask-claim')
+    .map((row) => ({ row, metadata: parseMeta(row.metadata) }))
+    .filter((entry) => isSubtaskStatus(entry.metadata.status))
+    .sort((a, b) => b.row.ts - a.row.ts || b.row.id - a.row.id);
+  const completed = claimRows.find((entry) => entry.metadata.status === 'completed');
+  const resolved = completed ?? claimRows[0];
+  return {
+    status: (resolved?.metadata.status as SubtaskStatus | undefined) ?? initialStatus,
+  };
+}
+
+function isSubtaskStatus(value: unknown): value is SubtaskStatus {
+  return (
+    value === 'available' || value === 'claimed' || value === 'completed' || value === 'blocked'
+  );
+}
+
+function areStateDepsMet(subtask: SweepPlanStateSubtask, all: SweepPlanStateSubtask[]): boolean {
+  return subtask.depends_on.every((depIndex) => {
+    const dep = all.find((candidate) => candidate.subtask_index === depIndex);
+    return dep?.status === 'completed';
+  });
+}
+
+function classifySweepPlanState(
+  store: MemoryStore,
+  root: TaskRow | null,
+  remainingSubtaskCount: number,
+): QueenPlanLifecycleState {
+  if (root === null) return 'orphan-subtasks';
+  const status = root.status.toLowerCase();
+  if (status === 'archived' || status === 'auto-archived' || planAlreadyArchived(store, root.id)) {
+    return 'archived';
+  }
+  if (remainingSubtaskCount === 0) return 'completed';
+  if (status !== 'open' && status !== 'active') return 'inactive-with-remaining-subtasks';
+  return 'active';
+}
+
+function sweepPlanRepairRecommendation(
+  state: QueenPlanLifecycleState,
+  plan: {
+    plan_slug: string;
+    repo_root: string;
+    ready_subtask_count: number;
+    remaining_subtask_count: number;
+    parent_task_status: string | null;
+  },
+): QueenPlanRepairRecommendation {
+  if (state === 'completed') return completedPlanRecommendation(plan.plan_slug, plan.repo_root);
+  if (state === 'orphan-subtasks') {
+    return {
+      action: 'delete-orphan-subtasks',
+      summary:
+        'Subtasks exist without a spec/<plan> parent task; delete orphan rows or publish a replacement plan before claiming work.',
+      command: null,
+      tool_call: null,
+    };
+  }
+  if (state === 'inactive-with-remaining-subtasks') {
+    return {
+      action: 'reactivate-plan',
+      summary: `Plan root is ${plan.parent_task_status ?? 'inactive'} with ${plan.remaining_subtask_count} remaining subtask(s); reactivate it before claiming work.`,
+      command: null,
+      tool_call:
+        'mcp__colony__task_plan_publish({ session_id: "<session_id>", agent: "<agent>", repo_root: "<repo_root>", slug: "<replacement_slug>", subtasks: [...] })',
+    };
+  }
+  if (state === 'archived') {
+    return {
+      action: plan.remaining_subtask_count > 0 ? 'publish-new-plan' : 'none',
+      summary:
+        plan.remaining_subtask_count > 0
+          ? 'Archived plan still has remaining subtasks; publish a new plan for follow-up work.'
+          : 'Plan is archived; no action needed.',
+      command:
+        plan.remaining_subtask_count > 0
+          ? `colony queen plan --repo-root ${shellQuote(plan.repo_root)} "<goal>"`
+          : null,
+      tool_call:
+        plan.remaining_subtask_count > 0
+          ? 'mcp__colony__queen_plan_goal({ session_id: "<session_id>", repo_root: "<repo_root>", goal_title: "<goal>", problem: "<problem>", acceptance_criteria: ["<done>"] })'
+          : null,
+    };
+  }
+  if (plan.ready_subtask_count > 0) {
+    return {
+      action: 'claim-ready-subtasks',
+      summary: `${plan.ready_subtask_count} ready subtask(s) should be claimed.`,
+      command: null,
+      tool_call:
+        'mcp__colony__task_plan_claim_subtask({ agent: "<agent>", session_id: "<session_id>", plan_slug: "<plan_slug>", subtask_index: <index> })',
+    };
+  }
+  return {
+    action: 'none',
+    summary: 'Plan is active but no subtask is currently claimable.',
+    command: null,
+    tool_call: null,
+  };
+}
+
+function planStateRank(state: QueenPlanLifecycleState): number {
+  if (state === 'orphan-subtasks') return 0;
+  if (state === 'inactive-with-remaining-subtasks') return 1;
+  if (state === 'completed') return 2;
+  if (state === 'archived') return 3;
+  return 4;
+}
+
+function planKey(repoRoot: string, slug: string): string {
+  return `${repoRoot}\0${slug}`;
+}
+
+function splitPlanKey(key: string): [string, string] {
+  const [repoRoot, slug] = key.split('\0');
+  return [repoRoot ?? '', slug ?? ''];
+}
+
+function planStateAttention(state: SweepPlanStateInfo): QueenPlanStateAttention | null {
+  if (state.state === 'active') return null;
+  if (state.state === 'completed') return null;
+  if (state.state === 'archived' && state.remaining_subtask_count === 0) return null;
+  return {
+    reason: 'plan-state',
+    plan_slug: state.plan_slug,
+    plan_title: state.title,
+    repo_root: state.repo_root,
+    state: state.state,
+    parent_task_id: state.parent_task_id,
+    parent_task_status: state.parent_task_status,
+    subtask_count: state.subtask_count,
+    completed_subtask_count: state.completed_subtask_count,
+    remaining_subtask_count: state.remaining_subtask_count,
+    ready_subtask_count: state.ready_subtask_count,
+    claimed_subtask_count: state.claimed_subtask_count,
+    blocked_subtask_count: state.blocked_subtask_count,
+    recommendation: state.recommendation,
+  };
+}
+
+function completedPlanRecommendation(
+  planSlug: string,
+  repoRoot: string,
+): QueenPlanRepairRecommendation {
+  return {
+    action: 'archive-completed-plan',
+    summary:
+      'All subtasks are complete; archive the completed plan instead of treating it as no work.',
+    command: `colony plan close ${planSlug} --cwd ${shellQuote(repoRoot)}`,
+    tool_call:
+      'mcp__colony__spec_archive({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>", slug: "<plan_slug>" })',
+  };
 }
 
 function recommendReplacementAgent(
@@ -670,6 +1033,12 @@ function stringArrayValue(value: unknown): string[] {
     : [];
 }
 
+function numberArrayValue(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is number => typeof item === 'number' && Number.isFinite(item))
+    : [];
+}
+
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -699,4 +1068,9 @@ function displayRuntime(agent: QueenReplacementAgent): string {
   if (agent === 'claude-code') return 'Claude';
   if (agent === 'codex') return 'Codex';
   return 'Unknown runtime';
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }

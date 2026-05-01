@@ -221,7 +221,9 @@ export function registerQueenCommand(program: Command): void {
 
   group
     .command('sweep')
-    .description('List queen plans needing attention: stalled, unclaimed, ready to archive')
+    .description(
+      'List queen plans needing attention: stalled, unclaimed, ready to archive, orphaned, or inactive',
+    )
     .option('--repo-root <path>', 'repo root to scan')
     .option(
       '--older-than-minutes <minutes>',
@@ -400,17 +402,21 @@ function renderSweep(result: ReturnType<typeof sweepQueenPlans>, opts: SweepOpts
   const stalled = items.filter((item) => item.reason === 'stalled');
   const unclaimed = items.filter((item) => item.reason === 'unclaimed');
   const ready = items.filter((item) => item.reason === 'ready-to-archive');
+  const planState = items.filter((item) => item.reason === 'plan-state');
   const sent = stalled.filter((item) => item.message_observation_id !== undefined).length;
 
   const lines: string[] = [];
   if (items.length === 0) {
     lines.push(kleur.green('Queen sweep: no plans need attention'));
+    lines.push(
+      kleur.dim('  recommendation: publish a new Queen/task plan if multi-agent work is waiting'),
+    );
     return lines.join('\n');
   }
 
   lines.push(
     kleur.bold(
-      `Queen sweep: ${result.length} plan(s) need attention  stalled: ${stalled.length}  unclaimed: ${unclaimed.length}  ready-to-archive: ${ready.length}`,
+      `Queen sweep: ${result.length} plan(s) need attention  stalled: ${stalled.length}  unclaimed: ${unclaimed.length}  ready-to-archive: ${ready.length}  plan-state: ${planState.length}`,
     ),
   );
   if (opts.autoMessage === true) {
@@ -509,7 +515,12 @@ function renderExample(item: QueenAttentionItem): string {
   if (item.reason === 'unclaimed') {
     return `${item.plan_slug}/sub-${item.subtask_index} unclaimed: available for ${item.age_minutes}m`;
   }
-  return `${item.plan_slug} ready-to-archive: ${item.completed_subtask_count} completed sub-task(s), auto_archive off`;
+  if (item.reason === 'ready-to-archive') {
+    const command = item.recommendation.command ? `; cmd ${item.recommendation.command}` : '';
+    return `${item.plan_slug} ready-to-archive: ${item.completed_subtask_count} completed sub-task(s), auto_archive off; recommendation ${item.recommendation.action}${command}`;
+  }
+  const command = item.recommendation.command ? `; cmd ${item.recommendation.command}` : '';
+  return `${item.plan_slug} ${item.state}: ${item.remaining_subtask_count} remaining / ${item.subtask_count} sub-task(s); recommendation ${item.recommendation.action}${command}`;
 }
 
 function publishQueenPlan(

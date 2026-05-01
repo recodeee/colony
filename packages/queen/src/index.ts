@@ -39,6 +39,8 @@ export {
   type QueenAttentionItem,
   type QueenAttentionReason,
   type QueenPlanAttention,
+  type QueenPlanRepairRecommendation,
+  type QueenPlanStateAttention,
   type ReadyToArchiveAttention,
   type StalledSubtaskAttention,
   type SweepQueenPlansOptions,

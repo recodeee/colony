@@ -49,6 +49,7 @@ const DEFAULT_RECENT_WINDOW_HOURS = 1;
 const HEALTH_TOOL_LIMIT = 5;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
 const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
+const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
 const TARGET_HIVEMIND_TO_ATTENTION = 0.5;
 const TARGET_TASK_LIST_TO_READY = 0.3;
 const TARGET_READY_TO_CLAIM = 0.3;
@@ -234,8 +235,50 @@ interface QueenWavePlanSummary {
   replacement_recommendation: QueenReplacementRecommendation | null;
 }
 
+type QueenPlanLifecycleState =
+  | 'active'
+  | 'completed'
+  | 'archived'
+  | 'orphan-subtasks'
+  | 'inactive-with-remaining-subtasks';
+
+type QueenPlanRepairAction =
+  | 'claim-ready-subtasks'
+  | 'archive-completed-plan'
+  | 'delete-orphan-subtasks'
+  | 'reactivate-plan'
+  | 'publish-new-plan'
+  | 'none';
+
+interface QueenPlanRepairRecommendation {
+  action: QueenPlanRepairAction;
+  summary: string;
+  command: string | null;
+  tool_call: string | null;
+}
+
+interface QueenPlanStateSummary {
+  plan_slug: string;
+  repo_root: string;
+  state: QueenPlanLifecycleState;
+  parent_task_id: number | null;
+  parent_task_status: string | null;
+  subtask_count: number;
+  completed_subtask_count: number;
+  remaining_subtask_count: number;
+  ready_subtask_count: number;
+  claimed_subtask_count: number;
+  blocked_subtask_count: number;
+  recommendation: QueenPlanRepairRecommendation;
+}
+
 interface QueenWaveHealthPayload {
   active_plans: number;
+  completed_plans: number;
+  archived_plans: number;
+  archived_plans_with_remaining_subtasks: number;
+  orphan_subtasks: number;
+  inactive_plans_with_remaining_subtasks: number;
   current_wave: string | null;
   ready_subtasks: number;
   claimed_subtasks: number;
@@ -244,6 +287,7 @@ interface QueenWaveHealthPayload {
   quota_handoffs_blocking_downstream: number;
   replacement_recommendation: QueenReplacementRecommendation | null;
   plans: QueenWavePlanSummary[];
+  plan_state_recommendations: QueenPlanStateSummary[];
   downstream_blockers: QueenDownstreamBlockerReport[];
 }
 
@@ -786,6 +830,11 @@ export function formatColonyHealthOutput(
     '',
     kleur.bold('Queen wave plans'),
     `  active plans:                       ${payload.queen_wave_health.active_plans}`,
+    `  completed plans:                    ${payload.queen_wave_health.completed_plans}`,
+    `  archived plans:                     ${payload.queen_wave_health.archived_plans}`,
+    `  archived with remaining subtasks:   ${payload.queen_wave_health.archived_plans_with_remaining_subtasks}`,
+    `  orphan subtasks:                    ${payload.queen_wave_health.orphan_subtasks}`,
+    `  inactive plans with remaining:      ${payload.queen_wave_health.inactive_plans_with_remaining_subtasks}`,
     `  current wave:                       ${payload.queen_wave_health.current_wave ?? 'n/a'}`,
     `  ready subtasks:                     ${payload.queen_wave_health.ready_subtasks}`,
     `  claimed subtasks:                   ${payload.queen_wave_health.claimed_subtasks}`,
@@ -807,6 +856,23 @@ export function formatColonyHealthOutput(
       lines.push(
         `  ${plan.plan_slug}: current ${plan.current_wave ?? 'complete'}; ready ${plan.ready_subtasks}, claimed ${plan.claimed_subtasks}, blocked ${plan.blocked_subtasks}, stale blockers ${plan.stale_claims_blocking_downstream}, quota blockers ${plan.quota_handoffs_blocking_downstream}`,
       );
+    }
+  }
+  if (payload.queen_wave_health.plan_state_recommendations.length > 0) {
+    lines.push('  plan-state recommendations:');
+    for (const item of payload.queen_wave_health.plan_state_recommendations.slice(
+      0,
+      HEALTH_TOOL_LIMIT,
+    )) {
+      lines.push(
+        `    ${item.plan_slug} ${item.state}: ${item.recommendation.action} - ${item.recommendation.summary}`,
+      );
+      if (item.recommendation.command) {
+        lines.push(kleur.dim(`      cmd:  ${item.recommendation.command}`));
+      }
+      if (item.recommendation.tool_call) {
+        lines.push(kleur.dim(`      tool: ${item.recommendation.tool_call}`));
+      }
     }
   }
   if (payload.queen_wave_health.downstream_blockers.length > 0) {
@@ -906,12 +972,19 @@ function readinessSummaryPayload(
           : 'bad';
 
   const queen = payload.queen_wave_health;
-  const queenStatus: ReadinessStatus =
-    queen.active_plans > 0
+  const brokenPlanState =
+    queen.orphan_subtasks > 0 ||
+    queen.inactive_plans_with_remaining_subtasks > 0 ||
+    queen.archived_plans_with_remaining_subtasks > 0;
+  const queenStatus: ReadinessStatus = brokenPlanState
+    ? 'bad'
+    : queen.active_plans > 0
       ? queen.ready_subtasks + queen.claimed_subtasks > 0
         ? 'good'
         : 'ok'
-      : 'bad';
+      : queen.completed_plans > 0 || queen.archived_plans > 0
+        ? 'ok'
+        : 'bad';
 
   const noteMigration = payload.task_post_vs_omx_notepad;
   const noteStatus: ReadinessStatus =
@@ -950,7 +1023,7 @@ function readinessSummaryPayload(
     },
     queen_plan_readiness: {
       status: queenStatus,
-      evidence: `${queen.active_plans} active plan(s); ${queen.ready_subtasks} ready, ${queen.claimed_subtasks} claimed`,
+      evidence: `${queen.active_plans} active plan(s); ${queen.ready_subtasks} ready, ${queen.claimed_subtasks} claimed; completed plans ${queen.completed_plans}, archived plans with remaining subtasks ${queen.archived_plans_with_remaining_subtasks}, orphan subtasks ${queen.orphan_subtasks}, inactive remaining ${queen.inactive_plans_with_remaining_subtasks}`,
     },
     working_state_migration: {
       status: noteStatus,
@@ -2311,6 +2384,39 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
+  const queenStateRepair = payload.queen_wave_health.plan_state_recommendations.find(
+    (item) => item.recommendation.action !== 'claim-ready-subtasks',
+  );
+  if (queenStateRepair) {
+    hints.push({
+      metric: 'Queen plan state repair',
+      status: 'bad',
+      current: `${queenStateRepair.plan_slug} ${queenStateRepair.state}; remaining ${queenStateRepair.remaining_subtask_count}`,
+      target: 'active plan with claimable work or archived completed plan',
+      action: queenStateRepair.recommendation.summary,
+      readiness_scope: 'queen_plan_readiness',
+      priority:
+        queenStateRepair.recommendation.action === 'delete-orphan-subtasks'
+          ? 6
+          : queenStateRepair.recommendation.action === 'reactivate-plan'
+            ? 7
+            : 8,
+      ...(queenStateRepair.recommendation.tool_call
+        ? { tool_call: queenStateRepair.recommendation.tool_call }
+        : {}),
+      ...(queenStateRepair.recommendation.command
+        ? { command: queenStateRepair.recommendation.command }
+        : {}),
+      prompt: codexPrompt({
+        goal: 'repair Queen plan state before treating subtasks as ready work',
+        current: `${queenStateRepair.plan_slug} is ${queenStateRepair.state} with ${queenStateRepair.remaining_subtask_count} remaining subtask(s)`,
+        inspect: 'colony queen sweep --json, colony health --json, mcp__colony__task_plan_list',
+        acceptance:
+          'completed plans are archived, inactive plans are reactivated, orphan subtasks are deleted, or a replacement plan is published',
+      }),
+    });
+  }
+
   if (
     payload.queen_wave_health.active_plans === 0 &&
     payload.ready_to_claim_vs_claimed.plan_subtasks === 0
@@ -2771,6 +2877,7 @@ function isExpiredLifecycleRow(
 
 interface PlanSubtaskHealth {
   task_id: number;
+  repo_root: string;
   plan_slug: string;
   index: number;
   title: string;
@@ -2803,6 +2910,7 @@ function readPlanSubtasks(
     const titleLine = initial.content.split('\n\n')[0] ?? '(untitled)';
     subtasks.push({
       task_id: task.id,
+      repo_root: task.repo_root,
       plan_slug: planSlug,
       index,
       title: typeof initialMeta.title === 'string' ? initialMeta.title : titleLine,
@@ -2881,46 +2989,229 @@ function readSubtaskLifecycle(
   };
 }
 
+function queenPlanStateSummaries(
+  storage: Pick<Storage, 'taskObservationsByKind'>,
+  tasks: TaskRow[],
+  subtasks: PlanSubtaskHealth[],
+): QueenPlanStateSummary[] {
+  const rootTasks = new Map<string, TaskRow>();
+  for (const task of tasks) {
+    const rootMatch = task.branch.match(PLAN_ROOT_BRANCH_RE);
+    if (rootMatch?.[1]) rootTasks.set(planKey(task.repo_root, rootMatch[1]), task);
+  }
+
+  const summaries: QueenPlanStateSummary[] = [];
+  for (const [groupKey, siblings] of groupPlanSubtasksByRepo(subtasks)) {
+    const [repoRoot, planSlug] = splitPlanKey(groupKey);
+    const root = rootTasks.get(groupKey) ?? null;
+    const completedSubtaskCount = siblings.filter(
+      (subtask) => subtask.status === 'completed',
+    ).length;
+    const remainingSubtaskCount = siblings.length - completedSubtaskCount;
+    const readySubtaskCount = siblings.filter((subtask) =>
+      isReadyPlanSubtask(subtask, siblings),
+    ).length;
+    const claimedSubtaskCount = siblings.filter((subtask) => subtask.status === 'claimed').length;
+    const blockedSubtaskCount = siblings.filter((subtask) =>
+      isBlockedPlanSubtask(subtask, siblings),
+    ).length;
+    const state = classifyQueenPlanState(storage, root, remainingSubtaskCount);
+
+    summaries.push({
+      plan_slug: planSlug,
+      repo_root: repoRoot,
+      state,
+      parent_task_id: root?.id ?? null,
+      parent_task_status: root?.status ?? null,
+      subtask_count: siblings.length,
+      completed_subtask_count: completedSubtaskCount,
+      remaining_subtask_count: remainingSubtaskCount,
+      ready_subtask_count: readySubtaskCount,
+      claimed_subtask_count: claimedSubtaskCount,
+      blocked_subtask_count: blockedSubtaskCount,
+      recommendation: queenPlanStateRecommendation(state, {
+        plan_slug: planSlug,
+        repo_root: repoRoot,
+        ready_subtask_count: readySubtaskCount,
+        remaining_subtask_count: remainingSubtaskCount,
+        parent_task_status: root?.status ?? null,
+      }),
+    });
+  }
+
+  return summaries.sort(
+    (a, b) =>
+      queenPlanStateRank(a.state) - queenPlanStateRank(b.state) ||
+      a.plan_slug.localeCompare(b.plan_slug),
+  );
+}
+
+function classifyQueenPlanState(
+  storage: Pick<Storage, 'taskObservationsByKind'>,
+  root: TaskRow | null,
+  remainingSubtaskCount: number,
+): QueenPlanLifecycleState {
+  if (root === null) return 'orphan-subtasks';
+  const status = root.status.toLowerCase();
+  if (
+    status === 'archived' ||
+    status === 'auto-archived' ||
+    storage.taskObservationsByKind(root.id, 'plan-archived', 1).length > 0 ||
+    storage.taskObservationsByKind(root.id, 'plan-auto-archive', 1).length > 0
+  ) {
+    return 'archived';
+  }
+  if (remainingSubtaskCount === 0) return 'completed';
+  if (status !== 'open' && status !== 'active') return 'inactive-with-remaining-subtasks';
+  return 'active';
+}
+
+function queenPlanStateRecommendation(
+  state: QueenPlanLifecycleState,
+  plan: {
+    plan_slug: string;
+    repo_root: string;
+    ready_subtask_count: number;
+    remaining_subtask_count: number;
+    parent_task_status: string | null;
+  },
+): QueenPlanRepairRecommendation {
+  if (state === 'completed') {
+    return {
+      action: 'archive-completed-plan',
+      summary: 'All subtasks are complete; archive the completed plan.',
+      command: `colony plan close ${plan.plan_slug} --cwd ${shellQuote(plan.repo_root)}`,
+      tool_call:
+        'mcp__colony__spec_archive({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>", slug: "<plan_slug>" })',
+    };
+  }
+  if (state === 'orphan-subtasks') {
+    return {
+      action: 'delete-orphan-subtasks',
+      summary:
+        'Subtasks exist without a spec/<plan> parent task; delete orphan subtasks or publish a new plan before claiming work.',
+      command: null,
+      tool_call: null,
+    };
+  }
+  if (state === 'inactive-with-remaining-subtasks') {
+    return {
+      action: 'reactivate-plan',
+      summary: `Plan root is ${plan.parent_task_status ?? 'inactive'} with ${plan.remaining_subtask_count} remaining subtask(s); reactivate it before claiming work.`,
+      command: null,
+      tool_call:
+        'mcp__colony__task_plan_publish({ session_id: "<session_id>", agent: "<agent>", repo_root: "<repo_root>", slug: "<replacement_slug>", subtasks: [...] })',
+    };
+  }
+  if (state === 'archived') {
+    return {
+      action: plan.remaining_subtask_count > 0 ? 'publish-new-plan' : 'none',
+      summary:
+        plan.remaining_subtask_count > 0
+          ? 'Archived plan still has remaining subtasks; publish a new plan for follow-up work.'
+          : 'Plan is archived; no action needed.',
+      command:
+        plan.remaining_subtask_count > 0
+          ? `colony queen plan --repo-root ${shellQuote(plan.repo_root)} "<goal>"`
+          : null,
+      tool_call:
+        plan.remaining_subtask_count > 0
+          ? 'mcp__colony__queen_plan_goal({ session_id: "<session_id>", repo_root: "<repo_root>", goal_title: "<goal>", problem: "<problem>", acceptance_criteria: ["<done>"] })'
+          : null,
+    };
+  }
+  if (plan.ready_subtask_count > 0) {
+    return {
+      action: 'claim-ready-subtasks',
+      summary: `${plan.ready_subtask_count} ready subtask(s) should be claimed.`,
+      command: null,
+      tool_call:
+        'mcp__colony__task_plan_claim_subtask({ agent: "<agent>", session_id: "<session_id>", plan_slug: "<plan_slug>", subtask_index: <index> })',
+    };
+  }
+  return {
+    action: 'none',
+    summary: 'Plan is active but no subtask is currently claimable.',
+    command: null,
+    tool_call: null,
+  };
+}
+
+function queenPlanStateRank(state: QueenPlanLifecycleState): number {
+  if (state === 'orphan-subtasks') return 0;
+  if (state === 'inactive-with-remaining-subtasks') return 1;
+  if (state === 'completed') return 2;
+  if (state === 'archived') return 3;
+  return 4;
+}
+
 function queenWaveHealthPayload(
   storage: Pick<Storage, 'taskTimeline' | 'taskObservationsByKind' | 'listClaims' | 'getSession'>,
   tasks: TaskRow[],
   options: { now: number; stale_claim_minutes: number },
 ): QueenWaveHealthPayload {
   const plans: QueenWavePlanSummary[] = [];
+  const subtasks = readPlanSubtasks(storage, tasks);
+  const planStates = queenPlanStateSummaries(storage, tasks, subtasks);
+  const activePlanSlugs = new Set(
+    planStates
+      .filter((state) => state.state === 'active')
+      .map((state) => planKey(state.repo_root, state.plan_slug)),
+  );
 
-  for (const [planSlug, subtasks] of groupPlanSubtasks(readPlanSubtasks(storage, tasks))) {
-    const incomplete = subtasks.filter((subtask) => subtask.status !== 'completed');
+  for (const [groupKey, planSubtasks] of groupPlanSubtasksByRepo(subtasks)) {
+    const [repoRoot, planSlug] = splitPlanKey(groupKey);
+    if (!activePlanSlugs.has(planKey(repoRoot, planSlug))) continue;
+    const incomplete = planSubtasks.filter((subtask) => subtask.status !== 'completed');
     if (incomplete.length === 0) continue;
 
     const currentWaveIndex = Math.min(...incomplete.map((subtask) => subtask.wave_index));
     const currentWave =
-      subtasks.find((subtask) => subtask.wave_index === currentWaveIndex)?.wave_name ?? null;
-    const downstreamBlockers = staleDownstreamBlockers(subtasks, options);
+      planSubtasks.find((subtask) => subtask.wave_index === currentWaveIndex)?.wave_name ?? null;
+    const downstreamBlockers = staleDownstreamBlockers(planSubtasks, options);
 
     plans.push({
       plan_slug: planSlug,
       current_wave: currentWave,
-      ready_subtasks: subtasks.filter((subtask) => isReadyPlanSubtask(subtask, subtasks)).length,
-      claimed_subtasks: subtasks.filter((subtask) => subtask.status === 'claimed').length,
-      blocked_subtasks: subtasks.filter((subtask) => isBlockedPlanSubtask(subtask, subtasks))
+      ready_subtasks: planSubtasks.filter((subtask) => isReadyPlanSubtask(subtask, planSubtasks))
         .length,
+      claimed_subtasks: planSubtasks.filter((subtask) => subtask.status === 'claimed').length,
+      blocked_subtasks: planSubtasks.filter((subtask) =>
+        isBlockedPlanSubtask(subtask, planSubtasks),
+      ).length,
       stale_claims_blocking_downstream: downstreamBlockers.length,
       downstream_blockers: downstreamBlockers,
-      quota_handoffs_blocking_downstream: subtasks.filter(
-        (subtask) => subtask.quota_handoff_pending && blocksDownstream(subtask, subtasks),
+      quota_handoffs_blocking_downstream: planSubtasks.filter(
+        (subtask) => subtask.quota_handoff_pending && blocksDownstream(subtask, planSubtasks),
       ).length,
       replacement_recommendation: planReplacementRecommendation(
         storage,
         planSlug,
-        subtasks,
+        planSubtasks,
         options,
       ),
     });
   }
 
   const currentWaves = new Set(plans.map((plan) => plan.current_wave).filter(Boolean));
+  const stateRecommendations = planStates.filter(
+    (state) =>
+      state.recommendation.action !== 'none' &&
+      state.recommendation.action !== 'claim-ready-subtasks',
+  );
   return {
     active_plans: plans.length,
+    completed_plans: planStates.filter((state) => state.state === 'completed').length,
+    archived_plans: planStates.filter((state) => state.state === 'archived').length,
+    archived_plans_with_remaining_subtasks: planStates.filter(
+      (state) => state.state === 'archived' && state.remaining_subtask_count > 0,
+    ).length,
+    orphan_subtasks: planStates
+      .filter((state) => state.state === 'orphan-subtasks')
+      .reduce((sum, state) => sum + state.subtask_count, 0),
+    inactive_plans_with_remaining_subtasks: planStates.filter(
+      (state) => state.state === 'inactive-with-remaining-subtasks',
+    ).length,
     current_wave:
       plans.length === 0
         ? null
@@ -2950,6 +3241,7 @@ function queenWaveHealthPayload(
       plans.find((plan) => plan.replacement_recommendation !== null)?.replacement_recommendation ??
       null,
     plans: plans.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug)),
+    plan_state_recommendations: stateRecommendations,
   };
 }
 
@@ -3155,6 +3447,26 @@ function groupPlanSubtasks(subtasks: PlanSubtaskHealth[]): Map<string, PlanSubta
     byPlan.set(subtask.plan_slug, bucket);
   }
   return byPlan;
+}
+
+function groupPlanSubtasksByRepo(subtasks: PlanSubtaskHealth[]): Map<string, PlanSubtaskHealth[]> {
+  const byPlan = new Map<string, PlanSubtaskHealth[]>();
+  for (const subtask of subtasks) {
+    const key = planKey(subtask.repo_root, subtask.plan_slug);
+    const bucket = byPlan.get(key) ?? [];
+    bucket.push(subtask);
+    byPlan.set(key, bucket);
+  }
+  return byPlan;
+}
+
+function planKey(repoRoot: string, slug: string): string {
+  return `${repoRoot}\0${slug}`;
+}
+
+function splitPlanKey(key: string): [string, string] {
+  const [repoRoot, slug] = key.split('\0');
+  return [repoRoot ?? '', slug ?? ''];
 }
 
 function annotatePlanSubtaskWaves(subtasks: PlanSubtaskHealth[]): PlanSubtaskHealth[] {
