@@ -6,14 +6,17 @@ import {
   type HivemindSession,
   type McpCapabilityMap,
   type McpConfigSource,
+  type OmxRuntimeSummaryHealthStats,
   ProposalSystem,
   type WorktreeContentionReport,
   buildCoordinationSweep,
   classifyClaimAge,
   currentSignalStrength,
   discoverMcpCapabilities,
+  discoverOmxRuntimeSummaryStats,
   isSignalExpired,
   isStrongClaimAge,
+  mergeOmxRuntimeSummaryStats,
   readHivemind,
   readWorktreeContentionReport,
   signalMetadataFromObservation,
@@ -128,7 +131,7 @@ interface TaskPostNotepadPayload {
   colony_note_share: number | null;
 }
 
-interface OmxRuntimeBridgePayload extends OmxRuntimeSummaryStats {
+interface OmxRuntimeBridgePayload extends OmxRuntimeSummaryHealthStats {
   latest_summary_age_ms: number | null;
 }
 
@@ -454,6 +457,9 @@ export function buildColonyHealthPayload(
     dirty_files_by_worktree?: Record<string, string[]>;
     worktree_contention?: WorktreeContentionReport;
     mcp_capability_sources?: McpConfigSource[];
+    omx_runtime_summary_stale_ms?: number;
+    omx_runtime_summary_global_dir?: string | null;
+    omx_runtime_summary_paths?: string[];
   },
 ): ColonyHealthPayload {
   const now = options.now ?? Date.now();
@@ -487,7 +493,35 @@ export function buildColonyHealthPayload(
   const taskPostCalls = countTool(calls, 'task_post');
   const taskNoteWorkingCalls = countTool(calls, 'task_note_working');
   const taskMessageCalls = countTool(calls, 'task_message');
-  const omxRuntimeStats = omxRuntimeSummaryStats(storage, options.since);
+  const storedOmxRuntimeStats = omxRuntimeSummaryStats(storage, options.since);
+  const discoveredOmxRuntimeStats =
+    options.repo_root !== undefined ||
+    options.omx_runtime_summary_paths !== undefined ||
+    options.omx_runtime_summary_global_dir !== undefined
+      ? discoverOmxRuntimeSummaryStats({
+          since: options.since,
+          now,
+          ...(options.repo_root !== undefined ? { repoRoot: options.repo_root } : {}),
+          ...(options.omx_runtime_summary_stale_ms !== undefined
+            ? { staleMs: options.omx_runtime_summary_stale_ms }
+            : {}),
+          ...(options.omx_runtime_summary_global_dir !== undefined
+            ? { globalSummaryDir: options.omx_runtime_summary_global_dir }
+            : {}),
+          ...(options.omx_runtime_summary_paths !== undefined
+            ? { paths: options.omx_runtime_summary_paths }
+            : {}),
+        })
+      : null;
+  const omxRuntimeStats = mergeOmxRuntimeSummaryStats(
+    [storedOmxRuntimeStats, discoveredOmxRuntimeStats],
+    {
+      now,
+      ...(options.omx_runtime_summary_stale_ms !== undefined
+        ? { staleMs: options.omx_runtime_summary_stale_ms }
+        : {}),
+    },
+  );
   const searchCalls = searchCallsPerSession(calls);
   const claimBeforeEditStats = storage.claimBeforeEditStats(options.since);
   const recentClaimBeforeEditStats = storage.claimBeforeEditStats(recentSince);
@@ -696,6 +730,9 @@ export function formatColonyHealthOutput(
     `  summaries ingested:  ${payload.omx_runtime_bridge.summaries_ingested}`,
     `  latest summary age:  ${formatDuration(payload.omx_runtime_bridge.latest_summary_age_ms)}`,
     `  warnings:            ${payload.omx_runtime_bridge.warning_count}`,
+    `  active sessions:     ${payload.omx_runtime_bridge.active_sessions}`,
+    `  recent edit paths:   ${payload.omx_runtime_bridge.recent_edit_paths.length ? payload.omx_runtime_bridge.recent_edit_paths.join(', ') : 'none'}`,
+    `  malformed summaries: ${payload.omx_runtime_bridge.malformed_summary_count}`,
     '',
     kleur.bold('Search calls per session'),
     `  total: ${payload.search_calls_per_session.total_search_calls}`,
@@ -1316,7 +1353,7 @@ function taskPostVsNotepadPayload(
 }
 
 function omxRuntimeBridgePayload(
-  stats: OmxRuntimeSummaryStats,
+  stats: OmxRuntimeSummaryHealthStats,
   now: number,
 ): OmxRuntimeBridgePayload {
   return {
@@ -1374,7 +1411,7 @@ function claimBeforeEditPayload(
   const reason =
     measurableEdits > 0 &&
     measurableEdits < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE &&
-    (recent.omx_runtime_bridge_status === 'unavailable' || unmeasurableEdits > 0)
+    (recent.omx_runtime_bridge_status !== 'available' || unmeasurableEdits > 0)
       ? INSUFFICIENT_RUNTIME_METADATA_REASON
       : null;
   const status =
@@ -1835,6 +1872,17 @@ function formatEditSourceBreakdown(payload: ClaimBeforeEditPayload): string[] {
   return lines;
 }
 
+function omxRuntimeBridgeNeedsAttention(payload: ColonyHealthPayloadWithoutHints): boolean {
+  if (payload.omx_runtime_bridge.status === 'available') return false;
+  return (
+    payload.omx_runtime_bridge.sources.length > 0 ||
+    payload.omx_runtime_bridge.malformed_summary_count > 0 ||
+    (payload.task_claim_file_before_edits.reason === INSUFFICIENT_RUNTIME_METADATA_REASON &&
+      payload.signal_health.quota_pending_claims > 0) ||
+    payload.task_claim_file_before_edits.codex_rollout_without_bridge
+  );
+}
+
 function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint[] {
   const hints: ActionHint[] = [];
   const liveContention = payload.live_contention_health;
@@ -1902,20 +1950,23 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
-  if (payload.omx_runtime_bridge.status === 'unavailable') {
+  const bridgeNeedsAttention = omxRuntimeBridgeNeedsAttention(payload);
+  if (bridgeNeedsAttention) {
     hints.push({
       metric: 'OMX runtime bridge',
       status: 'bad',
-      current: 'unavailable',
+      current: payload.omx_runtime_bridge.status,
       target: 'runtime summary/lifecycle bridge available',
       action:
-        'Wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
+        payload.omx_runtime_bridge.status === 'stale'
+          ? 'Refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits.'
+          : 'Wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
       readiness_scope: 'execution_safety',
       priority: 4,
       command: LIFECYCLE_BRIDGE_COMMAND,
       prompt: codexPrompt({
         goal: 'wire the OMX runtime summary and lifecycle bridge',
-        current: 'OMX runtime bridge unavailable in colony health',
+        current: `OMX runtime bridge ${payload.omx_runtime_bridge.status} in colony health`,
         inspect:
           'colony health --json, colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/hooks/src/lifecycle-envelope.ts',
         acceptance:
@@ -2033,12 +2084,11 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   const claimBeforeEdit = payload.task_claim_file_before_edits;
   const preToolUseMissing = claimBeforeEdit.claim_miss_reasons.pre_tool_use_missing;
   const preToolUseMissingDominates = isDominantPreToolUseMiss(claimBeforeEdit.claim_miss_reasons);
-  const bridgeUnavailable = payload.omx_runtime_bridge.status === 'unavailable';
+  const bridgeUnavailable = bridgeNeedsAttention;
   const highTaskClaimFileAdoption =
     claimBeforeEdit.task_claim_file_calls >=
     Math.max(RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE, claimBeforeEdit.measurable_edits);
-  const suppressGenericTaskClaimAdvice =
-    bridgeUnavailable || claimBeforeEdit.reason !== null || highTaskClaimFileAdoption;
+  const suppressGenericTaskClaimAdvice = bridgeUnavailable || highTaskClaimFileAdoption;
   if (claimBeforeEdit.root_cause?.kind === 'lifecycle_bridge_missing') {
     hints.push({
       metric: 'claim-before-edit',

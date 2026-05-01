@@ -37,13 +37,21 @@ export {
   type SkippedOmxActiveSession,
 } from './omx-session-reconcile.js';
 export {
+  COLONY_RUNTIME_SUMMARY_SCHEMA,
+  DEFAULT_OMX_RUNTIME_SUMMARY_STALE_MS,
+  defaultColonyRuntimeSummaryPaths,
   defaultOmxRuntimeSummaryPaths,
+  discoverOmxRuntimeSummaryStats,
   ingestOmxRuntimeSummary,
   ingestOmxRuntimeSummaryFile,
+  mergeOmxRuntimeSummaryStats,
   normalizeOmxRuntimeSummary,
+  type DiscoverOmxRuntimeSummaryStatsOptions,
   type IngestOmxRuntimeSummaryFileResult,
   type IngestOmxRuntimeSummaryResult,
   type NormalizedOmxRuntimeSummary,
+  type OmxRuntimeBridgeStatus,
+  type OmxRuntimeSummaryHealthStats,
   type OmxRuntimeSummaryInput,
   type OmxRuntimeWarningKind,
 } from './omx-runtime-summary.js';

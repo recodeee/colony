@@ -1,10 +1,13 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { MemoryStore } from './memory-store.js';
 
 const FIELD_LIMIT = 240;
 const NOTE_LIMIT = 320;
 const FILE_LIMIT = 8;
+export const COLONY_RUNTIME_SUMMARY_SCHEMA = 'colony-runtime-summary-v1';
+export const DEFAULT_OMX_RUNTIME_SUMMARY_STALE_MS = 15 * 60_000;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -23,6 +26,11 @@ export interface OmxRuntimeSummaryInput {
   last_failed_tool?: unknown;
   local_working_note?: unknown;
   active_file_focus?: unknown;
+  active_sessions?: unknown;
+  recent_edit_paths?: unknown;
+  edit_paths?: unknown;
+  extracted_paths?: unknown;
+  warnings?: unknown;
 }
 
 export interface NormalizedOmxRuntimeSummary {
@@ -60,6 +68,28 @@ export interface IngestOmxRuntimeSummaryFileResult {
   errors: string[];
 }
 
+export type OmxRuntimeBridgeStatus = 'available' | 'stale' | 'unavailable';
+
+export interface OmxRuntimeSummaryHealthStats {
+  status: OmxRuntimeBridgeStatus;
+  summaries_ingested: number;
+  latest_summary_ts: number | null;
+  warning_count: number;
+  active_sessions: number;
+  recent_edit_paths: string[];
+  malformed_summary_count: number;
+  sources: string[];
+}
+
+export interface DiscoverOmxRuntimeSummaryStatsOptions {
+  repoRoot?: string;
+  since?: number;
+  now?: number;
+  staleMs?: number;
+  globalSummaryDir?: string | null;
+  paths?: string[];
+}
+
 export function normalizeOmxRuntimeSummary(
   input: OmxRuntimeSummaryInput,
   defaults: { repoRoot?: string; sessionId?: string; agent?: string; branch?: string } = {},
@@ -68,14 +98,18 @@ export function normalizeOmxRuntimeSummary(
   if (!sessionId) return null;
   const repoRoot = shortString(input.repo_root) ?? defaults.repoRoot ?? null;
   const branch = shortString(input.branch) ?? defaults.branch ?? null;
-  const runtimeModelError = compactText(input.runtime_model_error ?? input.model_error, FIELD_LIMIT);
+  const runtimeModelError = compactText(
+    input.runtime_model_error ?? input.model_error,
+    FIELD_LIMIT,
+  );
   const failedTool = normalizeFailedTool(input.last_failed_tool);
   const summary: NormalizedOmxRuntimeSummary = {
     session_id: sessionId,
     agent: shortString(input.agent) ?? defaults.agent ?? agentFromSession(sessionId),
     repo_root: repoRoot ? resolve(repoRoot) : null,
     branch,
-    task_id: typeof input.task_id === 'number' && Number.isInteger(input.task_id) ? input.task_id : null,
+    task_id:
+      typeof input.task_id === 'number' && Number.isInteger(input.task_id) ? input.task_id : null,
     ts: timestampMs(input.timestamp),
     quota_warning: compactText(input.quota_warning, FIELD_LIMIT),
     runtime_model_error: runtimeModelError,
@@ -175,6 +209,225 @@ export function defaultOmxRuntimeSummaryPaths(repoRoot: string): string[] {
     join(repoRoot, '.omx', 'state', 'runtime-summary.json'),
     join(repoRoot, '.omx', 'state', 'runtime-summary.jsonl'),
   ];
+}
+
+export function defaultColonyRuntimeSummaryPaths(options: {
+  repoRoot?: string;
+  globalSummaryDir?: string | null;
+}): string[] {
+  const paths: string[] = [];
+  if (options.repoRoot) {
+    paths.push(join(resolve(options.repoRoot), '.omx', 'state', 'colony-runtime-summary.json'));
+  }
+  const summaryDir =
+    options.globalSummaryDir === null
+      ? null
+      : (options.globalSummaryDir ?? join(homedir(), '.omx', 'colony', 'runtime-summaries'));
+  if (summaryDir && existsSync(summaryDir)) {
+    for (const entry of readdirSync(summaryDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        paths.push(join(summaryDir, entry.name));
+      }
+    }
+  }
+  return Array.from(new Set(paths));
+}
+
+export function discoverOmxRuntimeSummaryStats(
+  options: DiscoverOmxRuntimeSummaryStatsOptions = {},
+): OmxRuntimeSummaryHealthStats {
+  const since = options.since ?? 0;
+  const now = options.now ?? Date.now();
+  const staleMs = options.staleMs ?? DEFAULT_OMX_RUNTIME_SUMMARY_STALE_MS;
+  const paths =
+    options.paths ??
+    defaultColonyRuntimeSummaryPaths({
+      ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {}),
+      ...(options.globalSummaryDir !== undefined
+        ? { globalSummaryDir: options.globalSummaryDir }
+        : {}),
+    });
+  const sessionIds = new Set<string>();
+  const editPaths: string[] = [];
+  const sources = new Set<string>();
+  let summariesIngested = 0;
+  let latestSummaryTs: number | null = null;
+  let warningCount = 0;
+  let malformedSummaryCount = 0;
+
+  for (const path of paths) {
+    if (!existsSync(path) || !statSync(path).isFile()) continue;
+    const parsed = safeJson(readFileSync(path, 'utf8'));
+    const records = Array.isArray(parsed) ? parsed : [parsed];
+    for (const record of records) {
+      const validation = validateColonyRuntimeSummaryRecord(record, path);
+      if (!validation.ok) {
+        malformedSummaryCount++;
+        warningCount++;
+        sources.add(path);
+        continue;
+      }
+      for (const input of validation.summaries) {
+        const normalized = normalizeOmxRuntimeSummary(input, {
+          ...(options.repoRoot !== undefined ? { repoRoot: options.repoRoot } : {}),
+        });
+        if (!normalized || normalized.ts <= since) continue;
+        summariesIngested++;
+        sources.add(path);
+        sessionIds.add(normalized.session_id);
+        for (const sessionId of normalizeActiveSessions(input.active_sessions)) {
+          sessionIds.add(sessionId);
+        }
+        latestSummaryTs =
+          latestSummaryTs === null ? normalized.ts : Math.max(latestSummaryTs, normalized.ts);
+        warningCount += normalized.warnings.length + normalizeWarningList(input.warnings).length;
+        for (const filePath of normalizeRecentEditPaths(input)) {
+          if (!editPaths.includes(filePath)) editPaths.push(filePath);
+        }
+      }
+    }
+  }
+
+  const status = runtimeBridgeStatus({
+    summaries_ingested: summariesIngested,
+    latest_summary_ts: latestSummaryTs,
+    now,
+    staleMs,
+  });
+  return {
+    status,
+    summaries_ingested: summariesIngested,
+    latest_summary_ts: latestSummaryTs,
+    warning_count: warningCount,
+    active_sessions: sessionIds.size,
+    recent_edit_paths: editPaths.slice(0, FILE_LIMIT),
+    malformed_summary_count: malformedSummaryCount,
+    sources: [...sources],
+  };
+}
+
+export function mergeOmxRuntimeSummaryStats(
+  stats: Array<Partial<OmxRuntimeSummaryHealthStats> | null | undefined>,
+  options: { now?: number; staleMs?: number } = {},
+): OmxRuntimeSummaryHealthStats {
+  const now = options.now ?? Date.now();
+  const staleMs = options.staleMs ?? DEFAULT_OMX_RUNTIME_SUMMARY_STALE_MS;
+  const sessions = new Set<string>();
+  const paths: string[] = [];
+  const sources: string[] = [];
+  let summariesIngested = 0;
+  let latestSummaryTs: number | null = null;
+  let warningCount = 0;
+  let malformedSummaryCount = 0;
+
+  for (const stat of stats) {
+    if (!stat) continue;
+    summariesIngested += stat.summaries_ingested ?? 0;
+    warningCount += stat.warning_count ?? 0;
+    malformedSummaryCount += stat.malformed_summary_count ?? 0;
+    if (stat.latest_summary_ts !== undefined && stat.latest_summary_ts !== null) {
+      latestSummaryTs =
+        latestSummaryTs === null
+          ? stat.latest_summary_ts
+          : Math.max(latestSummaryTs, stat.latest_summary_ts);
+    }
+    for (const source of stat.sources ?? []) {
+      if (!sources.includes(source)) sources.push(source);
+    }
+    for (const filePath of stat.recent_edit_paths ?? []) {
+      if (!paths.includes(filePath)) paths.push(filePath);
+    }
+    if (typeof stat.active_sessions === 'number' && stat.active_sessions > 0) {
+      for (let i = 0; i < stat.active_sessions; i++) sessions.add(`stat:${sources.length}:${i}`);
+    }
+  }
+
+  return {
+    status: runtimeBridgeStatus({
+      summaries_ingested: summariesIngested,
+      latest_summary_ts: latestSummaryTs,
+      now,
+      staleMs,
+    }),
+    summaries_ingested: summariesIngested,
+    latest_summary_ts: latestSummaryTs,
+    warning_count: warningCount,
+    active_sessions: sessions.size,
+    recent_edit_paths: paths.slice(0, FILE_LIMIT),
+    malformed_summary_count: malformedSummaryCount,
+    sources,
+  };
+}
+
+function validateColonyRuntimeSummaryRecord(
+  record: unknown,
+  path: string,
+): { ok: true; summaries: OmxRuntimeSummaryInput[] } | { ok: false; error: string } {
+  if (!isRecord(record)) return { ok: false, error: `${path}: expected object` };
+  const schema = shortString(record.schema ?? record.schema_version);
+  if (schema !== COLONY_RUNTIME_SUMMARY_SCHEMA) {
+    return { ok: false, error: `${path}: expected schema ${COLONY_RUNTIME_SUMMARY_SCHEMA}` };
+  }
+  const candidates = summaryCandidates(record);
+  if (candidates.length === 0) return { ok: false, error: `${path}: missing summary object` };
+  return { ok: true, summaries: candidates };
+}
+
+function summaryCandidates(record: JsonRecord): OmxRuntimeSummaryInput[] {
+  const inherited = {
+    repo_root: record.repo_root,
+    branch: record.branch,
+    timestamp: record.timestamp,
+  };
+  const raw =
+    Array.isArray(record.summaries) && record.summaries.length > 0
+      ? record.summaries
+      : Array.isArray(record.sessions) && record.sessions.length > 0
+        ? record.sessions
+        : isRecord(record.summary)
+          ? [record.summary]
+          : [record];
+  return raw
+    .filter(isRecord)
+    .map((entry) => compactObject({ ...inherited, ...entry }) as OmxRuntimeSummaryInput);
+}
+
+function runtimeBridgeStatus(input: {
+  summaries_ingested: number;
+  latest_summary_ts: number | null;
+  now: number;
+  staleMs: number;
+}): OmxRuntimeBridgeStatus {
+  if (input.summaries_ingested <= 0 || input.latest_summary_ts === null) return 'unavailable';
+  return input.now - input.latest_summary_ts > input.staleMs ? 'stale' : 'available';
+}
+
+function normalizeActiveSessions(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'number'
+      ? new Array(value).fill(null)
+      : [];
+  return raw
+    .map((entry, index) => {
+      if (typeof entry === 'string') return compactText(entry, FIELD_LIMIT);
+      if (isRecord(entry))
+        return compactText(entry.session_id ?? entry.id ?? entry.session, FIELD_LIMIT);
+      return typeof value === 'number' ? `active-${index}` : null;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function normalizeWarningList(value: unknown): string[] {
+  return (Array.isArray(value) ? value : [])
+    .map((entry) => compactText(entry, FIELD_LIMIT))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function normalizeRecentEditPaths(input: OmxRuntimeSummaryInput): string[] {
+  return normalizeFileFocus(
+    input.recent_edit_paths ?? input.edit_paths ?? input.extracted_paths ?? input.active_file_focus,
+  );
 }
 
 function readSummaryRecords(path: string): OmxRuntimeSummaryInput[] {

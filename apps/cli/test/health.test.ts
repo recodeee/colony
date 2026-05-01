@@ -2433,6 +2433,185 @@ describe('colony health payload', () => {
     expect(text).toContain('summaries ingested:  2');
     expect(text).toContain('latest summary age:  5m');
   });
+
+  it('shows OMX runtime bridge unavailable when no local summary exists', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-empty-repo-'));
+    const globalSummaryDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'colony-health-omx-empty-global-'),
+    );
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: globalSummaryDir,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'unavailable',
+        summaries_ingested: 0,
+        latest_summary_age_ms: null,
+        warning_count: 0,
+      });
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+      fs.rmSync(globalSummaryDir, { recursive: true, force: true });
+    }
+  });
+
+  it('shows OMX runtime bridge available when a fresh v1 summary exists', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-fresh-'));
+    const stateDir = path.join(repoRoot, '.omx', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, 'colony-runtime-summary.json'),
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@fresh',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: new Date(NOW - 60_000).toISOString(),
+        active_sessions: ['codex@fresh'],
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+        quota_warning: 'quota near',
+      }),
+    );
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: null,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'available',
+        summaries_ingested: 1,
+        latest_summary_age_ms: 60_000,
+        warning_count: 1,
+        active_sessions: 1,
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+      });
+      const text = formatColonyHealthOutput(payload);
+      expect(text).toContain('status:              available');
+      expect(text).toContain('active sessions:     1');
+      expect(text).toContain('recent edit paths:   apps/cli/src/commands/health.ts');
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('shows OMX runtime bridge stale when the latest v1 summary is old', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-stale-'));
+    const stateDir = path.join(repoRoot, '.omx', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, 'colony-runtime-summary.json'),
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@stale',
+        timestamp: new Date(NOW - 30 * 60_000).toISOString(),
+      }),
+    );
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: null,
+          omx_runtime_summary_stale_ms: 15 * 60_000,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'stale',
+        summaries_ingested: 1,
+        latest_summary_age_ms: 30 * 60_000,
+      });
+      expect(formatColonyHealthOutput(payload)).toContain('status:              stale');
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('shows malformed OMX runtime bridge summaries as warnings', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-malformed-'));
+    const stateDir = path.join(repoRoot, '.omx', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, 'colony-runtime-summary.json'),
+      JSON.stringify({
+        schema: 'wrong-schema',
+        session_id: 'codex@bad',
+        timestamp: new Date(NOW - 60_000).toISOString(),
+      }),
+    );
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: null,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'unavailable',
+        summaries_ingested: 0,
+        warning_count: 1,
+        malformed_summary_count: 1,
+      });
+      expect(formatColonyHealthOutput(payload)).toContain('malformed summaries: 1');
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 function outputSection(output: string, heading: string): string {
