@@ -42,6 +42,7 @@ interface TestTask {
   id: number;
   repo_root: string;
   branch: string;
+  status?: string;
 }
 
 interface TestObservation {
@@ -1746,9 +1747,11 @@ describe('colony health payload', () => {
           edits_claimed_before: 0,
         },
         tasks: [
+          { id: 9, repo_root: '/r', branch: 'spec/waves', status: 'open' },
           { id: 10, repo_root: '/r', branch: 'spec/waves/sub-0' },
           { id: 11, repo_root: '/r', branch: 'spec/waves/sub-1' },
           { id: 12, repo_root: '/r', branch: 'spec/waves/sub-2' },
+          { id: 14, repo_root: '/r', branch: 'spec/done', status: 'open' },
           { id: 13, repo_root: '/r', branch: 'spec/done/sub-0' },
         ],
         observationsByTask: {
@@ -3168,6 +3171,7 @@ function nearestClaimExample(
 function healthyTasks(): TestTask[] {
   return [
     { id: 1, repo_root: '/r', branch: 'b' },
+    { id: 5, repo_root: '/r', branch: 'spec/plan', status: 'open' },
     { id: 2, repo_root: '/r', branch: 'spec/plan/sub-0' },
     { id: 3, repo_root: '/r', branch: 'spec/plan/sub-1' },
     { id: 4, repo_root: '/r', branch: 'spec/plan/sub-2' },
