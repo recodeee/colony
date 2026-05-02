@@ -24,7 +24,7 @@
 
 ## 4. Completion / Cleanup
 
-- [ ] Commit changes.
-- [ ] Open/update PR.
-- [ ] Verify PR state `MERGED`.
-- [ ] Verify sandbox worktree cleanup.
+- [x] Commit changes: `aa6984f`.
+- [x] Open/update PR: https://github.com/recodeee/colony/pull/369.
+- [x] Verify PR state `MERGED`: merge commit `6b707b959b77e293cf865f27899e46b78399b6ae`.
+- [x] Verify sandbox worktree cleanup: `git worktree list` no longer includes `colony__codex__health-runtime-summary-claim-telemetry-2026-05-02-14-39`.
