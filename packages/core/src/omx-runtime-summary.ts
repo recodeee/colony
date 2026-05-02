@@ -34,6 +34,10 @@ export interface OmxRuntimeSummaryInput {
   recent_edit_paths?: unknown;
   edit_paths?: unknown;
   extracted_paths?: unknown;
+  lifecycle_events?: unknown;
+  recent_lifecycle_events?: unknown;
+  events?: unknown;
+  tool_events?: unknown;
   warnings?: unknown;
 }
 
@@ -97,10 +101,18 @@ export interface OmxRuntimeSummaryHealthStats {
   warning_count: number;
   active_sessions: number;
   recent_edit_paths: string[];
+  claim_before_edit: OmxRuntimeSummaryClaimBeforeEditStats;
   malformed_summary_count: number;
   malformed_summary_examples: OmxRuntimeMalformedSummaryExample[];
   malformed_summary_errors: string[];
   sources: string[];
+}
+
+export interface OmxRuntimeSummaryClaimBeforeEditStats {
+  hook_capable_edits: number;
+  pre_tool_use_signals: number;
+  measurable_edits: number;
+  edits_claimed_before: number;
 }
 
 export interface DiscoverOmxRuntimeSummaryStatsOptions {
@@ -276,6 +288,7 @@ export function discoverOmxRuntimeSummaryStats(
   let latestSummaryTs: number | null = null;
   let warningCount = 0;
   let malformedSummaryCount = 0;
+  const claimBeforeEdit = emptyRuntimeClaimBeforeEditStats();
   const malformedSummaryExamples: OmxRuntimeMalformedSummaryExample[] = [];
   const malformedSummaryErrors: string[] = [];
 
@@ -332,6 +345,10 @@ export function discoverOmxRuntimeSummaryStats(
         for (const filePath of normalizeRecentEditPaths(input)) {
           if (!editPaths.includes(filePath)) editPaths.push(filePath);
         }
+        mergeRuntimeClaimBeforeEditStats(
+          claimBeforeEdit,
+          runtimeClaimBeforeEditStatsFromSummary(input),
+        );
       }
     }
   }
@@ -349,6 +366,7 @@ export function discoverOmxRuntimeSummaryStats(
     warning_count: warningCount,
     active_sessions: sessionIds.size,
     recent_edit_paths: editPaths.slice(0, FILE_LIMIT),
+    claim_before_edit: claimBeforeEdit,
     malformed_summary_count: malformedSummaryCount,
     malformed_summary_examples: malformedSummaryExamples,
     malformed_summary_errors: malformedSummaryErrors,
@@ -371,6 +389,7 @@ export function mergeOmxRuntimeSummaryStats(
   let latestSummaryTs: number | null = null;
   let warningCount = 0;
   let malformedSummaryCount = 0;
+  const claimBeforeEdit = emptyRuntimeClaimBeforeEditStats();
 
   for (const stat of stats) {
     if (!stat) continue;
@@ -389,6 +408,7 @@ export function mergeOmxRuntimeSummaryStats(
     for (const filePath of stat.recent_edit_paths ?? []) {
       if (!paths.includes(filePath)) paths.push(filePath);
     }
+    mergeRuntimeClaimBeforeEditStats(claimBeforeEdit, stat.claim_before_edit);
     for (const example of stat.malformed_summary_examples ?? []) {
       if (malformedSummaryExamples.length >= MALFORMED_SUMMARY_EXAMPLE_LIMIT) break;
       malformedSummaryExamples.push(example);
@@ -414,6 +434,7 @@ export function mergeOmxRuntimeSummaryStats(
     warning_count: warningCount,
     active_sessions: sessions.size,
     recent_edit_paths: paths.slice(0, FILE_LIMIT),
+    claim_before_edit: claimBeforeEdit,
     malformed_summary_count: malformedSummaryCount,
     malformed_summary_examples: malformedSummaryExamples,
     malformed_summary_errors: malformedSummaryErrors,
@@ -467,6 +488,8 @@ function summaryCandidates(record: JsonRecord): OmxRuntimeSummaryInput[] {
     branch: record.branch,
     timestamp: record.timestamp,
     last_seen_at: record.last_seen_at,
+    lifecycle_events:
+      record.lifecycle_events ?? record.recent_lifecycle_events ?? record.events ?? record.tool_events,
   };
   const raw =
     Array.isArray(record.summaries) && record.summaries.length > 0
@@ -665,6 +688,138 @@ function normalizeRecentEditPaths(input: OmxRuntimeSummaryInput): string[] {
   );
 }
 
+interface RuntimeLifecycleSummaryEvent {
+  event_type: 'pre_tool_use' | 'post_tool_use';
+  event_id: string | null;
+  parent_event_id: string | null;
+  ts: number | null;
+  order: number;
+  paths: string[];
+}
+
+function runtimeClaimBeforeEditStatsFromSummary(
+  input: OmxRuntimeSummaryInput,
+): OmxRuntimeSummaryClaimBeforeEditStats {
+  const events = normalizeRuntimeLifecycleEvents(input);
+  if (events.length === 0) return emptyRuntimeClaimBeforeEditStats();
+
+  const preEvents = events.filter((event) => event.event_type === 'pre_tool_use');
+  const postEvents = events.filter((event) => event.event_type === 'post_tool_use');
+  const preToolUseSignals = preEvents.reduce((count, event) => count + event.paths.length, 0);
+  let coveredEdits = 0;
+
+  for (const postEvent of postEvents) {
+    coveredEdits += coveredPostToolUsePathCount(postEvent, preEvents);
+  }
+
+  return {
+    hook_capable_edits: coveredEdits,
+    pre_tool_use_signals: preToolUseSignals,
+    measurable_edits: coveredEdits,
+    edits_claimed_before: coveredEdits,
+  };
+}
+
+function normalizeRuntimeLifecycleEvents(input: OmxRuntimeSummaryInput): RuntimeLifecycleSummaryEvent[] {
+  const raw =
+    input.lifecycle_events ?? input.recent_lifecycle_events ?? input.events ?? input.tool_events;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry, order) => normalizeRuntimeLifecycleEvent(entry, order))
+    .filter((event): event is RuntimeLifecycleSummaryEvent => event !== null);
+}
+
+function normalizeRuntimeLifecycleEvent(
+  value: unknown,
+  order: number,
+): RuntimeLifecycleSummaryEvent | null {
+  if (!isRecord(value)) return null;
+  const metadata = isRecord(value.metadata) ? value.metadata : {};
+  const eventType = normalizeRuntimeLifecycleEventType(
+    value.event_type ?? value.event_name ?? value.type ?? value.kind ?? metadata.event_type,
+  );
+  if (!eventType) return null;
+  const paths = normalizeFileFocus(
+    value.extracted_paths ??
+      value.file_paths ??
+      value.file_path ??
+      value.path ??
+      value.recent_edit_paths ??
+      value.edit_paths ??
+      metadata.extracted_paths ??
+      metadata.file_paths ??
+      metadata.file_path,
+  );
+  if (paths.length === 0) return null;
+  return {
+    event_type: eventType,
+    event_id: shortString(value.event_id ?? value.id ?? metadata.event_id) ?? null,
+    parent_event_id:
+      shortString(value.parent_event_id ?? value.parent_id ?? metadata.parent_event_id) ?? null,
+    ts: optionalTimestampMs(
+      value.ts ?? value.timestamp ?? value.created_at ?? value.started_at ?? metadata.ts,
+    ),
+    order,
+    paths,
+  };
+}
+
+function normalizeRuntimeLifecycleEventType(
+  value: unknown,
+): RuntimeLifecycleSummaryEvent['event_type'] | null {
+  const normalized = shortString(value)?.toLowerCase().replace(/-/g, '_');
+  if (normalized === 'pretooluse') return 'pre_tool_use';
+  if (normalized === 'posttooluse') return 'post_tool_use';
+  if (normalized === 'pre_tool_use') return 'pre_tool_use';
+  if (normalized === 'post_tool_use') return 'post_tool_use';
+  return null;
+}
+
+function coveredPostToolUsePathCount(
+  postEvent: RuntimeLifecycleSummaryEvent,
+  preEvents: RuntimeLifecycleSummaryEvent[],
+): number {
+  let covered = 0;
+  for (const filePath of postEvent.paths) {
+    if (preEvents.some((preEvent) => preToolUseCoversPostPath(preEvent, postEvent, filePath))) {
+      covered++;
+    }
+  }
+  return covered;
+}
+
+function preToolUseCoversPostPath(
+  preEvent: RuntimeLifecycleSummaryEvent,
+  postEvent: RuntimeLifecycleSummaryEvent,
+  filePath: string,
+): boolean {
+  if (!preEvent.paths.includes(filePath)) return false;
+  if (postEvent.parent_event_id && preEvent.event_id === postEvent.parent_event_id) return true;
+  if (preEvent.order >= postEvent.order) return false;
+  if (preEvent.ts !== null && postEvent.ts !== null && preEvent.ts > postEvent.ts) return false;
+  return true;
+}
+
+function emptyRuntimeClaimBeforeEditStats(): OmxRuntimeSummaryClaimBeforeEditStats {
+  return {
+    hook_capable_edits: 0,
+    pre_tool_use_signals: 0,
+    measurable_edits: 0,
+    edits_claimed_before: 0,
+  };
+}
+
+function mergeRuntimeClaimBeforeEditStats(
+  target: OmxRuntimeSummaryClaimBeforeEditStats,
+  source: Partial<OmxRuntimeSummaryClaimBeforeEditStats> | null | undefined,
+): void {
+  if (!source) return;
+  target.hook_capable_edits += source.hook_capable_edits ?? 0;
+  target.pre_tool_use_signals += source.pre_tool_use_signals ?? 0;
+  target.measurable_edits += source.measurable_edits ?? 0;
+  target.edits_claimed_before += source.edits_claimed_before ?? 0;
+}
+
 function readSummaryRecords(path: string): OmxRuntimeSummaryInput[] {
   const raw = readFileSync(path, 'utf8');
   if (path.endsWith('.jsonl')) {
@@ -729,6 +884,15 @@ function timestampMs(value: unknown): number {
     if (Number.isFinite(parsed)) return parsed;
   }
   return Date.now();
+}
+
+function optionalTimestampMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 function shortString(value: unknown): string | undefined {

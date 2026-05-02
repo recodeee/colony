@@ -67,6 +67,8 @@ const LIFECYCLE_BRIDGE_SILENT_ROOT_CAUSE =
   'Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero.';
 const LIFECYCLE_PATHS_MISSING_ROOT_CAUSE =
   'Lifecycle paths missing: PreToolUse telemetry exists, but edit events do not include file_path metadata.';
+const LIFECYCLE_SUMMARY_NOT_JOINED_ROOT_CAUSE =
+  'Runtime bridge is fresh and sees edit paths, but claim-before-edit telemetry is not joined into health stats.';
 const LIFECYCLE_CLAIM_MISMATCH_ROOT_CAUSE =
   'Lifecycle claim mismatch: file paths are present, but lifecycle claims do not match edit scope.';
 const NO_HOOK_CAPABLE_EDITS_ROOT_CAUSE =
@@ -156,6 +158,7 @@ interface SearchCallsPayload {
 
 interface ClaimBeforeEditPayload extends ClaimBeforeEditStats {
   status: 'available' | 'not_available' | 'no_data';
+  hook_capable_edits: number;
   measurable_edits: number;
   unmeasurable_edits: number;
   runtime_bridge_status: OmxRuntimeBridgePayload['status'];
@@ -429,6 +432,7 @@ interface RootCauseSummary {
     | 'lifecycle_bridge_unavailable'
     | 'lifecycle_bridge_silent'
     | 'lifecycle_paths_missing'
+    | 'lifecycle_summary_not_joined'
     | 'lifecycle_claim_mismatch'
     | 'no_hook_capable_edits'
     | 'old_telemetry_pollution';
@@ -633,8 +637,16 @@ export function buildColonyHealthPayload(
     },
   );
   const searchCalls = searchCallsPerSession(calls);
-  const claimBeforeEditStats = storage.claimBeforeEditStats(options.since);
-  const recentClaimBeforeEditStats = storage.claimBeforeEditStats(recentSince);
+  const runtimeClaimBeforeEdit =
+    omxRuntimeStats.status === 'available' ? omxRuntimeStats.claim_before_edit : undefined;
+  const claimBeforeEditStats = claimBeforeEditStatsWithRuntimeSummary(
+    storage.claimBeforeEditStats(options.since),
+    runtimeClaimBeforeEdit,
+  );
+  const recentClaimBeforeEditStats = claimBeforeEditStatsWithRuntimeSummary(
+    storage.claimBeforeEditStats(recentSince),
+    runtimeClaimBeforeEdit,
+  );
   const taskSelection = taskSelectionPayload(calls);
   const taskClaimFileCalls = countTool(calls, 'task_claim_file');
   const recentTaskClaimFileCalls = countTool(
@@ -694,7 +706,7 @@ export function buildColonyHealthPayload(
         recent_stats: recentClaimBeforeEditStats,
         recent_task_claim_file_calls: recentTaskClaimFileCalls,
         recent_window_hours: recentWindowHours,
-        omx_runtime_bridge_status: omxRuntimeStats.status,
+        omx_runtime_bridge: omxRuntimeStats,
         live_file_contentions: liveContention.live_file_contentions,
         dirty_contended_files: liveContention.dirty_contended_files,
       },
@@ -1629,6 +1641,40 @@ function omxRuntimeSummaryStats(storage: unknown, since: number): OmxRuntimeSumm
   );
 }
 
+function claimBeforeEditStatsWithRuntimeSummary(
+  stats: ClaimBeforeEditStats,
+  runtime: OmxRuntimeSummaryHealthStats['claim_before_edit'] | undefined,
+): ClaimBeforeEditStats {
+  if (!runtime || runtime.measurable_edits <= 0) return stats;
+  const existingPreToolUseSignals = stats.pre_tool_use_signals ?? 0;
+  const syntheticHookCapableEdits = Math.max(
+    runtime.hook_capable_edits - stats.edits_with_file_path,
+    0,
+  );
+  const syntheticClaimedBefore = Math.min(
+    syntheticHookCapableEdits,
+    Math.max(runtime.edits_claimed_before - stats.edits_claimed_before, 0),
+  );
+  const syntheticPreToolUseSignals = Math.max(
+    runtime.pre_tool_use_signals - existingPreToolUseSignals,
+    0,
+  );
+  if (
+    syntheticHookCapableEdits === 0 &&
+    syntheticClaimedBefore === 0 &&
+    syntheticPreToolUseSignals === 0
+  ) {
+    return stats;
+  }
+  return {
+    ...stats,
+    edit_tool_calls: stats.edit_tool_calls + syntheticHookCapableEdits,
+    edits_with_file_path: stats.edits_with_file_path + syntheticHookCapableEdits,
+    edits_claimed_before: stats.edits_claimed_before + syntheticClaimedBefore,
+    pre_tool_use_signals: existingPreToolUseSignals + syntheticPreToolUseSignals,
+  };
+}
+
 function claimBeforeEditPayload(
   stats: ClaimBeforeEditStats,
   taskClaimFileCalls: number,
@@ -1637,7 +1683,7 @@ function claimBeforeEditPayload(
     recent_stats: ClaimBeforeEditStats;
     recent_task_claim_file_calls: number;
     recent_window_hours: number;
-    omx_runtime_bridge_status: OmxRuntimeBridgePayload['status'];
+    omx_runtime_bridge: OmxRuntimeSummaryHealthStats;
     live_file_contentions: number;
     dirty_contended_files: number;
   },
@@ -1665,7 +1711,7 @@ function claimBeforeEditPayload(
   const reason =
     measurableEdits > 0 &&
     measurableEdits < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE &&
-    (recent.omx_runtime_bridge_status !== 'available' || unmeasurableEdits > 0)
+    (recent.omx_runtime_bridge.status !== 'available' || unmeasurableEdits > 0)
       ? INSUFFICIENT_RUNTIME_METADATA_REASON
       : null;
   const status =
@@ -1682,7 +1728,7 @@ function claimBeforeEditPayload(
     ? 'Codex rollout edits are present, but no Codex PreToolUse signal is installed or firing. Run colony install --ide codex and restart Codex; without Codex hooks or a rollout bridge, rollout edits stay unsupported for claim-before-edit auto-claim.'
     : null;
   const rootCause = lifecycleBridgeRootCause({
-    runtime_bridge_status: recent.omx_runtime_bridge_status,
+    runtime_bridge_status: recent.omx_runtime_bridge.status,
     task_claim_file_calls: taskClaimFileCalls,
     edit_tool_calls: stats.edit_tool_calls,
     hook_capable_edits: stats.edits_with_file_path,
@@ -1693,6 +1739,11 @@ function claimBeforeEditPayload(
     recent_pre_tool_use_missing: recentClaimMissReasons.pre_tool_use_missing,
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_miss_reasons: claimMissReasons,
+    runtime_summary_recent_edit_paths: recent.omx_runtime_bridge.recent_edit_paths.length,
+    runtime_summary_hook_capable_edits:
+      recent.omx_runtime_bridge.claim_before_edit.hook_capable_edits,
+    runtime_summary_pre_tool_use_signals:
+      recent.omx_runtime_bridge.claim_before_edit.pre_tool_use_signals,
     live_file_contentions: recent.live_file_contentions,
     dirty_contended_files: recent.dirty_contended_files,
   });
@@ -1711,9 +1762,10 @@ function claimBeforeEditPayload(
   return {
     ...stats,
     status,
+    hook_capable_edits: stats.edits_with_file_path,
     measurable_edits: measurableEdits,
     unmeasurable_edits: unmeasurableEdits,
-    runtime_bridge_status: recent.omx_runtime_bridge_status,
+    runtime_bridge_status: recent.omx_runtime_bridge.status,
     reason,
     task_claim_file_calls: taskClaimFileCalls,
     edits_with_claim: stats.edits_claimed_before,
@@ -1770,6 +1822,23 @@ function lifecycleBridgeRootCause(input: {
   const freshPreToolUseMissing =
     input.recent_hook_capable_edits > 0 && input.recent_pre_tool_use_missing > 0;
   const noFreshBadEdits = !freshPreToolUseMissing;
+
+  if (
+    input.runtime_bridge_status === 'available' &&
+    input.runtime_summary_recent_edit_paths > 0 &&
+    input.hook_capable_edits === 0 &&
+    input.pre_tool_use_signals === 0
+  ) {
+    return {
+      kind: 'lifecycle_summary_not_joined',
+      summary: LIFECYCLE_SUMMARY_NOT_JOINED_ROOT_CAUSE,
+      evidence,
+      evidence_counters: counters,
+      action:
+        'Join runtime summary lifecycle PreToolUse/PostToolUse event metadata into claim-before-edit health before recommending lifecycle bridge reinstall.',
+      command: LIFECYCLE_HEALTH_VERIFY_COMMAND,
+    };
+  }
 
   if (
     input.hook_capable_edits >= LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS &&
@@ -1895,6 +1964,9 @@ function rootCauseEvidenceCounters(input: {
   recent_pre_tool_use_missing: number;
   edits_without_claim_before: number;
   claim_miss_reasons: ClaimMissReasons;
+  runtime_summary_recent_edit_paths: number;
+  runtime_summary_hook_capable_edits: number;
+  runtime_summary_pre_tool_use_signals: number;
   live_file_contentions: number;
   dirty_contended_files: number;
 }): RootCauseEvidenceCounters {

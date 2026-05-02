@@ -2692,6 +2692,147 @@ describe('colony health payload', () => {
     }
   });
 
+  it('joins fresh OMX runtime lifecycle events into claim-before-edit health', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-joined-'));
+    const stateDir = path.join(repoRoot, '.omx', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, 'colony-runtime-summary.json'),
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@joined',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: new Date(NOW).toISOString(),
+        active_sessions: ['codex@joined'],
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+        lifecycle_events: [
+          {
+            event_id: 'evt_joined_pre',
+            event_type: 'pre_tool_use',
+            timestamp: new Date(NOW - 200).toISOString(),
+            extracted_paths: ['apps/cli/src/commands/health.ts'],
+          },
+          {
+            event_id: 'evt_joined_post',
+            parent_event_id: 'evt_joined_pre',
+            event_type: 'post_tool_use',
+            timestamp: new Date(NOW - 100).toISOString(),
+            extracted_paths: ['apps/cli/src/commands/health.ts'],
+          },
+        ],
+      }),
+    );
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+            pre_tool_use_signals: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: null,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'available',
+        latest_summary_age_ms: 0,
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+        claim_before_edit: {
+          hook_capable_edits: 1,
+          pre_tool_use_signals: 1,
+          measurable_edits: 1,
+          edits_claimed_before: 1,
+        },
+      });
+      expect(payload.task_claim_file_before_edits).toMatchObject({
+        status: 'available',
+        hook_capable_edits: 1,
+        pre_tool_use_signals: 1,
+        measurable_edits: 1,
+        edits_with_claim: 1,
+        edits_missing_claim: 0,
+        claim_before_edit_ratio: 1,
+        root_cause: null,
+      });
+      const nextFixText = payload.action_hints.map((hint) => hint.current).join('\n');
+      expect(nextFixText).not.toContain('Lifecycle bridge missing');
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('diagnoses fresh runtime edit paths that are not joined into claim-before-edit stats', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-not-joined-'));
+    const stateDir = path.join(repoRoot, '.omx', 'state');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, 'colony-runtime-summary.json'),
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@not-joined',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: new Date(NOW).toISOString(),
+        active_sessions: ['codex@not-joined'],
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+      }),
+    );
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+            pre_tool_use_signals: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: null,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'available',
+        latest_summary_age_ms: 0,
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+        claim_before_edit: {
+          hook_capable_edits: 0,
+          pre_tool_use_signals: 0,
+        },
+      });
+      expect(payload.task_claim_file_before_edits).toMatchObject({
+        hook_capable_edits: 0,
+        pre_tool_use_signals: 0,
+        measurable_edits: 0,
+        root_cause: {
+          kind: 'lifecycle_summary_not_joined',
+          summary:
+            'Runtime bridge is fresh and sees edit paths, but claim-before-edit telemetry is not joined into health stats.',
+        },
+      });
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('shows OMX runtime bridge stale when the latest v1 summary is old', () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-stale-'));
     const stateDir = path.join(repoRoot, '.omx', 'state');

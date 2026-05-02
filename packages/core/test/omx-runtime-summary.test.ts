@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MemoryStore, ingestOmxRuntimeSummary, ingestOmxRuntimeSummaryFile } from '../src/index.js';
+import {
+  MemoryStore,
+  discoverOmxRuntimeSummaryStats,
+  ingestOmxRuntimeSummary,
+  ingestOmxRuntimeSummaryFile,
+} from '../src/index.js';
 import { TaskThread } from '../src/task-thread.js';
 
 let dir: string | undefined;
@@ -103,5 +108,55 @@ describe('OMX runtime summaries', () => {
     const row = store.storage.getObservation(result.observations[0] ?? 0);
     expect(row?.content.length).toBeLessThan(700);
     expect(row?.content).not.toContain('x'.repeat(500));
+  });
+
+  it('counts lifecycle event ordering as runtime claim-before-edit telemetry', () => {
+    dir = mkdtempSync(join(tmpdir(), 'colony-omx-runtime-summary-events-'));
+    const repoRoot = join(dir, 'repo');
+    const path = join(dir, 'colony-runtime-summary.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@events',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: '2026-04-29T12:00:01.000Z',
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+        lifecycle_events: [
+          {
+            event_id: 'evt_pre',
+            event_type: 'pre_tool_use',
+            timestamp: '2026-04-29T12:00:00.000Z',
+            extracted_paths: ['apps/cli/src/commands/health.ts'],
+          },
+          {
+            event_id: 'evt_post',
+            parent_event_id: 'evt_pre',
+            event_type: 'post_tool_use',
+            timestamp: '2026-04-29T12:00:00.100Z',
+            extracted_paths: ['apps/cli/src/commands/health.ts'],
+          },
+        ],
+      }),
+    );
+
+    const stats = discoverOmxRuntimeSummaryStats({
+      paths: [path],
+      since: 0,
+      now: Date.parse('2026-04-29T12:00:02.000Z'),
+      staleMs: 60_000,
+    });
+
+    expect(stats).toMatchObject({
+      status: 'available',
+      recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+      claim_before_edit: {
+        hook_capable_edits: 1,
+        pre_tool_use_signals: 1,
+        measurable_edits: 1,
+        edits_claimed_before: 1,
+      },
+    });
   });
 });
