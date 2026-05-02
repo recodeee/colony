@@ -211,6 +211,17 @@ Healthy runs trend toward:
 | `working_state_migration` | Use `task_note_working` instead of ad hoc notepads. |
 | `signal_evaporation` | Run a dry sweep, then explicit safe stale-claim cleanup. |
 
+`execution_safety` includes a source-level `root_cause` in `--json` when edit
+telemetry cannot be trusted:
+
+| Root cause | Meaning | First command |
+| --- | --- | --- |
+| `lifecycle_bridge_unavailable` | runtime/lifecycle bridge is unavailable | `colony install --ide <ide>` then `pnpm smoke:codex-omx-pretool` |
+| `lifecycle_bridge_silent` | bridge is available, but PreToolUse edit-path telemetry is empty or near-zero | `colony install --ide <ide>` then `colony health --hours 1 --json` |
+| `lifecycle_paths_missing` | PreToolUse exists, but edit events lack `file_path` | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
+| `lifecycle_claim_mismatch` | paths exist, but claim metadata does not match edit scope | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
+| `no_hook_capable_edits` | the selected window has no file edit events to diagnose | `colony health --hours 1 --json` |
+
 Safe stale-claim cleanup is opt-in because releasing a claim changes who may edit
 a file:
 

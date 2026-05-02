@@ -127,7 +127,7 @@ describe('colony health next fixes', () => {
     expect(snippets).not.toContain('future-work candidates');
   });
 
-  it('points dominant pre_tool_use_missing at runtime bridge wiring when manual claims are high', () => {
+  it('points dominant pre_tool_use_missing at a silent lifecycle bridge when manual claims are high', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: [
@@ -163,17 +163,24 @@ describe('colony health next fixes', () => {
     );
 
     const evidence =
-      'task_claim_file_calls=480, hook_capable_edits=128, pre_tool_use_signals=1, recent_hook_capable_edits=128, recent_pre_tool_use_missing=128';
+      'runtime_bridge_status=available, task_claim_file_calls=480, edit_tool_calls=128, hook_capable_edits=128, pre_tool_use_signals=1, recent_task_claim_file_calls=480, recent_hook_capable_edits=128, recent_pre_tool_use_signals=1, recent_pre_tool_use_missing=128, edits_without_claim_before=128, dominant_claim_miss_reason=pre_tool_use_missing';
 
     expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
-      kind: 'lifecycle_bridge_missing',
+      kind: 'lifecycle_bridge_silent',
       summary:
-        'Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.',
+        'Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero.',
       evidence,
       action:
         'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
       command:
-        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+        'colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json',
+      evidence_counters: {
+        runtime_bridge_status: 'available',
+        task_claim_file_calls: 480,
+        edit_tool_calls: 128,
+        hook_capable_edits: 128,
+        pre_tool_use_signals: 1,
+      },
     });
     expect(payload.readiness_summary.execution_safety.root_cause).toEqual(
       payload.task_claim_file_before_edits.root_cause,
@@ -181,13 +188,13 @@ describe('colony health next fixes', () => {
 
     const claimHint = payload.action_hints.find((hint) => hint.metric === 'claim-before-edit');
     expect(claimHint).toMatchObject({
-      current: `Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals. (${evidence})`,
+      current: `Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero. (${evidence})`,
       target: 'pre_tool_use before file mutation',
       action:
         'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
       priority: 5,
       command:
-        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+        'colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json',
       prompt: expect.stringContaining('Goal: wire the runtime lifecycle bridge'),
     });
     expect(claimHint?.tool_call).toBeUndefined();
@@ -195,43 +202,49 @@ describe('colony health next fixes', () => {
     const text = formatColonyHealthOutput(payload);
     const readiness = outputSection(text, 'Readiness summary');
     expect(readiness).toContain(
-      'root cause: Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals.',
+      'root cause: Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero.',
     );
     expect(readiness).toContain(`evidence: ${evidence}`);
     expect(readiness).toContain(
       'action: Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
     );
     expect(readiness).toContain(
-      'cmd:  colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+      'cmd:  colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json',
     );
 
     const nextFixes = outputSection(text, 'Next fixes');
     expect(nextFixes).toContain(
-      `claim-before-edit: Lifecycle bridge missing: many task_claim_file calls, many hook-capable edits, near-zero pre_tool_use_signals. (${evidence}) (target pre_tool_use before file mutation) - Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.`,
+      `claim-before-edit: Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero. (${evidence}) (target pre_tool_use before file mutation) - Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.`,
     );
     expect(nextFixes).toContain(
-      'cmd:  colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+      'cmd:  colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json',
     );
     expect(nextFixes).not.toContain('mcp__colony__task_claim_file');
     expect(nextFixes).not.toContain('Call task_claim_file');
 
     const json = JSON.parse(formatColonyHealthOutput(payload, { json: true }));
     expect(json.readiness_summary.execution_safety.root_cause).toMatchObject({
-      kind: 'lifecycle_bridge_missing',
+      kind: 'lifecycle_bridge_silent',
       command:
-        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+        'colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json',
     });
     expect(json.task_claim_file_before_edits.root_cause.evidence).toBe(evidence);
+    expect(json.task_claim_file_before_edits.root_cause.evidence_counters).toMatchObject({
+      runtime_bridge_status: 'available',
+      task_claim_file_calls: 480,
+      hook_capable_edits: 128,
+      pre_tool_use_signals: 1,
+    });
   });
 
-  it('reports lifecycle bridge missing when manual claims are high but no hook-capable edits were recorded', () => {
+  it('reports lifecycle bridge silent when manual claims are high but no hook-capable edits were recorded', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: [
           call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
           call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
           call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
-          ...calls(1043, 100, 'session-a', 'mcp__colony__task_claim_file'),
+          ...calls(492, 100, 'session-a', 'mcp__colony__task_claim_file'),
         ],
         claimBeforeEdit: {
           edit_tool_calls: 0,
@@ -248,31 +261,212 @@ describe('colony health next fixes', () => {
       },
     );
 
-    const evidence = 'task_claim_file_calls=1043, hook_capable_edits=0, pre_tool_use_signals=0';
+    const evidence =
+      'runtime_bridge_status=available, task_claim_file_calls=492, edit_tool_calls=0, hook_capable_edits=0, pre_tool_use_signals=0, recent_task_claim_file_calls=492, recent_hook_capable_edits=0, recent_pre_tool_use_signals=0, recent_pre_tool_use_missing=0, edits_without_claim_before=0, dominant_claim_miss_reason=none';
     expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
-      kind: 'lifecycle_bridge_missing',
+      kind: 'lifecycle_bridge_silent',
       summary:
-        'Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry.',
+        'Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero.',
       evidence,
       action:
-        'Install/wire the lifecycle bridge so OMX/Codex/Claude emits pre_tool_use before file mutation.',
+        'Verify lifecycle hook installation and restart the editor session so PreToolUse emits edit-path telemetry.',
       command:
-        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+        'colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json',
+      evidence_counters: {
+        runtime_bridge_status: 'available',
+        task_claim_file_calls: 492,
+        hook_capable_edits: 0,
+        pre_tool_use_signals: 0,
+      },
     });
 
     const hint = payload.action_hints.find((entry) => entry.metric === 'claim-before-edit');
     expect(hint).toMatchObject({
       current:
-        'Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry. (task_claim_file_calls=1043, hook_capable_edits=0, pre_tool_use_signals=0)',
+        'Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero. (runtime_bridge_status=available, task_claim_file_calls=492, edit_tool_calls=0, hook_capable_edits=0, pre_tool_use_signals=0, recent_task_claim_file_calls=492, recent_hook_capable_edits=0, recent_pre_tool_use_signals=0, recent_pre_tool_use_missing=0, edits_without_claim_before=0, dominant_claim_miss_reason=none)',
       target: 'pre_tool_use before file mutation',
       priority: 5,
     });
 
-    const readiness = outputSection(formatColonyHealthOutput(payload), 'Readiness summary');
+    const text = formatColonyHealthOutput(payload);
+    const focus = outputSection(text, 'Health focus');
+    expect(focus).toContain('top blocker: claim-before-edit: Lifecycle bridge silent');
+    expect(focus).toContain('cmd:  colony install --ide <ide>');
+    const readiness = outputSection(text, 'Readiness summary');
     expect(readiness).toContain(
-      'root cause: Lifecycle bridge missing: task_claim_file calls without any hook-capable edit telemetry.',
+      'root cause: Lifecycle bridge silent: runtime bridge is available, but edit-path telemetry is empty or near-zero.',
     );
     expect(readiness).toContain(`evidence: ${evidence}`);
+  });
+
+  it('reports lifecycle bridge unavailable separately from silent bridge telemetry', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          ...calls(12, 100, 'session-a', 'mcp__colony__task_claim_file'),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 0,
+        },
+        omxRuntimeStats: {
+          status: 'unavailable',
+          summaries_ingested: 0,
+          latest_summary_ts: null,
+          warning_count: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
+      kind: 'lifecycle_bridge_unavailable',
+      summary:
+        'Lifecycle bridge unavailable: runtime bridge is not available, so health cannot trust edit telemetry.',
+      evidence_counters: {
+        runtime_bridge_status: 'unavailable',
+        task_claim_file_calls: 12,
+        hook_capable_edits: 0,
+        pre_tool_use_signals: 0,
+      },
+    });
+    const nextFixes = outputSection(formatColonyHealthOutput(payload), 'Next fixes');
+    expect(nextFixes).toContain('1. OMX runtime bridge');
+    expect(nextFixes).not.toContain('1. claim-before-edit');
+  });
+
+  it('reports lifecycle paths missing when PreToolUse exists without file_path metadata', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          ...calls(12, 100, 'session-a', 'mcp__colony__task_claim_file'),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 4,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 4,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
+      kind: 'lifecycle_paths_missing',
+      summary:
+        'Lifecycle paths missing: PreToolUse telemetry exists, but edit events do not include file_path metadata.',
+      evidence_counters: {
+        runtime_bridge_status: 'available',
+        edit_tool_calls: 4,
+        hook_capable_edits: 0,
+        pre_tool_use_signals: 4,
+      },
+    });
+    expect(formatColonyHealthOutput(payload)).toContain(
+      'root cause: Lifecycle paths missing: PreToolUse telemetry exists, but edit events do not include file_path metadata.',
+    );
+  });
+
+  it('reports lifecycle claim mismatch when paths exist but claims do not match edit scope', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          ...calls(12, 100, 'session-a', 'mcp__colony__task_claim_file'),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 12,
+          edits_with_file_path: 12,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 12,
+          claim_miss_reasons: {
+            no_claim_for_file: 0,
+            branch_mismatch: 12,
+            pre_tool_use_missing: 0,
+          },
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
+      kind: 'lifecycle_claim_mismatch',
+      summary:
+        'Lifecycle claim mismatch: file paths are present, but lifecycle claims do not match edit scope.',
+      evidence_counters: {
+        runtime_bridge_status: 'available',
+        hook_capable_edits: 12,
+        pre_tool_use_signals: 12,
+        edits_without_claim_before: 12,
+        dominant_claim_miss_reason: 'branch_mismatch',
+      },
+    });
+    const json = JSON.parse(formatColonyHealthOutput(payload, { json: true }));
+    expect(json.task_claim_file_before_edits.root_cause.kind).toBe(
+      'lifecycle_claim_mismatch',
+    );
+  });
+
+  it('reports no hook-capable edits when recent claims exist but no edit event exists yet', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'session-a', 'mcp__colony__hivemind_context', NOW - 90_000),
+          call(2, 'session-a', 'mcp__colony__attention_inbox', NOW - 89_000),
+          call(3, 'session-a', 'mcp__colony__task_ready_for_agent', NOW - 88_000),
+          call(4, 'session-a', 'mcp__colony__task_claim_file', NOW - 87_000),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+          pre_tool_use_signals: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_claim_file_before_edits.root_cause).toMatchObject({
+      kind: 'no_hook_capable_edits',
+      summary: 'No hook-capable edits: health saw no file edit events in the selected window.',
+      command: 'colony health --hours 1 --json',
+      evidence_counters: {
+        runtime_bridge_status: 'available',
+        task_claim_file_calls: 1,
+        hook_capable_edits: 0,
+        pre_tool_use_signals: 0,
+      },
+    });
   });
 
   it('does not ask for bridge wiring when pre_tool_use covers write edits', () => {

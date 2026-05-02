@@ -471,7 +471,7 @@ describe('colony health payload', () => {
     );
   });
 
-  it('keeps lifecycle bridge missing when bad edits are fresh', () => {
+  it('keeps lifecycle bridge unavailable when bad edits are fresh and runtime bridge is unavailable', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
@@ -490,10 +490,10 @@ describe('colony health payload', () => {
 
     expect(payload.task_claim_file_before_edits.old_telemetry_pollution).toBe(false);
     expect(payload.readiness_summary.execution_safety.root_cause).toMatchObject({
-      kind: 'lifecycle_bridge_missing',
-      summary: expect.stringContaining('Lifecycle bridge missing'),
+      kind: 'lifecycle_bridge_unavailable',
+      summary: expect.stringContaining('Lifecycle bridge unavailable'),
     });
-    expect(formatColonyHealthOutput(payload)).toContain('root cause: Lifecycle bridge missing');
+    expect(formatColonyHealthOutput(payload)).toContain('root cause: Lifecycle bridge unavailable');
   });
 
   it('marks the recent claim-before-edit rate n/a when there are no recent edits', () => {
