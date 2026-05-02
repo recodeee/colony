@@ -21,4 +21,9 @@ export function getInstaller(name: string): Installer {
   return found;
 }
 
-export type { Installer, InstallContext } from './types.js';
+export type {
+  Installer,
+  InstallContext,
+  InstallValidationIssue,
+  InstallValidationResult,
+} from './types.js';

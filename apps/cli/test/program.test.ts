@@ -130,7 +130,9 @@ describe('Colony CLI program', () => {
     const install = program.commands.find((c) => c.name() === 'install');
     expect(install).toBeDefined();
     const ide = install?.options.find((o) => o.long === '--ide');
+    const verify = install?.options.find((o) => o.long === '--verify');
     expect(ide?.defaultValue).toBe('claude-code');
+    expect(verify).toBeDefined();
   });
 
   it('exposes a hook subcommand with a `run` action', () => {

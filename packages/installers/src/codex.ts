@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readJson, shellQuote, writeJson } from './fs-utils.js';
-import type { InstallContext, Installer } from './types.js';
+import type {
+  InstallContext,
+  InstallValidationIssue,
+  InstallValidationResult,
+  Installer,
+} from './types.js';
 
 interface CodexConfig {
   mcpServers?: Record<string, { command: string; args?: string[] }>;
@@ -26,6 +31,8 @@ const HOOK_NAMES: Array<[string, string]> = [
   ['Stop', 'stop'],
 ];
 
+const REQUIRED_MCP_SERVER = 'colony';
+
 // Codex hooks support the same matcher grammar as Claude Code for tool-use
 // events. Keep this aligned with the Claude installer so claim-before-edit
 // telemetry covers the same write-family tools.
@@ -46,9 +53,13 @@ function matcherForHook(hookId: string): string | undefined {
   return undefined;
 }
 
+function commandForHook(ctx: InstallContext, hookId: string): string {
+  return `${shellQuote(ctx.nodeBin)} ${shellQuote(ctx.cliPath)} hook run ${hookId} --ide codex`;
+}
+
 function isColonyHookCommand(command: string, hookId: string): boolean {
   const normalized = command.replace(/["']/g, ' ').replace(/\s+/g, ' ').trim();
-  return /\bcolony(?:\.js)?\b/.test(normalized) && normalized.includes(` hook run ${hookId}`);
+  return normalized.includes(` hook run ${hookId}`) && normalized.includes('--ide codex');
 }
 
 function installColonyHook(
@@ -102,14 +113,17 @@ export const codex: Installer = {
     const hooksPath = hooksFile();
     const hooksCurrent = readJson<CodexHooksConfig>(hooksPath, {});
     const hooks: CodexHooksConfig['hooks'] = { ...(hooksCurrent.hooks ?? {}) };
-    const nodeBin = shellQuote(ctx.nodeBin);
-    const cliPath = shellQuote(ctx.cliPath);
     for (const [codexName, hookId] of HOOK_NAMES) {
-      const command = `${nodeBin} ${cliPath} hook run ${hookId} --ide codex`;
+      const command = commandForHook(ctx, hookId);
       hooks[codexName] = installColonyHook(hooks[codexName], command, hookId);
     }
     writeJson(hooksPath, { ...hooksCurrent, hooks });
-    return [`wrote ${path}`, `wrote ${hooksPath}`];
+    const validation = validateCodexInstall(ctx);
+    if (!validation.ok) throw new Error(formatValidationFailure(validation));
+    return [`wrote ${path}`, `wrote ${hooksPath}`, ...validation.messages];
+  },
+  async verify(ctx: InstallContext): Promise<InstallValidationResult> {
+    return validateCodexInstall(ctx);
   },
   async uninstall(_ctx): Promise<string[]> {
     const path = configFile();
@@ -133,3 +147,110 @@ export const codex: Installer = {
     return [`updated ${path}`, `updated ${hooksPath}`];
   },
 };
+
+export function validateCodexInstall(ctx: InstallContext): InstallValidationResult {
+  const issues: InstallValidationIssue[] = [];
+  const path = configFile();
+  const config = readJson<CodexConfig>(path, {});
+  const colonyMcp = config.mcpServers?.[REQUIRED_MCP_SERVER];
+  if (colonyMcp?.command !== ctx.nodeBin || !sameArgs(colonyMcp.args, [ctx.cliPath, 'mcp'])) {
+    issues.push(
+      validationIssue({
+        file: path,
+        missingMcpServers: [REQUIRED_MCP_SERVER],
+      }),
+    );
+  }
+
+  const hooksPath = hooksFile();
+  const hooksCurrent = readJson<CodexHooksConfig>(hooksPath, {});
+  const missingHooks: string[] = [];
+  const staleHooks: string[] = [];
+  for (const [codexName, hookId] of HOOK_NAMES) {
+    const status = codexHookStatus(hooksCurrent.hooks?.[codexName], ctx, hookId);
+    if (status === 'missing') missingHooks.push(codexName);
+    else if (status === 'stale') staleHooks.push(codexName);
+  }
+  if (missingHooks.length > 0 || staleHooks.length > 0) {
+    issues.push(validationIssue({ file: hooksPath, missingHooks, staleHooks }));
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    messages:
+      issues.length === 0
+        ? [
+            `verified ${path}`,
+            `verified ${hooksPath}: ${HOOK_NAMES.map(([name]) => name).join(', ')}`,
+          ]
+        : [],
+  };
+}
+
+type CodexHookStatus = 'ok' | 'missing' | 'stale';
+
+function codexHookStatus(
+  entries: NonNullable<CodexHooksConfig['hooks']>[string] | undefined,
+  ctx: InstallContext,
+  hookId: string,
+): CodexHookStatus {
+  if (!entries || entries.length === 0) return 'missing';
+  const expectedCommand = commandForHook(ctx, hookId);
+  const expectedMatcher = matcherForHook(hookId);
+  let sawColonyHook = false;
+
+  for (const entry of entries) {
+    for (const hook of entry.hooks) {
+      const commandMatches = hook.command === expectedCommand;
+      if (!isColonyHookCommand(hook.command, hookId) && !commandMatches) continue;
+      sawColonyHook = true;
+      if (commandMatches && hook.type === 'command' && entry.matcher === expectedMatcher) {
+        return 'ok';
+      }
+    }
+  }
+
+  return sawColonyHook ? 'stale' : 'missing';
+}
+
+function sameArgs(actual: string[] | undefined, expected: string[]): boolean {
+  if (!actual || actual.length !== expected.length) return false;
+  return expected.every((value, index) => actual[index] === value);
+}
+
+function validationIssue(args: {
+  file: string;
+  missingHooks?: string[];
+  staleHooks?: string[];
+  missingMcpServers?: string[];
+}): InstallValidationIssue {
+  const parts: string[] = [];
+  if (args.missingHooks && args.missingHooks.length > 0) {
+    parts.push(`missing hooks: ${args.missingHooks.join(', ')}`);
+  }
+  if (args.staleHooks && args.staleHooks.length > 0) {
+    parts.push(`stale hooks: ${args.staleHooks.join(', ')}`);
+  }
+  if (args.missingMcpServers && args.missingMcpServers.length > 0) {
+    parts.push(`missing MCP servers: ${args.missingMcpServers.join(', ')}`);
+  }
+  return {
+    file: args.file,
+    message: parts.join('; '),
+    ...(args.missingHooks && args.missingHooks.length > 0
+      ? { missingHooks: args.missingHooks }
+      : {}),
+    ...(args.staleHooks && args.staleHooks.length > 0 ? { staleHooks: args.staleHooks } : {}),
+    ...(args.missingMcpServers && args.missingMcpServers.length > 0
+      ? { missingMcpServers: args.missingMcpServers }
+      : {}),
+  };
+}
+
+export function formatValidationFailure(result: InstallValidationResult): string {
+  return [
+    'Codex Colony install validation failed.',
+    ...result.issues.map((issue) => `${issue.file}: ${issue.message}`),
+  ].join('\n');
+}

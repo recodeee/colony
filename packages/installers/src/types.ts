@@ -13,10 +13,25 @@ export interface InstallContext {
   dataDir: string;
 }
 
+export interface InstallValidationIssue {
+  file: string;
+  message: string;
+  missingHooks?: string[];
+  staleHooks?: string[];
+  missingMcpServers?: string[];
+}
+
+export interface InstallValidationResult {
+  ok: boolean;
+  messages: string[];
+  issues: InstallValidationIssue[];
+}
+
 export interface Installer {
   id: string;
   label: string;
   detect(ctx: InstallContext): Promise<boolean>;
   install(ctx: InstallContext): Promise<string[]>;
+  verify?(ctx: InstallContext): Promise<InstallValidationResult>;
   uninstall(ctx: InstallContext): Promise<string[]>;
 }

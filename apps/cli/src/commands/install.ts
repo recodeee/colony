@@ -7,7 +7,12 @@ import {
   saveSettings,
   settingsPath,
 } from '@colony/config';
-import { type IdeName, getInstaller, installers } from '@colony/installers';
+import {
+  type IdeName,
+  type InstallValidationIssue,
+  getInstaller,
+  installers,
+} from '@colony/installers';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';
@@ -17,7 +22,8 @@ export function registerInstallCommand(program: Command): void {
     .command('install')
     .description('Register hooks + MCP server for an IDE')
     .option('--ide <name>', 'IDE to target', 'claude-code')
-    .action(async (opts: { ide: string }) => {
+    .option('--verify', 'validate the IDE integration without writing config')
+    .action(async (opts: { ide: string; verify?: boolean }) => {
       const name = opts.ide as IdeName;
       if (!installers[name]) {
         throw new Error(
@@ -25,7 +31,7 @@ export function registerInstallCommand(program: Command): void {
         );
       }
       const path = settingsPath();
-      if (!existsSync(path)) {
+      if (!opts.verify && !existsSync(path)) {
         saveSettings(defaultSettings);
         process.stdout.write(`${kleur.dim('wrote')} ${path}\n`);
       }
@@ -37,6 +43,16 @@ export function registerInstallCommand(program: Command): void {
         dataDir: resolveDataDir(settings.dataDir),
       };
       const installer = getInstaller(name);
+      if (opts.verify) {
+        if (!installer.verify) {
+          throw new Error(`Installer ${name} does not support --verify`);
+        }
+        const result = await installer.verify(ctx);
+        for (const m of result.messages) process.stdout.write(`${kleur.green('✓')} ${m}\n`);
+        for (const issue of result.issues) writeValidationIssue(issue);
+        if (!result.ok) process.exitCode = 1;
+        return;
+      }
       const msgs = await installer.install(ctx);
       for (const m of msgs) process.stdout.write(`${kleur.green('✓')} ${m}\n`);
       settings.ides[name] = true;
@@ -75,4 +91,17 @@ export function registerInstallCommand(program: Command): void {
         );
       }
     });
+}
+
+function writeValidationIssue(issue: InstallValidationIssue): void {
+  process.stderr.write(`${kleur.red('✗')} ${issue.file}: ${issue.message}\n`);
+  if (issue.missingHooks?.length) {
+    process.stderr.write(`  missing hooks: ${issue.missingHooks.join(', ')}\n`);
+  }
+  if (issue.staleHooks?.length) {
+    process.stderr.write(`  stale hooks: ${issue.staleHooks.join(', ')}\n`);
+  }
+  if (issue.missingMcpServers?.length) {
+    process.stderr.write(`  missing MCP servers: ${issue.missingMcpServers.join(', ')}\n`);
+  }
 }

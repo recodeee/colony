@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { quotaSafeOperatingContract } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { claudeCode } from '../src/claude-code.js';
-import { codex } from '../src/codex.js';
+import { codex, validateCodexInstall } from '../src/codex.js';
 import { cursor } from '../src/cursor.js';
 import { deepMerge } from '../src/fs-utils.js';
 import { getInstaller, installers } from '../src/registry.js';
@@ -324,9 +324,59 @@ describe('codex installer', () => {
     const second = JSON.parse(readFileSync(hooksPath, 'utf8')) as typeof first;
     expect(Object.keys(second.hooks).sort()).toEqual(Object.keys(first.hooks).sort());
     expect(second.hooks.PreToolUse).toHaveLength(1);
+    expect(second.hooks.PostToolUse).toHaveLength(1);
+    expect(second.hooks.SessionStart).toHaveLength(1);
+    expect(second.hooks.UserPromptSubmit).toHaveLength(1);
+    expect(second.hooks.Stop).toHaveLength(1);
+    expect(validateCodexInstall(ctx)).toMatchObject({
+      ok: true,
+      issues: [],
+      messages: expect.arrayContaining([expect.stringContaining(`verified ${hooksPath}`)]),
+    });
   });
 
-  it('preserves unrelated Codex hooks and removes only Colony hooks', async () => {
+  it('reports exact Codex hook file and missing/stale hooks during verification', async () => {
+    const configPath = join(home, '.codex', 'config.json');
+    const hooksPath = join(home, '.codex', 'hooks.json');
+    mkdirSync(dirname(hooksPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          colony: { command: ctx.nodeBin, args: [ctx.cliPath, 'mcp'] },
+        },
+      }),
+    );
+    writeFileSync(
+      hooksPath,
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Edit|Write',
+              hooks: [
+                { type: 'command', command: '/old/colony hook run pre-tool-use --ide codex' },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await codex.verify?.(ctx);
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          file: hooksPath,
+          missingHooks: ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop'],
+          staleHooks: ['PreToolUse'],
+        },
+      ],
+    });
+  });
+
+  it('preserves unrelated Codex hooks and removes stale Colony hooks', async () => {
     const hooksPath = join(home, '.codex', 'hooks.json');
     mkdirSync(dirname(hooksPath), { recursive: true });
     writeFileSync(
@@ -342,6 +392,18 @@ describe('codex installer', () => {
               matcher: 'Edit|Write',
               hooks: [
                 { type: 'command', command: '/old/colony hook run pre-tool-use --ide codex' },
+              ],
+            },
+          ],
+          PostToolUse: [
+            {
+              matcher: 'Edit|Write',
+              hooks: [
+                {
+                  type: 'command',
+                  command:
+                    '/old/bin/node /old/apps/cli/dist/index.js hook run post-tool-use --ide codex',
+                },
               ],
             },
           ],
@@ -364,6 +426,17 @@ describe('codex installer', () => {
           {
             type: 'command',
             command: `${ctx.nodeBin} ${ctx.cliPath} hook run pre-tool-use --ide codex`,
+          },
+        ],
+      },
+    ]);
+    expect(installed.hooks.PostToolUse).toEqual([
+      {
+        matcher: WRITE_TOOL_MATCHER,
+        hooks: [
+          {
+            type: 'command',
+            command: `${ctx.nodeBin} ${ctx.cliPath} hook run post-tool-use --ide codex`,
           },
         ],
       },
