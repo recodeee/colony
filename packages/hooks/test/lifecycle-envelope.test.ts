@@ -111,6 +111,105 @@ describe('OMX lifecycle envelope', () => {
     expect(store.storage.taskObservationsByKind(taskId, 'omx-lifecycle')).toHaveLength(1);
   });
 
+  it('records warning metadata when lifecycle edit path extraction fails', async () => {
+    const repo = fakeGitRepo('repo-path-warning', 'agent/codex/path-warning');
+    const bind = await runOmxLifecycleEnvelope(
+      envelope({
+        event_id: 'evt_warning_bind',
+        event_name: 'task_bind',
+        session_id: 'codex@path-warning',
+        cwd: repo,
+        repo_root: repo,
+        branch: 'agent/codex/path-warning',
+      }),
+      { store },
+    );
+    expect(bind.ok).toBe(true);
+
+    const pre = await runOmxLifecycleEnvelope(
+      envelope({
+        event_id: 'evt_warning_pre',
+        event_name: 'pre_tool_use',
+        session_id: 'codex@path-warning',
+        cwd: repo,
+        repo_root: repo,
+        branch: 'agent/codex/path-warning',
+        tool_name: 'Write',
+        tool_input: { content: 'export const missingPath = true;\n' },
+      }),
+      { store },
+    );
+    expect(pre).toMatchObject({
+      ok: true,
+      route: 'pre-tool-use',
+      extracted_paths: [],
+      warnings: [expect.stringContaining('No claimable file paths extracted from Write')],
+    });
+
+    const post = await runOmxLifecycleEnvelope(
+      envelope({
+        event_id: 'evt_warning_post',
+        event_name: 'post_tool_use',
+        parent_event_id: 'evt_warning_pre',
+        session_id: 'codex@path-warning',
+        cwd: repo,
+        repo_root: repo,
+        branch: 'agent/codex/path-warning',
+        tool_name: 'Write',
+        tool_input: { content: 'export const missingPath = true;\n' },
+        tool_response: { success: true },
+      }),
+      { store },
+    );
+    expect(post).toMatchObject({
+      ok: true,
+      route: 'post-tool-use',
+      extracted_paths: [],
+      warnings: [expect.stringContaining('No claimable file paths extracted from Write')],
+    });
+
+    const taskId = store.storage.findActiveTaskForSession('codex@path-warning');
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task not bound');
+
+    const signal = store.storage.taskObservationsByKind(taskId, 'claim-before-edit', 1)[0];
+    expect(parseMetadata(signal?.metadata)).toMatchObject({
+      outcome: 'path_extraction_failed',
+      file_path: null,
+      extracted_paths: [],
+      tool: 'Write',
+      code: 'PATH_EXTRACTION_FAILED',
+      path_extraction_failed: true,
+      path_extraction_warning: expect.stringContaining('No claimable file paths extracted'),
+    });
+
+    const postLifecycle = store
+      .storage
+      .taskObservationsByKind(taskId, 'omx-lifecycle')
+      .map((row) => parseMetadata(row.metadata))
+      .find((metadata) => metadata?.event_id === 'evt_warning_post');
+    expect(postLifecycle).toMatchObject({
+      path_extraction_failed: true,
+      path_extraction_warning: expect.stringContaining('No claimable file paths extracted'),
+    });
+
+    const toolUse = store
+      .storage
+      .timeline('codex@path-warning')
+      .find((row) => row.kind === 'tool_use');
+    expect(parseMetadata(toolUse?.metadata)).toMatchObject({
+      tool: 'Write',
+      path_extraction_failed: true,
+      path_extraction_warning: expect.stringContaining('No claimable file paths extracted'),
+    });
+
+    expect(store.storage.claimBeforeEditStats(0)).toMatchObject({
+      edit_tool_calls: 1,
+      edits_with_file_path: 0,
+      pre_tool_use_signals: 1,
+    });
+  });
+
   it('records a first-class quota-exhausted handoff from stop_intent', async () => {
     const repo = fakeGitRepo('repo-quota', 'agent/codex/quota-stop');
     mkdirSync(join(repo, 'src'), { recursive: true });
@@ -216,4 +315,9 @@ function fakeGitRepo(name: string, branch: string): string {
   mkdirSync(repo, { recursive: true });
   execFileSync('git', ['init', '--quiet', '-b', branch, repo], { stdio: 'ignore' });
   return repo;
+}
+
+function parseMetadata(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  return JSON.parse(value) as Record<string, unknown>;
 }

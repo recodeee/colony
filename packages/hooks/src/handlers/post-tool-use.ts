@@ -32,7 +32,15 @@ type TouchedPathContext = {
 
 type PathRef = { path: string; role?: string; kind?: string };
 
-export async function postToolUse(store: MemoryStore, input: HookInput): Promise<void> {
+export interface PostToolUseResult {
+  extracted_paths: string[];
+  warnings: string[];
+}
+
+export async function postToolUse(
+  store: MemoryStore,
+  input: HookInput,
+): Promise<PostToolUseResult> {
   const tool = input.tool_name ?? input.tool ?? 'unknown';
   const toolInput = input.tool_input;
   const toolOutput = input.tool_response ?? input.tool_output;
@@ -41,7 +49,7 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
       0,
       4000,
     );
-  if (!body.trim()) return;
+  if (!body.trim()) return { extracted_paths: [], warnings: [] };
 
   // Capture touched files in the observation metadata. Parsing content for
   // file_path later would require reversing compression — cheap to record
@@ -53,11 +61,17 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
     toolInput,
     touchedPathContextForToolUse(store, input),
   );
+  const warnings = pathExtractionWarningsForToolUse(tool, toolInput, touchedFiles);
   const metadata: Record<string, unknown> = { tool, ...lifecycleLinkMetadata(input.metadata) };
   if (touchedFiles.length > 0) {
     metadata.file_path = touchedFiles[0];
     metadata.file_paths = touchedFiles;
     metadata.extracted_paths = touchedFiles;
+  }
+  if (warnings.length > 0) {
+    metadata.path_extraction_failed = true;
+    metadata.path_extraction_warning = warnings[0];
+    metadata.path_extraction_warnings = warnings;
   }
 
   store.addObservation({
@@ -100,6 +114,8 @@ export async function postToolUse(store: MemoryStore, input: HookInput): Promise
   // thinking about them explicitly — the ordinary work of editing code
   // feeds the foraging algorithm for free.
   reinforceAdjacentProposals(store, input);
+
+  return { extracted_paths: touchedFiles, warnings };
 }
 
 function lifecycleLinkMetadata(
@@ -289,6 +305,26 @@ export function extractTouchedFiles(
     extractToolInputPathValues(toolInput as Record<string, unknown>),
     context,
   );
+}
+
+export function pathExtractionWarningsForToolUse(
+  toolName: string,
+  toolInput: unknown,
+  extractedPaths: string[],
+): string[] {
+  if (extractedPaths.length > 0) return [];
+  if (!shouldWarnWhenPathless(toolName, toolInput)) return [];
+  return [
+    `No claimable file paths extracted from ${toolName} tool_input; checked file_path, path, notebook_path, file_paths, extracted_paths, paths[].path, and apply_patch file headers.`,
+  ];
+}
+
+function shouldWarnWhenPathless(toolName: string, toolInput: unknown): boolean {
+  if (WRITE_TOOLS.has(toolName) || APPLY_PATCH_TOOLS.has(toolName)) return true;
+  if (toolName !== 'Bash' || typeof toolInput !== 'object' || toolInput === null) return false;
+  const command = (toolInput as Record<string, unknown>).command;
+  if (typeof command !== 'string') return false;
+  return command.includes('apply_patch') || command.includes('*** Begin Patch');
 }
 
 function extractBashTouchedFiles(toolInput: unknown, context: TouchedPathContext): string[] {

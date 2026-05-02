@@ -34,6 +34,7 @@ export function normalizeRepoFilePath(
       : { repo_root: repoRootOrContext, cwd, file_path: filePath ?? '' };
   const rawPath = context.file_path.trim();
   if (!rawPath || isPseudoClaimPath(rawPath)) return null;
+  if (looksLikeDirectoryPath(rawPath)) return null;
 
   const repoRoot = context.repo_root
     ? realpathWithMissingTail(context.repo_root)
@@ -46,11 +47,13 @@ export function normalizeRepoFilePath(
     : cwdRoot
       ? realpathWithMissingTail(path.resolve(relativePathBase(repoRoot, cwdRoot, rawPath), rawPath))
       : undefined;
+  if (absolutePath && isExistingDirectoryPath(absolutePath)) return null;
 
   const relativePath = absolutePath
     ? repoRelativePath({ absolutePath, repoRoot })
     : normalizeRelativePath(rawPath);
   if (relativePath !== null) return relativePath;
+  if (absolutePath && repoRoot) return null;
   if (absolutePath) return normalizeSlashes(path.normalize(absolutePath));
   return normalizeRelativePath(rawPath);
 }
@@ -122,6 +125,18 @@ function normalizeRelativePath(value: string): string {
 function isPathInside(child: string, parent: string): boolean {
   const relativePath = path.relative(parent, child);
   return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function looksLikeDirectoryPath(value: string): boolean {
+  return value.endsWith('/') || value.endsWith('\\');
+}
+
+function isExistingDirectoryPath(value: string): boolean {
+  try {
+    return existsSync(value) && statSync(value).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function realpathWithMissingTail(value: string): string {

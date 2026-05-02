@@ -17,7 +17,7 @@ import {
   autoClaimFileBeforeEdit,
 } from '../auto-claim.js';
 import type { HookInput } from '../types.js';
-import { extractTouchedFiles } from './post-tool-use.js';
+import { extractTouchedFiles, pathExtractionWarningsForToolUse } from './post-tool-use.js';
 
 const CLAIM_WARNING_DEBOUNCE_MS = 60_000;
 const CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID = 'colony-pre-tool-use-diagnostics';
@@ -53,12 +53,14 @@ export interface ClaimBeforeEditHookResult {
   permissionDecision: 'allow' | 'deny';
   permissionDecisionReason?: string;
   extracted_paths: string[];
+  warnings?: string[];
 }
 
 export interface ClaimBeforeEditResult {
   policy_mode: BridgePolicyMode;
   files: string[];
   extracted_paths: string[];
+  path_extraction_warnings: string[];
   edits_with_claim: string[];
   edits_missing_claim: string[];
   auto_claimed_before_edit: string[];
@@ -107,10 +109,24 @@ export function preToolUseResult(store: MemoryStore, input: HookInput): ClaimBef
       repoRoot: scope.repo_root,
     });
     const policyMode = bridgePolicyMode(store);
+    const pathExtractionWarnings = pathExtractionWarningsForToolUse(
+      toolName,
+      input.tool_input,
+      files,
+    );
+    if (pathExtractionWarnings.length > 0) {
+      recordPathExtractionFailure(store, input.session_id, {
+        tool: toolName,
+        policy_mode: policyMode,
+        warnings: pathExtractionWarnings,
+        scope,
+      });
+    }
     return bridgePolicyResult({
       policy_mode: policyMode,
       files,
       extracted_paths: files,
+      path_extraction_warnings: pathExtractionWarnings,
       edits_with_claim: [],
       edits_missing_claim: files,
       auto_claimed_before_edit: [],
@@ -139,10 +155,16 @@ export function claimBeforeEditFromToolUse(
     repoRoot: scope.repo_root,
     cwd: scope.cwd ?? scope.worktree_path,
   });
+  const pathExtractionWarnings = pathExtractionWarningsForToolUse(
+    toolName,
+    input.tool_input,
+    files,
+  );
   const result: ClaimBeforeEditResult = {
     policy_mode: policyMode,
     files,
     extracted_paths: files,
+    path_extraction_warnings: pathExtractionWarnings,
     edits_with_claim: [],
     edits_missing_claim: [],
     auto_claimed_before_edit: [],
@@ -150,7 +172,17 @@ export function claimBeforeEditFromToolUse(
     blocked_conflicts: [],
     warnings: [],
   };
-  if (files.length === 0) return result;
+  if (files.length === 0) {
+    if (pathExtractionWarnings.length > 0) {
+      recordPathExtractionFailure(store, input.session_id, {
+        tool: toolName,
+        policy_mode: policyMode,
+        warnings: pathExtractionWarnings,
+        scope,
+      });
+    }
+    return result;
+  }
 
   for (const file_path of files) {
     const protectedConflict = protectedLiveClaimConflict(store, input.session_id, scope, file_path);
@@ -308,6 +340,7 @@ export function claimBeforeEditFromToolUse(
 function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookResult {
   const context = claimBeforeEditWarning(result);
   const extracted_paths = result.extracted_paths;
+  const warnings = result.path_extraction_warnings;
   const blocked = result.blocked_conflicts.length > 0;
   if (blocked) {
     const reason =
@@ -320,10 +353,16 @@ function bridgePolicyResult(result: ClaimBeforeEditResult): ClaimBeforeEditHookR
       context,
       permissionDecision: 'deny',
       extracted_paths,
+      ...(warnings.length > 0 ? { warnings } : {}),
       ...(reason ? { permissionDecisionReason: reason } : {}),
     };
   }
-  return { context, permissionDecision: 'allow', extracted_paths };
+  return {
+    context,
+    permissionDecision: 'allow',
+    extracted_paths,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 function bridgePolicyMode(store: MemoryStore): BridgePolicyMode {
@@ -635,6 +674,75 @@ function recordClaimBeforeEditFailure(
   } catch {
     // Warning output is the fallback path when Colony cannot persist telemetry.
   }
+}
+
+function recordPathExtractionFailure(
+  store: MemoryStore,
+  session_id: string,
+  metadata: {
+    tool: string;
+    policy_mode: BridgePolicyMode;
+    warnings: string[];
+    scope: {
+      repo_root?: string;
+      branch?: string;
+      cwd?: string;
+      worktree_path?: string;
+      agent?: string;
+    };
+  },
+): void {
+  try {
+    const taskId = activeTaskIdForScope(store, session_id, metadata.scope);
+    store.addObservation({
+      session_id,
+      kind: 'claim-before-edit',
+      content: `path_extraction_failed: ${metadata.tool}`,
+      ...(taskId !== undefined ? { task_id: taskId } : {}),
+      metadata: {
+        kind: 'claim-before-edit',
+        source: 'pre-tool-use',
+        outcome: 'path_extraction_failed',
+        file_path: null,
+        extracted_paths: [],
+        tool: metadata.tool,
+        code: 'PATH_EXTRACTION_FAILED',
+        policy_mode: metadata.policy_mode,
+        path_extraction_failed: true,
+        path_extraction_warning: metadata.warnings[0] ?? null,
+        path_extraction_warnings: metadata.warnings,
+        warning: metadata.warnings[0] ?? null,
+        repo_root: metadata.scope.repo_root ?? null,
+        branch: metadata.scope.branch ?? null,
+        cwd: metadata.scope.cwd ?? null,
+        worktree_path: metadata.scope.worktree_path ?? null,
+        agent: metadata.scope.agent ?? null,
+      },
+    });
+  } catch {
+    // Context warnings still carry the failure when telemetry persistence fails.
+  }
+}
+
+function activeTaskIdForScope(
+  store: MemoryStore,
+  session_id: string,
+  scope: {
+    repo_root?: string;
+    branch?: string;
+    cwd?: string;
+    worktree_path?: string;
+    agent?: string;
+  },
+): number | undefined {
+  const active = store.storage.findActiveTaskForSession(session_id);
+  if (active !== undefined) return active;
+  if (scope.repo_root && scope.branch) {
+    const task = store.storage.findTaskByBranch(scope.repo_root, scope.branch);
+    if (task) return task.id;
+  }
+  const candidates = activeTaskCandidatesForSession(store, { session_id, ...scope });
+  return candidates.length === 1 ? candidates[0]?.task_id : undefined;
 }
 
 function compactCandidates(candidates: AutoClaimFailure['candidates']): Array<{

@@ -137,12 +137,163 @@ describe('Codex/OMX pre_tool_use smoke', () => {
       },
     });
   });
+
+  it('normalizes Write, MultiEdit, apply_patch, and Patch paths into lifecycle edit telemetry', async () => {
+    await emitLifecycle(10, {
+      event_id: 'evt_multi_session_start',
+      event_name: 'session_start',
+    });
+    await emitLifecycle(20, {
+      event_id: 'evt_multi_task_bind',
+      event_name: 'task_bind',
+    });
+
+    const taskId = store.storage.findActiveTaskForSession(SESSION_ID);
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task was not bound');
+
+    const multiTarget = 'src/multi-target.ts';
+    writeFileSync(join(repoRoot, multiTarget), 'export const beforeMulti = 1;\n', 'utf8');
+    const cases = [
+      {
+        tool: 'Write',
+        expected: 'src/write-target.ts',
+        input: {
+          path: join(repoRoot, 'src/write-target.ts'),
+          content: 'export const writeTarget = true;\n',
+        },
+        mutate: () =>
+          writeFileSync(
+            join(repoRoot, 'src/write-target.ts'),
+            'export const writeTarget = true;\n',
+            'utf8',
+          ),
+      },
+      {
+        tool: 'MultiEdit',
+        expected: multiTarget,
+        input: {
+          paths: [{ path: multiTarget, role: 'target', kind: 'file' }],
+          edits: [{ old_string: 'beforeMulti', new_string: 'afterMulti' }],
+        },
+        mutate: () =>
+          writeFileSync(join(repoRoot, multiTarget), 'export const afterMulti = 2;\n', 'utf8'),
+      },
+      {
+        tool: 'apply_patch',
+        expected: 'src/apply-patch-target.ts',
+        input: {
+          patch: [
+            '*** Begin Patch',
+            '*** Add File: src/apply-patch-target.ts',
+            '+export const applyPatchTarget = true;',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        mutate: () =>
+          writeFileSync(
+            join(repoRoot, 'src/apply-patch-target.ts'),
+            'export const applyPatchTarget = true;\n',
+            'utf8',
+          ),
+      },
+      {
+        tool: 'Patch',
+        expected: 'src/patch-target.ts',
+        input: [
+          '*** Begin Patch',
+          '*** Add File: src/patch-target.ts',
+          '+export const patchTarget = true;',
+          '*** End Patch',
+        ].join('\n'),
+        mutate: () =>
+          writeFileSync(
+            join(repoRoot, 'src/patch-target.ts'),
+            'export const patchTarget = true;\n',
+            'utf8',
+          ),
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const eventPrefix = `evt_multi_${index}`;
+      const pre = await emitLifecycleResult(100 + index * 100, {
+        event_id: `${eventPrefix}_pre`,
+        event_name: 'pre_tool_use',
+        tool_name: testCase.tool,
+        tool_input: testCase.input,
+      });
+      expect(pre.extracted_paths).toContain(testCase.expected);
+
+      testCase.mutate();
+
+      const post = await emitLifecycleResult(130 + index * 100, {
+        event_id: `${eventPrefix}_post`,
+        event_name: 'post_tool_use',
+        parent_event_id: `${eventPrefix}_pre`,
+        tool_name: testCase.tool,
+        tool_input: testCase.input,
+        tool_response: { success: true },
+      });
+      expect(post.extracted_paths).toContain(testCase.expected);
+    }
+
+    for (const testCase of cases) {
+      expect(store.storage.getClaim(taskId, testCase.expected)).toMatchObject({
+        session_id: SESSION_ID,
+        file_path: testCase.expected,
+      });
+    }
+
+    const editObservations = store
+      .storage
+      .timeline(SESSION_ID)
+      .filter((row) => row.kind === 'tool_use')
+      .map((row) => parseMetadata(row.metadata))
+      .filter((metadata): metadata is Record<string, unknown> => metadata !== null);
+    const expectedPaths = cases.map((testCase) => testCase.expected);
+    expect(editObservations.map((metadata) => metadata.file_path).sort()).toEqual(
+      expectedPaths.slice().sort(),
+    );
+
+    const preToolSignals = store
+      .storage
+      .taskObservationsByKind(taskId, 'claim-before-edit')
+      .map((row) => parseMetadata(row.metadata))
+      .filter((metadata): metadata is Record<string, unknown> => metadata !== null);
+    expect(preToolSignals).toHaveLength(cases.length);
+    expect(preToolSignals.map((metadata) => metadata.file_path).sort()).toEqual(
+      expectedPaths.slice().sort(),
+    );
+
+    const stats = store.storage.claimBeforeEditStats(BASE_TS + 50);
+    expect(stats).toMatchObject({
+      edit_tool_calls: cases.length,
+      edits_with_file_path: cases.length,
+      edits_claimed_before: cases.length,
+      pre_tool_use_signals: cases.length,
+      claim_miss_reasons: {
+        pre_tool_use_missing: 0,
+      },
+    });
+  });
 });
 
-async function emitLifecycle(tsOffset: number, overrides: Record<string, unknown>): Promise<void> {
+async function emitLifecycle(
+  tsOffset: number,
+  overrides: Record<string, unknown>,
+): Promise<void> {
+  await emitLifecycleResult(tsOffset, overrides);
+}
+
+async function emitLifecycleResult(
+  tsOffset: number,
+  overrides: Record<string, unknown>,
+): ReturnType<typeof runOmxLifecycleEnvelope> {
   vi.setSystemTime(BASE_TS + tsOffset);
   const result = await runOmxLifecycleEnvelope(envelope(overrides), { store });
   expect(result.ok).toBe(true);
+  return result;
 }
 
 function envelope(overrides: Record<string, unknown>): Record<string, unknown> {

@@ -60,5 +60,6 @@ export interface HookResult {
   permissionDecision?: 'allow' | 'deny';
   permissionDecisionReason?: string;
   extracted_paths?: string[];
+  warnings?: string[];
   error?: string;
 }

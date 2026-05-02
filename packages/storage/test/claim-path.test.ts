@@ -99,6 +99,29 @@ describe('normalizeRepoFilePath', () => {
     expect(normalizeRepoFilePath(repoRoot, repoRoot, '/dev/null')).toBeNull();
   });
 
+  it('skips directories instead of treating them as files', () => {
+    const { repoRoot } = repoFixture();
+
+    expect(normalizeRepoFilePath(repoRoot, repoRoot, join(repoRoot, 'src'))).toBeNull();
+    expect(normalizeRepoFilePath(repoRoot, repoRoot, 'src/')).toBeNull();
+  });
+
+  it('skips absolute paths outside the repo when repo scope is known', () => {
+    const { repoRoot } = repoFixture();
+    const outsideRoot = join(dir, 'outside');
+    mkdirSync(outsideRoot, { recursive: true });
+    writeFileSync(join(outsideRoot, 'x.ts'), 'export const outside = true;\n');
+
+    expect(normalizeRepoFilePath(repoRoot, repoRoot, join(outsideRoot, 'x.ts'))).toBeNull();
+  });
+
+  it('keeps absolute paths when no repo scope is known', () => {
+    const outsideFile = join(dir, 'unknown-scope.ts');
+    writeFileSync(outsideFile, 'export const unknown = true;\n');
+
+    expect(normalizeRepoFilePath(undefined, undefined, outsideFile)).toBe(outsideFile);
+  });
+
   it('keeps normalizeClaimPath as the compatibility alias', () => {
     const { repoRoot } = repoFixture();
 

@@ -2,7 +2,10 @@ import path, { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
 import { MemoryStore, TaskThread, inferIdeFromSessionId } from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
-import { extractTouchedFiles } from './handlers/post-tool-use.js';
+import {
+  extractTouchedFiles,
+  pathExtractionWarningsForToolUse,
+} from './handlers/post-tool-use.js';
 import { runHook } from './runner.js';
 import type { HookInput, HookName } from './types.js';
 
@@ -57,6 +60,7 @@ export interface OmxLifecycleRunResult {
   duplicate?: boolean;
   context?: string;
   extracted_paths?: string[];
+  warnings?: string[];
   error?: string;
 }
 
@@ -221,6 +225,7 @@ export async function runOmxLifecycleEnvelope(
     };
     if (routed.context !== undefined) result.context = routed.context;
     if (routed.extracted_paths !== undefined) result.extracted_paths = routed.extracted_paths;
+    if (routed.warnings !== undefined) result.warnings = routed.warnings;
     if (routed.error !== undefined) result.error = routed.error;
     return result;
   } catch (err) {
@@ -244,6 +249,7 @@ async function routeLifecycleEvent(
   route: string;
   context?: string;
   extracted_paths?: string[];
+  warnings?: string[];
   error?: string;
 }> {
   if (event.event_type === 'task_bind') return bindTaskFromLifecycle(store, event);
@@ -290,13 +296,21 @@ async function ensurePreToolUseBeforePostToolUse(
   route: string;
   context?: string;
   extracted_paths?: string[];
+  warnings?: string[];
   error?: string;
 }> {
   const touchedFiles = extractTouchedFiles(event.tool_name ?? '', toolInputForHook(event), {
     cwd: event.cwd,
     repoRoot: event.repo_root,
   });
-  if (touchedFiles.length === 0) return { ok: true, route: 'pre-tool-use-not-needed' };
+  const warnings = pathExtractionWarningsForToolUse(
+    event.tool_name ?? '',
+    toolInputForHook(event),
+    touchedFiles,
+  );
+  if (touchedFiles.length === 0 && warnings.length === 0) {
+    return { ok: true, route: 'pre-tool-use-not-needed' };
+  }
 
   const parentEventId =
     event.parent_event_id ??
@@ -306,7 +320,12 @@ async function ensurePreToolUseBeforePostToolUse(
   event.metadata = { ...event.metadata, parent_event_id: parentEventId };
 
   if (hasProcessedLifecycleEvent(store, parentEventId, event.session_id)) {
-    return { ok: true, route: 'pre-tool-use-existing', extracted_paths: touchedFiles };
+    return {
+      ok: true,
+      route: 'pre-tool-use-existing',
+      extracted_paths: touchedFiles,
+      ...(warnings.length > 0 ? { warnings } : {}),
+    };
   }
 
   const preEvent = preToolUseEventFromPost(event, parentEventId);
@@ -316,7 +335,12 @@ async function ensurePreToolUseBeforePostToolUse(
   );
   recordLifecycleAudit(store, preEvent, routed);
   if (!routed.ok) return routed;
-  return { ok: true, route: 'pre-tool-use-synthesized', extracted_paths: touchedFiles };
+  return {
+    ok: true,
+    route: 'pre-tool-use-synthesized',
+    extracted_paths: touchedFiles,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 function findMatchingPreToolUseEventId(
@@ -372,13 +396,27 @@ function preToolUseEventFromPost(
 
 function hookRouteResult(
   route: HookName,
-  result: { ok: boolean; context?: string; extracted_paths?: string[]; error?: string },
-): { ok: boolean; route: string; context?: string; extracted_paths?: string[]; error?: string } {
+  result: {
+    ok: boolean;
+    context?: string;
+    extracted_paths?: string[];
+    warnings?: string[];
+    error?: string;
+  },
+): {
+  ok: boolean;
+  route: string;
+  context?: string;
+  extracted_paths?: string[];
+  warnings?: string[];
+  error?: string;
+} {
   return {
     ok: result.ok,
     route,
     ...(result.context !== undefined ? { context: result.context } : {}),
     ...(result.extracted_paths !== undefined ? { extracted_paths: result.extracted_paths } : {}),
+    ...(result.warnings !== undefined ? { warnings: result.warnings } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
   };
 }
@@ -466,7 +504,13 @@ function hasProcessedLifecycleEvent(
 function recordLifecycleAudit(
   store: MemoryStore,
   event: NormalizedOmxLifecycleEvent,
-  routed: { ok: boolean; route: string; error?: string; extracted_paths?: string[] },
+  routed: {
+    ok: boolean;
+    route: string;
+    error?: string;
+    extracted_paths?: string[];
+    warnings?: string[];
+  },
 ): void {
   const taskId = activeTaskIdForLifecycle(store, event);
   store.storage.insertObservation({
@@ -493,6 +537,13 @@ function recordLifecycleAudit(
       route: routed.route,
       ok: routed.ok,
       ...(routed.extracted_paths?.length ? { extracted_paths: routed.extracted_paths } : {}),
+      ...(routed.warnings?.length
+        ? {
+            path_extraction_failed: true,
+            path_extraction_warning: routed.warnings[0],
+            path_extraction_warnings: routed.warnings,
+          }
+        : {}),
       ...(routed.error ? { error: routed.error } : {}),
     },
     task_id: taskId ?? null,
