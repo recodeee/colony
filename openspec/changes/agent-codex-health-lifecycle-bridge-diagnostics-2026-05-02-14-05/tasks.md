@@ -13,7 +13,9 @@
 
 ## Cleanup
 
-- [ ] Finish PR, merge, and sandbox cleanup; record PR URL and `MERGED` evidence.
+- [x] Finish PR, merge, and sandbox cleanup; record PR URL and `MERGED` evidence.
 
 Evidence:
 - Targeted verification passed locally after rebuilding the local `better-sqlite3` native binding generated under `node_modules`.
+- Implementation PR: https://github.com/recodeee/colony/pull/361 (`MERGED`, merge commit `8325d0842148c74fa2e428e49e60bf879c5b694b`).
+- Sandbox cleanup: source worktree `.omx/agent-worktrees/colony__codex__health-lifecycle-bridge-diagnostics-2026-05-02-14-05` was pruned by `gx branch finish --branch agent/codex/health-lifecycle-bridge-diagnostics-2026-05-02-14-05 --base main --via-pr --wait-for-merge --cleanup`.
