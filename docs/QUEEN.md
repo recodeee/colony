@@ -340,6 +340,22 @@ Example: fix flaky tests with tests-only sub-tasks.
 }
 ```
 
+## cleanup and repair
+
+When health shows zero active Queen plans but a completed plan remains, close
+the completed plan before publishing a replacement repair lane:
+
+```bash
+colony plan close <slug> --cwd <repo_root>
+colony queen adoption-fixes --repo-root <repo_root>
+colony task ready --repo-root <repo_root> --agent <agent> --session <session_id> --json
+```
+
+The close command refuses incomplete workspaces and records a `plan-archived`
+observation on the parent plan task after a clean archive. The adoption-fixes
+command is idempotent for an already-active `colony-adoption-fixes` plan, and
+the ready command should then return `task_plan_claim_subtask` args for Wave 1.
+
 ## what NOT
 
 Queen is not a sub-agent launcher. It never calls Codex, Claude, Cursor, Gemini,

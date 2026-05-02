@@ -197,6 +197,27 @@ export function registerPlanCommand(program: Command): void {
           reason: `Close plan ${slug}: all subtasks completed`,
         });
         const archived = repo.archiveChange(slug);
+        const parentTaskId =
+          workspace.manifest.published.spec_task_id ??
+          store.storage
+            .listTasks(2000)
+            .find((task) => task.repo_root === repoRoot && task.branch === `spec/${slug}`)?.id ??
+          null;
+        if (parentTaskId !== null) {
+          store.addObservation({
+            session_id: opts.session ?? 'colony-plan-cli',
+            task_id: parentTaskId,
+            kind: 'plan-archived',
+            content: `plan ${slug} archived after all workspace subtasks completed`,
+            metadata: {
+              plan_slug: slug,
+              archived_path: archived,
+              merged_root_hash: merge.spec.rootHash,
+              applied: merge.applied,
+              source_tool: 'colony plan close',
+            },
+          });
+        }
         process.stdout.write(`${kleur.green('✓')} closed ${slug}\n`);
         process.stdout.write(`  archived: ${archived}\n`);
       });

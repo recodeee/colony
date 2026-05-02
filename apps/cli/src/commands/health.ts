@@ -25,6 +25,8 @@ import {
 import {
   type QueenReplacementAgent,
   type QueenReplacementRecommendation,
+  colonyAdoptionFixesPlanInput,
+  orderedPlanToTaskPlanInput,
   sweepQueenPlans,
 } from '@colony/queen';
 import type {
@@ -695,7 +697,7 @@ export function buildColonyHealthPayload(
   return {
     ...payload,
     readiness_summary: readinessSummary,
-    action_hints: healthActionHints(payload),
+    action_hints: healthActionHints(payload, readinessSummary),
   };
 }
 
@@ -2349,7 +2351,10 @@ function quotaRelayActionHint(payload: SignalHealthPayload): {
   };
 }
 
-function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint[] {
+function healthActionHints(
+  payload: ColonyHealthPayloadWithoutHints,
+  readinessSummary: ReadinessSummaryPayload,
+): ActionHint[] {
   const hints: ActionHint[] = [];
   const liveContention = payload.live_contention_health;
   if (liveContention.live_file_contentions > 0) {
@@ -2745,6 +2750,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   const queenStateRepair = payload.queen_wave_health.plan_state_recommendations.find(
     (item) => item.recommendation.action !== 'claim-ready-subtasks',
   );
+  const queenCleanupFlow = queenCleanupFlowHint(payload, readinessSummary, queenStateRepair);
+  if (queenCleanupFlow) hints.push(queenCleanupFlow);
   if (queenStateRepair) {
     hints.push({
       metric: 'Queen plan state repair',
@@ -2944,6 +2951,66 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   }
 
   return hints;
+}
+
+function queenCleanupFlowHint(
+  payload: ColonyHealthPayloadWithoutHints,
+  readinessSummary: ReadinessSummaryPayload,
+  repair: QueenPlanStateSummary | undefined,
+): ActionHint | null {
+  if (payload.queen_wave_health.active_plans > 0) return null;
+  if (!Object.values(readinessSummary).some((item) => item.status === 'bad')) return null;
+  if (repair?.recommendation.action !== 'archive-completed-plan') return null;
+
+  const repoRoot = repair.repo_root;
+  if (!repoRoot) return null;
+
+  const commands = [
+    repair?.recommendation.action === 'archive-completed-plan'
+      ? repair.recommendation.command
+      : null,
+    `colony queen adoption-fixes --repo-root ${shellQuote(repoRoot)}`,
+    `colony task ready --repo-root ${shellQuote(repoRoot)} --agent <agent> --session <session_id> --json`,
+  ].filter((command): command is string => typeof command === 'string');
+  const toolCalls = [
+    repair?.recommendation.action === 'archive-completed-plan'
+      ? repair.recommendation.tool_call
+      : null,
+    adoptionFixesTaskPlanPublishToolCall(repoRoot),
+    `mcp__colony__task_ready_for_agent({ agent: "<agent>", session_id: "<session_id>", repo_root: ${JSON.stringify(repoRoot)} })`,
+  ].filter((call): call is string => typeof call === 'string');
+
+  return {
+    metric: 'Queen cleanup flow',
+    status: 'bad',
+    current: `active plans ${payload.queen_wave_health.active_plans}; completed plans ${payload.queen_wave_health.completed_plans}`,
+    target: 'archived completed plan, active colony-adoption-fixes plan, ready wave-1 claim args',
+    action:
+      'Archive the completed plan, publish colony-adoption-fixes once, then call task_ready_for_agent so Wave 1 returns task_plan_claim_subtask args.',
+    readiness_scope: 'queen_plan_readiness',
+    priority: 6,
+    command: commands.join(' && '),
+    tool_call: toolCalls.join(' -> '),
+    prompt: codexPrompt({
+      goal: 'close completed Queen plan state and activate the adoption-fixes repair lane',
+      current: `${payload.queen_wave_health.active_plans} active Queen plans, ${payload.queen_wave_health.completed_plans} completed plan(s)`,
+      inspect:
+        'colony health --json, colony plan close <slug> --cwd <repo_root>, colony queen adoption-fixes --repo-root <repo_root>, mcp__colony__task_ready_for_agent',
+      acceptance:
+        'completed plan is archived, colony-adoption-fixes is active once, and task_ready_for_agent returns task_plan_claim_subtask args for Wave 1',
+    }),
+  };
+}
+
+function adoptionFixesTaskPlanPublishToolCall(repoRoot: string): string {
+  const input = orderedPlanToTaskPlanInput({
+    plan: colonyAdoptionFixesPlanInput,
+    repo_root: repoRoot,
+    session_id: '<session_id>',
+    agent: '<agent>',
+    auto_archive: false,
+  });
+  return `mcp__colony__task_plan_publish(${JSON.stringify(input)})`;
 }
 
 function isDominantPreToolUseMiss(reasons: ClaimMissReasons): boolean {
@@ -3442,8 +3509,7 @@ function queenPlanStateRecommendation(
       action: 'archive-completed-plan',
       summary: 'All subtasks are complete; archive the completed plan.',
       command: `colony plan close ${plan.plan_slug} --cwd ${shellQuote(plan.repo_root)}`,
-      tool_call:
-        'mcp__colony__spec_archive({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>", slug: "<plan_slug>" })',
+      tool_call: `mcp__colony__spec_archive({ agent: "<agent>", session_id: "<session_id>", repo_root: ${JSON.stringify(plan.repo_root)}, slug: ${JSON.stringify(plan.plan_slug)} })`,
     };
   }
   if (state === 'orphan-subtasks') {

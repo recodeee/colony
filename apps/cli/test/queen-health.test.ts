@@ -6,8 +6,16 @@ import { MemoryStore, TaskThread, listPlans } from '@colony/core';
 import {
   type QueenOrderedPlanInput,
   colonyAdoptionFixesPlanInput,
+  orderedPlanToTaskPlanInput,
   publishOrderedPlan,
 } from '@colony/queen';
+import {
+  SpecRepository,
+  SyncEngine,
+  createPlanWorkspace,
+  parseSpec,
+  serializeSpec,
+} from '@colony/spec';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildColonyHealthPayload, formatColonyHealthOutput } from '../src/commands/health.js';
@@ -91,11 +99,14 @@ const staleBlockedPlanInput: QueenOrderedPlanInput = {
 let dataDir: string;
 let repoRoot: string;
 let store: MemoryStore;
+let originalColonyHome: string | undefined;
 
 beforeEach(() => {
   kleur.enabled = false;
   dataDir = mkdtempSync(join(tmpdir(), 'colony-queen-health-data-'));
   repoRoot = mkdtempSync(join(tmpdir(), 'colony-queen-health-repo-'));
+  originalColonyHome = process.env.COLONY_HOME;
+  process.env.COLONY_HOME = dataDir;
   writeFileSync(join(repoRoot, 'SPEC.md'), MINIMAL_SPEC, 'utf8');
   store = new MemoryStore({ dbPath: join(dataDir, 'data.db'), settings: defaultSettings });
   store.startSession({ id: 'queen-session', ide: 'queen', cwd: repoRoot });
@@ -106,6 +117,8 @@ afterEach(() => {
   store.close();
   rmSync(dataDir, { recursive: true, force: true });
   rmSync(repoRoot, { recursive: true, force: true });
+  if (originalColonyHome === undefined) delete process.env.COLONY_HOME;
+  else process.env.COLONY_HOME = originalColonyHome;
   kleur.enabled = true;
 });
 
@@ -280,8 +293,101 @@ describe('queen wave health', () => {
     expect(payload.queen_wave_health.plan_state_recommendations[0]).toMatchObject({
       plan_slug: staleBlockedPlanInput.slug,
       state: 'completed',
-      recommendation: { action: 'archive-completed-plan' },
+      recommendation: {
+        action: 'archive-completed-plan',
+        command: `colony plan close ${staleBlockedPlanInput.slug} --cwd ${repoRoot}`,
+        tool_call: expect.stringContaining(`slug: "${staleBlockedPlanInput.slug}"`),
+      },
     });
+    expect(payload.action_hints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metric: 'Queen cleanup flow',
+          command: expect.stringContaining(
+            `colony plan close ${staleBlockedPlanInput.slug} --cwd ${repoRoot}`,
+          ),
+          tool_call: expect.stringContaining('"slug":"colony-adoption-fixes"'),
+        }),
+      ]),
+    );
+    expect(payload.action_hints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          metric: 'Queen cleanup flow',
+          command: expect.stringContaining('colony queen adoption-fixes'),
+          tool_call: expect.stringContaining('mcp__colony__task_ready_for_agent'),
+        }),
+      ]),
+    );
+  });
+
+  it('closes completed plan workspaces and removes them from active health', async () => {
+    const published = publishOrderedPlan({
+      store,
+      plan: staleBlockedPlanInput,
+      repo_root: repoRoot,
+      session_id: 'queen-session',
+      agent: 'queen',
+      auto_archive: false,
+    });
+    const taskPlan = orderedPlanToTaskPlanInput({
+      plan: staleBlockedPlanInput,
+      repo_root: repoRoot,
+      session_id: 'queen-session',
+      agent: 'queen',
+      auto_archive: false,
+    });
+    createPlanWorkspace({
+      repoRoot,
+      slug: staleBlockedPlanInput.slug,
+      title: staleBlockedPlanInput.title,
+      problem: staleBlockedPlanInput.problem,
+      acceptanceCriteria: staleBlockedPlanInput.acceptance_criteria,
+      tasks: taskPlan.subtasks.map((task) => ({ ...task, status: 'completed' })),
+      published: {
+        spec_task_id: published.spec_task_id,
+        spec_change_path: published.spec_change_path,
+        auto_archive: false,
+      },
+      force: true,
+    });
+    for (let i = 0; i < staleBlockedPlanInput.waves.flatMap((wave) => wave.subtasks).length; i++) {
+      completePlanSubtask(
+        staleBlockedPlanInput.slug,
+        i,
+        taskIdForSubtask(staleBlockedPlanInput.slug, i),
+        'queen-session',
+      );
+    }
+
+    let payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      completed_plans: 1,
+      archived_plans: 0,
+    });
+
+    closePlanLikeCli(staleBlockedPlanInput.slug, published.spec_task_id);
+
+    payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      completed_plans: 0,
+      archived_plans: 1,
+    });
+    expect(
+      store.storage.taskObservationsByKind(published.spec_task_id, 'plan-archived', 5),
+    ).toHaveLength(1);
   });
 
   it('classifies orphan subtasks and recommends sweep repair', () => {
@@ -474,6 +580,37 @@ function completePlanSubtask(
       agent: 'codex',
       plan_slug: planSlug,
       subtask_index: subtaskIndex,
+    },
+  });
+}
+
+function closePlanLikeCli(planSlug: string, parentTaskId: number): void {
+  const repo = new SpecRepository({ repoRoot, store });
+  const currentRoot = repo.readRoot();
+  const change = repo.readChange(planSlug);
+  const baseRoot =
+    currentRoot.rootHash === change.baseRootHash
+      ? currentRoot
+      : parseSpec(serializeSpec(currentRoot));
+  const merge = new SyncEngine('three_way').merge(currentRoot, baseRoot, change);
+  expect(merge.clean).toBe(true);
+  repo.writeRoot(merge.spec, {
+    session_id: 'queen-session',
+    agent: 'queen',
+    reason: `Close plan ${planSlug}: all subtasks completed`,
+  });
+  const archived = repo.archiveChange(planSlug);
+  store.addObservation({
+    session_id: 'queen-session',
+    task_id: parentTaskId,
+    kind: 'plan-archived',
+    content: `plan ${planSlug} archived after all workspace subtasks completed`,
+    metadata: {
+      plan_slug: planSlug,
+      archived_path: archived,
+      merged_root_hash: merge.spec.rootHash,
+      applied: merge.applied,
+      source_tool: 'colony plan close',
     },
   });
 }
