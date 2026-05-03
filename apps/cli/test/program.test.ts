@@ -54,7 +54,7 @@ describe('Colony CLI program', () => {
       Cross-agent persistent memory with compressed storage.
 
       Options:
-        -V, --version                       output the version number
+        -v, -V, --version                   output the version number
         -h, --help                          display help for command
 
       Commands:
@@ -183,6 +183,24 @@ describe('Colony CLI program', () => {
   it('advertises a semantic version', () => {
     const program = createProgram();
     expect(program.version()).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('prints the version for lowercase -v', async () => {
+    const program = createProgram();
+    let output = '';
+    program.exitOverride();
+    program.configureOutput({
+      writeOut: (value) => {
+        output += value;
+      },
+    });
+
+    await expect(
+      program.parseAsync(['node', 'test', '-v'], { from: 'node' }),
+    ).rejects.toMatchObject({
+      code: 'commander.version',
+    });
+    expect(output.trim()).toBe(program.version());
   });
 
   it('exposes foraging scan/list/clear subcommands', () => {

@@ -45,7 +45,7 @@ export function createProgram(): Command {
   program
     .name('colony')
     .description('Cross-agent persistent memory with compressed storage.')
-    .version(__COLONY_VERSION__);
+    .version(__COLONY_VERSION__, '-v, -V, --version');
 
   registerAgentsCommand(program);
   registerCockpitCommand(program);
