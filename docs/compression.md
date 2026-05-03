@@ -6,6 +6,40 @@ colony compresses prose deterministically and offline. The engine never invokes 
 2. **Technical tokens are preserved byte-for-byte.** The tokenizer identifies code, URLs, paths, commands, version numbers, dates, numeric literals, and identifier-like tokens. These segments are held out of every transformation.
 3. **Round-trippable on substance.** `expand(compress(x))` preserves every technical token exactly. Prose content is lossy on filler and hedging words by design.
 
+## Token-saving invariants
+
+Compression is write-path infrastructure, not generation.
+
+- Compression must be deterministic for the same input and `compression_intensity`.
+- The write path must not call an LLM. `MemoryStore` may redact, tokenize, compress, and persist; remote model calls do not belong in that path.
+- Technical tokens must survive byte-for-byte through compression and expansion.
+- Loss is allowed only in prose filler, hedges, pleasantries, articles, and approved abbreviations.
+- Token counts must use stable local estimation so savings are comparable across runs.
+
+Protected token categories:
+
+- commands
+- paths
+- URLs
+- dates
+- versions
+- code fences
+- branch names
+- PR URLs
+- OpenSpec row IDs
+
+### Future token receipts
+
+When compression receipts are added, record them as metadata next to the observation or summary without changing the compressed content:
+
+- `tokens_before`
+- `tokens_after`
+- `saved_tokens`
+- `saved_ratio`
+- `compression_intensity`
+
+Receipts must be computed locally from the same stable counter used for comparisons. `saved_tokens` is `tokens_before - tokens_after`; `saved_ratio` is the saved share of `tokens_before`.
+
 ## Pipeline
 
 ```
