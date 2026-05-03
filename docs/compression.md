@@ -8,37 +8,39 @@ colony compresses prose deterministically and offline. The engine never invokes 
 
 ## Token-saving invariants
 
-Compression is write-path infrastructure, not generation.
+Compression is write-path infrastructure, not generation. These invariants lock the current token-saving behavior before any behavior changes:
 
-- Compression must be deterministic for the same input and `compression_intensity`.
-- The write path must not call an LLM. `MemoryStore` may redact, tokenize, compress, and persist; remote model calls do not belong in that path.
-- Technical tokens must survive byte-for-byte through compression and expansion.
-- Loss is allowed only in prose filler, hedges, pleasantries, articles, and approved abbreviations.
-- Token counts must use stable local estimation so savings are comparable across runs.
+- **Deterministic:** the same input and `compression_intensity` must always produce the same output.
+- **Offline on writes:** the write path must not call an LLM. `MemoryStore` may redact, tokenize, compress, and persist; remote model calls do not belong in that path.
+- **Technical-token safe:** protected tokens must survive compression and expansion byte-for-byte.
+- **Prose-only loss:** loss is allowed only for prose filler, hedges, pleasantries, articles, and approved abbreviations.
+- **Stable accounting:** token counts must use the same local estimator so savings remain comparable across runs.
 
 Protected token categories:
 
-- commands
-- paths
-- URLs
-- dates
-- versions
-- code fences
-- branch names
-- PR URLs
-- OpenSpec row IDs
+| category | examples / notes |
+|---|---|
+| commands | shell commands and command-like snippets |
+| paths | `/tmp/x`, `~/src`, `C:\\repo\\file` |
+| URLs | HTTP(S) links, including PR URLs |
+| dates | `2026-04-18`, `2026-04-18T09:00` |
+| versions | `v1.2.3`, `22.1.0-rc.1` |
+| code fences | triple-backtick and tilde fences |
+| branch names | `main`, `feature/token-receipts`, `fix/compression-ids` |
+| PR URLs | full pull request links must remain intact |
+| OpenSpec row IDs | row identifiers used to track OpenSpec entries |
 
 ### Future token receipts
 
-When compression receipts are added, record them as metadata next to the observation or summary without changing the compressed content:
+When token receipts are added, store the receipt as metadata next to the observation or summary without changing compressed content:
 
-- `tokens_before`
-- `tokens_after`
-- `saved_tokens`
-- `saved_ratio`
-- `compression_intensity`
+- `tokens_before`: local token estimate before compression
+- `tokens_after`: local token estimate after compression
+- `saved_tokens`: `tokens_before - tokens_after`
+- `saved_ratio`: saved share of `tokens_before`
+- `compression_intensity`: intensity used for the write
 
-Receipts must be computed locally from the same stable counter used for comparisons. `saved_tokens` is `tokens_before - tokens_after`; `saved_ratio` is the saved share of `tokens_before`.
+Receipts must be computed locally from the same stable counter used for comparisons.
 
 ## Pipeline
 
