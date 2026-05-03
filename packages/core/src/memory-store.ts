@@ -1,4 +1,4 @@
-import { compress, expand, redactPrivate } from '@colony/compress';
+import { compress, countTokens, expand, redactPrivate } from '@colony/compress';
 import type { Settings } from '@colony/config';
 import { type NewObservation, type ObservationRow, Storage } from '@colony/storage';
 import { inferSessionIdentity, sessionIdentityMetadata } from './infer-ide.js';
@@ -65,13 +65,17 @@ export class MemoryStore {
     this.ensureSession(p.session_id, p.metadata);
     const intensity = this.settings.compression.intensity;
     const compressed = compress(redacted, { intensity });
+    const metadata = {
+      ...(p.metadata ?? {}),
+      ...tokenReceiptMetadata(redacted, compressed, intensity),
+    };
     const obs: NewObservation = {
       session_id: p.session_id,
       kind: p.kind,
       content: compressed,
       compressed: true,
       intensity,
-      ...(p.metadata !== undefined ? { metadata: p.metadata } : {}),
+      metadata,
       ...(p.task_id !== undefined ? { task_id: p.task_id } : {}),
       ...(p.reply_to !== undefined ? { reply_to: p.reply_to } : {}),
     };
@@ -219,6 +223,29 @@ function serializeSessionMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): string | null {
   return metadata ? JSON.stringify(metadata) : null;
+}
+
+function tokenReceiptMetadata(
+  before: string,
+  after: string,
+  intensity: string,
+): Record<string, unknown> {
+  const tokens_before = countTokens(before);
+  const tokens_after = countTokens(after);
+  const saved_tokens = tokens_before - tokens_after;
+  const saved_ratio =
+    tokens_before === 0 ? 0 : normalizeRatio(Number((saved_tokens / tokens_before).toFixed(3)));
+  return {
+    tokens_before,
+    tokens_after,
+    saved_tokens,
+    saved_ratio,
+    compression_intensity: intensity,
+  };
+}
+
+function normalizeRatio(value: number): number {
+  return Object.is(value, -0) ? 0 : value;
 }
 
 export interface Embedder {
