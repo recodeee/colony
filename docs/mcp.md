@@ -55,6 +55,147 @@ For choosing work to claim, the compact path is:
 
 Following the progressive-disclosure pattern saves ~10× tokens versus fetching full bodies upfront.
 
+## Progressive disclosure budget contract
+
+Invariant: compact MCP tools do not return full observation bodies by default. Default responses may include counts, IDs, snippets, previews, branch/task/file metadata, action hints, and suggested MCP calls. Full observation `content` and `metadata` belong behind `get_observations(ids[])`, after the caller has selected the compact IDs worth hydrating.
+
+The expected compact startup and work-selection flow is:
+
+`hivemind_context -> attention_inbox -> task_ready_for_agent -> get_observations only after compact IDs are selected`
+
+Use `hivemind_context` for ownership, compact memory hits, negative warnings, and the attention summary. Use `attention_inbox` for compact attention buckets and message/action hints. Use `task_ready_for_agent` for the claimable-work picker and exact claim calls. Use `get_observations` only after a compact tool returned IDs that the caller deliberately selected.
+
+Current payloads already expose this contract through fields such as `summary`, `observation_ids`, `observation_ids_truncated`, `hydrate_with`, `next_action`, compact message `preview`, and tool-specific action hints. A uniform `budget` object is planned/optional and is not required in current MCP payloads yet. When implemented, `budget` should be advisory and compact:
+
+- `items_available`: total items matching the request before compaction.
+- `items_returned`: items included in the current response.
+- `collapsed_count`: items intentionally omitted from the compact response.
+- `estimated_tokens_returned`: rough token estimate for the compact payload.
+- `hydrate_with`: next tool to use for expansion, usually `get_observations`; it may name another compact tool such as `attention_inbox` when that is the next disclosure step.
+- `why_collapsed`: short reason the response stayed compact.
+
+Example noisy inbox payload. The `budget` object is planned/optional; the compact IDs, previews, and action hints match the current behavior:
+
+```json
+{
+  "summary": {
+    "unread_message_count": 12,
+    "pending_handoff_count": 1,
+    "stalled_lane_count": 2,
+    "blocked": true,
+    "next_action": "Reply to blocking messages before choosing work."
+  },
+  "unread_messages": [
+    {
+      "id": 401,
+      "task_id": 17,
+      "urgency": "blocking",
+      "preview": "Need PR merge evidence before cleanup.",
+      "reply_tool": "task_message",
+      "suggested_reply_args": {
+        "task_id": 17,
+        "reply_to": 401,
+        "urgency": "fyi",
+        "content": "..."
+      },
+      "mark_read_tool": "task_message_mark_read"
+    }
+  ],
+  "pending_handoffs": [
+    {
+      "id": 402,
+      "task_id": 17,
+      "summary": "Take over cleanup evidence",
+      "next": "Accept or decline the handoff."
+    }
+  ],
+  "budget": {
+    "items_available": 26,
+    "items_returned": 5,
+    "collapsed_count": 21,
+    "estimated_tokens_returned": 950,
+    "hydrate_with": "get_observations",
+    "why_collapsed": "Noisy inbox: returned top blocking/needs_reply items, compact counts, and action hints only."
+  }
+}
+```
+
+Example stalled-lane payload. Stalled lanes stay compact: owner, branch, task, activity, and worktree path are enough to decide whether to rescue, inspect, or ignore. If there is no observation ID, expand with the lane's task timeline or a targeted search rather than fetching unrelated bodies:
+
+```json
+{
+  "summary": {
+    "stalled_lane_count": 1,
+    "next_action": "Review stalled lanes before treating the repo as idle."
+  },
+  "stalled_lanes": [
+    {
+      "repo_root": "/abs/repo",
+      "branch": "agent/codex/docs-budget-contract",
+      "task": "Tool: colony.examples_query",
+      "owner": "agent/unknown",
+      "activity": "dead",
+      "activity_summary": "Heartbeat stale for 7m 28s.",
+      "worktree_path": "/abs/repo/.omx/agent-worktrees/repo__codex__docs-budget-contract"
+    }
+  ],
+  "budget": {
+    "items_available": 9,
+    "items_returned": 1,
+    "collapsed_count": 8,
+    "estimated_tokens_returned": 420,
+    "hydrate_with": "attention_inbox",
+    "why_collapsed": "Only the top stalled lane is needed for the immediate startup decision."
+  }
+}
+```
+
+Example suggestion payload. `task_suggest_approach` and the SessionStart suggestion preface return derived guidance and task IDs, not full historical observation bodies:
+
+```json
+{
+  "similar_tasks": [
+    {
+      "task_id": 31,
+      "similarity": 0.91,
+      "branch": "agent/codex/attention-budget",
+      "repo_root": "/abs/repo",
+      "status": "completed",
+      "observation_count": 42
+    }
+  ],
+  "first_files_likely_claimed": [
+    {
+      "file_path": "apps/mcp-server/src/tools/attention.ts",
+      "appears_in_count": 4,
+      "confidence": 0.64
+    }
+  ],
+  "patterns_to_watch": [
+    {
+      "description": "Expired handoff caused stale ownership",
+      "seen_in_task_id": 31,
+      "kind": "expired-handoff"
+    }
+  ],
+  "resolution_hints": {
+    "median_elapsed_minutes": 38,
+    "median_handoff_count": 1,
+    "median_subtask_count": 2,
+    "completed_sample_size": 5
+  },
+  "insufficient_data_reason": null,
+  "budget": {
+    "items_available": 12,
+    "items_returned": 3,
+    "collapsed_count": 9,
+    "estimated_tokens_returned": 700,
+    "hydrate_with": "task_suggest_approach",
+    "why_collapsed": "Startup suggestion shows only top files and first pattern; run task_suggest_approach for the full derived guidance."
+  }
+}
+```
+
 The OMX-Colony bridge contract lives in `openspec/specs/omx-colony-bridge/spec.md`:
 OMX runs agents, Colony coordinates agents, OMX displays Colony state, and
 Colony consumes OMX telemetry. Use Colony first for coordination; use OMX state
