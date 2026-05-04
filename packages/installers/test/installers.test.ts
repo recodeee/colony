@@ -40,6 +40,12 @@ const QUOTA_SAFE_CONTRACT_TERMS = [
   'Colony',
   'OMX',
   'MCP servers',
+  'RTK command policy',
+  'Always prefix shell commands with `rtk`',
+  'rtk git status',
+  'rtk gh pr view',
+  'rtk proxy <command>',
+  'If `rtk` is unavailable',
 ];
 
 beforeEach(() => {

@@ -130,6 +130,11 @@ describe('SessionStart predictive suggestion preface', () => {
       const preface = await sessionStart(store, { session_id: `S-${ide}`, ide, cwd: repo });
 
       expect(preface).toContain('## Quota-safe Colony operating contract');
+      expect(preface).toContain('RTK command policy:');
+      expect(preface).toContain('Always prefix shell commands with `rtk`');
+      expect(preface).toContain('rtk git status');
+      expect(preface).toContain('rtk proxy <command>');
+      expect(preface).toContain('If `rtk` is unavailable');
       expect(preface).toContain('Call hivemind_context.');
       expect(preface).toContain('Call attention_inbox.');
       expect(preface).toContain('Call task_ready_for_agent.');
