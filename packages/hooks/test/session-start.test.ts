@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { type Embedder, MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type SuggestionPrefaceDeps, sessionStart } from '../src/handlers/session-start.js';
+import {
+  buildReadyClaimNudgePreface,
+  type SuggestionPrefaceDeps,
+  sessionStart,
+} from '../src/handlers/session-start.js';
 
 const THRESHOLDS = {
   SIMILARITY_FLOOR: 0.5,
@@ -309,5 +313,59 @@ describe('SessionStart predictive suggestion preface', () => {
     expect(preface).not.toContain('FULL_BODY_SENTINEL_WAKE_NEXT_STEP_1');
     expect(preface).not.toContain('PENDING HANDOFF');
     expect(preface).not.toContain('PENDING WAKE');
+  });
+});
+
+describe('SessionStart ready-claim nudge', () => {
+  function seedAvailableSubtask(slug: string): void {
+    fakeGitCheckout(repo, 'main');
+    store.startSession({ id: 'publisher', ide: 'codex', cwd: repo });
+    const parent = TaskThread.open(store, {
+      repo_root: repo,
+      branch: `spec/${slug}`,
+      session_id: 'publisher',
+      title: `parent ${slug}`,
+    });
+    parent.join('publisher', 'codex');
+    const sub = TaskThread.open(store, {
+      repo_root: repo,
+      branch: `spec/${slug}/sub-0`,
+      session_id: 'publisher',
+      title: `sub-0 ${slug}`,
+    });
+    sub.join('publisher', 'codex');
+    store.addObservation({
+      session_id: 'publisher',
+      task_id: sub.task_id,
+      kind: 'plan-subtask',
+      content: 'Available subtask\n\nDescription',
+      metadata: {
+        title: 'Available subtask',
+        description: 'Description',
+        subtask_index: 0,
+        status: 'available',
+        file_scope: ['apps/api/foo.ts'],
+        parent_plan_slug: slug,
+        parent_spec_task_id: parent.task_id,
+      },
+    });
+  }
+
+  it('returns empty when no plans exist in the repo', () => {
+    fakeGitCheckout(repo, 'main');
+    expect(buildReadyClaimNudgePreface(store, { cwd: repo })).toBe('');
+  });
+
+  it('surfaces a ready-Queen-sub-tasks line when work is unclaimed', () => {
+    seedAvailableSubtask('nudge-target');
+    const preface = buildReadyClaimNudgePreface(store, { cwd: repo });
+    expect(preface).toContain('## Ready Queen sub-tasks');
+    expect(preface).toContain('1 ready sub-task');
+    expect(preface).toContain('task_plan_claim_subtask');
+  });
+
+  it('does not nudge when no cwd is provided', () => {
+    seedAvailableSubtask('nudge-target');
+    expect(buildReadyClaimNudgePreface(store, {})).toBe('');
   });
 });

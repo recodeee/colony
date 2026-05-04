@@ -503,7 +503,19 @@ describe('task_ready_for_agent', () => {
     expect(result.codex_mcp_call).toBe(
       `mcp__colony__task_plan_claim_subtask({ agent: "codex", session_id: "agent-session", repo_root: ${JSON.stringify(repoRoot)}, plan_slug: "claimable-plan", subtask_index: 0, file_scope: ["apps/api/claimable.ts"] })`,
     );
+    expect(result.claim_required).toBe(true);
     expect(result.empty_state).toBeUndefined();
+  });
+
+  it('omits claim_required when there is no claimable sub-task', async () => {
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+    expect(result.ready).toHaveLength(0);
+    expect(result.claim_required).toBeUndefined();
+    expect(result.empty_state).toBeDefined();
   });
 
   it('makes ready output directly claimable so agents do not stop at discovery', async () => {

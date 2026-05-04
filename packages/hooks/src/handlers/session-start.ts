@@ -10,6 +10,7 @@ import {
   applyAttentionBudget,
   buildAttentionInbox,
   detectRepoBranch,
+  listPlans,
 } from '@colony/core';
 import { spawnNodeScript } from '@colony/process';
 import { buildScopeCheckPreface } from '../preface-conflict-map.js';
@@ -101,6 +102,7 @@ export async function sessionStart(
   const foragingPreface = buildForagingPreface(store, input);
   const scopeCheckPreface = buildScopeCheckPreface(store, input);
   const attentionBudgetPreface = buildAttentionBudgetSection(store, input);
+  const readyClaimNudgePreface = buildReadyClaimNudgePreface(store, input);
 
   return [
     priorPreface,
@@ -111,6 +113,7 @@ export async function sessionStart(
     foragingPreface,
     scopeCheckPreface,
     attentionBudgetPreface,
+    readyClaimNudgePreface,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -157,6 +160,45 @@ export function buildForagingPreface(store: MemoryStore, input: Pick<HookInput, 
     '## Examples indexed (foraging)',
     `${rows.length} food source${rows.length === 1 ? '' : 's'}: ${names}${more}.`,
     'Query with examples_query; fetch a plan with examples_integrate_plan.',
+  ].join('\n');
+}
+
+/**
+ * One-line nudge when ready Queen sub-tasks exist but nobody has claimed
+ * them yet. Loop adoption (`task_ready_for_agent` -> `task_plan_claim_subtask`)
+ * sat at 0% across sessions because agents read the queue without
+ * following up; this preface keeps the protocol visible at the start of
+ * every session that lands in a repo with claimable plan work.
+ */
+export function buildReadyClaimNudgePreface(
+  store: MemoryStore,
+  input: Pick<HookInput, 'cwd'>,
+): string {
+  if (!input.cwd) return '';
+  const detected = detectRepoBranch(input.cwd);
+  if (!detected) return '';
+  let plans: ReturnType<typeof listPlans>;
+  try {
+    plans = listPlans(store, { repo_root: detected.repo_root, limit: 50 });
+  } catch {
+    return '';
+  }
+  let unclaimed = 0;
+  let claimed = 0;
+  for (const plan of plans) {
+    unclaimed += plan.next_available.length;
+    claimed += plan.subtask_counts.claimed;
+  }
+  if (unclaimed === 0) return '';
+  const noun = unclaimed === 1 ? 'sub-task' : 'sub-tasks';
+  const claimedNote =
+    claimed === 0
+      ? 'no current claim'
+      : `${claimed} claimed by other session${claimed === 1 ? '' : 's'}`;
+  return [
+    '## Ready Queen sub-tasks',
+    `${unclaimed} ready ${noun} (${claimedNote}).`,
+    'Call task_ready_for_agent then task_plan_claim_subtask before editing — reading the ready queue without claiming leaves the lane stalled.',
   ].join('\n');
 }
 

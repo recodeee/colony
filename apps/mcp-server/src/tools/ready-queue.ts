@@ -147,6 +147,14 @@ export interface ReadyForAgentResult {
   ready_scope_overlap_warnings: ReadyScopeOverlapWarning[];
   next_action: string;
   next_tool?: 'task_plan_claim_subtask' | 'task_claim_quota_accept' | 'rescue_stranded_scan';
+  /**
+   * When true, the response carries a claimable plan sub-task that the
+   * caller is expected to follow up with `task_plan_claim_subtask` (or
+   * `task_claim_quota_accept` for quota relays) before treating the
+   * sub-task as ready work. Surfaced so the loop adoption metric stops
+   * stalling at 0% from agents that read the queue without claiming.
+   */
+  claim_required?: boolean;
   plan_slug?: string;
   subtask_index?: number;
   reason?: ReadyReason;
@@ -378,6 +386,7 @@ function buildReadyResult(
       ...base,
       next_action: readyNextAction(base.ready, args),
       next_tool: 'task_claim_quota_accept',
+      claim_required: true,
       claim_args: claimable.claim_args,
       codex_mcp_call: quotaMcpCall(claimable.claim_args),
       next_action_reason: claimable.next_action_reason,
@@ -400,6 +409,7 @@ function buildReadyResult(
     ...base,
     next_action: readyNextAction(base.ready, args),
     next_tool: 'task_plan_claim_subtask',
+    claim_required: true,
     plan_slug: claimable.plan_slug,
     subtask_index: claimable.subtask_index,
     reason: claimable.reason,
