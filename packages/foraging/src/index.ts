@@ -9,10 +9,13 @@ export type { BuildIntegrationPlanOptions } from './integration-plan.js';
 export { redact } from './redact.js';
 export type {
   ExampleManifestKind,
+  ForagedFileEntry,
   FoodSource,
   ForagedPattern,
+  ForagingSkipReason,
   IntegrationPlan,
   ScanLimits,
   ScanResult,
+  SkippedForagedFile,
 } from './types.js';
 export { DEFAULT_SCAN_LIMITS } from './types.js';

@@ -148,6 +148,53 @@ describe('indexFoodSource', () => {
       : null;
     expect(filetreeMeta?.concept_tags ?? []).toEqual([]);
   });
+
+  it('persists skipped file observations with skip-reason metadata', () => {
+    write('examples/app/package.json', '{"name":"app"}');
+    write('examples/app/package-lock.json', '{"lockfileVersion":3}');
+    write('examples/app/src/index.ts', 'export {}');
+    write('examples/app/docs/huge.md', 'x'.repeat(128));
+    write('examples/app/assets/logo.png', 'png bytes');
+
+    scanExamples({
+      repo_root: repo,
+      store,
+      session_id: 'session-forage',
+      limits: { max_file_bytes: 32, max_files_per_source: 20 },
+    });
+
+    const rows = store.storage.listForagedObservations(repo, 'app');
+    const skipped = rows
+      .map((r) =>
+        r.metadata
+          ? (JSON.parse(r.metadata) as {
+              entry_kind?: string;
+              file_path?: string;
+              file_size?: number | null;
+              skipped_due_to?: string;
+            })
+          : null,
+      )
+      .filter((m): m is NonNullable<typeof m> => m?.entry_kind === 'skipped');
+
+    expect(skipped).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          file_path: 'package-lock.json',
+          skipped_due_to: 'generated',
+        }),
+        expect.objectContaining({
+          file_path: 'docs/huge.md',
+          file_size: 128,
+          skipped_due_to: 'too_large',
+        }),
+        expect.objectContaining({
+          file_path: 'assets/logo.png',
+          skipped_due_to: 'binary',
+        }),
+      ]),
+    );
+  });
 });
 
 describe('scanExamples (storage-aware)', () => {

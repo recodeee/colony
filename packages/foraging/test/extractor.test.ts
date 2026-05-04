@@ -74,11 +74,10 @@ describe('readCapped', () => {
     expect(readCapped(abs, 1024)).toBe('hello');
   });
 
-  it('truncates oversize content at the byte cap', () => {
+  it('returns null for oversize content instead of silently truncating', () => {
     const abs = join(dir, 'big.txt');
     writeFileSync(abs, 'a'.repeat(1024));
-    const got = readCapped(abs, 64);
-    expect(got?.length).toBe(64);
+    expect(readCapped(abs, 64)).toBeNull();
   });
 
   it('returns null on unreadable paths', () => {

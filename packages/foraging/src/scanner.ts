@@ -57,6 +57,8 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
       manifest_path: shape.manifest_path,
       readme_path: shape.readme_path,
       entrypoints: shape.entrypoints,
+      file_tree: shape.file_tree,
+      skipped_files: shape.skipped_files,
       content_hash,
     });
   }
@@ -85,6 +87,10 @@ function computeContentHash(abs_path: string, shape: ExtractedShape, limits: Sca
   hash.update('filetree:\n');
   for (const f of shape.file_tree.slice().sort((a, b) => a.path.localeCompare(b.path))) {
     hash.update(`${f.path}\t${f.size}\n`);
+  }
+  hash.update('skipped:\n');
+  for (const f of shape.skipped_files.slice().sort((a, b) => a.path.localeCompare(b.path))) {
+    hash.update(`${f.path}\t${f.skipped_due_to}\t${f.size ?? ''}\t${f.entry_type}\n`);
   }
   return hash.digest('hex');
 }

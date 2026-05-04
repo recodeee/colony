@@ -1,10 +1,13 @@
-import { type Stats, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { MemoryStore } from '@colony/core';
 import { readCapped } from './extractor.js';
 import { redact } from './redact.js';
-import { FORAGING_SKIP_NAMES } from './skip-names.js';
-import { DEFAULT_SCAN_LIMITS, type FoodSource, type ForagedPattern } from './types.js';
+import {
+  DEFAULT_SCAN_LIMITS,
+  type FoodSource,
+  type ForagedPattern,
+  type SkippedForagedFile,
+} from './types.js';
 
 export interface IndexFoodSourceOptions {
   /** Session id that owns the foraged observations (scanner spawns one). */
@@ -46,6 +49,8 @@ export function indexFoodSource(
         manifest_kind: food.manifest_kind,
         file_path: p.file_path,
         entry_kind: p.entry_kind,
+        ...(p.skipped_due_to !== undefined ? { skipped_due_to: p.skipped_due_to } : {}),
+        ...(p.size !== undefined ? { file_size: p.size } : {}),
         concept_tags,
       },
     });
@@ -55,10 +60,11 @@ export function indexFoodSource(
 }
 
 function detectConceptTags(food: FoodSource, pattern: ForagedPattern): string[] {
-  if (pattern.entry_kind === 'filetree') return [];
+  if (pattern.entry_kind === 'filetree' || pattern.entry_kind === 'skipped') return [];
   const hay = `${food.example_name}\n${pattern.file_path}\n${pattern.content}`.toLowerCase();
   const tags: string[] = [];
-  if (hasAny(hay, ['outcome', 'debrief', 'completion', 'verification'])) tags.push('outcome-learning');
+  if (hasAny(hay, ['outcome', 'debrief', 'completion', 'verification']))
+    tags.push('outcome-learning');
   if (hasAny(hay, ['token', 'budget', 'compact', 'hydrate', 'collapse'])) tags.push('token-budget');
   if (hasAny(hay, ['pattern', 'memory', 'observation', 'history'])) tags.push('pattern-memory');
   if (hasAny(hay, ['trigger', 'route', 'routing', 'classify'])) tags.push('trigger-routing');
@@ -73,8 +79,8 @@ function hasAny(hay: string, needles: readonly string[]): boolean {
  * Emit patterns in a stable order so the indexed observations sit in a
  * predictable sequence: manifest first (highest signal for
  * integration), README next (human prose with usage examples),
- * entrypoints after (canonical call sites), filetree last (tail
- * context).
+ * entrypoints after (canonical call sites), skipped records next
+ * (budget/filter evidence), filetree last (tail context).
  */
 function buildPatterns(food: FoodSource, maxBytes: number): ForagedPattern[] {
   const out: ForagedPattern[] = [];
@@ -114,7 +120,11 @@ function buildPatterns(food: FoodSource, maxBytes: number): ForagedPattern[] {
     });
   }
 
-  const tree = renderFiletree(food.abs_path);
+  for (const skipped of food.skipped_files) {
+    out.push(skippedPattern(food, skipped));
+  }
+
+  const tree = renderFiletree(food);
   if (tree) {
     out.push({
       example_name: food.example_name,
@@ -128,46 +138,54 @@ function buildPatterns(food: FoodSource, maxBytes: number): ForagedPattern[] {
 }
 
 /**
- * Render a small, sorted two-line-per-dir outline of the example.
- * Deliberately flat — deep directory trees get truncated by the caller
- * (`max_files_per_source` on the scanner). The output is human-readable
- * so when an agent calls `get_observations(ids[])` on a filetree
- * observation they see something they can reason about.
+ * Render a small, sorted outline of the scanner-approved file tree.
+ * The indexer never re-walks the source; scanner filters/budgets are
+ * the single source of truth for what may be surfaced.
  */
-function renderFiletree(abs_path: string): string {
+function renderFiletree(food: FoodSource): string {
   const lines: string[] = [];
   const seenDirs = new Set<string>();
 
-  function visit(dir: string, depth: number): void {
-    if (depth > 3 || lines.length > 200) return;
-    let entries: string[];
-    try {
-      entries = readdirSync(dir).sort();
-    } catch {
-      return;
-    }
-    for (const name of entries) {
-      if (FORAGING_SKIP_NAMES.has(name)) continue;
-      const abs = join(dir, name);
-      let st: Stats;
-      try {
-        st = statSync(abs);
-      } catch {
-        continue;
-      }
-      const rel = relative(abs_path, abs);
-      if (st.isDirectory()) {
-        if (!seenDirs.has(rel)) {
-          seenDirs.add(rel);
-          lines.push(`${rel}/`);
-          visit(abs, depth + 1);
-        }
-      } else if (st.isFile()) {
-        lines.push(rel);
-      }
-    }
+  for (const file of food.file_tree.slice().sort((a, b) => a.path.localeCompare(b.path))) {
+    addParentDirs(file.path, lines, seenDirs);
+    lines.push(file.path);
   }
 
-  visit(abs_path, 0);
+  for (const skipped of food.skipped_files.slice().sort((a, b) => a.path.localeCompare(b.path))) {
+    addParentDirs(skipped.path.replace(/\/$/, ''), lines, seenDirs);
+    lines.push(`${skipped.path} [skipped_due_to=${skipped.skipped_due_to}]`);
+  }
+
   return lines.join('\n');
+}
+
+function addParentDirs(path: string, lines: string[], seenDirs: Set<string>): void {
+  let dir = dirname(path);
+  const parents: string[] = [];
+  while (dir && dir !== '.') {
+    parents.push(dir);
+    dir = dirname(dir);
+  }
+  for (const parent of parents.reverse()) {
+    if (!seenDirs.has(parent)) {
+      seenDirs.add(parent);
+      lines.push(`${parent}/`);
+    }
+  }
+}
+
+function skippedPattern(food: FoodSource, skipped: SkippedForagedFile): ForagedPattern {
+  return {
+    example_name: food.example_name,
+    file_path: skipped.path,
+    entry_kind: 'skipped',
+    skipped_due_to: skipped.skipped_due_to,
+    size: skipped.size,
+    content: [
+      `path=${skipped.path}`,
+      `skipped_due_to=${skipped.skipped_due_to}`,
+      `entry_type=${skipped.entry_type}`,
+      `size=${skipped.size ?? 'unknown'}`,
+    ].join('\n'),
+  };
 }

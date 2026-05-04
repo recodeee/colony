@@ -99,6 +99,8 @@ describe('scanExamplesFs', () => {
     // The hash must still be computed; content_hash presence is the proof
     // the walk terminated cleanly rather than scanning all 11 files.
     expect(scanned[0]?.content_hash).toBeDefined();
+    expect(scanned[0]?.file_tree.length).toBeLessThanOrEqual(3);
+    expect(scanned[0]?.skipped_files.some((s) => s.skipped_due_to === 'budget')).toBe(true);
   });
 
   it('ignores node_modules and other skip-listed directories', () => {
@@ -110,5 +112,52 @@ describe('scanExamplesFs', () => {
     // Must not see node_modules via entrypoint list; src/index.ts must.
     expect(source?.entrypoints).toContain('src/index.ts');
     expect(source?.entrypoints.some((e) => e.includes('node_modules'))).toBe(false);
+  });
+
+  it('filters large nested dumps with deterministic skip reasons', () => {
+    write('examples/app/package.json', '{"name":"app"}');
+    write('examples/app/package-lock.json', '{"lockfileVersion":3}');
+    write('examples/app/src/index.ts', 'export {}');
+    write('examples/app/docs/giant.md', 'a'.repeat(256));
+    write('examples/app/node_modules/dep/index.js', '// ignored dependency dump');
+    write('examples/app/.git/config', '[core]');
+    write('examples/app/screenshots/home.png', 'png bytes');
+    write('examples/app/assets/logo.png', 'png bytes');
+    write('examples/app/public/app.min.js', 'var a=1;');
+
+    const source = scanExamplesFs({
+      repo_root: repo,
+      limits: { max_file_bytes: 80, max_files_per_source: 20 },
+    }).scanned[0];
+
+    expect(source?.entrypoints).toContain('src/index.ts');
+    expect(source?.file_tree.map((f) => f.path)).not.toEqual(
+      expect.arrayContaining([
+        'package-lock.json',
+        'docs/giant.md',
+        'assets/logo.png',
+        'public/app.min.js',
+      ]),
+    );
+
+    const skipped = new Map(
+      (source?.skipped_files ?? []).map((s) => [s.path, s.skipped_due_to] as const),
+    );
+    expect(skipped.get('.git/')).toBe('nested_git');
+    expect(skipped.get('node_modules/')).toBe('generated');
+    expect(skipped.get('screenshots/')).toBe('binary');
+    expect(skipped.get('package-lock.json')).toBe('generated');
+    expect(skipped.get('docs/giant.md')).toBe('too_large');
+    expect(skipped.get('assets/logo.png')).toBe('binary');
+    expect(skipped.get('public/app.min.js')).toBe('generated');
+  });
+
+  it('keeps lockfiles when no matching manifest makes them redundant', () => {
+    write('examples/lock-only/package-lock.json', '{"lockfileVersion":3}');
+
+    const source = scanExamplesFs({ repo_root: repo }).scanned[0];
+
+    expect(source?.file_tree.map((f) => f.path)).toContain('package-lock.json');
+    expect(source?.skipped_files.some((s) => s.path === 'package-lock.json')).toBe(false);
   });
 });

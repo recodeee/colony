@@ -7,6 +7,20 @@
 
 export type ExampleManifestKind = 'npm' | 'pypi' | 'cargo' | 'go' | 'unknown';
 
+export type ForagingSkipReason = 'too_large' | 'generated' | 'binary' | 'nested_git' | 'budget';
+
+export interface ForagedFileEntry {
+  path: string;
+  size: number;
+}
+
+export interface SkippedForagedFile {
+  path: string;
+  skipped_due_to: ForagingSkipReason;
+  size: number | null;
+  entry_type: 'file' | 'directory';
+}
+
 /**
  * What a single `<repo_root>/examples/<name>/` looks like after the
  * extractor classifies it. Paths inside are *relative to abs_path* so
@@ -21,6 +35,8 @@ export interface FoodSource {
   manifest_path: string | null;
   readme_path: string | null;
   entrypoints: string[];
+  file_tree: ForagedFileEntry[];
+  skipped_files: SkippedForagedFile[];
   content_hash: string;
 }
 
@@ -32,8 +48,10 @@ export interface FoodSource {
 export interface ForagedPattern {
   example_name: string;
   file_path: string;
-  entry_kind: 'manifest' | 'readme' | 'filetree' | 'entrypoint' | 'config';
+  entry_kind: 'manifest' | 'readme' | 'filetree' | 'entrypoint' | 'config' | 'skipped';
   content: string;
+  skipped_due_to?: ForagingSkipReason;
+  size?: number | null;
 }
 
 /**
