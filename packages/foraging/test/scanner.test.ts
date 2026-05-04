@@ -161,6 +161,37 @@ describe('scanExamplesFs', () => {
     expect(source?.skipped_files.some((s) => s.path === 'package-lock.json')).toBe(false);
   });
 
+  it('splits curated Ruflo examples into compact concept sub-sources', () => {
+    write('examples/ruflo/package.json', '{"name":"ruflo"}');
+    write('examples/ruflo/README.md', '# Ruflo concept index');
+    write('examples/ruflo/plugins/README.md', '# plugins');
+
+    const { scanned, suppressed_examples } = scanExamplesFs({ repo_root: repo });
+
+    expect(suppressed_examples).toEqual(['ruflo']);
+    expect(scanned.map((s) => s.example_name)).toEqual([
+      'ruflo-v3-mcp',
+      'ruflo-plugins',
+      'ruflo-hooks',
+      'ruflo-memory',
+      'ruflo-swarm',
+      'ruflo-federation',
+      'ruflo-agentdb',
+      'ruflo-ruvector',
+    ]);
+    expect(scanned.find((s) => s.example_name === 'ruflo')).toBeUndefined();
+    expect(scanned.every((s) => s.manifest_path === 'package.json')).toBe(true);
+    expect(scanned.every((s) => s.file_tree.length === 0)).toBe(true);
+    expect(scanned.every((s) => s.skipped_files.length === 0)).toBe(true);
+    expect(scanned.every((s) => s.filetree_paths?.includes('package.json'))).toBe(true);
+    expect(scanned.every((s) => s.filetree_paths?.includes('README.md'))).toBe(true);
+
+    const plugins = scanned.find((s) => s.example_name === 'ruflo-plugins');
+    expect(plugins?.readme_path).toBe('plugins/README.md');
+    expect(plugins?.entrypoints).toEqual(['plugins/README.md']);
+    expect(plugins?.filetree_paths).toContain('plugins/');
+  });
+
   it('splits large Ruflo examples into compact sub-sources', () => {
     write('examples/ruflo/package.json', '{"name":"ruflo"}');
     write('examples/ruflo/README.md', '# Ruflo');

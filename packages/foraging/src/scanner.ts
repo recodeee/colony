@@ -316,7 +316,7 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
       continue;
     }
 
-    if (example_name === RUFLO_EXAMPLE_NAME && isLargeRufloExample(abs_path)) {
+    if (example_name === RUFLO_EXAMPLE_NAME && isRufloExample(abs_path)) {
       scanned.push(...buildRufloSubSources(opts.repo_root, abs_path, limits));
       suppressed_examples.push(example_name);
       continue;
@@ -352,6 +352,10 @@ function isLargeRufloExample(abs_path: string): boolean {
   return directoryExists(join(abs_path, 'v3')) && directoryExists(join(abs_path, 'plugins'));
 }
 
+function isRufloExample(abs_path: string): boolean {
+  return isLargeRufloExample(abs_path) || fileExists(join(abs_path, 'package.json'));
+}
+
 function buildCocoindexSubSources(
   repo_root: string,
   abs_path: string,
@@ -365,7 +369,25 @@ function buildRufloSubSources(
   abs_path: string,
   limits: ScanLimits,
 ): FoodSource[] {
-  return buildSubSources(repo_root, abs_path, RUFLO_SOURCE_PATH, RUFLO_SUB_SOURCES, limits);
+  const specs = isLargeRufloExample(abs_path)
+    ? RUFLO_SUB_SOURCES
+    : RUFLO_SUB_SOURCES.map((spec) => compactRufloSubSourceSpec(abs_path, spec));
+  return buildSubSources(repo_root, abs_path, RUFLO_SOURCE_PATH, specs, limits);
+}
+
+function compactRufloSubSourceSpec(abs_path: string, spec: RufloSubSourceSpec): RufloSubSourceSpec {
+  const pluginReadme =
+    spec.example_name === 'ruflo-plugins' && fileExists(join(abs_path, 'plugins/README.md'));
+  return {
+    ...spec,
+    manifest_kind: 'npm',
+    manifest_path: 'package.json',
+    readme_path: pluginReadme ? 'plugins/README.md' : 'README.md',
+    entrypoints: pluginReadme ? ['plugins/README.md'] : [],
+    filetree_paths: pluginReadme
+      ? ['package.json', 'README.md', 'plugins/', 'plugins/README.md']
+      : ['package.json', 'README.md'],
+  };
 }
 
 function buildSubSources(

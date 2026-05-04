@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Storage } from '@colony/storage';
 import { FORAGING_CONCEPT_RULES, type ForagingConceptTag } from './concepts.js';
@@ -183,8 +183,8 @@ function resolveExampleManifestPath(
   example_name: string,
   kind: string | null,
 ): string | null {
-  const rufloManifest = RUFLO_MANIFEST_PATHS[example_name];
-  if (rufloManifest) return join(repo_root, 'examples', 'ruflo', rufloManifest);
+  const rufloManifest = resolveRufloManifestPath(repo_root, example_name);
+  if (rufloManifest) return rufloManifest;
 
   const baseDir = join(repo_root, 'examples', example_name);
   switch (kind) {
@@ -201,14 +201,27 @@ function resolveExampleManifestPath(
   }
 }
 
-const RUFLO_MANIFEST_PATHS: Record<string, string> = {
-  'ruflo-v3-mcp': 'v3/package.json',
-  'ruflo-memory': 'v3/@claude-flow/memory/package.json',
-  'ruflo-swarm': 'v3/@claude-flow/swarm/package.json',
-  'ruflo-federation': 'v3/@claude-flow/plugin-agent-federation/package.json',
-  'ruflo-agentdb': 'v3/@claude-flow/memory/package.json',
-  'ruflo-ruvector': 'v3/plugins/ruvector-upstream/package.json',
+const RUFLO_MANIFEST_PATHS: Record<string, readonly string[]> = {
+  'ruflo-v3-mcp': ['v3/package.json', 'package.json'],
+  'ruflo-plugins': ['.claude-plugin/plugin.json', 'package.json'],
+  'ruflo-hooks': ['.claude-plugin/hooks/hooks.json', 'package.json'],
+  'ruflo-memory': ['v3/@claude-flow/memory/package.json', 'package.json'],
+  'ruflo-swarm': ['v3/@claude-flow/swarm/package.json', 'package.json'],
+  'ruflo-federation': ['v3/@claude-flow/plugin-agent-federation/package.json', 'package.json'],
+  'ruflo-agentdb': ['v3/@claude-flow/memory/package.json', 'package.json'],
+  'ruflo-ruvector': ['v3/plugins/ruvector-upstream/package.json', 'package.json'],
 };
+
+function resolveRufloManifestPath(repo_root: string, example_name: string): string | null {
+  const candidates = RUFLO_MANIFEST_PATHS[example_name];
+  if (!candidates) return null;
+  const base = join(repo_root, 'examples', 'ruflo');
+  for (const rel of candidates) {
+    const abs = join(base, rel);
+    if (existsSync(abs)) return abs;
+  }
+  return join(base, candidates[candidates.length - 1] ?? 'package.json');
+}
 
 function sourcePathForExample(example_name: string): string {
   return example_name.startsWith('ruflo-') ? 'examples/ruflo' : `examples/${example_name}`;
