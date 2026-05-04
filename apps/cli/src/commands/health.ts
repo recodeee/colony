@@ -1825,6 +1825,9 @@ function lifecycleBridgeRootCause(input: {
   recent_pre_tool_use_missing: number;
   edits_without_claim_before: number;
   claim_miss_reasons: ClaimMissReasons;
+  runtime_summary_recent_edit_paths: number;
+  runtime_summary_hook_capable_edits: number;
+  runtime_summary_pre_tool_use_signals: number;
   live_file_contentions: number;
   dirty_contended_files: number;
 }): RootCauseSummary | null {

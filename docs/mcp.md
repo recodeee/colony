@@ -27,6 +27,19 @@ Codex-style MCP tool names include the server prefix:
 
 Use `task_list` for browsing/debugging recent task threads. Use `task_ready_for_agent` for choosing what to work on next.
 
+## Ruflo sidecar boundary
+
+Ruflo integration should stay at the sidecar boundary. Do not vendor Ruflo, copy
+its swarm runtime, or import its browser/security tool trees into Colony. If
+Ruflo runs beside Colony, expose it through a separate MCP/runtime and let Colony
+observe compact events through a bridge.
+
+The intended flow is
+`Ruflo tools/events -> Colony bridge -> compact observations -> suggestions/health/debrief`.
+Map those events into Colony records such as observations, task threads,
+handoffs, claims, active-session state, learned patterns, and token receipts. See
+[Ruflo sidecar architecture](./ruflo-sidecar.md).
+
 Copy-paste startup:
 
 ```json
