@@ -76,7 +76,8 @@ export function buildIntegrationPlan(
   const files_to_copy = entrypointMetas.map((m) => ({
     from: `examples/${opts.example_name}/${m.file_path}`,
     to_suggestion: suggestTargetPath(m.file_path),
-    rationale: 'Entrypoint indexed from the example; keeps the same directory shape in the target.',
+    rationale:
+      'Port concept from this entrypoint into target code; keep directory shape only when it supports the integration.',
   }));
 
   const config_steps = extractConfigSteps(example.manifest_kind, exampleManifestPath);

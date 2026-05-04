@@ -41,12 +41,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
       limit: z.number().int().positive().max(20).optional(),
     },
     wrapHandler('examples_query', async ({ query, example_name, limit }) => {
+      const expandedQuery = expandForagingQuery(query);
       const e = (await resolveEmbedder()) ?? undefined;
       const filter: { kind: string; metadata?: Record<string, string> } = {
         kind: 'foraged-pattern',
       };
       if (example_name) filter.metadata = { example_name };
-      const hits = await store.search(query, limit ?? 10, e, filter);
+      const hits = await store.search(expandedQuery, limit ?? 10, e, filter);
       return { content: [{ type: 'text', text: JSON.stringify(hits) }] };
     }),
   );
@@ -68,4 +69,23 @@ export function register(server: McpServer, ctx: ToolContext): void {
       return { content: [{ type: 'text', text: JSON.stringify(plan) }] };
     }),
   );
+}
+
+export function expandForagingQuery(query: string): string {
+  const q = query.toLowerCase();
+  const extras: string[] = [];
+  if (q.includes('outcome-learning') || q.includes('concept=outcome-learning')) {
+    extras.push('outcome learning verification completion');
+  }
+  if (q.includes('token-budget') || q.includes('concept=token-budget')) {
+    extras.push('token budget compact hydrate collapse');
+  }
+  if (q.includes('pattern-memory') || q.includes('concept=pattern-memory')) {
+    extras.push('pattern memory observation history');
+  }
+  if (q.includes('trigger-routing') || q.includes('concept=trigger-routing')) {
+    extras.push('trigger routing classify route');
+  }
+  if (extras.length === 0) return query;
+  return `${query} ${extras.join(' ')}`;
 }

@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import type { MemoryStore } from '@colony/core';
 import { readCapped } from './extractor.js';
 import { redact } from './redact.js';
+import { FORAGING_SKIP_NAMES } from './skip-names.js';
 import { DEFAULT_SCAN_LIMITS, type FoodSource, type ForagedPattern } from './types.js';
 
 export interface IndexFoodSourceOptions {
@@ -32,6 +33,7 @@ export function indexFoodSource(
 
   let written = 0;
   for (const p of patterns) {
+    const concept_tags = detectConceptTags(food, p);
     const safe = redact(p.content, opts.extra_secret_env_names ?? []);
     if (!safe.trim()) continue;
     const id = store.addObservation({
@@ -44,11 +46,27 @@ export function indexFoodSource(
         manifest_kind: food.manifest_kind,
         file_path: p.file_path,
         entry_kind: p.entry_kind,
+        concept_tags,
       },
     });
     if (id > 0) written += 1;
   }
   return written;
+}
+
+function detectConceptTags(food: FoodSource, pattern: ForagedPattern): string[] {
+  if (pattern.entry_kind === 'filetree') return [];
+  const hay = `${food.example_name}\n${pattern.file_path}\n${pattern.content}`.toLowerCase();
+  const tags: string[] = [];
+  if (hasAny(hay, ['outcome', 'debrief', 'completion', 'verification'])) tags.push('outcome-learning');
+  if (hasAny(hay, ['token', 'budget', 'compact', 'hydrate', 'collapse'])) tags.push('token-budget');
+  if (hasAny(hay, ['pattern', 'memory', 'observation', 'history'])) tags.push('pattern-memory');
+  if (hasAny(hay, ['trigger', 'route', 'routing', 'classify'])) tags.push('trigger-routing');
+  return tags;
+}
+
+function hasAny(hay: string, needles: readonly string[]): boolean {
+  return needles.some((n) => hay.includes(n));
 }
 
 /**
@@ -129,7 +147,7 @@ function renderFiletree(abs_path: string): string {
       return;
     }
     for (const name of entries) {
-      if (SKIP_NAMES.has(name)) continue;
+      if (FORAGING_SKIP_NAMES.has(name)) continue;
       const abs = join(dir, name);
       let st: Stats;
       try {
@@ -153,17 +171,3 @@ function renderFiletree(abs_path: string): string {
   visit(abs_path, 0);
   return lines.join('\n');
 }
-
-const SKIP_NAMES = new Set([
-  'node_modules',
-  '.git',
-  '.venv',
-  'venv',
-  'dist',
-  'build',
-  'target',
-  '.next',
-  '.turbo',
-  '.cache',
-  '__pycache__',
-]);

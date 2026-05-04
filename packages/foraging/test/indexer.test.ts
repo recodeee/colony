@@ -111,6 +111,43 @@ describe('indexFoodSource', () => {
     });
     expect(readmeRow).toBeDefined();
   });
+
+  it('adds concept tags for Ruflo-like learning/token patterns', () => {
+    write('examples/ruflo-lite/package.json', '{"name":"ruflo-lite"}');
+    write(
+      'examples/ruflo-lite/README.md',
+      'Outcome learning with token budget and trigger routing improves pattern memory.',
+    );
+    write('examples/ruflo-lite/src/index.ts', 'export const triggerRouting = true');
+
+    const { scanned } = scanExamplesFs({ repo_root: repo });
+    const sample = scanned.find((s) => s.example_name === 'ruflo-lite');
+    if (!sample) throw new Error('fixture missing');
+    indexFoodSource(sample, store, { session_id: 'session-forage' });
+
+    const rows = store.storage.listForagedObservations(repo, 'ruflo-lite');
+    const allTags = new Set(
+      rows.flatMap((r) => {
+        const md = r.metadata ? (JSON.parse(r.metadata) as { concept_tags?: string[] }) : null;
+        return md?.concept_tags ?? [];
+      }),
+    );
+    expect(allTags.has('token-budget')).toBe(true);
+    expect(allTags.has('outcome-learning')).toBe(true);
+    expect(allTags.has('pattern-memory')).toBe(true);
+    expect(allTags.has('trigger-routing')).toBe(true);
+
+    const filetree = rows.find((r) => {
+      const md = r.metadata
+        ? (JSON.parse(r.metadata) as { entry_kind?: string; concept_tags?: string[] })
+        : null;
+      return md?.entry_kind === 'filetree';
+    });
+    const filetreeMeta = filetree?.metadata
+      ? (JSON.parse(filetree.metadata) as { concept_tags?: string[] })
+      : null;
+    expect(filetreeMeta?.concept_tags ?? []).toEqual([]);
+  });
 });
 
 describe('scanExamples (storage-aware)', () => {

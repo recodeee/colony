@@ -1,6 +1,7 @@
 import { type Stats, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { ExampleManifestKind, ScanLimits } from './types.js';
+import { FORAGING_SKIP_NAMES } from './skip-names.js';
 
 /**
  * The subset of an `examples/<name>/` that the extractor can classify
@@ -93,7 +94,7 @@ function walk(root: string, limits: ScanLimits): Array<{ path: string; size: num
 
     for (const name of entries) {
       if (out.length >= limits.max_files_per_source) break;
-      if (SKIP_NAMES.has(name)) continue;
+      if (FORAGING_SKIP_NAMES.has(name)) continue;
       const abs = join(dir, name);
       let st: Stats;
       try {
@@ -113,20 +114,6 @@ function walk(root: string, limits: ScanLimits): Array<{ path: string; size: num
   }
   return out;
 }
-
-const SKIP_NAMES = new Set([
-  'node_modules',
-  '.git',
-  '.venv',
-  'venv',
-  'dist',
-  'build',
-  'target',
-  '.next',
-  '.turbo',
-  '.cache',
-  '__pycache__',
-]);
 
 /**
  * Read a manifest file and return its raw text capped at `max_file_bytes`.

@@ -7,6 +7,7 @@ import { scanExamples } from '@colony/foraging';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { expandForagingQuery } from '../src/tools/foraging.js';
 import { buildServer } from '../src/server.js';
 
 let dir: string;
@@ -105,6 +106,12 @@ describe('MCP foraging tools', () => {
       const md = row?.metadata ? (JSON.parse(row.metadata) as { example_name: string }) : null;
       expect(md?.example_name).toBe('alpha');
     }
+  });
+
+  it('expands concept aliases for Ruflo-style discovery queries', async () => {
+    const expanded = expandForagingQuery('concept=token-budget');
+    expect(expanded).toContain('token budget');
+    expect(expanded).toContain('hydrate');
   });
 
   it('examples_integrate_plan returns a deterministic plan', async () => {

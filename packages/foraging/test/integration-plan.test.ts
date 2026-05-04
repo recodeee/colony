@@ -100,6 +100,7 @@ describe('buildIntegrationPlan', () => {
     });
     expect(plan.files_to_copy.some((f) => f.from === 'examples/app/src/index.ts')).toBe(true);
     expect(plan.files_to_copy[0]?.to_suggestion).toBe('src/index.ts');
+    expect(plan.files_to_copy[0]?.rationale).toMatch(/Port concept/i);
   });
 
   it('handles a missing target manifest gracefully', () => {
