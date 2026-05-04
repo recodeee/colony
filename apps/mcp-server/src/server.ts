@@ -7,8 +7,10 @@ import { isMainEntry } from '@colony/process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as attention from './tools/attention.js';
+import * as autopilot from './tools/autopilot.js';
 import * as bridge from './tools/bridge.js';
 import type { ToolContext } from './tools/context.js';
+import * as drift from './tools/drift.js';
 import * as foraging from './tools/foraging.js';
 import * as handoff from './tools/handoff.js';
 import { createHeartbeatWrapper, installActiveSessionHeartbeat } from './tools/heartbeat.js';
@@ -103,6 +105,12 @@ export function buildServer(
   recall.register(server, ctx);
   suggest.register(server, ctx);
   rescue.register(server, ctx);
+
+  // Autopilot lane (tick advisor + drift checker). Cheap compositions of
+  // existing primitives; registered after the core surface so the heartbeat
+  // wrapper has already wrapped the tools they delegate to.
+  autopilot.register(server, ctx);
+  drift.register(server, ctx);
 
   // Spec-driven dev lane (@colony/spec). Adds spec_read, spec_change_open,
   // spec_change_add_delta, spec_build_context, spec_build_record_failure,
