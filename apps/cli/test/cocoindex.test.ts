@@ -48,5 +48,7 @@ describe('cocoindex command helpers', () => {
     expect(COCOINDEX_APP).toContain('@coco.fn(memo=True)');
     expect(COCOINDEX_APP).toContain('localfs.walk_dir');
     expect(COCOINDEX_APP).toContain('coco.mount_each');
+    expect(COCOINDEX_APP).toContain('sourcedir=pathlib.Path(".")');
+    expect(COCOINDEX_APP).toContain('outdir=pathlib.Path(".")');
   });
 });

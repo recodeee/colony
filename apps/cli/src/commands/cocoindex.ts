@@ -82,10 +82,6 @@ from cocoindex.connectors import localfs
 from cocoindex.resources.file import PatternFilePathMatcher
 
 
-SOURCE_DIR = coco.ContextKey[pathlib.Path]("source_dir")
-OUTPUT_DIR = coco.ContextKey[pathlib.Path]("output_dir")
-
-
 @coco.fn(memo=True)
 def render_session_card(file: localfs.File, outdir: pathlib.Path) -> None:
     data = json.loads(file.file_path.resolve().read_text())
@@ -117,7 +113,7 @@ async def app_main(sourcedir: pathlib.Path, outdir: pathlib.Path) -> None:
 app = coco.App(
     "ColonyAgentSessionTokenIndex",
     app_main,
-    sourcedir=SOURCE_DIR,
-    outdir=OUTPUT_DIR,
+    sourcedir=pathlib.Path("."),
+    outdir=pathlib.Path("."),
 )
 `;
