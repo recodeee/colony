@@ -171,6 +171,7 @@ export {
   type InboxLane,
   type InboxMessage,
   type InboxOmxRuntimeWarning,
+  type InboxQuotaPendingClaim,
   type InboxPausedLane,
   type InboxRecentClaim,
   type InboxStaleClaimBranch,

@@ -1553,6 +1553,90 @@ Returns `{ status: 'completed', auto_archive: { status, reason?, archived_path?,
 
 Errors on `task_plan_complete_subtask` itself: `PLAN_SUBTASK_NOT_FOUND`, `PLAN_SUBTASK_NOT_CLAIMED`, `PLAN_SUBTASK_NOT_YOURS`.
 
+## `task_autopilot_tick`
+
+Stateless one-shot advisor that collapses `attention_inbox` + `task_ready_for_agent` into a single decision. Returns the next tool, the args to call it with, and a sleep hint. The loop itself lives in the caller (Claude Code's `ScheduleWakeup`, the `/loop` skill, cron, or any other scheduler) — this MCP call is stateless and never sleeps.
+
+```json
+{
+  "name": "task_autopilot_tick",
+  "input": { "session_id": "sess_abc", "agent": "claude-code", "repo_root": "/abs/repo" }
+}
+```
+
+Decision priority (first match wins):
+
+1. `accept_handoff` — a pending handoff is addressed to this session/agent. Returns `task_accept_handoff` args with `observation_id`.
+2. `accept_quota_relay` — a quota-pending claim is ready for adoption. Returns `task_claim_quota_accept` args lifted from the inbox's `suggested_actions.accept`.
+3. `reply_blocking_message` — at least one unread message has `urgency='blocking'`. Returns `task_message_mark_read` args; the caller is expected to read the body before claiming new work.
+4. `claim_ready` — `task_ready_for_agent` returned a claimable subtask. Returns `task_plan_claim_subtask` args (or `task_claim_quota_accept` for a quota-relay ready entry).
+5. `continue_current` — the caller already holds an open subtask claim. Returns `task_plan_complete_subtask` args; the caller should finish or hand off before switching.
+6. `no_op` — no actionable signal. `next_tool` and `next_args` are `null`; `suggested_wake_seconds` is conservative (1200s by default).
+
+Returned shape:
+
+```json
+{
+  "generated_at": 1700000000000,
+  "decision": "claim_ready",
+  "reason": "Claim foo/sub-0: it is unclaimed, dependencies are met, and it is the highest-ranked claimable ready item.",
+  "next_tool": "task_plan_claim_subtask",
+  "next_args": { "plan_slug": "foo", "subtask_index": 0, "session_id": "sess_abc", "agent": "claude-code", "repo_root": "/abs/repo", "file_scope": ["src/x.ts"] },
+  "next_action": "Call task_plan_claim_subtask with plan_slug=\"foo\", subtask_index=0, ...",
+  "suggested_wake_seconds": 60,
+  "signals": {
+    "pending_handoff_count": 0,
+    "quota_pending_claim_count": 0,
+    "unread_message_count": 0,
+    "blocking_message_count": 0,
+    "ready_subtask_count": 1,
+    "stalled_lane_count": 8,
+    "dead_heartbeat_lane_count": 6,
+    "actionable_stalled_lane_count": 2
+  }
+}
+```
+
+Stalled lanes whose surface activity is just session-start noise — title beginning with `Session start`, `No active swarm`, or `Heartbeat`, plus `dead`-activity lanes with no title — are classified as **dead heartbeats** and excluded from `actionable_stalled_lane_count`. Callers should drive escalation off `actionable_stalled_lane_count`, not the raw `stalled_lane_count`, to avoid noisy takeover signals.
+
+## `task_drift_check`
+
+Compare a session's active claims for one task against its recent edit-tool observations within a configurable window. File-scope drift only — does not analyse semantic drift from the task description.
+
+```json
+{
+  "name": "task_drift_check",
+  "input": { "session_id": "sess_abc", "task_id": 42, "window_minutes": 60 }
+}
+```
+
+Inputs:
+
+- `session_id` — the agent's session.
+- `task_id` — the task whose claims and edits are compared.
+- `window_minutes` — lookback for edit observations. Default 60, max 1440. Claims have no time bound; only their `state='active'` rows count.
+
+Returns:
+
+```json
+{
+  "generated_at": 1700000000000,
+  "task_id": 42,
+  "session_id": "sess_abc",
+  "window_minutes": 60,
+  "claimed_files": ["src/keeper.ts", "src/idle-claim.ts"],
+  "edited_files": ["src/keeper.ts", "src/uncovered.ts"],
+  "edits_without_claim": ["src/uncovered.ts"],
+  "claims_without_edits": ["src/idle-claim.ts"],
+  "drift_score": 0.5,
+  "recommendation": "Claim 1 file(s) edited without an active claim: src/uncovered.ts. Release or revisit 1 claim(s) with no recent edits: src/idle-claim.ts.",
+  "next_tool": "task_claim_file",
+  "next_args": [{ "session_id": "sess_abc", "task_id": 42, "file_path": "src/uncovered.ts" }]
+}
+```
+
+`drift_score` is `edits_without_claim.length / max(1, edited_files.length)` — the share of recent edits that fell outside the claim manifest. `next_tool` / `next_args` carry concrete `task_claim_file` payloads when drift exists, otherwise `null`. Edit-tool detection uses the canonical `FILE_EDIT_TOOLS` set from `@colony/storage`.
+
 ## Plan observation kinds
 
 The lane introduces several observation kinds on the parent spec task and on the sub-task threads. They are written through `MemoryStore.addObservation`, so content is compressed and `metadata` carries the structured payload.
