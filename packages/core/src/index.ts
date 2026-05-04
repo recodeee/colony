@@ -56,6 +56,18 @@ export {
   type OmxRuntimeSummaryInput,
   type OmxRuntimeWarningKind,
 } from './omx-runtime-summary.js';
+export {
+  RUFLO_BRIDGE_EVENT_FAMILIES,
+  RUFLO_BRIDGE_EVENT_FAMILY_BY_NAME,
+  RUFLO_BRIDGE_EVENT_NAMES,
+  mapRufloEventToColonyObservation,
+  type RufloBridgeEvent,
+  type RufloBridgeEventFamily,
+  type RufloBridgeEventFamilyForName,
+  type RufloBridgeEventName,
+  type RufloBridgeObservation,
+  type RufloBridgeObservationMetadata,
+} from './ruflo-bridge.js';
 export { hybridRank } from './ranker.js';
 export type { SearchResult, GetObservationsOptions, Observation, Session } from './types.js';
 export { createSessionId } from './ids.js';
