@@ -76,6 +76,64 @@ const EVENT_TYPES = new Set<OmxLifecycleEventType>([
   'finish_result',
 ]);
 
+const EVENT_TYPE_HINT = Array.from(EVENT_TYPES).join(', ');
+
+export const OMX_LIFECYCLE_REQUIRED_FIELDS = [
+  'event_id',
+  'event_name',
+  'session_id',
+  'cwd',
+  'repo_root',
+  'branch',
+  'timestamp',
+  'source',
+] as const;
+
+/**
+ * Sample envelope used by `colony bridge lifecycle --example` and surfaced in
+ * validator error messages. Lets users hitting the bridge for the first time
+ * pipe a known-good envelope instead of guessing the schema.
+ */
+export function omxLifecycleEnvelopeExample(): Record<string, unknown> {
+  return {
+    schema: OMX_LIFECYCLE_SCHEMA,
+    event_id: 'evt_example_pre_tool_use',
+    event_name: 'pre_tool_use',
+    session_id: 'codex@example-session',
+    agent: 'codex',
+    cwd: '/path/to/your/worktree',
+    repo_root: '/path/to/your/repo',
+    branch: 'agent/codex/example',
+    timestamp: '2026-05-04T16:00:00.000Z',
+    source: 'omx',
+    tool_name: 'Edit',
+    tool_input: { file_path: '/path/to/your/repo/src/example.ts' },
+  };
+}
+
+function lifecycleSchemaError(root: JsonRecord): string {
+  const schema = readEnvelopeSchema(root);
+  if (schema && schema !== OMX_LIFECYCLE_SCHEMA && schema !== OMX_LIFECYCLE_SCHEMA_ID) {
+    return (
+      `unexpected envelope schema ${JSON.stringify(schema)}; ` +
+      `expected ${JSON.stringify(OMX_LIFECYCLE_SCHEMA)}. ` +
+      'Run `colony bridge lifecycle --example` for a valid envelope.'
+    );
+  }
+  const eventName = root.event_name;
+  if (typeof eventName !== 'string' || !eventName.trim()) {
+    return (
+      `missing event_name; expected one of: ${EVENT_TYPE_HINT}. ` +
+      'Run `colony bridge lifecycle --example` for a valid envelope.'
+    );
+  }
+  return (
+    `unknown event_name ${JSON.stringify(eventName)}; ` +
+    `expected one of: ${EVENT_TYPE_HINT}. ` +
+    'Run `colony bridge lifecycle --example` for a valid envelope.'
+  );
+}
+
 export function isOmxLifecycleEnvelopeLike(value: unknown): boolean {
   const root = asRecord(value);
   if (!root) return false;
@@ -92,7 +150,7 @@ export function parseOmxLifecycleEnvelope(
     const root = asRecord(value);
     if (!root) return { ok: false, error: 'lifecycle envelope must be a JSON object' };
     if (!isOmxLifecycleEnvelopeLike(root)) {
-      return { ok: false, error: `expected ${OMX_LIFECYCLE_SCHEMA} envelope` };
+      return { ok: false, error: lifecycleSchemaError(root) };
     }
 
     const eventId = readString(root.event_id);

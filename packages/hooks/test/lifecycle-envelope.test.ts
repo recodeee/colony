@@ -7,6 +7,7 @@ import { MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   OMX_LIFECYCLE_SCHEMA,
+  omxLifecycleEnvelopeExample,
   parseOmxLifecycleEnvelope,
   runOmxLifecycleEnvelope,
 } from '../src/lifecycle-envelope.js';
@@ -25,6 +26,40 @@ afterEach(() => {
 });
 
 describe('OMX lifecycle envelope', () => {
+  it('returns a self-documenting error for an invalid envelope', () => {
+    const missing = parseOmxLifecycleEnvelope({});
+    expect(missing.ok).toBe(false);
+    if (missing.ok) throw new Error('expected ok=false');
+    expect(missing.error).toContain('missing event_name');
+    expect(missing.error).toContain('pre_tool_use');
+    expect(missing.error).toContain('colony bridge lifecycle --example');
+
+    const wrongName = parseOmxLifecycleEnvelope({ event_name: 'tool_use' });
+    expect(wrongName.ok).toBe(false);
+    if (wrongName.ok) throw new Error('expected ok=false');
+    expect(wrongName.error).toContain('unknown event_name "tool_use"');
+    expect(wrongName.error).toContain('post_tool_use');
+
+    const wrongSchema = parseOmxLifecycleEnvelope({
+      schema: 'omx-runtime-summary-v1',
+      event_name: 'pre_tool_use',
+    });
+    expect(wrongSchema.ok).toBe(false);
+    if (wrongSchema.ok) throw new Error('expected ok=false');
+    expect(wrongSchema.error).toContain('unexpected envelope schema "omx-runtime-summary-v1"');
+    expect(wrongSchema.error).toContain('"colony-omx-lifecycle-v1"');
+  });
+
+  it('returns an example envelope that round-trips through the parser', () => {
+    const example = omxLifecycleEnvelopeExample();
+    expect(example.schema).toBe(OMX_LIFECYCLE_SCHEMA);
+    const parsed = parseOmxLifecycleEnvelope(example);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error(parsed.error);
+    expect(parsed.event.event_type).toBe('pre_tool_use');
+    expect(parsed.event.tool_name).toBe('Edit');
+  });
+
   it('normalizes the shared envelope shape', () => {
     const parsed = parseOmxLifecycleEnvelope({
       event_id: 'evt_normalize',

@@ -1,8 +1,10 @@
 export { runHook } from './runner.js';
 export {
+  OMX_LIFECYCLE_REQUIRED_FIELDS,
   OMX_LIFECYCLE_SCHEMA,
   OMX_LIFECYCLE_SCHEMA_ID,
   isOmxLifecycleEnvelopeLike,
+  omxLifecycleEnvelopeExample,
   parseOmxLifecycleEnvelope,
   runOmxLifecycleEnvelope,
   type NormalizedOmxLifecycleEvent,

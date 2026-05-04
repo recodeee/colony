@@ -59,6 +59,7 @@ interface BridgeCommandDeps {
     payload: unknown,
     options: { defaultCwd?: string; ide?: string },
   ) => Promise<OmxLifecycleRunResult>;
+  omxLifecycleEnvelopeExample?: () => Record<string, unknown>;
   ingestOmxRuntimeSummary?: (
     store: MemoryStore,
     payload: OmxRuntimeSummaryInput,
@@ -70,6 +71,7 @@ interface BridgeLifecycleOptions {
   json?: boolean;
   ide?: string;
   cwd?: string;
+  example?: boolean;
 }
 
 interface BridgeRuntimeSummaryOptions {
@@ -164,7 +166,15 @@ export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps 
     .option('--json', 'emit the routing result as JSON')
     .option('--ide <name>', 'IDE/agent hint used when the envelope omits one')
     .option('--cwd <path>', 'cwd hint used when the envelope uses relative paths')
+    .option('--example', 'print a sample colony-omx-lifecycle-v1 envelope and exit')
     .action(async (opts: BridgeLifecycleOptions) => {
+      if (opts.example) {
+        const example =
+          deps.omxLifecycleEnvelopeExample ??
+          (await import('@colony/hooks')).omxLifecycleEnvelopeExample;
+        process.stdout.write(`${JSON.stringify(example(), null, 2)}\n`);
+        return;
+      }
       const raw = await (deps.readStdin ?? readStdin)();
       const payload = raw.trim() ? safeJson(raw) : {};
       const runLifecycle =

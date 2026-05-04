@@ -263,6 +263,47 @@ describe('bridge lifecycle --json', () => {
   });
 });
 
+describe('bridge lifecycle --example', () => {
+  it('prints a sample envelope without reading stdin or invoking the runner', async () => {
+    const exampleEnvelope = {
+      schema: 'colony-omx-lifecycle-v1',
+      event_id: 'evt_example_pre_tool_use',
+      event_name: 'pre_tool_use',
+      session_id: 'codex@example-session',
+      agent: 'codex',
+      cwd: '/path/to/your/worktree',
+      repo_root: '/path/to/your/repo',
+      branch: 'agent/codex/example',
+      timestamp: '2026-05-04T16:00:00.000Z',
+      source: 'omx',
+      tool_name: 'Edit',
+      tool_input: { file_path: '/path/to/your/repo/src/example.ts' },
+    };
+    const exampleFn = vi.fn(() => exampleEnvelope);
+    const output: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
+      output.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+
+    const program = new Command();
+    registerBridgeCommand(program, {
+      readStdin: mocks.readStdin,
+      runOmxLifecycleEnvelope: mocks.runOmxLifecycleEnvelope,
+      omxLifecycleEnvelopeExample: exampleFn,
+    });
+
+    await program.parseAsync(['node', 'test', 'bridge', 'lifecycle', '--example'], {
+      from: 'node',
+    });
+
+    expect(exampleFn).toHaveBeenCalledTimes(1);
+    expect(mocks.readStdin).not.toHaveBeenCalled();
+    expect(mocks.runOmxLifecycleEnvelope).not.toHaveBeenCalled();
+    expect(JSON.parse(output.join(''))).toEqual(exampleEnvelope);
+  });
+});
+
 describe('bridge runtime-summary --json', () => {
   it('ingests compact OMX runtime summaries from stdin', async () => {
     mocks.readStdin.mockResolvedValue(
