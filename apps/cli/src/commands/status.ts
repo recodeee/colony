@@ -4,10 +4,10 @@ import { loadSettings, resolveDataDir, settingsPath } from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import {
-  collectGitGuardexColonyClaims,
-  formatGitGuardexLanesOutput,
   type GitGuardexColonyClaim,
   type GitGuardexLanesPayload,
+  collectGitGuardexColonyClaims,
+  formatGitGuardexLanesOutput,
   readGitGuardexLanes,
 } from '../lib/gitguardex.js';
 import { dataDbPath, withStorage } from '../util/store.js';

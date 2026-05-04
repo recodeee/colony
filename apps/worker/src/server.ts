@@ -20,10 +20,10 @@ import { type CaffeinateHandle, startCaffeinate } from './caffeinate.js';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
 import { type RescueLoopHandle, startRescueLoop } from './rescue-loop.js';
 import {
-  buildViewerAdoptionHealthPayload,
   type StrandedSessionSummary,
   buildClaimCoverageSnapshot,
   buildFileHeatRows,
+  buildViewerAdoptionHealthPayload,
   renderIndex,
   renderSession,
 } from './viewer.js';

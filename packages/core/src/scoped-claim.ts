@@ -4,8 +4,8 @@ import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
 import { normalizeClaimFilePath } from './live-file-contention.js';
 import type { MemoryStore } from './memory-store.js';
 import {
-  readWorktreeContentionReport,
   type WorktreeContentionReport,
+  readWorktreeContentionReport,
 } from './worktree-contention.js';
 
 export type GuardedClaimStatus =

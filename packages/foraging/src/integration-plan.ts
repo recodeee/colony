@@ -74,13 +74,16 @@ export function buildIntegrationPlan(
     source: `${sourcePathForExample(opts.example_name)}/${m.file_path}`,
     target_hint: suggestTargetPath(m.file_path),
     concept_tags: m.concept_tags,
-    rationale: 'Port concept from this indexed pattern; keep only behavior that fits target boundaries.',
+    rationale:
+      'Port concept from this indexed pattern; keep only behavior that fits target boundaries.',
   }));
 
   const config_steps = extractConfigSteps(example.manifest_kind, exampleManifestPath);
 
   if (!manifestObs) {
-    uncertainty_notes.push('Manifest observation missing — dependency considerations may be incomplete.');
+    uncertainty_notes.push(
+      'Manifest observation missing — dependency considerations may be incomplete.',
+    );
   }
   if (!filetreeObs) {
     uncertainty_notes.push(
@@ -129,7 +132,9 @@ function buildDependencyConsiderations(
 
   const exampleDeps = exampleManifestPath ? parseNpmDepsFromFile(exampleManifestPath) : null;
   if (!exampleDeps) {
-    notes.push('Example manifest could not be read or parsed as JSON; package considerations empty.');
+    notes.push(
+      'Example manifest could not be read or parsed as JSON; package considerations empty.',
+    );
     return [];
   }
 

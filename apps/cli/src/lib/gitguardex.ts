@@ -368,7 +368,9 @@ export function buildGitGuardexLanesPayload(
     active_lanes: lanes.length,
     lanes,
     claimed_files: claimedFiles,
-    orphan_gx_lanes: lanes.filter((lane) => !colonyClaims.some((claim) => laneMatchesClaim(lane, claim))),
+    orphan_gx_lanes: lanes.filter(
+      (lane) => !colonyClaims.some((claim) => laneMatchesClaim(lane, claim)),
+    ),
     colony_claims_without_gx_lane: colonyClaims.filter(
       (claim) => !lanes.some((lane) => laneMatchesClaim(lane, claim)),
     ),
@@ -378,9 +380,7 @@ export function buildGitGuardexLanesPayload(
 
 export function collectGitGuardexColonyClaims(
   tasks: Array<{ id: number; title: string; branch: string }>,
-  listClaims: (
-    taskId: number,
-  ) => Array<{
+  listClaims: (taskId: number) => Array<{
     task_id: number;
     file_path: string;
     session_id: string;
@@ -424,7 +424,8 @@ export function formatGitGuardexLanesOutput(
   lines.push('  lanes:');
   for (const lane of payload.lanes.slice(0, limit)) {
     lines.push(`    - ${lane.branch ?? 'unknown-branch'} (${lane.session_id ?? 'no-session'})`);
-    if (lane.agent || lane.task) lines.push(`      ${compactParts([lane.agent, lane.task]).join(' | ')}`);
+    if (lane.agent || lane.task)
+      lines.push(`      ${compactParts([lane.agent, lane.task]).join(' | ')}`);
     if (lane.worktree) lines.push(`      worktree: ${lane.worktree}`);
     if (lane.claimed_files.length > 0) {
       lines.push(`      claimed: ${lane.claimed_files.slice(0, limit).join(', ')}`);
@@ -494,7 +495,8 @@ function resolveReadySubtask(
     );
   }
   const plan = plans.find((candidate) => candidate.plan_slug === args.planSlug);
-  if (!plan) throw new GitGuardexExecutorError('PLAN_NOT_FOUND', `plan not found: ${args.planSlug}`);
+  if (!plan)
+    throw new GitGuardexExecutorError('PLAN_NOT_FOUND', `plan not found: ${args.planSlug}`);
   const subtask = plan.subtasks.find((candidate) => candidate.subtask_index === args.subtaskIndex);
   if (!subtask) {
     throw new GitGuardexExecutorError(
@@ -706,8 +708,20 @@ function normalizeLane(raw: unknown): GitGuardexLane {
       'files',
     ]),
     dirty_files: readFileArray(item, ['dirty_files', 'dirtyFiles', ['dirty', 'files']]),
-    pr_url: readString(item, ['pr_url', 'prUrl', 'pull_request_url', 'pullRequestUrl', ['pr', 'url']]),
-    pr_state: readString(item, ['pr_state', 'prState', 'pull_request_state', 'pullRequestState', ['pr', 'state']]),
+    pr_url: readString(item, [
+      'pr_url',
+      'prUrl',
+      'pull_request_url',
+      'pullRequestUrl',
+      ['pr', 'url'],
+    ]),
+    pr_state: readString(item, [
+      'pr_state',
+      'prState',
+      'pull_request_state',
+      'pullRequestState',
+      ['pr', 'state'],
+    ]),
   };
 }
 
@@ -728,14 +742,18 @@ function normalizeFileArray(value: unknown): string[] {
         .flatMap((entry) => {
           if (typeof entry === 'string') return [entry];
           if (!isRecord(entry)) return [];
-          return [readString(entry, ['file_path', 'filePath', 'path', 'file']), readString(entry, ['name'])];
+          return [
+            readString(entry, ['file_path', 'filePath', 'path', 'file']),
+            readString(entry, ['name']),
+          ];
         })
         .filter((entry): entry is string => typeof entry === 'string')
         .map(normalizeFilePath)
         .filter(Boolean),
     );
   }
-  if (isRecord(value)) return readFileArray(value, ['files', 'paths', 'claimed_files', 'dirty_files']);
+  if (isRecord(value))
+    return readFileArray(value, ['files', 'paths', 'claimed_files', 'dirty_files']);
   return [];
 }
 
@@ -805,11 +823,7 @@ function matchLine(text: string, pattern: RegExp): string | null {
   return match?.[1]?.trim() ?? null;
 }
 
-function execGx(
-  execFileSync: GitGuardexExecFileSync,
-  args: string[],
-  cwd: string,
-): string {
+function execGx(execFileSync: GitGuardexExecFileSync, args: string[], cwd: string): string {
   return String(
     execFileSync('gx', args, {
       cwd,

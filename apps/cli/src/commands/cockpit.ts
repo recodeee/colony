@@ -42,11 +42,15 @@ export function registerCockpitCommand(program: Command): void {
         });
         const next = nextReadySpawnCommands(store, repoRoot, agent, opts.base ?? 'main');
         if (opts.json === true) {
-          process.stdout.write(`${JSON.stringify({ ...result, next_spawn_commands: next }, null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify({ ...result, next_spawn_commands: next }, null, 2)}\n`,
+          );
           return;
         }
         const lines = [
-          result.dry_run ? kleur.green('gitguardex cockpit dry-run') : kleur.green('gitguardex cockpit'),
+          result.dry_run
+            ? kleur.green('gitguardex cockpit dry-run')
+            : kleur.green('gitguardex cockpit'),
           `command: ${result.command}`,
         ];
         if (result.stdout) lines.push('', result.stdout.trimEnd());

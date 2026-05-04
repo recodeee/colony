@@ -3,15 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { MemoryStore, listPlans } from '@colony/core';
-import { publishOrderedPlan, type QueenOrderedPlanInput } from '@colony/queen';
+import { type QueenOrderedPlanInput, publishOrderedPlan } from '@colony/queen';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setGitGuardexCommandRunnerForTests,
   type CommandResult,
+  setGitGuardexCommandRunnerForTests,
 } from '../src/executors/gitguardex.js';
 import { createProgram } from '../src/index.js';
-import { spawnGitGuardexAgent, type GitGuardexExecFileSync } from '../src/lib/gitguardex.js';
+import { type GitGuardexExecFileSync, spawnGitGuardexAgent } from '../src/lib/gitguardex.js';
 
 const MINIMAL_SPEC = `# SPEC
 

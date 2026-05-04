@@ -89,7 +89,16 @@ describe('colony cockpit', () => {
   it('validates the displayed agent value used for follow-up spawn commands', async () => {
     await expect(
       createProgram().parseAsync(
-        ['node', 'test', 'cockpit', '--dry-run', '--repo-root', '/work/colony', '--agent', 'medusa'],
+        [
+          'node',
+          'test',
+          'cockpit',
+          '--dry-run',
+          '--repo-root',
+          '/work/colony',
+          '--agent',
+          'medusa',
+        ],
         { from: 'node' },
       ),
     ).rejects.toThrow('--agent must be codex or claude, got medusa');

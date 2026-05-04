@@ -7,8 +7,8 @@ import { scanExamples } from '@colony/foraging';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { expandForagingQuery } from '../src/tools/foraging.js';
 import { buildServer } from '../src/server.js';
+import { expandForagingQuery } from '../src/tools/foraging.js';
 
 let dir: string;
 let repoRoot: string;

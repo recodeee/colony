@@ -72,7 +72,8 @@ const AUTO_USAGE_HANDOFF_SUMMARY = 'Session hit usage limit; takeover requested.
 const USAGE_LIMIT_TEXT =
   /\b(usage[-_\s]*limit|rate[-_\s]*limit|quota|token[-_\s]*limit|max(?:imum)?[-_\s]*tokens?)\b/i;
 const WORKING_NOTE_KINDS = new Set(['note', 'decision', 'blocker']);
-const VERIFICATION_TEXT = /\b(test|tests|typecheck|lint|verify|verification|passed|failed|green)\b/i;
+const VERIFICATION_TEXT =
+  /\b(test|tests|typecheck|lint|verify|verification|passed|failed|green)\b/i;
 
 export function registerResumeCommand(program: Command): void {
   const group = program.command('resume').description('Build read-only recovery packets');
@@ -210,7 +211,10 @@ function packetFromCandidate(
       .taskTimeline(task.id, 100)
       .filter((obs) => WORKING_NOTE_KINDS.has(obs.kind) && obs.id !== row.id),
   );
-  const lastVerification = latestVerificationContent(store, store.storage.taskTimeline(task.id, 150));
+  const lastVerification = latestVerificationContent(
+    store,
+    store.storage.taskTimeline(task.id, 150),
+  );
   const agentPlaceholder = meta.to_agent === 'any' ? '<codex|claude>' : meta.to_agent;
   const shellCommand =
     worktree !== null

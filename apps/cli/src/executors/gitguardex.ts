@@ -133,9 +133,7 @@ export function defaultCommandRunner(
     status: result.status,
     stdout: String(result.stdout ?? ''),
     stderr: String(result.stderr ?? ''),
-    ...(result.error !== undefined
-      ? { error: result.error as Error & { code?: string } }
-      : {}),
+    ...(result.error !== undefined ? { error: result.error as Error & { code?: string } } : {}),
   };
 }
 
@@ -367,7 +365,9 @@ export function buildPlanAwareLaunchPacket(
   const siblingAgents = plan === null || subtask === null ? [] : buildSiblingAgents(plan, subtask);
   const claimedFiles = subtask?.file_scope ?? [];
   const siblingFiles = unique(
-    siblingAgents.flatMap((sibling) => sibling.files).filter((file) => !claimedFiles.includes(file)),
+    siblingAgents
+      .flatMap((sibling) => sibling.files)
+      .filter((file) => !claimedFiles.includes(file)),
   );
   const verificationCommand =
     opts.verificationCommand ?? 'pnpm --filter @imdeadpool/colony-cli test';

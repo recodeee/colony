@@ -97,9 +97,7 @@ function enrichForagingHits(
     if (!row.metadata) continue;
     try {
       metadataById.set(row.id, JSON.parse(row.metadata) as Record<string, unknown>);
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   return hits.map((h) => {
     const md = metadataById.get(h.id);

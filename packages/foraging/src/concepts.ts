@@ -1,7 +1,15 @@
 export const FORAGING_CONCEPT_RULES = [
   {
     tag: 'outcome-learning',
-    keywords: ['outcome', 'outcomes', 'debrief', 'completion', 'verification', 'trajectory', 'feedback'],
+    keywords: [
+      'outcome',
+      'outcomes',
+      'debrief',
+      'completion',
+      'verification',
+      'trajectory',
+      'feedback',
+    ],
     aliases: ['outcome learning', 'learn outcomes', 'failure learning'],
   },
   {
@@ -21,7 +29,15 @@ export const FORAGING_CONCEPT_RULES = [
   },
   {
     tag: 'sidecar-runtime',
-    keywords: ['sidecar', 'runtime', 'daemon', 'worker', 'background worker', 'loop worker', 'service'],
+    keywords: [
+      'sidecar',
+      'runtime',
+      'daemon',
+      'worker',
+      'background worker',
+      'loop worker',
+      'service',
+    ],
     aliases: ['sidecar runtime', 'runtime sidecar', 'background runtime'],
   },
   {
@@ -31,7 +47,14 @@ export const FORAGING_CONCEPT_RULES = [
   },
   {
     tag: 'plugin-registry',
-    keywords: ['plugin', 'plugins', 'plugin registry', 'plugin marketplace', 'plugin catalog', 'plugin install'],
+    keywords: [
+      'plugin',
+      'plugins',
+      'plugin registry',
+      'plugin marketplace',
+      'plugin catalog',
+      'plugin install',
+    ],
     aliases: ['plugin registry', 'plugin marketplace', 'plugin catalog'],
   },
   {
@@ -51,12 +74,26 @@ export const FORAGING_CONCEPT_RULES = [
   },
   {
     tag: 'ruvector',
-    keywords: ['ruvector', '@ruvector', 'vector search', 'graph rag', 'flashattention', 'embeddings'],
+    keywords: [
+      'ruvector',
+      '@ruvector',
+      'vector search',
+      'graph rag',
+      'flashattention',
+      'embeddings',
+    ],
     aliases: ['ruvector', 'ru vector'],
   },
   {
     tag: 'federation',
-    keywords: ['federation', 'federated', 'federation init', 'federation join', 'zero-trust', 'trust scoring'],
+    keywords: [
+      'federation',
+      'federated',
+      'federation init',
+      'federation join',
+      'zero-trust',
+      'trust scoring',
+    ],
     aliases: ['federation', 'agent federation', 'federated agents'],
   },
   {

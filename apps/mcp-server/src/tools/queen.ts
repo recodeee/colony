@@ -11,11 +11,11 @@ import { PublishPlanError } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
+import { withPlanPublishGuidance } from './plan-output.js';
 import {
   type PlanValidationSummary,
   buildPlanValidationSummary,
 } from './plan-validation-summary.js';
-import { withPlanPublishGuidance } from './plan-output.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
 
 interface QueenToolGoal extends Goal {

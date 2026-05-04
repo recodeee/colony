@@ -90,7 +90,9 @@ export function registerAgentsCommand(program: Command): void {
             sessionId,
             command: opts.gxCommand ?? 'gx',
             ...(opts.base !== undefined ? { base: opts.base } : {}),
-            ...(opts.verifyCommand !== undefined ? { verificationCommand: opts.verifyCommand } : {}),
+            ...(opts.verifyCommand !== undefined
+              ? { verificationCommand: opts.verifyCommand }
+              : {}),
           });
         }
 

@@ -1,5 +1,5 @@
+import { type TokenReceipt, buildTokenReceipt } from '@colony/core';
 import { describe, expect, it } from 'vitest';
-import { buildTokenReceipt, type TokenReceipt } from '@colony/core';
 
 describe('token receipt builder', () => {
   it('builds deterministic compact token receipt metadata and content', () => {
