@@ -13,6 +13,7 @@ interface SweepOpts {
   releaseStaleBlockers?: boolean;
   releaseSameBranchDuplicates?: boolean;
   releaseSafeStaleClaims?: boolean;
+  releaseExpiredQuota?: boolean;
   json?: boolean;
 }
 
@@ -38,6 +39,10 @@ export function registerCoordinationCommand(program: Command): void {
       '--release-safe-stale-claims',
       'release expired safe stale claims and downgrade inactive stale claims to audit-only; audit history retained',
     )
+    .option(
+      '--release-expired-quota',
+      'downgrade quota-pending claims past their TTL to weak_expired and mark linked relays expired; audit history retained',
+    )
     .option('--json', 'emit sweep result as JSON')
     .action(async (opts: SweepOpts) => {
       const repoRoot = resolve(opts.repoRoot ?? process.cwd());
@@ -47,6 +52,8 @@ export function registerCoordinationCommand(program: Command): void {
         opts.releaseSameBranchDuplicates === true && opts.dryRun !== true;
       const releaseSafeStaleClaims =
         opts.releaseSafeStaleClaims === true && opts.dryRun !== true;
+      const releaseExpiredQuotaClaims =
+        opts.releaseExpiredQuota === true && opts.dryRun !== true;
       const settings = loadSettings();
       await withStore(settings, (store) => {
         const result = buildCoordinationSweep(store, {
@@ -55,6 +62,7 @@ export function registerCoordinationCommand(program: Command): void {
           release_stale_blockers: releaseStaleBlockers,
           release_same_branch_duplicates: releaseSameBranchDuplicates,
           release_safe_stale_claims: releaseSafeStaleClaims,
+          release_expired_quota_claims: releaseExpiredQuotaClaims,
         });
         if (opts.json) {
           process.stdout.write(
@@ -68,6 +76,7 @@ export function registerCoordinationCommand(program: Command): void {
               releaseStaleBlockers,
               releaseSameBranchDuplicates,
               releaseSafeStaleClaims,
+              releaseExpiredQuotaClaims,
             }),
           })}\n`,
         );
@@ -137,6 +146,9 @@ function renderCoordinationSweep(
   );
   lines.push(
     `  released stale claims: ${result.summary.released_stale_claim_count}  downgraded stale claims: ${result.summary.downgraded_stale_claim_count}  skipped dirty claims: ${result.summary.skipped_dirty_claim_count}`,
+  );
+  lines.push(
+    `  quota-pending claims: ${result.summary.quota_pending_claims}  released expired quota-pending: ${result.summary.released_expired_quota_pending_claim_count}`,
   );
 
   renderSection(
@@ -232,6 +244,13 @@ function renderCoordinationSweep(
   );
   renderSection(
     lines,
+    'Released expired quota-pending claims',
+    result.released_expired_quota_pending_claims,
+    (claim) =>
+      `task #${claim.task_id} ${claim.branch} ${claim.file_path} previously held by ${claim.session_id} (TTL ${claim.expires_at}, age ${claim.age_minutes}m) -> weak_expired, audit #${claim.audit_observation_id}`,
+  );
+  renderSection(
+    lines,
     'Released stale claims',
     result.released_stale_claims,
     (claim) =>
@@ -259,11 +278,13 @@ function appliedSweepModes(opts: {
   releaseStaleBlockers: boolean;
   releaseSameBranchDuplicates: boolean;
   releaseSafeStaleClaims: boolean;
+  releaseExpiredQuotaClaims: boolean;
 }): string[] {
   const modes: string[] = [];
   if (opts.releaseStaleBlockers) modes.push('release-stale-blockers');
   if (opts.releaseSameBranchDuplicates) modes.push('release-same-branch-duplicates');
   if (opts.releaseSafeStaleClaims) modes.push('release-safe-stale-claims');
+  if (opts.releaseExpiredQuotaClaims) modes.push('release-expired-quota');
   return modes;
 }
 

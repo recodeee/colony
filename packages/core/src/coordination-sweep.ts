@@ -37,6 +37,7 @@ export interface CoordinationSweepOptions {
   release_stale_blockers?: boolean;
   release_safe_stale_claims?: boolean;
   release_same_branch_duplicates?: boolean;
+  release_expired_quota_claims?: boolean;
   hivemind?: HivemindSnapshot;
   worktree_contention?: WorktreeContentionReport;
 }
@@ -66,12 +67,14 @@ export interface CoordinationSweepResult {
     released_stale_blocker_claim_count: number;
     requeued_stale_blocker_count: number;
     released_same_branch_duplicate_claim_count: number;
+    released_expired_quota_pending_claim_count: number;
     released_stale_claim_count: number;
     downgraded_stale_claim_count: number;
     /** Normalized safe-cleanup counters for CLI/health reporting. */
     stale_claims: number;
     expired_or_weak_claims: number;
     quota_pending_claims: number;
+    released_quota_pending_claims: number;
     released_claims: number;
     downgraded_claims: number;
     skipped_dirty_claims: number;
@@ -101,6 +104,7 @@ export interface CoordinationSweepResult {
   same_branch_duplicate_claims: SameBranchDuplicateClaimSignal[];
   released_stale_downstream_blockers: ReleasedStaleDownstreamBlocker[];
   released_same_branch_duplicate_claims: ReleasedSameBranchDuplicateClaim[];
+  released_expired_quota_pending_claims: ReleasedExpiredQuotaPendingClaim[];
   released_stale_claims: ReleasedStaleClaim[];
   downgraded_stale_claims: DowngradedStaleClaim[];
   skipped_dirty_claims: SkippedDirtyClaim[];
@@ -112,6 +116,7 @@ export interface CoordinationSweepSafeCleanupReport {
   stale_claims: number;
   expired_or_weak_claims: number;
   quota_pending_claims: number;
+  released_quota_pending_claims: number;
   released_claims: number;
   downgraded_claims: number;
   skipped_dirty_claims: number;
@@ -308,6 +313,19 @@ export interface ReleasedStaleClaim {
   audit_observation_id: number;
 }
 
+export interface ReleasedExpiredQuotaPendingClaim {
+  task_id: number;
+  branch: string;
+  file_path: string;
+  session_id: string;
+  handoff_observation_id: number;
+  expires_at: number;
+  age_minutes: number;
+  cleanup_action: 'release_expired_quota_pending';
+  reason: 'quota_pending_expired';
+  audit_observation_id: number;
+}
+
 export interface DowngradedStaleClaim {
   task_id: number;
   file_path: string;
@@ -390,6 +408,14 @@ export function buildCoordinationSweep(
     opts.release_stale_blockers === true
       ? releaseStaleDownstreamBlockers(store, stale_downstream_blockers, now)
       : [];
+  const expiredQuotaPendingClaims = collectExpiredQuotaPendingClaims(
+    [...claimBuckets.stale_claims, ...claimBuckets.expired_weak_claims],
+    now,
+  );
+  const released_expired_quota_pending_claims =
+    opts.release_expired_quota_claims === true
+      ? releaseExpiredQuotaPendingClaims(store, expiredQuotaPendingClaims, now)
+      : [];
   const remainingStaleClaims = filterRemainingStaleClaims(staleClaims, staleClaimCleanup);
   const remainingExpiredWeakClaims = filterRemainingStaleClaims(
     expiredWeakClaims,
@@ -421,6 +447,7 @@ export function buildCoordinationSweep(
     expired_weak_claims: expiredWeakClaims,
     cleanup: staleClaimCleanup,
     recommended_actions,
+    released_expired_quota_pending_claim_count: released_expired_quota_pending_claims.length,
   });
 
   return {
@@ -445,11 +472,13 @@ export function buildCoordinationSweep(
       ),
       requeued_stale_blocker_count: released_stale_downstream_blockers.length,
       released_same_branch_duplicate_claim_count: released_same_branch_duplicate_claims.length,
+      released_expired_quota_pending_claim_count: released_expired_quota_pending_claims.length,
       released_stale_claim_count: staleClaimCleanup.released_stale_claims.length,
       downgraded_stale_claim_count: staleClaimCleanup.downgraded_stale_claims.length,
       stale_claims: safe_cleanup.stale_claims,
       expired_or_weak_claims: safe_cleanup.expired_or_weak_claims,
       quota_pending_claims: safe_cleanup.quota_pending_claims,
+      released_quota_pending_claims: safe_cleanup.released_quota_pending_claims,
       released_claims: safe_cleanup.released_claims,
       downgraded_claims: safe_cleanup.downgraded_claims,
       skipped_dirty_claims: safe_cleanup.skipped_dirty_claims,
@@ -474,6 +503,7 @@ export function buildCoordinationSweep(
     same_branch_duplicate_claims: remainingSameBranchDuplicateClaims,
     released_stale_downstream_blockers,
     released_same_branch_duplicate_claims,
+    released_expired_quota_pending_claims,
     released_stale_claims: staleClaimCleanup.released_stale_claims,
     downgraded_stale_claims: staleClaimCleanup.downgraded_stale_claims,
     skipped_dirty_claims: staleClaimCleanup.skipped_dirty_claims,
@@ -1064,6 +1094,7 @@ function safeCleanupReport(args: {
   expired_weak_claims: ExpiredWeakClaimSignal[];
   cleanup: StaleClaimCleanupResult;
   recommended_actions: string[];
+  released_expired_quota_pending_claim_count: number;
 }): CoordinationSweepSafeCleanupReport {
   const skipped = args.cleanup.skipped_dirty_claims;
   return {
@@ -1071,6 +1102,7 @@ function safeCleanupReport(args: {
     expired_or_weak_claims: args.expired_weak_claims.length,
     quota_pending_claims: args.stale_claims.filter((claim) => claim.state === 'handoff_pending')
       .length,
+    released_quota_pending_claims: args.released_expired_quota_pending_claim_count,
     released_claims: args.cleanup.released_stale_claims.length,
     downgraded_claims: args.cleanup.downgraded_stale_claims.length,
     skipped_dirty_claims: skipped.filter((claim) => claim.reason === 'dirty_worktree').length,
@@ -1080,6 +1112,105 @@ function safeCleanupReport(args: {
     ).length,
     recommended_actions: args.recommended_actions,
   };
+}
+
+function collectExpiredQuotaPendingClaims(
+  signals: ClaimSignal[],
+  now: number,
+): ClaimSignal[] {
+  const seen = new Set<string>();
+  const out: ClaimSignal[] = [];
+  for (const claim of signals) {
+    if (claim.state !== 'handoff_pending') continue;
+    if (typeof claim.expires_at !== 'number' || claim.expires_at > now) continue;
+    if (claim.handoff_observation_id === null) continue;
+    const key = staleClaimKey(claim);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(claim);
+  }
+  return out;
+}
+
+function releaseExpiredQuotaPendingClaims(
+  store: MemoryStore,
+  claims: ClaimSignal[],
+  now: number,
+): ReleasedExpiredQuotaPendingClaim[] {
+  const released: ReleasedExpiredQuotaPendingClaim[] = [];
+  for (const claim of claims) {
+    if (claim.handoff_observation_id === null) continue;
+    if (typeof claim.expires_at !== 'number') continue;
+    const handoff_observation_id = claim.handoff_observation_id;
+    const expires_at = claim.expires_at;
+    const auditId = store.storage.transaction(() => {
+      const observationId = store.addObservation({
+        session_id: 'coordination-sweep',
+        task_id: claim.task_id,
+        kind: 'coordination-sweep',
+        content: `Coordination sweep released expired quota-pending claim ${claim.file_path} from ${claim.session_id}; audit history retained.`,
+        metadata: {
+          kind: 'coordination-sweep',
+          action: 'release-expired-quota-pending',
+          task_id: claim.task_id,
+          file_path: claim.file_path,
+          branch: claim.branch,
+          repo_root: claim.repo_root,
+          owner_session_id: claim.session_id,
+          handoff_observation_id,
+          claimed_at: claim.claimed_at,
+          expires_at,
+          age_minutes: claim.age_minutes,
+          now,
+        },
+      });
+      store.storage.markClaimWeakExpired({
+        task_id: claim.task_id,
+        file_path: claim.file_path,
+        session_id: claim.session_id,
+        handoff_observation_id,
+      });
+      expireQuotaBatonObservationIfPending(store, claim.task_id, handoff_observation_id, now);
+      store.storage.touchTask(claim.task_id, now);
+      return observationId;
+    });
+    released.push({
+      task_id: claim.task_id,
+      branch: claim.branch,
+      file_path: claim.file_path,
+      session_id: claim.session_id,
+      handoff_observation_id,
+      expires_at,
+      age_minutes: claim.age_minutes,
+      cleanup_action: 'release_expired_quota_pending',
+      reason: 'quota_pending_expired',
+      audit_observation_id: auditId,
+    });
+  }
+  return released;
+}
+
+function expireQuotaBatonObservationIfPending(
+  store: MemoryStore,
+  task_id: number,
+  observation_id: number,
+  now: number,
+): void {
+  const obs = store.storage.getObservation(observation_id);
+  if (!obs || obs.task_id !== task_id) return;
+  if (obs.kind !== 'handoff' && obs.kind !== 'relay') return;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = obs.metadata ? (JSON.parse(obs.metadata) as Record<string, unknown>) : {};
+  } catch {
+    return;
+  }
+  const status = typeof parsed.status === 'string' ? parsed.status : null;
+  const expires_at = typeof parsed.expires_at === 'number' ? parsed.expires_at : null;
+  if (status !== 'pending') return;
+  if (expires_at === null || now < expires_at) return;
+  parsed.status = 'expired';
+  store.storage.updateObservationMetadata(observation_id, JSON.stringify(parsed));
 }
 
 function staleClaimKey(claim: { task_id: number; file_path: string; session_id: string }): string {

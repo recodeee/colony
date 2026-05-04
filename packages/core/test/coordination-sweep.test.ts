@@ -242,6 +242,77 @@ describe('buildCoordinationSweep stale claim cleanup', () => {
     );
   });
 
+  it('releases expired quota-pending claims to weak_expired and marks relay expired', () => {
+    const filePath = 'src/quota-expired.ts';
+    seedStaleClaim('agent/quota-expired', filePath, 'codex@quota-expired', '/repo', 300);
+    const taskId = taskIdByBranch('agent/quota-expired');
+    const handoffId = markExpiredQuotaPendingClaim(
+      taskId,
+      filePath,
+      'codex@quota-expired',
+      NOW - 30 * MINUTE_MS,
+    );
+
+    const dryRun = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+    expect(dryRun.summary.released_expired_quota_pending_claim_count).toBe(0);
+    expect(dryRun.summary.quota_pending_claims).toBe(1);
+    expect(store.storage.getClaim(taskId, filePath)?.state).toBe('handoff_pending');
+
+    const applied = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      release_expired_quota_claims: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(applied.summary).toMatchObject({
+      released_expired_quota_pending_claim_count: 1,
+      released_quota_pending_claims: 1,
+    });
+    expect(applied.safe_cleanup.released_quota_pending_claims).toBe(1);
+    expect(applied.released_expired_quota_pending_claims).toEqual([
+      expect.objectContaining({
+        task_id: taskId,
+        branch: 'agent/quota-expired',
+        file_path: filePath,
+        session_id: 'codex@quota-expired',
+        handoff_observation_id: handoffId,
+        cleanup_action: 'release_expired_quota_pending',
+        reason: 'quota_pending_expired',
+      }),
+    ]);
+    expect(store.storage.getClaim(taskId, filePath)?.state).toBe('weak_expired');
+    const sweepObs = store.storage.taskObservationsByKind(taskId, 'coordination-sweep');
+    expect(sweepObs).toHaveLength(1);
+    const relayObs = store.storage.getObservation(handoffId);
+    expect(relayObs?.metadata).toContain('"status":"expired"');
+  });
+
+  it('leaves quota-pending claims that are not yet expired alone', () => {
+    const filePath = 'src/quota-future.ts';
+    seedStaleClaim('agent/quota-future', filePath, 'codex@quota-future', '/repo', 300);
+    const taskId = taskIdByBranch('agent/quota-future');
+    markQuotaPendingClaim(taskId, filePath, 'codex@quota-future'); // expires in future
+
+    const result = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      release_expired_quota_claims: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(result.summary.released_expired_quota_pending_claim_count).toBe(0);
+    expect(result.released_expired_quota_pending_claims).toEqual([]);
+    expect(store.storage.getClaim(taskId, filePath)?.state).toBe('handoff_pending');
+  });
+
   it('releases same-branch duplicate claims to audit-only history', () => {
     seedStaleClaim('agent/codex/duplicate', 'src/shared.ts', 'codex@left', '/repo');
     seedStaleClaim('agent/codex/duplicate', 'src/shared.ts', 'codex@right', '/repo-alias');
@@ -322,6 +393,29 @@ function markQuotaPendingClaim(taskId: number, filePath: string, sessionId: stri
     expires_at: NOW + 60 * MINUTE_MS,
     handoff_observation_id: handoffObservationId,
   });
+}
+
+function markExpiredQuotaPendingClaim(
+  taskId: number,
+  filePath: string,
+  sessionId: string,
+  expiresAt: number,
+): number {
+  const handoffObservationId = store.addObservation({
+    session_id: sessionId,
+    task_id: taskId,
+    kind: 'relay',
+    content: 'quota relay pending claim',
+    metadata: { kind: 'relay', reason: 'quota', status: 'pending', expires_at: expiresAt },
+  });
+  store.storage.markClaimHandoffPending({
+    task_id: taskId,
+    file_path: filePath,
+    session_id: sessionId,
+    expires_at: expiresAt,
+    handoff_observation_id: handoffObservationId,
+  });
+  return handoffObservationId;
 }
 
 function seedDownstreamBlockingClaim(): { taskId: number; filePath: string } {
