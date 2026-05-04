@@ -8,6 +8,7 @@ import { registerBackfillCommand } from './commands/backfill.js';
 import { registerBridgeCommand } from './commands/bridge.js';
 import { registerClaimsCommand } from './commands/claims.js';
 import { registerCockpitCommand } from './commands/cockpit.js';
+import { registerCocoIndexCommand } from './commands/cocoindex.js';
 import { registerCompressCommands } from './commands/compress.js';
 import { registerConfigCommand } from './commands/config.js';
 import { registerCoordinationCommand } from './commands/coordination.js';
@@ -49,6 +50,7 @@ export function createProgram(): Command {
 
   registerAgentsCommand(program);
   registerCockpitCommand(program);
+  registerCocoIndexCommand(program);
   registerClaimsCommand(program);
   registerInstallCommand(program);
   registerLaneCommand(program);
