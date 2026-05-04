@@ -2,10 +2,7 @@ import path, { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
 import { MemoryStore, TaskThread, inferIdeFromSessionId } from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
-import {
-  extractTouchedFiles,
-  pathExtractionWarningsForToolUse,
-} from './handlers/post-tool-use.js';
+import { extractTouchedFiles, pathExtractionWarningsForToolUse } from './handlers/post-tool-use.js';
 import { runHook } from './runner.js';
 import type { HookInput, HookName } from './types.js';
 

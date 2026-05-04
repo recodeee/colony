@@ -24,10 +24,7 @@ describe('SettingsSchema', () => {
     expect(parsed.claimStaleMinutes).toBe(240);
     expect(parsed.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);
     expect(parsed.protected_files).toEqual(
-      expect.arrayContaining([
-        'apps/cli/src/commands/health.ts',
-        'apps/cli/test/health.test.ts',
-      ]),
+      expect.arrayContaining(['apps/cli/src/commands/health.ts', 'apps/cli/test/health.test.ts']),
     );
     expect(parsed.bridge.writeOmxNotepadPointer).toBe(false);
     expect(parsed.bridge.policyMode).toBe('warn');

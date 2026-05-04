@@ -489,7 +489,10 @@ function summaryCandidates(record: JsonRecord): OmxRuntimeSummaryInput[] {
     timestamp: record.timestamp,
     last_seen_at: record.last_seen_at,
     lifecycle_events:
-      record.lifecycle_events ?? record.recent_lifecycle_events ?? record.events ?? record.tool_events,
+      record.lifecycle_events ??
+      record.recent_lifecycle_events ??
+      record.events ??
+      record.tool_events,
   };
   const raw =
     Array.isArray(record.summaries) && record.summaries.length > 0
@@ -720,7 +723,9 @@ function runtimeClaimBeforeEditStatsFromSummary(
   };
 }
 
-function normalizeRuntimeLifecycleEvents(input: OmxRuntimeSummaryInput): RuntimeLifecycleSummaryEvent[] {
+function normalizeRuntimeLifecycleEvents(
+  input: OmxRuntimeSummaryInput,
+): RuntimeLifecycleSummaryEvent[] {
   const raw =
     input.lifecycle_events ?? input.recent_lifecycle_events ?? input.events ?? input.tool_events;
   if (!Array.isArray(raw)) return [];

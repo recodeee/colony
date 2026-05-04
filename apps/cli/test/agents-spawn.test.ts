@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadSettings } from '@colony/config';
 import { listPlans } from '@colony/core';
-import { publishPlan, type PublishPlanSubtaskInput } from '@colony/spec';
+import { type PublishPlanSubtaskInput, publishPlan } from '@colony/spec';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -242,10 +242,9 @@ describe('colony agents spawn', () => {
       const subtask = plan?.subtasks[0];
       expect(subtask?.status).toBe('claimed');
       expect(subtask?.claimed_by_session_id).toBe('spawn-session');
-      expect(store.storage.listClaims(subtask?.task_id ?? -1).map((claim) => claim.file_path)).toEqual([
-        'packages/api/src/index.ts',
-        'packages/api/test/index.test.ts',
-      ]);
+      expect(
+        store.storage.listClaims(subtask?.task_id ?? -1).map((claim) => claim.file_path),
+      ).toEqual(['packages/api/src/index.ts', 'packages/api/test/index.test.ts']);
     });
   });
 

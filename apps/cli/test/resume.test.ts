@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore, TaskThread, type ManagedWorktreeInspection } from '@colony/core';
+import { type ManagedWorktreeInspection, MemoryStore, TaskThread } from '@colony/core';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildResumeQuotaPayload, renderResumeQuotaPayload } from '../src/commands/resume.js';

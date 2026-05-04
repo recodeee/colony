@@ -245,8 +245,7 @@ describe('Codex/OMX pre_tool_use smoke', () => {
       });
     }
 
-    const editObservations = store
-      .storage
+    const editObservations = store.storage
       .timeline(SESSION_ID)
       .filter((row) => row.kind === 'tool_use')
       .map((row) => parseMetadata(row.metadata))
@@ -256,8 +255,7 @@ describe('Codex/OMX pre_tool_use smoke', () => {
       expectedPaths.slice().sort(),
     );
 
-    const preToolSignals = store
-      .storage
+    const preToolSignals = store.storage
       .taskObservationsByKind(taskId, 'claim-before-edit')
       .map((row) => parseMetadata(row.metadata))
       .filter((metadata): metadata is Record<string, unknown> => metadata !== null);
@@ -279,10 +277,7 @@ describe('Codex/OMX pre_tool_use smoke', () => {
   });
 });
 
-async function emitLifecycle(
-  tsOffset: number,
-  overrides: Record<string, unknown>,
-): Promise<void> {
+async function emitLifecycle(tsOffset: number, overrides: Record<string, unknown>): Promise<void> {
   await emitLifecycleResult(tsOffset, overrides);
 }
 

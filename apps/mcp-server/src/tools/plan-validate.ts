@@ -61,11 +61,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     wrapHandler('task_plan_validate', async ({ repo_root, subtasks }) => {
       const pairwise = pairwiseScopeOverlap(subtasks);
-      const claims = claimsForPaths(
-        store,
-        repo_root,
-        [...new Set(subtasks.flatMap((subtask) => subtask.file_scope))],
-      );
+      const claims = claimsForPaths(store, repo_root, [
+        ...new Set(subtasks.flatMap((subtask) => subtask.file_scope)),
+      ]);
       const liveCollisions = liveClaimCollisions(subtasks, claims);
       const moduleWarnings = computeModuleOverlaps(subtasks);
       const orderedWaveErrors = validateOrderedPlan(subtasks);

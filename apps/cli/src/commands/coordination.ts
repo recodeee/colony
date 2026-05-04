@@ -45,8 +45,7 @@ export function registerCoordinationCommand(program: Command): void {
       const releaseStaleBlockers = opts.releaseStaleBlockers === true && opts.dryRun !== true;
       const releaseSameBranchDuplicates =
         opts.releaseSameBranchDuplicates === true && opts.dryRun !== true;
-      const releaseSafeStaleClaims =
-        opts.releaseSafeStaleClaims === true && opts.dryRun !== true;
+      const releaseSafeStaleClaims = opts.releaseSafeStaleClaims === true && opts.dryRun !== true;
       const settings = loadSettings();
       await withStore(settings, (store) => {
         const result = buildCoordinationSweep(store, {

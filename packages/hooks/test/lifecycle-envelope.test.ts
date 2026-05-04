@@ -183,8 +183,7 @@ describe('OMX lifecycle envelope', () => {
       path_extraction_warning: expect.stringContaining('No claimable file paths extracted'),
     });
 
-    const postLifecycle = store
-      .storage
+    const postLifecycle = store.storage
       .taskObservationsByKind(taskId, 'omx-lifecycle')
       .map((row) => parseMetadata(row.metadata))
       .find((metadata) => metadata?.event_id === 'evt_warning_post');
@@ -193,8 +192,7 @@ describe('OMX lifecycle envelope', () => {
       path_extraction_warning: expect.stringContaining('No claimable file paths extracted'),
     });
 
-    const toolUse = store
-      .storage
+    const toolUse = store.storage
       .timeline('codex@path-warning')
       .find((row) => row.kind === 'tool_use');
     expect(parseMetadata(toolUse?.metadata)).toMatchObject({

@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path';
 import type { MemoryStore } from '@colony/core';
-import { detectForagingConceptTags, type ForagingConceptTag } from './concepts.js';
+import { type ForagingConceptTag, detectForagingConceptTags } from './concepts.js';
 import { readCapped } from './extractor.js';
 import { redact } from './redact.js';
 import {

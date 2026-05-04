@@ -307,9 +307,7 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
     let isDir = false;
     try {
       isDir = statSync(abs_path).isDirectory();
-    } catch {
-      continue;
-    }
+    } catch {}
     if (!isDir) continue;
 
     if (example_name === COCOINDEX_EXAMPLE_NAME && isLargeCocoindexExample(abs_path)) {
@@ -437,12 +435,11 @@ function computeRufloContentHash(
   for (const rel of filetree_paths) {
     const cleanRel = rel.replace(/\/$/, '');
     const abs = join(abs_path, cleanRel);
-    let st: Stats;
+    let st: Stats | null = null;
     try {
       st = statSync(abs);
-    } catch {
-      continue;
-    }
+    } catch {}
+    if (!st) continue;
     hash.update(`${rel}\t${st.size}\n`);
     if (st.isFile()) {
       const text = readCapped(abs, limits.max_file_bytes);

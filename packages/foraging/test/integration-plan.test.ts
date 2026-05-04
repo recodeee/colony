@@ -145,8 +145,9 @@ describe('buildIntegrationPlan', () => {
     expect(plan.dependency_considerations).toEqual([
       expect.objectContaining({ package_name: 'zod', version: '^3.23.0' }),
     ]);
-    expect(plan.concepts_to_port.some((c) => c.source === 'examples/ruflo/v3/mcp/server-entry.ts'))
-      .toBe(true);
+    expect(
+      plan.concepts_to_port.some((c) => c.source === 'examples/ruflo/v3/mcp/server-entry.ts'),
+    ).toBe(true);
     expect(plan.config_steps).toContain('npm run build');
   });
 });
