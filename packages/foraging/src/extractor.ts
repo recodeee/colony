@@ -7,7 +7,7 @@ import {
   readdirSync,
   statSync,
 } from 'node:fs';
-import { basename, extname, join, relative } from 'node:path';
+import { basename, dirname, extname, join, relative } from 'node:path';
 import { FORAGING_SKIP_NAMES } from './skip-names.js';
 import type {
   ExampleManifestKind,
@@ -221,6 +221,10 @@ function walk(
  */
 export function readCapped(abs: string, max_file_bytes: number): string | null {
   try {
+    const st = statSync(abs);
+    if (!st.isFile() || st.size > max_file_bytes) {
+      return null;
+    }
     const buf = readFileSync(abs);
     if (buf.byteLength > max_file_bytes) {
       return null;
@@ -268,7 +272,7 @@ function fileSkipReason(
   const lowerRel = rel.toLowerCase();
   const ext = extname(lowerName);
 
-  if (isRedundantLockfile(name, rootFiles)) return 'generated';
+  if (isRedundantLockfile(abs, name, rootFiles)) return 'generated';
   if (isGeneratedFileName(name, lowerName, lowerRel)) return 'generated';
   if (BINARY_FILE_EXTENSIONS.has(ext)) return 'binary';
   if (st.size > limits.max_file_bytes) return 'too_large';
@@ -276,9 +280,16 @@ function fileSkipReason(
   return null;
 }
 
-function isRedundantLockfile(name: string, rootFiles: ReadonlySet<string>): boolean {
+function isRedundantLockfile(
+  abs: string,
+  name: string,
+  rootFiles: ReadonlySet<string>,
+): boolean {
   const hit = REDUNDANT_LOCKFILES.find((lockfile) => lockfile.name === name);
-  return hit ? hit.manifests.some((manifest) => rootFiles.has(manifest)) : false;
+  if (!hit) return false;
+  if (hit.manifests.some((manifest) => rootFiles.has(manifest))) return true;
+  const siblingFiles = readRootFileNames(dirname(abs));
+  return hit.manifests.some((manifest) => siblingFiles.has(manifest));
 }
 
 function isGeneratedFileName(name: string, lowerName: string, lowerRel: string): boolean {

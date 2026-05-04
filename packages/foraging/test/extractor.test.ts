@@ -65,6 +65,20 @@ describe('extract', () => {
     expect(paths).toContain('a.txt');
     expect(paths).not.toContain('nested/b.txt');
   });
+
+  it('skips nested lockfiles when their sibling manifest makes them redundant', () => {
+    write('packages/app/package.json', '{"name":"nested"}');
+    write('packages/app/package-lock.json', '{"lockfileVersion":3}');
+    write('packages/app/src/index.ts', 'export {}');
+
+    const shape = extract(dir, { ...DEFAULT_SCAN_LIMITS, max_depth: 4 });
+    const paths = shape.file_tree.map((f) => f.path);
+    const skipped = new Map(shape.skipped_files.map((f) => [f.path, f.skipped_due_to] as const));
+
+    expect(paths).toContain('packages/app/package.json');
+    expect(paths).not.toContain('packages/app/package-lock.json');
+    expect(skipped.get('packages/app/package-lock.json')).toBe('generated');
+  });
 });
 
 describe('readCapped', () => {

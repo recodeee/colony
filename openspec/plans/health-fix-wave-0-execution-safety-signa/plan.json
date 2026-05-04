@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "plan_slug": "health-fix-wave-0-execution-safety-signa",
+  "title": "Health-fix Wave 0: execution_safety + signal_evaporation cleanup",
+  "problem": "colony health reports 3 bad readiness areas (execution_safety, queen_plan_readiness, signal_evaporation). claim-before-edit sits at 0% even though pre_tool_use_signals=16 fire correctly — agents skip task_claim_file and the PreToolUse hook does not auto-claim. 22 quota-pending claims block downstream tasks. Ready Queen subtasks (6) go unclaimed because agents call task_ready_for_agent without following up with task_plan_claim_subtask. Sub-fixes: (1) PreToolUse hook auto-claim target file via task_claim_file when no prior claim exists for (repo_root, file). (2) Periodic sweeper releases expired quota-pending claims via task_claim_quota_release_expired. (3) Auto-archive Queen plans when remaining_subtasks=0 stays so for a grace window. (4) Reject or nudge task_ready_for_agent calls that lack a follow-up task_plan_claim_subtask in the same session.",
+  "acceptance_criteria": [
+    "PreToolUse hook auto-claims target file via task_claim_file when no prior claim exists; auto_claimed_before_edit rises above 0",
+    "Hook overhead stays under 150ms p95 budget",
+    "Hook gracefully no-ops when Colony storage is unavailable (no edit blocking)",
+    "Periodic sweeper releases expired quota-pending claims; quota_pending_claim_count trends to 0 in steady state",
+    "Completed Queen plans archive automatically when remaining=0; archived_with_remaining stays 0",
+    "task_ready_for_agent without follow-up task_plan_claim_subtask raises a SessionStart or MCP nudge",
+    "All four sub-fixes have unit + integration tests; pnpm test green"
+  ],
+  "roles": [
+    "planner",
+    "architect",
+    "critic",
+    "executor",
+    "writer",
+    "verifier"
+  ],
+  "tasks": [
+    {
+      "subtask_index": 0,
+      "title": "Prepare storage scope",
+      "description": "Update storage files for Health-fix Wave 0: execution_safety + signal_evaporation cleanup.",
+      "file_scope": [
+        "packages/storage/src/storage.ts"
+      ],
+      "depends_on": [],
+      "spec_row_id": null,
+      "capability_hint": "infra_work",
+      "status": "available",
+      "claimed_by_session_id": null,
+      "claimed_by_agent": null,
+      "completed_summary": null
+    },
+    {
+      "subtask_index": 1,
+      "title": "Update shared infrastructure scope",
+      "description": "Update remaining non-UI/non-API files for Health-fix Wave 0: execution_safety + signal_evaporation cleanup.",
+      "file_scope": [
+        "packages/hooks/src/handlers/pre-tool-use.ts",
+        "packages/core/src/scoped-claim.ts",
+        "packages/core/src/coordination-sweep.ts",
+        "apps/cli/src/commands/health.ts",
+        "apps/mcp-server/src/tools/ready-queue.ts"
+      ],
+      "depends_on": [
+        0
+      ],
+      "spec_row_id": null,
+      "capability_hint": "infra_work",
+      "status": "available",
+      "claimed_by_session_id": null,
+      "claimed_by_agent": null,
+      "completed_summary": null
+    }
+  ],
+  "published": {
+    "spec_task_id": 122,
+    "spec_change_path": "/home/deadpool/Documents/recodee/colony/openspec/changes/health-fix-wave-0-execution-safety-signa/CHANGE.md",
+    "auto_archive": true
+  },
+  "created_at": "2026-05-04T15:12:03.113Z",
+  "updated_at": "2026-05-04T15:12:03.113Z"
+}
