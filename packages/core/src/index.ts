@@ -268,6 +268,12 @@ export {
   type TokenReceipt,
   type TokenReceiptMetadata,
 } from './token-receipts.js';
+export {
+  buildCocoIndexSessionRecords,
+  safeCocoIndexSessionFileName,
+  type CocoIndexSessionRecord,
+  type CocoIndexSessionSourceOptions,
+} from './cocoindex-session-source.js';
 export { buildDiscrepancyReport, type DiscrepancyReport } from './discrepancy.js';
 export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from '@colony/storage';
 export type { ClaimPathContext, RepoFilePathContext } from '@colony/storage';
