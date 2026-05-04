@@ -20,9 +20,8 @@
 
 ## Completion / cleanup
 
-- BLOCKED: `git add` could not create `.git/worktrees/colony__codex__show-gitguardex-lanes-health-status-2026-04-30-00-06/index.lock` in the sandbox, and escalated git index write was rejected by approval quota until 4:55 AM. Next: rerun verification after reconstruction, then `git add`, commit, push, PR/merge, and prune the worktree.
-- [ ] Commit changes.
-- [ ] Push branch.
-- [ ] Open/update PR and record PR URL.
-- [ ] Verify PR state is `MERGED`.
-- [ ] Prune sandbox worktree and record cleanup evidence.
+- [x] Commit changes -> merged via PR #313 (`dfb106a1b12e3d763490df927d09fa2a2198e96d`); follow-on bridge surfaces merged via PR #316 (`cd66071002b54b58d459453ea730b547dae24ebd`) and PR #318 (`5f64a36cf5cac27ac4e5f51508e2ec586176a143`).
+- [x] Push branch -> PR #313 head `agent/codex/show-gitguardex-lanes-health-status-2026-04-30-00-06` reached GitHub; follow-on heads `agent/codex/gitguardex-executor-spawn-bridge-2026-04-30-00-11` and `agent/codex/colony-cockpit-gitguardex-entrypoint-2026-04-30-00-11` also reached GitHub.
+- [x] Open/update PR and record PR URL -> https://github.com/recodeee/colony/pull/313; related completion PRs: https://github.com/recodeee/colony/pull/316 and https://github.com/recodeee/colony/pull/318.
+- [x] Verify PR state is `MERGED` -> `gh pr view 313 --json number,state,url,headRefName,baseRefName,mergeCommit,mergedAt` returned `state=MERGED`, `mergedAt=2026-04-29T22:57:31Z`, `mergeCommit=dfb106a1b12e3d763490df927d09fa2a2198e96d`.
+- [x] Prune sandbox worktree and record cleanup evidence -> `git worktree list` on 2026-05-04 shows no `show-gitguardex-lanes-health-status-2026-04-30-00-06`, `gitguardex-executor-spawn-bridge-2026-04-30-00-11`, or `colony-cockpit-gitguardex-entrypoint-2026-04-30-00-11` worktrees remaining.
