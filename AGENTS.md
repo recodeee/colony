@@ -124,6 +124,11 @@ Do not store long proof dumps, stale narrative, or full logs in notepads. Put bu
 
 Default: less word, same proof.
 
+- Always prefix shell commands with `rtk` for token-optimized output and savings tracking.
+- Use RTK shorthands for file, git, GitHub, test, build, lint, package, container, cloud, data, and log commands, for example `rtk ls`, `rtk read`, `rtk grep`, `rtk git status`, `rtk gh pr view`, `rtk pytest`, `rtk tsc`, and `rtk lint`.
+- Use `rtk err <cmd>` or `rtk test <cmd>` when a command is noisy and failures are the only needed output.
+- Use `rtk proxy <command>` when exact raw command behavior is required while still routing through RTK.
+- If `rtk` is unavailable, record that fact, run the underlying command only as needed, and keep output compact.
 - For prompts about `token inefficiency`, `reviewer mode`, `minimal token overhead`, or session waste patterns, switch into low-overhead mode.
 - Plan in at most 4 bullets.
 - Execute by phase.
