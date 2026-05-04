@@ -16,6 +16,7 @@ import type { ObservationRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
+import { attemptClaimPlanSubtask } from './plan.js';
 import { type CompactNegativeWarning, searchNegativeWarnings } from './shared.js';
 
 const DEFAULT_LIMIT = 5;
@@ -166,7 +167,32 @@ export interface ReadyForAgentResult {
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
+  /**
+   * Populated when the caller passed `auto_claim: true` and the server
+   * attempted the claim in-band. The result is reported regardless of
+   * outcome so callers always know whether the next-step obligation was
+   * fulfilled or whether they still need to react (e.g. to a takeover
+   * recommendation).
+   */
+  auto_claimed?: AutoClaimOutcome;
 }
+
+export type AutoClaimOutcome =
+  | {
+      ok: true;
+      plan_slug: string;
+      subtask_index: number;
+      task_id: number;
+      branch: string;
+      file_scope: string[];
+    }
+  | {
+      ok: false;
+      plan_slug: string;
+      subtask_index: number;
+      code: string;
+      message: string;
+    };
 
 interface RankedSubtask extends ReadySubtask {
   task_id: number;
@@ -203,29 +229,81 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_ready_for_agent',
-    'Find the next task to claim for this agent. Use this when deciding what to work on. Returns exact task_plan_claim_subtask args when work is claimable, or a compact empty_state when no plan sub-tasks can be claimed. Capability map is opt-in via include_capability_map.',
+    'Find the next task to claim for this agent. Use this when deciding what to work on. Returns exact task_plan_claim_subtask args when work is claimable, or a compact empty_state when no plan sub-tasks can be claimed. Capability map is opt-in via include_capability_map. Pass auto_claim=true to have the server claim the single unambiguous candidate in the same call (only fires when next_tool would be task_plan_claim_subtask and assigned_agent matches the caller).',
     {
       session_id: z.string().min(1),
       agent: z.string().min(1),
       repo_root: z.string().min(1).optional(),
       limit: z.number().int().positive().max(20).optional(),
       include_capability_map: z.boolean().optional(),
+      auto_claim: z.boolean().optional(),
     },
     wrapHandler(
       'task_ready_for_agent',
-      async ({ session_id, agent, repo_root, limit, include_capability_map }) => {
-        return jsonReply(
-          await buildReadyForAgent(store, {
-            session_id,
-            agent,
-            ...(repo_root !== undefined ? { repo_root } : {}),
-            ...(limit !== undefined ? { limit } : {}),
-            ...(include_capability_map !== undefined ? { include_capability_map } : {}),
-          }),
-        );
+      async ({ session_id, agent, repo_root, limit, include_capability_map, auto_claim }) => {
+        const result = await buildReadyForAgent(store, {
+          session_id,
+          agent,
+          ...(repo_root !== undefined ? { repo_root } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(include_capability_map !== undefined ? { include_capability_map } : {}),
+        });
+        if (auto_claim) {
+          const enriched = await maybeAutoClaim(store, result, { session_id, agent });
+          return jsonReply(enriched);
+        }
+        return jsonReply(result);
       },
     ),
   );
+}
+
+async function maybeAutoClaim(
+  store: MemoryStore,
+  result: ReadyForAgentResult,
+  caller: { session_id: string; agent: string },
+): Promise<ReadyForAgentResult> {
+  if (!result.claim_required) return result;
+  if (result.next_tool !== 'task_plan_claim_subtask') return result;
+  const claim_args = result.claim_args;
+  if (!claim_args || !('plan_slug' in claim_args)) return result;
+  if (
+    result.assigned_agent !== undefined &&
+    result.assigned_agent !== caller.agent &&
+    result.assigned_agent !== 'any'
+  ) {
+    return result;
+  }
+  const claimResult = attemptClaimPlanSubtask(store, {
+    plan_slug: claim_args.plan_slug,
+    subtask_index: claim_args.subtask_index,
+    session_id: caller.session_id,
+    agent: caller.agent,
+  });
+  if (claimResult.ok) {
+    return {
+      ...result,
+      auto_claimed: {
+        ok: true,
+        plan_slug: claim_args.plan_slug,
+        subtask_index: claim_args.subtask_index,
+        task_id: claimResult.task_id,
+        branch: claimResult.branch,
+        file_scope: claimResult.file_scope,
+      },
+      next_action: `Auto-claimed ${claim_args.plan_slug}/sub-${claim_args.subtask_index}: claim files before edits with task_claim_file, then post task_note_working.`,
+    };
+  }
+  return {
+    ...result,
+    auto_claimed: {
+      ok: false,
+      plan_slug: claim_args.plan_slug,
+      subtask_index: claim_args.subtask_index,
+      code: claimResult.code,
+      message: claimResult.message,
+    },
+  };
 }
 
 export async function buildReadyForAgent(

@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -1000,6 +1008,38 @@ describe('task_plan auto-archive', () => {
     );
     expect(archiveErrors).toHaveLength(1);
     expect(archiveErrors[0]?.content).toContain('auto-archive failed');
+  });
+
+  it('reconciles a plan whose change dir was already moved to archive on disk', async () => {
+    const slug = 'orphan-archive-recon';
+    await call<PublishResult>('task_plan_publish', basicPublishArgs({ slug }));
+    await claimAndComplete(slug, 0, 'B', 'codex');
+    await claimAndComplete(slug, 1, 'C', 'claude');
+
+    // Simulate the lane being closed manually: move the change dir into
+    // archive without the colony plan-archived observation. This mirrors
+    // an operator running `mv openspec/changes/<slug> openspec/changes/archive/<date>-<slug>`.
+    backdateAllSubtaskCompletions(slug, 120_000);
+    const sourceDir = join(repoRoot, 'openspec/changes', slug);
+    const archiveRoot = join(repoRoot, 'openspec/changes/archive');
+    mkdirSync(archiveRoot, { recursive: true });
+    const datedSlug = `${new Date().toISOString().slice(0, 10)}-${slug}`;
+    const targetDir = join(archiveRoot, datedSlug);
+    renameSync(sourceDir, targetDir);
+    expect(existsSync(sourceDir)).toBe(false);
+    expect(existsSync(targetDir)).toBe(true);
+
+    await call<unknown>('task_plan_list', { repo_root: repoRoot });
+
+    const parentTask = store.storage
+      .listTasks(2000)
+      .find((t) => t.branch === `spec/${slug}`);
+    expect(parentTask).toBeDefined();
+    if (parentTask) {
+      const archived = store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10);
+      expect(archived).toHaveLength(1);
+      expect(archived[0]?.content).toContain('reconciled');
+    }
   });
 
   it('records a plan-archive-error observation when archive throws', async () => {

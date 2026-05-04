@@ -431,6 +431,46 @@ describe('colony health read queries', () => {
       }),
     );
   });
+
+  it('matches worktree-prefixed edits to canonical claims for the same logical file', () => {
+    const repoRoot = '/repo';
+    const worktree = '/repo/.omx/agent-worktrees/lane-a';
+    session('codex@worktree', 1_000, {
+      cwd: worktree,
+      metadata: { repo_root: repoRoot, branch: 'agent/lane-a' },
+    });
+
+    claim('codex@worktree', 'apps/api/foo.ts', 2_000, {
+      metadata: { repo_root: repoRoot, branch: 'agent/lane-a' },
+    });
+    toolUse(
+      'codex@worktree',
+      'Edit',
+      3_000,
+      '.omx/agent-worktrees/lane-a/apps/api/foo.ts',
+      { repo_root: repoRoot, branch: 'agent/lane-a' },
+    );
+
+    claim('codex@worktree', '.omc/agent-worktrees/lane-b/apps/api/bar.ts', 4_000, {
+      metadata: { repo_root: repoRoot, branch: 'agent/lane-a' },
+    });
+    toolUse('codex@worktree', 'Edit', 5_000, 'apps/api/bar.ts', {
+      repo_root: repoRoot,
+      branch: 'agent/lane-a',
+    });
+
+    const stats = storage.claimBeforeEditStats(0);
+    expect(stats).toMatchObject({
+      edit_tool_calls: 2,
+      edits_with_file_path: 2,
+      edits_claimed_before: 2,
+      claim_miss_reasons: {
+        no_claim_for_file: 0,
+        path_mismatch: 0,
+        worktree_path_mismatch: 0,
+      },
+    });
+  });
 });
 
 describe('fileHeat', () => {

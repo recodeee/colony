@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   type MemoryStore,
@@ -10,6 +10,7 @@ import {
   guardedClaimFile,
   listPlans,
   readSubtaskByBranch,
+  resolveManagedRepoRoot,
 } from '@colony/core';
 import {
   type PlanWorkspaceTaskInput,
@@ -219,144 +220,19 @@ export function register(server: McpServer, ctx: ToolContext): void {
       file_scope: z.array(z.string().min(1)).optional(),
     },
     wrapHandler('task_plan_claim_subtask', async (args) => {
-      const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
-      const located = readSubtaskByBranch(store, branch);
-      if (!located) {
-        return mcpErrorResponse('PLAN_SUBTASK_NOT_FOUND', `no sub-task at ${branch}`);
+      const result = attemptClaimPlanSubtask(store, args);
+      if (!result.ok) {
+        if (result.code === 'CLAIM_INTERNAL_ERROR') return mcpError(result.exception);
+        return mcpErrorResponse(result.code, result.message);
       }
-
-      const allTasks = store.storage.listTasks(2000);
-      const siblings = allTasks
-        .filter((t) => {
-          const m = t.branch.match(/^spec\/([a-z0-9-]+)\/sub-(\d+)$/);
-          return Boolean(m && m[1] === args.plan_slug);
-        })
-        .map((t) => readSubtaskByBranch(store, t.branch))
-        .filter((s): s is SubtaskLookup => s !== null)
-        .map((s) => s.info);
-
-      if (!areDepsMet(located.info, siblings)) {
-        const unmet = located.info.depends_on.filter((idx) => {
-          const dep = siblings.find((s) => s.subtask_index === idx);
-          return dep?.status !== 'completed';
-        });
-        return mcpErrorResponse(
-          'PLAN_SUBTASK_DEPS_UNMET',
-          `dependencies not met: sub-tasks [${unmet.join(', ')}] are not completed`,
-        );
-      }
-
-      // Race-safe claim. Re-scan the claim observations inside a transaction
-      // so two concurrent claims serialize through SQLite's write lock; the
-      // first commit wins, the second reads its current lifecycle and rejects.
-      try {
-        const claimBlock = store.storage.transaction(
-          (): {
-            code: 'CLAIM_TAKEOVER_RECOMMENDED' | 'CLAIM_HELD_BY_ACTIVE_OWNER';
-            message: string;
-          } | null => {
-            const fresh = readSubtaskByBranch(store, branch);
-            if (!fresh) {
-              const err: CodedError = new Error(`no sub-task at ${branch}`);
-              err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
-              throw err;
-            }
-            if (fresh.info.status !== 'available') {
-              const err: CodedError = new Error(
-                `sub-task is ${fresh.info.status}${
-                  fresh.info.claimed_by_session_id ? ` by ${fresh.info.claimed_by_session_id}` : ''
-                }`,
-              );
-              err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
-              throw err;
-            }
-            for (const file of fresh.info.file_scope) {
-              const guarded = guardedClaimFile(store, {
-                task_id: fresh.task_id,
-                file_path: file,
-                session_id: args.session_id,
-                agent: args.agent,
-                dryRun: true,
-              });
-              if (guarded.status === 'takeover_recommended') {
-                return {
-                  code: 'CLAIM_TAKEOVER_RECOMMENDED',
-                  message:
-                    guarded.recommendation ?? 'release or take over inactive claim before claiming',
-                };
-              }
-              if (guarded.status === 'blocked_active_owner') {
-                return {
-                  code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
-                  message:
-                    guarded.recommendation ??
-                    'request handoff or explicit takeover before claiming',
-                };
-              }
-            }
-            store.addObservation({
-              session_id: args.session_id,
-              task_id: fresh.task_id,
-              kind: 'plan-subtask-claim',
-              content: `${args.agent} claimed sub-task ${args.subtask_index} of plan ${args.plan_slug}`,
-              metadata: {
-                status: 'claimed',
-                session_id: args.session_id,
-                agent: args.agent,
-                plan_slug: args.plan_slug,
-                subtask_index: args.subtask_index,
-              },
-            });
-            const thread = new TaskThread(store, fresh.task_id);
-            thread.join(args.session_id, args.agent);
-            for (const file of fresh.info.file_scope) {
-              const guarded = guardedClaimFile(store, {
-                task_id: fresh.task_id,
-                file_path: file,
-                session_id: args.session_id,
-                agent: args.agent,
-              });
-              if (guarded.status === 'takeover_recommended') {
-                const err: CodedError = new Error(
-                  guarded.recommendation ?? 'release or take over inactive claim before claiming',
-                );
-                err.__code = 'CLAIM_TAKEOVER_RECOMMENDED';
-                throw err;
-              }
-              if (guarded.status === 'blocked_active_owner') {
-                const err: CodedError = new Error(
-                  guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
-                );
-                err.__code = 'CLAIM_HELD_BY_ACTIVE_OWNER';
-                throw err;
-              }
-            }
-            return null;
-          },
-        );
-        if (claimBlock) {
-          return mcpErrorResponse(claimBlock.code, claimBlock.message);
-        }
-      } catch (err) {
-        const code = (err as CodedError).__code;
-        if (
-          code === 'PLAN_SUBTASK_NOT_AVAILABLE' ||
-          code === 'CLAIM_TAKEOVER_RECOMMENDED' ||
-          code === 'CLAIM_HELD_BY_ACTIVE_OWNER'
-        ) {
-          return mcpErrorResponse(code, (err as Error).message);
-        }
-        return mcpError(err);
-      }
-
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({
-              task_id: located.task_id,
-              branch,
-              file_scope: located.info.file_scope,
+              task_id: result.task_id,
+              branch: result.branch,
+              file_scope: result.file_scope,
             }),
           },
         ],
@@ -522,6 +398,179 @@ export function register(server: McpServer, ctx: ToolContext): void {
       };
     }),
   );
+}
+
+export type ClaimPlanSubtaskArgs = {
+  plan_slug: string;
+  subtask_index: number;
+  session_id: string;
+  agent: string;
+};
+
+export type ClaimPlanSubtaskResult =
+  | { ok: true; task_id: number; branch: string; file_scope: string[] }
+  | {
+      ok: false;
+      code:
+        | 'PLAN_SUBTASK_NOT_FOUND'
+        | 'PLAN_SUBTASK_DEPS_UNMET'
+        | 'PLAN_SUBTASK_NOT_AVAILABLE'
+        | 'CLAIM_TAKEOVER_RECOMMENDED'
+        | 'CLAIM_HELD_BY_ACTIVE_OWNER';
+      message: string;
+      exception?: undefined;
+    }
+  | { ok: false; code: 'CLAIM_INTERNAL_ERROR'; message: string; exception: unknown };
+
+/**
+ * Race-safe claim of a plan sub-task. Extracted from the
+ * `task_plan_claim_subtask` MCP handler so the ready-queue path can
+ * opt into a server-side auto-claim without re-implementing the
+ * lifecycle. Returns a discriminated result instead of throwing —
+ * MCP handlers map non-`ok` results to `mcpErrorResponse` codes.
+ */
+export function attemptClaimPlanSubtask(
+  store: MemoryStore,
+  args: ClaimPlanSubtaskArgs,
+): ClaimPlanSubtaskResult {
+  const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
+  const located = readSubtaskByBranch(store, branch);
+  if (!located) {
+    return { ok: false, code: 'PLAN_SUBTASK_NOT_FOUND', message: `no sub-task at ${branch}` };
+  }
+
+  const allTasks = store.storage.listTasks(2000);
+  const siblings = allTasks
+    .filter((t) => {
+      const m = t.branch.match(/^spec\/([a-z0-9-]+)\/sub-(\d+)$/);
+      return Boolean(m && m[1] === args.plan_slug);
+    })
+    .map((t) => readSubtaskByBranch(store, t.branch))
+    .filter((s): s is SubtaskLookup => s !== null)
+    .map((s) => s.info);
+
+  if (!areDepsMet(located.info, siblings)) {
+    const unmet = located.info.depends_on.filter((idx) => {
+      const dep = siblings.find((s) => s.subtask_index === idx);
+      return dep?.status !== 'completed';
+    });
+    return {
+      ok: false,
+      code: 'PLAN_SUBTASK_DEPS_UNMET',
+      message: `dependencies not met: sub-tasks [${unmet.join(', ')}] are not completed`,
+    };
+  }
+
+  try {
+    const claimBlock = store.storage.transaction(
+      (): {
+        code: 'CLAIM_TAKEOVER_RECOMMENDED' | 'CLAIM_HELD_BY_ACTIVE_OWNER';
+        message: string;
+      } | null => {
+        const fresh = readSubtaskByBranch(store, branch);
+        if (!fresh) {
+          const err: CodedError = new Error(`no sub-task at ${branch}`);
+          err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+          throw err;
+        }
+        if (fresh.info.status !== 'available') {
+          const err: CodedError = new Error(
+            `sub-task is ${fresh.info.status}${
+              fresh.info.claimed_by_session_id ? ` by ${fresh.info.claimed_by_session_id}` : ''
+            }`,
+          );
+          err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+          throw err;
+        }
+        for (const file of fresh.info.file_scope) {
+          const guarded = guardedClaimFile(store, {
+            task_id: fresh.task_id,
+            file_path: file,
+            session_id: args.session_id,
+            agent: args.agent,
+            dryRun: true,
+          });
+          if (guarded.status === 'takeover_recommended') {
+            return {
+              code: 'CLAIM_TAKEOVER_RECOMMENDED',
+              message:
+                guarded.recommendation ?? 'release or take over inactive claim before claiming',
+            };
+          }
+          if (guarded.status === 'blocked_active_owner') {
+            return {
+              code: 'CLAIM_HELD_BY_ACTIVE_OWNER',
+              message:
+                guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
+            };
+          }
+        }
+        store.addObservation({
+          session_id: args.session_id,
+          task_id: fresh.task_id,
+          kind: 'plan-subtask-claim',
+          content: `${args.agent} claimed sub-task ${args.subtask_index} of plan ${args.plan_slug}`,
+          metadata: {
+            status: 'claimed',
+            session_id: args.session_id,
+            agent: args.agent,
+            plan_slug: args.plan_slug,
+            subtask_index: args.subtask_index,
+          },
+        });
+        const thread = new TaskThread(store, fresh.task_id);
+        thread.join(args.session_id, args.agent);
+        for (const file of fresh.info.file_scope) {
+          const guarded = guardedClaimFile(store, {
+            task_id: fresh.task_id,
+            file_path: file,
+            session_id: args.session_id,
+            agent: args.agent,
+          });
+          if (guarded.status === 'takeover_recommended') {
+            const err: CodedError = new Error(
+              guarded.recommendation ?? 'release or take over inactive claim before claiming',
+            );
+            err.__code = 'CLAIM_TAKEOVER_RECOMMENDED';
+            throw err;
+          }
+          if (guarded.status === 'blocked_active_owner') {
+            const err: CodedError = new Error(
+              guarded.recommendation ?? 'request handoff or explicit takeover before claiming',
+            );
+            err.__code = 'CLAIM_HELD_BY_ACTIVE_OWNER';
+            throw err;
+          }
+        }
+        return null;
+      },
+    );
+    if (claimBlock) {
+      return { ok: false, code: claimBlock.code, message: claimBlock.message };
+    }
+  } catch (err) {
+    const code = (err as CodedError).__code;
+    if (
+      code === 'PLAN_SUBTASK_NOT_AVAILABLE' ||
+      code === 'CLAIM_TAKEOVER_RECOMMENDED' ||
+      code === 'CLAIM_HELD_BY_ACTIVE_OWNER'
+    ) {
+      return { ok: false, code, message: (err as Error).message };
+    }
+    return {
+      ok: false,
+      code: 'CLAIM_INTERNAL_ERROR',
+      message: err instanceof Error ? err.message : String(err),
+      exception: err,
+    };
+  }
+
+  return {
+    ok: true,
+    task_id: located.task_id,
+    branch,
+    file_scope: located.info.file_scope,
+  };
 }
 
 function applyOrderedWaveHints(
@@ -897,8 +946,41 @@ function runAutoArchiveIfReady(
     return { status: 'skipped', reason: 'parent spec task not found' };
   }
 
+  // The parent spec task's `repo_root` may point to a now-deleted agent
+  // worktree. Strip the managed-worktree segment so the sweep can keep
+  // working when the lane was cleaned up.
+  const usableRepoRoot = resolveUsableRepoRoot(parentTask.repo_root);
+  if (!usableRepoRoot) {
+    return { status: 'skipped', reason: 'parent repo path missing on disk' };
+  }
+
+  // The change directory may already be missing because the operator (or
+  // an earlier sweep) moved it under `openspec/changes/archive/<date>-<slug>`
+  // without leaving a `plan-archived` observation. Reconcile by recording
+  // the archive path so the plan stops surfacing as completed-but-unarchived
+  // forever.
+  const sourceChangeDir = join(usableRepoRoot, 'openspec/changes', args.plan_slug);
+  if (!existsSync(sourceChangeDir)) {
+    const onDiskArchive = findExistingArchiveDir(usableRepoRoot, args.plan_slug);
+    if (onDiskArchive) {
+      store.addObservation({
+        session_id: args.session_id,
+        task_id: args.parent_spec_task_id,
+        kind: 'plan-archived',
+        content: `plan ${args.plan_slug} reconciled with on-disk archive`,
+        metadata: {
+          plan_slug: args.plan_slug,
+          archived_path: onDiskArchive,
+          reconciled: true,
+        },
+      });
+      return { status: 'archived', archived_path: onDiskArchive };
+    }
+    return { status: 'skipped', reason: 'change directory missing and no archive found' };
+  }
+
   try {
-    const repo = new SpecRepository({ repoRoot: parentTask.repo_root, store });
+    const repo = new SpecRepository({ repoRoot: usableRepoRoot, store });
     const currentRoot = repo.readRoot();
     const change = repo.readChange(args.plan_slug);
     const baseRoot =
@@ -956,7 +1038,7 @@ function runAutoArchiveIfReady(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    restoreStagedArchive(parentTask.repo_root, args.plan_slug);
+    restoreStagedArchive(usableRepoRoot, args.plan_slug);
     store.addObservation({
       session_id: args.session_id,
       task_id: args.parent_spec_task_id,
@@ -966,6 +1048,41 @@ function runAutoArchiveIfReady(
     });
     return { status: 'error', reason: message };
   }
+}
+
+/**
+ * Resolve the parent spec task's `repo_root` to a directory that still
+ * exists on disk. When the task was created inside an agent worktree
+ * (`<root>/.omx/agent-worktrees/<lane>` or `.omc/...`), the lane may
+ * have been pruned after merge — in that case we strip the worktree
+ * segment to find the canonical repo. Returns null if no candidate
+ * exists.
+ */
+function resolveUsableRepoRoot(repoRoot: string): string | null {
+  if (existsSync(repoRoot)) return repoRoot;
+  const stripped = resolveManagedRepoRoot(repoRoot);
+  if (stripped !== repoRoot && existsSync(stripped)) return stripped;
+  return null;
+}
+
+/**
+ * Look for an `openspec/changes/archive/<date>-<slug>` directory under
+ * the given repo root. Returns the absolute path of the first match,
+ * or null if none exist. Used by the auto-archive sweep to reconcile
+ * plans whose change directory was archived manually before colony
+ * recorded a `plan-archived` observation.
+ */
+function findExistingArchiveDir(repoRoot: string, slug: string): string | null {
+  const archiveRoot = join(repoRoot, 'openspec/changes/archive');
+  if (!existsSync(archiveRoot)) return null;
+  let entries: string[];
+  try {
+    entries = readdirSync(archiveRoot);
+  } catch {
+    return null;
+  }
+  const match = entries.find((name) => name.endsWith(`-${slug}`));
+  return match ? join(archiveRoot, match) : null;
 }
 
 /**

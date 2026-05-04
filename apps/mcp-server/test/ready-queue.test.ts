@@ -174,6 +174,23 @@ interface ReadyResult {
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
+  claim_required?: boolean;
+  auto_claimed?:
+    | {
+        ok: true;
+        plan_slug: string;
+        subtask_index: number;
+        task_id: number;
+        branch: string;
+        file_scope: string[];
+      }
+    | {
+        ok: false;
+        plan_slug: string;
+        subtask_index: number;
+        code: string;
+        message: string;
+      };
 }
 
 const EMPTY_READY_STATE =
@@ -515,6 +532,67 @@ describe('task_ready_for_agent', () => {
     });
     expect(result.ready).toHaveLength(0);
     expect(result.claim_required).toBeUndefined();
+    expect(result.empty_state).toBeDefined();
+  });
+
+  it('claims the unambiguous ready sub-task when auto_claim=true', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Auto-claim me',
+            description: 'Server should claim this in the same call.',
+            file_scope: ['apps/api/auto-claim.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Document auto-claim flow',
+            description: 'Document the auto-claim flow.',
+            file_scope: ['docs/auto-claim.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'auto-claim-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: true,
+    });
+
+    expect(result.auto_claimed).toMatchObject({
+      ok: true,
+      plan_slug: 'auto-claim-plan',
+      subtask_index: 0,
+      branch: 'spec/auto-claim-plan/sub-0',
+      file_scope: ['apps/api/auto-claim.ts'],
+    });
+    expect(result.next_action).toContain('Auto-claimed auto-claim-plan/sub-0');
+
+    const followup = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+    expect(followup.ready[0]).toMatchObject({
+      plan_slug: 'auto-claim-plan',
+      subtask_index: 0,
+      reason: 'continue_current_task',
+    });
+  });
+
+  it('skips auto_claim when no claimable sub-task is ready', async () => {
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: true,
+    });
+    expect(result.auto_claimed).toBeUndefined();
     expect(result.empty_state).toBeDefined();
   });
 

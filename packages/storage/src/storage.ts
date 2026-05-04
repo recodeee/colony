@@ -2879,13 +2879,36 @@ function sameComparableFilePath(edit: ClaimBeforeEditRow, claim: ClaimBeforeEdit
 
 function comparableFilePath(filePath: string, repoRoot: string | null): string {
   const normalizedPath = normalizeSlashes(normalize(filePath.trim()));
-  if (!repoRoot || !isAbsolute(normalizedPath)) return trimCurrentDirPrefix(normalizedPath);
+  if (!repoRoot || !isAbsolute(normalizedPath)) {
+    return stripManagedWorktreePrefix(trimCurrentDirPrefix(normalizedPath));
+  }
   const root = resolve(repoRoot);
   const absolutePath = resolve(normalizedPath);
   const rel = relative(root, absolutePath);
   if (rel === '') return '.';
-  if (!rel.startsWith('..') && !isAbsolute(rel)) return normalizeSlashes(rel);
-  return normalizeSlashes(absolutePath);
+  if (!rel.startsWith('..') && !isAbsolute(rel)) return stripManagedWorktreePrefix(normalizeSlashes(rel));
+  return stripManagedWorktreePrefix(normalizeSlashes(absolutePath));
+}
+
+/**
+ * Strip the managed agent-worktree prefix from a normalized path so that
+ * an edit recorded inside `.omx/agent-worktrees/<lane>/<rest>` matches a
+ * claim recorded for `<rest>` in the canonical repo. Without this, edit
+ * paths from worktrees never line up with claims posted from the primary
+ * checkout (or from a different worktree of the same file), and the
+ * claim-before-edit metric reports a path mismatch even when the agent
+ * did claim correctly. Symmetric — both edit and claim sides go through
+ * `comparableFilePath`, so canonical-vs-canonical and worktree-vs-worktree
+ * paths still compare equal.
+ */
+function stripManagedWorktreePrefix(value: string): string {
+  if (!value) return value;
+  const match = value.match(
+    /(^|\/)\.(?:omx|omc)\/agent-worktrees\/[^/]+\/(.*)$/,
+  );
+  if (!match || match[2] === undefined) return value;
+  const rest = match[2];
+  return rest === '' ? '.' : rest;
 }
 
 function normalizeRoot(value: string | null): string | null {
