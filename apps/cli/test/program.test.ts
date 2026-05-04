@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -62,6 +62,7 @@ describe('Colony CLI program', () => {
       Commands:
         agents                                            Launch Colony plan subtasks through an external executor
         cockpit [options]                                 Open a GitGuardex cockpit for Colony-managed plan lanes
+        cocoindex                                         Export compact agent session sources for CocoIndex
         claims                                            Inspect Colony file claim coverage
         install [options]                                 Register hooks + MCP server for an IDE
         lane                                              Pause, resume, and take over contended lanes
@@ -124,7 +125,12 @@ describe('Colony CLI program', () => {
     expect(hook?.commands.map((c) => c.name())).toContain('run');
   });
 
-  it('defaults hook storage to a writable repo-local Colony home', () => {
+  it('does not silently default hook storage to a per-repo `.omx/colony-home`', () => {
+    // Regression: the hook used to force every spawn at a fresh repo to write
+    // into `<cwd>/.omx/colony-home/data.db`, which split observations away from
+    // the user's canonical `~/.colony` DB and left the claim-before-edit health
+    // metric stuck at 0%. Without env or repo override, the hook must resolve
+    // through the standard settings cascade instead.
     const originalColonyHome = process.env.COLONY_HOME;
     const originalCavememHome = process.env.CAVEMEM_HOME;
     const cwd = mkdtempSync(join(tmpdir(), 'colony-hook-home-'));
@@ -132,9 +138,42 @@ describe('Colony CLI program', () => {
       delete process.env.COLONY_HOME;
       delete process.env.CAVEMEM_HOME;
       const resolved = ensureWritableHookHome({ cwd });
-      expect(resolved).toBe(join(cwd, '.omx', 'colony-home'));
+      expect(resolved).not.toBe(join(cwd, '.omx', 'colony-home'));
+      expect(resolved).not.toBeNull();
       expect(process.env.COLONY_HOME).toBe(resolved);
       expect(existsSync(resolved ?? '')).toBe(true);
+    } finally {
+      if (originalColonyHome === undefined) delete process.env.COLONY_HOME;
+      else process.env.COLONY_HOME = originalColonyHome;
+      if (originalCavememHome === undefined) delete process.env.CAVEMEM_HOME;
+      else process.env.CAVEMEM_HOME = originalCavememHome;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('honors a repo-local `.colony/settings.json` dataDir override', () => {
+    // Per-repo isolation is now opt-in via a checked-in repo settings file;
+    // this is the escape hatch that replaces the implicit `.omx/colony-home`
+    // default removed by the regression test above.
+    const originalColonyHome = process.env.COLONY_HOME;
+    const originalCavememHome = process.env.CAVEMEM_HOME;
+    const cwd = mkdtempSync(join(tmpdir(), 'colony-hook-home-repo-'));
+    const repoDataDir = join(cwd, 'custom-colony');
+    try {
+      delete process.env.COLONY_HOME;
+      delete process.env.CAVEMEM_HOME;
+      // loadSettingsForCwd looks for `.colony/settings.json` rooted at the
+      // nearest `.git` ancestor, so stage a fake repo root here.
+      mkdirSync(join(cwd, '.git'), { recursive: true });
+      mkdirSync(join(cwd, '.colony'), { recursive: true });
+      writeFileSync(
+        join(cwd, '.colony', 'settings.json'),
+        JSON.stringify({ dataDir: repoDataDir }),
+      );
+      const resolved = ensureWritableHookHome({ cwd });
+      expect(resolved).toBe(repoDataDir);
+      expect(process.env.COLONY_HOME).toBe(repoDataDir);
+      expect(existsSync(repoDataDir)).toBe(true);
     } finally {
       if (originalColonyHome === undefined) delete process.env.COLONY_HOME;
       else process.env.COLONY_HOME = originalColonyHome;

@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { loadSettingsForCwd, resolveDataDir } from '@colony/config';
 import { inferIdeFromSessionId } from '@colony/core';
 import { type HookName, type HookResult, runHook } from '@colony/hooks';
 import type { Command } from 'commander';
@@ -71,7 +71,11 @@ export function registerHookCommand(program: Command): void {
 export function ensureWritableHookHome(input: Record<string, unknown>): string | null {
   if (process.env.COLONY_HOME || process.env.CAVEMEM_HOME) return null;
   const cwd = readString(input.cwd) ?? process.cwd();
-  const colonyHome = join(cwd, '.omx', 'colony-home');
+  // Resolve through the same settings cascade the rest of the CLI uses so hook
+  // writes land in the user's canonical Colony home (default ~/.colony) and stay
+  // visible to health, MCP, and the worker. A repo can opt back into per-repo
+  // isolation by checking in `.colony/settings.json` with a custom dataDir.
+  const colonyHome = resolveDataDir(loadSettingsForCwd(cwd).dataDir);
   try {
     mkdirSync(colonyHome, { recursive: true });
     process.env.COLONY_HOME = colonyHome;
