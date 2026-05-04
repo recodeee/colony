@@ -33,6 +33,113 @@ interface RufloSubSourceSpec {
   concept_tags: readonly ForagingConceptTag[];
 }
 
+const COCOINDEX_EXAMPLE_NAME = 'cocoindex';
+const COCOINDEX_SOURCE_PATH = 'examples/cocoindex';
+const COCOINDEX_SUB_SOURCES: readonly RufloSubSourceSpec[] = [
+  {
+    example_name: 'cocoindex-skill',
+    manifest_kind: 'unknown',
+    manifest_path: null,
+    readme_path: 'skills/cocoindex/SKILL.md',
+    entrypoints: [
+      'skills/cocoindex/SKILL.md',
+      'skills/cocoindex/references/api_reference.md',
+      'skills/cocoindex/references/connectors.md',
+      'skills/cocoindex/references/patterns.md',
+      'skills/cocoindex/references/setup_database.md',
+      'skills/cocoindex/references/setup_project.md',
+    ],
+    filetree_paths: ['skills/cocoindex/', 'skills/cocoindex/references/'],
+    concept_tags: ['pattern-memory', 'trigger-routing'],
+  },
+  {
+    example_name: 'cocoindex-python',
+    manifest_kind: 'pypi',
+    manifest_path: 'pyproject.toml',
+    readme_path: 'README.md',
+    entrypoints: [
+      'python/cocoindex/__init__.py',
+      'python/cocoindex/cli.py',
+      'python/cocoindex/user_app_loader.py',
+      'python/cocoindex/_internal/app.py',
+      'python/cocoindex/_internal/runner.py',
+      'python/cocoindex/ops/text.py',
+    ],
+    filetree_paths: [
+      'python/cocoindex/',
+      'python/cocoindex/_internal/',
+      'python/cocoindex/connectorkits/',
+      'python/cocoindex/ops/',
+      'python/cocoindex/resources/',
+    ],
+    concept_tags: ['pattern-memory'],
+  },
+  {
+    example_name: 'cocoindex-rust',
+    manifest_kind: 'cargo',
+    manifest_path: 'Cargo.toml',
+    readme_path: 'README.md',
+    entrypoints: [
+      'rust/core/src/lib.rs',
+      'rust/py/src/lib.rs',
+      'rust/py/src/app.rs',
+      'rust/py/src/runtime.rs',
+      'rust/ops_text/src/lib.rs',
+      'rust/utils/src/fingerprint.rs',
+    ],
+    filetree_paths: ['rust/core/', 'rust/ops_text/', 'rust/py/', 'rust/py_utils/', 'rust/utils/'],
+    concept_tags: ['sidecar-runtime', 'token-budget'],
+  },
+  {
+    example_name: 'cocoindex-examples',
+    manifest_kind: 'pypi',
+    manifest_path: 'pyproject.toml',
+    readme_path: 'README.md',
+    entrypoints: [
+      'examples/code_embedding/main.py',
+      'examples/code_embedding_lancedb/main.py',
+      'examples/conversation_to_knowledge/conv_knowledge/app.py',
+      'examples/csv_to_kafka/main.py',
+      'examples/entire_session_search/main.py',
+      'examples/multi_codebase_summarization/main.py',
+      'examples/pdf_embedding/main.py',
+      'examples/patient_intake_extraction_baml/main.py',
+    ],
+    filetree_paths: [
+      'examples/code_embedding/',
+      'examples/code_embedding_lancedb/',
+      'examples/conversation_to_knowledge/',
+      'examples/csv_to_kafka/',
+      'examples/entire_session_search/',
+      'examples/multi_codebase_summarization/',
+      'examples/pdf_embedding/',
+      'examples/patient_intake_extraction_baml/',
+    ],
+    concept_tags: ['pattern-memory'],
+  },
+  {
+    example_name: 'cocoindex-docs',
+    manifest_kind: 'npm',
+    manifest_path: 'docs/package.json',
+    readme_path: 'README.md',
+    entrypoints: [
+      'docs/src/content/docs/getting_started/ai_coding_agents.mdx',
+      'docs/src/content/docs/getting_started/quickstart.mdx',
+      'docs/src/content/docs/programming_guide/app.mdx',
+      'docs/src/content/docs/programming_guide/core_concepts.mdx',
+      'docs/src/content/docs/ops/text.mdx',
+    ],
+    filetree_paths: [
+      'README.md',
+      'docs/src/content/docs/',
+      'docs/src/content/docs/getting_started/',
+      'docs/src/content/docs/programming_guide/',
+      'docs/src/content/docs/ops/',
+    ],
+    concept_tags: ['pattern-memory', 'token-budget'],
+  },
+];
+
 const RUFLO_EXAMPLE_NAME = 'ruflo';
 const RUFLO_SOURCE_PATH = 'examples/ruflo';
 const RUFLO_SUB_SOURCES: readonly RufloSubSourceSpec[] = [
@@ -205,6 +312,12 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
     }
     if (!isDir) continue;
 
+    if (example_name === COCOINDEX_EXAMPLE_NAME && isLargeCocoindexExample(abs_path)) {
+      scanned.push(...buildCocoindexSubSources(opts.repo_root, abs_path, limits));
+      suppressed_examples.push(example_name);
+      continue;
+    }
+
     if (example_name === RUFLO_EXAMPLE_NAME && isLargeRufloExample(abs_path)) {
       scanned.push(...buildRufloSubSources(opts.repo_root, abs_path, limits));
       suppressed_examples.push(example_name);
@@ -229,8 +342,24 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
   return suppressed_examples.length > 0 ? { scanned, suppressed_examples } : { scanned };
 }
 
+function isLargeCocoindexExample(abs_path: string): boolean {
+  return (
+    directoryExists(join(abs_path, 'python')) &&
+    directoryExists(join(abs_path, 'rust')) &&
+    directoryExists(join(abs_path, 'skills'))
+  );
+}
+
 function isLargeRufloExample(abs_path: string): boolean {
   return directoryExists(join(abs_path, 'v3')) && directoryExists(join(abs_path, 'plugins'));
+}
+
+function buildCocoindexSubSources(
+  repo_root: string,
+  abs_path: string,
+  limits: ScanLimits,
+): FoodSource[] {
+  return buildSubSources(repo_root, abs_path, COCOINDEX_SOURCE_PATH, COCOINDEX_SUB_SOURCES, limits);
 }
 
 function buildRufloSubSources(
@@ -238,8 +367,18 @@ function buildRufloSubSources(
   abs_path: string,
   limits: ScanLimits,
 ): FoodSource[] {
+  return buildSubSources(repo_root, abs_path, RUFLO_SOURCE_PATH, RUFLO_SUB_SOURCES, limits);
+}
+
+function buildSubSources(
+  repo_root: string,
+  abs_path: string,
+  source_path: string,
+  specs: readonly RufloSubSourceSpec[],
+  limits: ScanLimits,
+): FoodSource[] {
   const out: FoodSource[] = [];
-  for (const spec of RUFLO_SUB_SOURCES) {
+  for (const spec of specs) {
     const manifest_path =
       spec.manifest_path && fileExists(join(abs_path, spec.manifest_path))
         ? spec.manifest_path
@@ -260,7 +399,7 @@ function buildRufloSubSources(
       repo_root,
       example_name: spec.example_name,
       abs_path,
-      source_path: RUFLO_SOURCE_PATH,
+      source_path,
       manifest_kind: manifest_path ? spec.manifest_kind : 'unknown',
       manifest_path,
       readme_path,
@@ -282,9 +421,7 @@ function compactExistingPaths(abs_path: string, paths: readonly string[]): strin
     try {
       const st = statSync(abs);
       out.add(st.isDirectory() ? `${p.replace(/\/$/, '')}/` : p);
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   return Array.from(out).sort();
 }

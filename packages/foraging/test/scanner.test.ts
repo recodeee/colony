@@ -210,4 +210,60 @@ describe('scanExamplesFs', () => {
     expect(mcp?.filetree_paths).toContain('v3/mcp/');
     expect(mcp?.filetree_paths?.some((p) => p.includes('v2/docs'))).toBe(false);
   });
+
+  it('splits large CocoIndex examples into compact sub-sources', () => {
+    write('examples/cocoindex/pyproject.toml', '[project]\nname = "cocoindex"');
+    write('examples/cocoindex/Cargo.toml', '[workspace]\nmembers = ["rust/core"]');
+    write('examples/cocoindex/README.md', '# CocoIndex');
+    write('examples/cocoindex/python/cocoindex/__init__.py', 'def flow(): pass');
+    write('examples/cocoindex/python/cocoindex/cli.py', 'def main(): pass');
+    write('examples/cocoindex/python/cocoindex/_internal/app.py', 'class App: pass');
+    write('examples/cocoindex/python/cocoindex/_internal/runner.py', 'def run(): pass');
+    write('examples/cocoindex/python/cocoindex/ops/text.py', 'class Splitter: pass');
+    write('examples/cocoindex/rust/core/src/lib.rs', 'pub fn core() {}');
+    write('examples/cocoindex/rust/py/src/lib.rs', 'pub fn py() {}');
+    write('examples/cocoindex/rust/py/src/runtime.rs', 'pub fn runtime() {}');
+    write('examples/cocoindex/rust/utils/src/fingerprint.rs', 'pub fn hash() {}');
+    write('examples/cocoindex/skills/cocoindex/SKILL.md', '# CocoIndex skill');
+    write('examples/cocoindex/skills/cocoindex/references/patterns.md', '# Patterns');
+    write('examples/cocoindex/examples/code_embedding/main.py', 'import cocoindex');
+    write(
+      'examples/cocoindex/examples/conversation_to_knowledge/conv_knowledge/app.py',
+      'import cocoindex',
+    );
+    write('examples/cocoindex/examples/csv_to_kafka/main.py', 'import cocoindex');
+    write('examples/cocoindex/docs/package.json', '{"name":"cocoindex-docs"}');
+    write(
+      'examples/cocoindex/docs/src/content/docs/programming_guide/core_concepts.mdx',
+      '# Core concepts',
+    );
+    write('examples/cocoindex/docs/src/content/docs/ops/text.mdx', '# Text ops');
+    write('examples/cocoindex/tmp/huge.md', 'do not index by default');
+
+    const { scanned, suppressed_examples } = scanExamplesFs({ repo_root: repo });
+    expect(suppressed_examples).toEqual(['cocoindex']);
+    expect(scanned.map((s) => s.example_name)).toEqual([
+      'cocoindex-skill',
+      'cocoindex-python',
+      'cocoindex-rust',
+      'cocoindex-examples',
+      'cocoindex-docs',
+    ]);
+    expect(scanned.find((s) => s.example_name === 'cocoindex')).toBeUndefined();
+    const skill = scanned.find((s) => s.example_name === 'cocoindex-skill');
+    expect(skill?.readme_path).toBe('skills/cocoindex/SKILL.md');
+    expect(skill?.entrypoints).toContain('skills/cocoindex/references/patterns.md');
+    const python = scanned.find((s) => s.example_name === 'cocoindex-python');
+    expect(python?.entrypoints).toContain('python/cocoindex/_internal/app.py');
+    const rust = scanned.find((s) => s.example_name === 'cocoindex-rust');
+    expect(rust?.entrypoints).toContain('rust/py/src/runtime.rs');
+    const examples = scanned.find((s) => s.example_name === 'cocoindex-examples');
+    expect(examples?.entrypoints).toContain('examples/code_embedding/main.py');
+    const docs = scanned.find((s) => s.example_name === 'cocoindex-docs');
+    expect(docs?.manifest_path).toBe('docs/package.json');
+    expect(docs?.entrypoints).toContain(
+      'docs/src/content/docs/programming_guide/core_concepts.mdx',
+    );
+    expect(docs?.filetree_paths?.some((p) => p.includes('tmp/huge'))).toBe(false);
+  });
 });
