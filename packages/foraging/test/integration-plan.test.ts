@@ -150,4 +150,31 @@ describe('buildIntegrationPlan', () => {
     ).toBe(true);
     expect(plan.config_steps).toContain('npm run build');
   });
+
+  it('plans curated Ruflo sub-sources from the compact root manifest', () => {
+    write('package.json', JSON.stringify({ name: 'target' }));
+    write(
+      'examples/ruflo/package.json',
+      JSON.stringify({
+        name: 'ruflo',
+        dependencies: { zod: '^3.23.0' },
+        scripts: { build: 'tsc' },
+      }),
+    );
+    write('examples/ruflo/README.md', '# Ruflo concept index');
+    write('examples/ruflo/plugins/README.md', '# plugins');
+
+    scanExamples({ repo_root: repo, store, session_id: 's' });
+
+    const plan = buildIntegrationPlan(store.storage, {
+      repo_root: repo,
+      example_name: 'ruflo-hooks',
+    });
+    expect(plan.dependency_considerations).toEqual([
+      expect.objectContaining({ package_name: 'zod', version: '^3.23.0' }),
+    ]);
+    expect(plan.concepts_to_port.some((c) => c.source === 'examples/ruflo/README.md')).toBe(true);
+    expect(plan.config_steps).toContain('npm run build');
+    expect(JSON.stringify(plan)).not.toContain('copy file');
+  });
 });
