@@ -189,6 +189,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
       limit: z.number().int().positive().max(50).optional(),
     },
     wrapHandler('task_plan_list', async (args) => {
+      // Opportunistic auto-archive sweep: completed plans whose grace
+      // window has elapsed get archived before the listing returns. This
+      // is the daemon-less trigger that flips queen_plan_readiness from
+      // bad to good without requiring an operator to call colony plan
+      // close manually.
+      sweepCompletedPlansForAutoArchive(store, args.repo_root);
       const plans = listPlans(store, {
         ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
         ...(args.only_with_available_subtasks !== undefined
@@ -824,12 +830,22 @@ interface AutoArchiveOutcome {
   conflicts?: number;
 }
 
+/**
+ * Grace window between the last sub-task completion and an opportunistic
+ * auto-archive when the plan was published with `auto_archive: false`.
+ * Short enough that a stale completed plan does not linger in health for
+ * long, long enough that a follow-up `colony plan close` or human review
+ * can land first if the lane wants explicit archival.
+ */
+const AUTO_ARCHIVE_GRACE_PERIOD_MS = 60_000;
+
 function runAutoArchiveIfReady(
   store: MemoryStore,
   args: {
     plan_slug: string;
     parent_spec_task_id: number | null;
     session_id: string;
+    now?: number;
   },
 ): AutoArchiveOutcome {
   if (args.parent_spec_task_id == null) {
@@ -837,9 +853,6 @@ function runAutoArchiveIfReady(
   }
 
   const config = readPlanConfig(store, args.parent_spec_task_id);
-  if (!config?.auto_archive) {
-    return { status: 'skipped', reason: 'auto_archive disabled' };
-  }
 
   // Aggregate sibling sub-task statuses. The core `readSubtask` helper
   // already resolves the claim/complete race with a terminal-state-wins
@@ -859,6 +872,24 @@ function runAutoArchiveIfReady(
   const allDone = siblingInfos.every((s) => s.status === 'completed');
   if (!allDone) {
     return { status: 'skipped', reason: 'sub-tasks still outstanding' };
+  }
+
+  // When auto_archive was not opted into at publish time, only fire after
+  // a grace window elapses since the last sub-task completion. This lets
+  // an operator land an explicit `colony plan close` (or refuse the
+  // archive entirely) before the merge happens silently.
+  if (!config?.auto_archive) {
+    const now = args.now ?? Date.now();
+    const latest = latestSubtaskCompletedAt(store, siblingTasks);
+    if (latest === null) {
+      return { status: 'skipped', reason: 'auto_archive disabled' };
+    }
+    if (now - latest < AUTO_ARCHIVE_GRACE_PERIOD_MS) {
+      return {
+        status: 'skipped',
+        reason: 'auto_archive grace period pending',
+      };
+    }
   }
 
   const parentTask = allTasks.find((t) => t.id === args.parent_spec_task_id);
@@ -935,6 +966,75 @@ function runAutoArchiveIfReady(
     });
     return { status: 'error', reason: message };
   }
+}
+
+/**
+ * Read-path sweep that archives completed plans past the grace window.
+ * Bounded to current spec changes (cheap iteration over plan-config
+ * observations) so list calls remain fast even when many plans linger.
+ * Errors are swallowed: a failed archive surfaces via the
+ * `plan-archive-blocked` / `plan-archive-error` observation already
+ * written by `runAutoArchiveIfReady`, not via the list response.
+ */
+const PLAN_AUTO_ARCHIVE_SWEEP_SESSION = 'plan-auto-archive-sweep';
+
+function sweepCompletedPlansForAutoArchive(store: MemoryStore, repo_root?: string): void {
+  try {
+    const plans = listPlans(store, {
+      ...(repo_root !== undefined ? { repo_root } : {}),
+      limit: 100,
+    });
+    let sessionEnsured = false;
+    for (const plan of plans) {
+      const counts = plan.subtask_counts;
+      const total = counts.available + counts.claimed + counts.completed + counts.blocked;
+      if (total === 0 || counts.completed !== total) continue;
+      if (!sessionEnsured) {
+        if (!store.storage.getSession(PLAN_AUTO_ARCHIVE_SWEEP_SESSION)) {
+          store.startSession({
+            id: PLAN_AUTO_ARCHIVE_SWEEP_SESSION,
+            ide: 'plan-system',
+            cwd: null,
+            metadata: { source: 'plan-auto-archive-sweep' },
+          });
+        }
+        sessionEnsured = true;
+      }
+      runAutoArchiveIfReady(store, {
+        plan_slug: plan.plan_slug,
+        parent_spec_task_id: plan.spec_task_id,
+        session_id: PLAN_AUTO_ARCHIVE_SWEEP_SESSION,
+      });
+    }
+  } catch {
+    // Best-effort. The next list call will retry the sweep.
+  }
+}
+
+function latestSubtaskCompletedAt(
+  store: MemoryStore,
+  siblingTasks: Array<{ id: number }>,
+): number | null {
+  let latest = -Infinity;
+  for (const task of siblingTasks) {
+    const claims = store.storage.taskObservationsByKind(task.id, 'plan-subtask-claim', 100);
+    for (const row of claims) {
+      if (!row.metadata) continue;
+      let parsed: { status?: unknown; completed_at?: unknown };
+      try {
+        parsed = JSON.parse(row.metadata) as typeof parsed;
+      } catch {
+        continue;
+      }
+      if (parsed.status !== 'completed') continue;
+      const ts =
+        typeof parsed.completed_at === 'number' && Number.isFinite(parsed.completed_at)
+          ? parsed.completed_at
+          : row.ts;
+      if (typeof ts === 'number' && ts > latest) latest = ts;
+    }
+  }
+  return Number.isFinite(latest) ? latest : null;
 }
 
 function readPlanConfig(

@@ -849,6 +849,27 @@ describe('task_plan_complete_subtask', () => {
 });
 
 describe('task_plan auto-archive', () => {
+  function backdateAllSubtaskCompletions(slug: string, ageMs: number): void {
+    const cutoff = Date.now() - ageMs;
+    const branchPrefix = `spec/${slug}/sub-`;
+    for (const task of store.storage.listTasks(2000)) {
+      if (!task.branch.startsWith(branchPrefix)) continue;
+      const obs = store.storage.taskObservationsByKind(task.id, 'plan-subtask-claim', 100);
+      for (const row of obs) {
+        if (!row.metadata) continue;
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(row.metadata) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (parsed.status !== 'completed') continue;
+        parsed.completed_at = cutoff;
+        store.storage.updateObservationMetadata(row.id, JSON.stringify(parsed));
+      }
+    }
+  }
+
   async function claimAndComplete(slug: string, index: number, sessionId: string, agent: string) {
     await call<ClaimResult>('task_plan_claim_subtask', {
       plan_slug: slug,
@@ -888,7 +909,7 @@ describe('task_plan auto-archive', () => {
     expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-on/CHANGE.md'))).toBe(false);
   });
 
-  it('does not archive when auto_archive is omitted (default off)', async () => {
+  it('defers the archive within the grace window when auto_archive is omitted', async () => {
     await call<PublishResult>(
       'task_plan_publish',
       basicPublishArgs({ slug: 'auto-archive-default-off' }),
@@ -896,11 +917,40 @@ describe('task_plan auto-archive', () => {
     await claimAndComplete('auto-archive-default-off', 0, 'B', 'codex');
     const last = await claimAndComplete('auto-archive-default-off', 1, 'C', 'claude');
     expect(last.auto_archive.status).toBe('skipped');
-    expect(last.auto_archive.reason).toMatch(/disabled/);
-    // CHANGE.md stays in openspec/changes/.
+    expect(last.auto_archive.reason).toMatch(/grace/);
+    // CHANGE.md stays in openspec/changes/ during the grace window.
     expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-default-off/CHANGE.md'))).toBe(
       true,
     );
+  });
+
+  it('archives via task_plan_list sweep after the grace window elapses', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({ slug: 'auto-archive-grace-elapsed' }),
+    );
+    await claimAndComplete('auto-archive-grace-elapsed', 0, 'B', 'codex');
+    const last = await claimAndComplete('auto-archive-grace-elapsed', 1, 'C', 'claude');
+    expect(last.auto_archive.status).toBe('skipped');
+
+    // Backdate every subtask completion observation past the 60s grace
+    // window so the next list call treats the plan as archive-eligible.
+    backdateAllSubtaskCompletions('auto-archive-grace-elapsed', 120_000);
+
+    await call<unknown>('task_plan_list', { repo_root: repoRoot });
+
+    expect(
+      existsSync(join(repoRoot, 'openspec/changes/auto-archive-grace-elapsed/CHANGE.md')),
+    ).toBe(false);
+    const parentTask = store.storage
+      .listTasks(2000)
+      .find((t) => t.branch === 'spec/auto-archive-grace-elapsed');
+    expect(parentTask).toBeDefined();
+    if (parentTask) {
+      expect(
+        store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10),
+      ).toHaveLength(1);
+    }
   });
 
   it('delta written then archive throws', async () => {

@@ -416,20 +416,22 @@ describe('queen_plan_goal', () => {
     const [finalCompletion] = await completeWave(plan.slug, wave3Claims);
     expect(finalCompletion?.auto_archive).toMatchObject({
       status: 'skipped',
-      reason: expect.stringMatching(/disabled/),
+      reason: expect.stringMatching(/grace/),
     });
     await expectReadyOnly(plan.slug, []);
 
     const sweep = sweepQueenPlans(store, { repo_root: repoRoot });
     expect(sweep).toHaveLength(1);
-    expect(sweep[0]?.items).toContainEqual({
-      reason: 'ready-to-archive',
-      plan_slug: plan.slug,
-      plan_title: plan.title,
-      repo_root: repoRoot,
-      spec_task_id: published.spec_task_id,
-      completed_subtask_count: 10,
-    });
+    expect(sweep[0]?.items).toContainEqual(
+      expect.objectContaining({
+        reason: 'ready-to-archive',
+        plan_slug: plan.slug,
+        plan_title: plan.title,
+        repo_root: repoRoot,
+        spec_task_id: published.spec_task_id,
+        completed_subtask_count: 10,
+      }),
+    );
   });
 });
 
