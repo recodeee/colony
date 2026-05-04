@@ -28,6 +28,8 @@ const STALE_BLOCKER_WINDOW_MS = 60 * 60 * 1000;
 const LARGE_TASK_FILE_COUNT = 4;
 const MISSING_CAPABILITY_SCORE = 0.2;
 const CAPABLE_AGENT_SCORE = 0.5;
+const QUOTA_READY_FILE_PREVIEW_LIMIT = 3;
+const QUOTA_READY_TEXT_LIMIT = 240;
 const PLAN_SUBTASK_KIND = 'plan-subtask';
 const PLAN_SUBTASK_CLAIM_KIND = 'plan-subtask-claim';
 const QUOTA_RELAY_READY_KIND = 'quota_relay_ready';
@@ -101,7 +103,9 @@ export interface QuotaRelayReady {
     agent: string | null;
   };
   files: string[];
+  file_count: number;
   active_files: string[];
+  active_file_count: number;
   evidence: string;
   next: string;
   age: {
@@ -869,15 +873,17 @@ function quotaRelayReadyItems(
     if (!quotaObservationVisible(meta, args.session_id, args.agent)) continue;
     if (!quotaObservationClaimableStatus(meta)) continue;
 
-    const files = [...new Set(group.claims.map((claim) => claim.file_path))].sort();
-    if (files.length === 0) continue;
-    const activeFiles = [
+    const allFiles = [...new Set(group.claims.map((claim) => claim.file_path))].sort();
+    if (allFiles.length === 0) continue;
+    const allActiveFiles = [
       ...new Set(
         group.claims
           .filter((claim) => claim.state === 'handoff_pending')
           .map((claim) => claim.file_path),
       ),
     ].sort();
+    const files = allFiles.slice(0, QUOTA_READY_FILE_PREVIEW_LIMIT);
+    const activeFiles = allActiveFiles.slice(0, QUOTA_READY_FILE_PREVIEW_LIMIT);
     const planSubtask = subtasksByTaskId.get(group.task.id);
     const blocksDownstream =
       planSubtask !== undefined &&
@@ -901,9 +907,11 @@ function quotaRelayReadyItems(
         agent: oldOwnerAgent,
       },
       files,
+      file_count: allFiles.length,
       active_files: activeFiles,
-      evidence: quotaRelayEvidence(obs, meta),
-      next: quotaRelayNext(obs, meta),
+      active_file_count: allActiveFiles.length,
+      evidence: compactQuotaReadyText(quotaRelayEvidence(obs, meta)),
+      next: compactQuotaReadyText(quotaRelayNext(obs, meta)),
       age: {
         milliseconds: ageMs,
         minutes: Math.floor(ageMs / 60_000),
@@ -911,7 +919,7 @@ function quotaRelayReadyItems(
       repo_root: group.task.repo_root,
       branch: group.task.branch,
       expires_at: expiresAt,
-      has_active_files: activeFiles.length > 0,
+      has_active_files: allActiveFiles.length > 0,
       blocks_downstream: blocksDownstream,
       quota_observation_id: group.quota_observation_id,
       quota_observation_kind: obs.kind,
@@ -973,6 +981,12 @@ function quotaRelayNext(obs: ObservationRow, meta: Record<string, unknown>): str
   if (summary !== null) return summary;
 
   return firstContentLine(obs.content) ?? `Inspect ${obs.kind} #${obs.id}`;
+}
+
+function compactQuotaReadyText(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= QUOTA_READY_TEXT_LIMIT) return compact;
+  return `${compact.slice(0, QUOTA_READY_TEXT_LIMIT - 3)}...`;
 }
 
 function isQuotaClaimReadyState(claim: TaskClaimRow): boolean {

@@ -55,7 +55,9 @@ interface QuotaRelayReadyEntry {
     agent: string | null;
   };
   files: string[];
+  file_count: number;
   active_files: string[];
+  active_file_count: number;
   evidence: string;
   next: string;
   age: {
@@ -777,7 +779,9 @@ describe('task_ready_for_agent', () => {
       old_session_id: 'quota-session',
       old_owner: { session_id: 'quota-session', agent: 'codex' },
       files: ['apps/api/quota-stopped.ts'],
+      file_count: 1,
       active_files: ['apps/api/quota-stopped.ts'],
+      active_file_count: 1,
       evidence: `observation ${handoffId} handoff: HANDOFF from codex -> any`,
       next: 'Continue the quota-stopped subtask.',
       age: { minutes: 5 },
@@ -930,7 +934,9 @@ describe('task_ready_for_agent', () => {
       task_id: taskId,
       old_session_id: 'quota-session',
       files: [filePath],
+      file_count: 1,
       active_files: [filePath],
+      active_file_count: 1,
       evidence: `observation ${relayId} relay: RELAY from codex (quota) -> any`,
       next: 'quota stopped this task',
       expires_at: t0 + 60_000,
@@ -964,6 +970,54 @@ describe('task_ready_for_agent', () => {
         handoff_observation_id: null,
       }),
     ]);
+  });
+
+  it('keeps quota relay ready payloads compact for many files and long handoffs', async () => {
+    const sessionId = 'quota-session';
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'agent/codex/large-quota-relay',
+      session_id: sessionId,
+      title: 'Large quota relay task',
+    });
+    thread.join(sessionId, 'codex');
+    for (const filePath of [
+      'apps/api/alpha.ts',
+      'apps/api/beta.ts',
+      'apps/api/gamma.ts',
+      'apps/api/delta.ts',
+      'apps/api/epsilon.ts',
+    ]) {
+      thread.claimFile({ session_id: sessionId, file_path: filePath });
+    }
+    const relayId = thread.relay({
+      from_session_id: sessionId,
+      from_agent: 'codex',
+      reason: 'quota',
+      one_line: 'x'.repeat(500),
+      base_branch: 'main',
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 1,
+    });
+
+    const quota = result.ready[0] as unknown as QuotaRelayReadyEntry;
+    expect(quota).toMatchObject({
+      kind: 'quota_relay_ready',
+      task_id: thread.task_id,
+      files: ['apps/api/alpha.ts', 'apps/api/beta.ts', 'apps/api/delta.ts'],
+      file_count: 5,
+      active_files: ['apps/api/alpha.ts', 'apps/api/beta.ts', 'apps/api/delta.ts'],
+      active_file_count: 5,
+      quota_observation_id: relayId,
+    });
+    expect(quota.next).toHaveLength(240);
+    expect(quota.next.endsWith('...')).toBe(true);
+    expect(JSON.stringify(result).length).toBeLessThan(2500);
   });
 
   it('surfaces released weak-expired quota relays when they block downstream plans', async () => {
@@ -1048,7 +1102,9 @@ describe('task_ready_for_agent', () => {
       task_id: claim.task_id,
       old_session_id: 'quota-session',
       files: ['apps/api/expired-quota-blocker.ts'],
+      file_count: 1,
       active_files: [],
+      active_file_count: 0,
       evidence: `observation ${handoffId} handoff: HANDOFF from codex -> any`,
       next: 'Continue the quota-stopped subtask.',
       has_active_files: false,
