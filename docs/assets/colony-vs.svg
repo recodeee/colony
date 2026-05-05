@@ -75,7 +75,8 @@
   <!-- Agent A (Codex) - left side, attacking the file -->
   <g transform="translate(80 200)" color="#ef4444">
     <use href="#agentRing"/>
-    <text y="5" text-anchor="middle" fill="#fca5a5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="700">cdx</text>
+    <text y="5" text-anchor="middle" fill="#fca5a5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700">&gt;_</text>
+    <text y="42" text-anchor="middle" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Codex</text>
     <!-- arrow toward file -->
     <path d="M 28 0 L 110 18" stroke="#ef4444" stroke-width="2" fill="none" marker-end="url(#redArrow)" opacity="0.85"/>
   </g>
@@ -83,7 +84,10 @@
   <!-- Agent B (Claude) - left side bottom -->
   <g transform="translate(80 280)" color="#f59e0b">
     <use href="#agentRing"/>
-    <text y="5" text-anchor="middle" fill="#fcd34d" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="700">cld</text>
+    <g fill="#fcd34d">
+      <path d="M -7 9 L -2 -8 L 2 -8 L 7 9 L 4.5 9 L 1.5 1 L -1.5 1 L -4.5 9 Z"/>
+    </g>
+    <text y="42" text-anchor="middle" fill="#fcd34d" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Claude</text>
     <path d="M 28 0 L 110 -18" stroke="#f59e0b" stroke-width="2" fill="none" marker-end="url(#orangeArrow)" opacity="0.85"/>
   </g>
 
@@ -141,7 +145,8 @@
   <!-- Agent A (Codex) - claims successfully -->
   <g transform="translate(530 200)" color="#10b981">
     <use href="#agentRing"/>
-    <text y="5" text-anchor="middle" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="700">cdx</text>
+    <text y="5" text-anchor="middle" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700">&gt;_</text>
+    <text y="42" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Codex</text>
     <!-- claim arrow -->
     <path d="M 28 0 L 105 18" stroke="#10b981" stroke-width="2" fill="none" marker-end="url(#greenArrow)"/>
     <text x="55" y="-2" fill="#34d399" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9">claim</text>
@@ -157,12 +162,15 @@
   <!-- Agent B (Claude) - sees claim, stands down -->
   <g transform="translate(530 290)" color="#22d3ee">
     <use href="#agentRing"/>
-    <text y="5" text-anchor="middle" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="700">cld</text>
+    <g fill="#67e8f9">
+      <path d="M -7 9 L -2 -8 L 2 -8 L 7 9 L 4.5 9 L 1.5 1 L -1.5 1 L -4.5 9 Z"/>
+    </g>
+    <text y="42" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Claude</text>
     <!-- read arrow (dashed) -->
     <path d="M 28 -10 L 105 -25" stroke="#22d3ee" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#cyanArrow)" opacity="0.8"/>
     <text x="60" y="-25" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9">reads claim</text>
     <!-- stand-down indicator -->
-    <g transform="translate(-2 32)">
+    <g transform="translate(-2 62)">
       <rect x="-44" y="-10" width="88" height="20" rx="10" fill="#0f172a" stroke="#22d3ee" stroke-width="1"/>
       <text y="3" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">stand down</text>
     </g>
