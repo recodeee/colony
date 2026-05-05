@@ -8,6 +8,7 @@ import type {
 } from '@colony/storage';
 import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
 import type { MemoryStore } from './memory-store.js';
+import { recordReflexion } from './reflexion.js';
 import {
   type AgentProfile,
   type CandidateScore,
@@ -905,7 +906,7 @@ export class TaskThread {
     agent: string,
     now = Date.now(),
   ): HandoffObservation[] {
-    return this.store.storage
+    const handoffs = this.store.storage
       .taskObservationsByKind(this.task_id, 'handoff')
       .map((row) => {
         const meta = parseHandoff(row.metadata, row.ts);
@@ -920,6 +921,23 @@ export class TaskThread {
           meta.from_session_id !== session_id &&
           (meta.to_session_id === session_id || meta.to_agent === 'any' || meta.to_agent === agent),
       );
+    for (const handoff of handoffs) {
+      recordReflexion(this.store, {
+        session_id,
+        task_id: this.task_id,
+        kind: 'expiry',
+        action: 'handoff expired',
+        observation_summary: `handoff #${handoff.id} expired before acceptance`,
+        reflection: 'expired handoffs need faster acceptance or release',
+        source_kind: 'handoff',
+        source_observation_id: handoff.id,
+        idempotency_key: `handoff-expiry:${handoff.id}`,
+        reply_to: handoff.id,
+        now,
+        tags: ['handoff', 'expiry'],
+      });
+    }
+    return handoffs;
   }
 
   /**
@@ -1753,26 +1771,39 @@ export class TaskThread {
             handoff_observation_id: claim.handoff_observation_id,
           });
         }
-        audit_observation_ids.push(
-          this.store.addObservation({
-            session_id: args.session_id,
+        const auditObservationId = this.store.addObservation({
+          session_id: args.session_id,
+          kind: 'claim-weakened',
+          content: `claim ${claim.file_path} downgraded to weak_expired from quota-pending owner ${claim.session_id}`,
+          task_id: this.task_id,
+          reply_to: claim.handoff_observation_id,
+          metadata: {
             kind: 'claim-weakened',
-            content: `claim ${claim.file_path} downgraded to weak_expired from quota-pending owner ${claim.session_id}`,
-            task_id: this.task_id,
-            reply_to: claim.handoff_observation_id,
-            metadata: {
-              kind: 'claim-weakened',
-              file_path: claim.file_path,
-              previous_session_id: claim.session_id,
-              ownership_strength: 'weak',
-              state: 'weak_expired',
-              reason: 'quota_pending_expired',
-              handoff_observation_id: claim.handoff_observation_id,
-              previous_claimed_at: claim.claimed_at,
-              expires_at: claim.expires_at,
-            },
-          }),
-        );
+            file_path: claim.file_path,
+            previous_session_id: claim.session_id,
+            ownership_strength: 'weak',
+            state: 'weak_expired',
+            reason: 'quota_pending_expired',
+            handoff_observation_id: claim.handoff_observation_id,
+            previous_claimed_at: claim.claimed_at,
+            expires_at: claim.expires_at,
+          },
+        });
+        audit_observation_ids.push(auditObservationId);
+        recordReflexion(this.store, {
+          session_id: args.session_id,
+          task_id: this.task_id,
+          kind: 'rollback',
+          action: 'quota claim released',
+          observation_summary: `claim ${claim.file_path} rolled back to weak_expired`,
+          reflection: 'expired quota claims should be weakened before another agent proceeds',
+          source_kind: 'claim-weakened',
+          source_observation_id: auditObservationId,
+          idempotency_key: `quota-release:${this.task_id}:${claim.file_path}:${claim.session_id}:${claim.handoff_observation_id ?? 'none'}`,
+          reply_to: claim.handoff_observation_id,
+          now,
+          tags: ['quota', 'claim'],
+        });
       }
       for (const batonId of seenBatons) {
         this.expireQuotaBatonIfPending(batonId, now);

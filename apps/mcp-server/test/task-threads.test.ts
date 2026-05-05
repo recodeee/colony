@@ -1243,6 +1243,14 @@ describe('task threads — handoff lifecycle', () => {
       state: 'weak_expired',
       handoff_observation_id: relay_observation_id,
     });
+    const reflexions = store.storage.taskObservationsByKind(task_id, 'reflexion', 10);
+    expect(reflexions).toHaveLength(1);
+    expect(JSON.parse(reflexions[0]?.metadata ?? '{}')).toMatchObject({
+      kind: 'rollback',
+      reward: -0.25,
+      source_kind: 'claim-weakened',
+      idempotency_key: `quota-release:${task_id}:src/auth.ts:${sessionA}:${relay_observation_id}`,
+    });
     const relay = store.storage.getObservation(relay_observation_id);
     const relayMeta = JSON.parse(relay?.metadata ?? '{}');
     expect(relayMeta.status).toBe('expired');

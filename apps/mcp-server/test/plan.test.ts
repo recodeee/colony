@@ -917,6 +917,44 @@ describe('task_plan auto-archive', () => {
     expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-on/CHANGE.md'))).toBe(false);
   });
 
+  it('records a reflexion sibling when auto archive is blocked by merge conflicts', async () => {
+    const slug = 'auto-archive-conflict-reflexion';
+    const published = await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({ slug, auto_archive: true }),
+    );
+    writeFileSync(
+      join(repoRoot, 'openspec/changes', slug, 'CHANGE.md'),
+      readChangeText(slug).replace('op|target|row\n-|-|-', 'op|target|row\n-|-|-\nremove|V1|-'),
+      'utf8',
+    );
+
+    await claimAndComplete(slug, 0, 'B', 'codex');
+    const last = await claimAndComplete(slug, 1, 'C', 'claude');
+    expect(last.status).toBe('completed');
+    expect(last.auto_archive.status).toBe('blocked');
+
+    const blocked = store.storage.taskObservationsByKind(
+      published.spec_task_id,
+      'plan-archive-blocked',
+      10,
+    );
+    const reflexions = store.storage.taskObservationsByKind(
+      published.spec_task_id,
+      'reflexion',
+      10,
+    );
+    expect(blocked).toHaveLength(1);
+    expect(reflexions).toHaveLength(1);
+    expect(JSON.parse(reflexions[0]?.metadata ?? '{}')).toMatchObject({
+      kind: 'failure',
+      reward: -1,
+      source_kind: 'plan-archive-blocked',
+      source_observation_id: blocked[0]?.id,
+      idempotency_key: `plan-archive-blocked:${slug}:V1:delta_removes_cited_row`,
+    });
+  });
+
   it('defers the archive within the grace window when auto_archive is omitted', async () => {
     await call<PublishResult>(
       'task_plan_publish',

@@ -72,6 +72,8 @@ export { hybridRank } from './ranker.js';
 export {
   REFLEXION_OBSERVATION_KIND,
   REFLEXION_REWARD_BY_KIND,
+  recordReflexion,
+  type RecordReflexionArgs,
   type ReflexionKind,
   type ReflexionMetadata,
 } from './reflexion.js';
