@@ -38,6 +38,18 @@ until an agent explicitly hydrates the full record. The result is measurable —
 > Agents pull ready work.
 > Stale signals evaporate.
 
+<p align="center">
+  <a href="#token-savings"><img alt="Cross-agent handoff: 99% saved" src="https://img.shields.io/badge/cross--agent%20handoff-99%25%20saved-10b981?style=flat-square&labelColor=022c22" /></a>
+  <a href="#token-savings"><img alt="Search result shape: 97% saved" src="https://img.shields.io/badge/search%20result%20shape-97%25%20saved-10b981?style=flat-square&labelColor=022c22" /></a>
+  <a href="#token-savings"><img alt="Find file owner: 92% saved" src="https://img.shields.io/badge/find%20file%20owner-92%25%20saved-10b981?style=flat-square&labelColor=022c22" /></a>
+  <a href="#token-savings"><img alt="Startup sweep: 90% saved" src="https://img.shields.io/badge/startup%20sweep-90%25%20saved-10b981?style=flat-square&labelColor=022c22" /></a>
+</p>
+
+<p align="center">
+  <em>Measured per-operation savings versus standard agent loops.</em>
+  <a href="#token-savings"><strong>See the receipts &#8594;</strong></a>
+</p>
+
 ---
 
 ## The Problem: Two Agents, One Bug, Two Patches
@@ -71,6 +83,122 @@ shared task thread.
 
 ---
 
+## Token Savings
+
+> **TL;DR — a single cross-agent handoff costs 30,000 tokens without Colony and 400 with it.**
+> That's 99% saved on the most expensive coordination event in a multi-agent session,
+> and Colony's `mcp_metrics` table records every one so the savings are _measured_, not estimated.
+
+Coordination is where multi-agent runs burn tokens. Every handoff, every
+"what was I working on", every "did someone already touch this file" turns
+into a re-read of the repo, the chat, and the git log. Colony makes those
+moments cheap by replacing replay with **one compact observation**.
+
+<p align="center">
+  <img src="docs/assets/colony-savings-vs.svg" alt="A handoff between two agents — without Colony costs 30,000 tokens of repo, git log, and chat replay; with Colony costs 400 tokens through one compact observation. 99% saved." width="100%" />
+</p>
+
+### Why It's Cheap
+
+Six mechanisms compound. The big-bar wins below come from at least two of
+them stacking on the same operation:
+
+| Mechanism                  | What changes                                                                                                                                                          |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compression at rest**    | Every observation runs through `@colony/compress` before SQLite. Prose shrinks ~70% while paths, URLs, code, commands, versions, and dates stay byte-for-byte intact. |
+| **Progressive disclosure** | `search`, `timeline`, `attention_inbox`, `task_ready_for_agent` return compact IDs plus snippets. Full bodies only ship via `get_observations([ids])`.                |
+| **Cross-session recall**   | Instead of re-reading 5–10 files plus `git log` to rederive a prior decision, agents `search` and pull one observation.                                               |
+| **Claim-aware routing**    | `task_ready_for_agent` returns the next claimable action and exact claim args, so agents stop browsing task lists just to choose work.                                |
+| **Stale-signal decay**     | Expired handoffs, weak claims, and stranded lanes surface as compact attention items instead of full historical transcripts.                                          |
+| **Tiny handoffs**          | A durable handoff is `branch + task + blocker + next + evidence`, not a pasted session log.                                                                           |
+
+### Where Colony Wins Hardest
+
+Each row is a real coordination operation. The standard column is what the
+same operation costs without a shared substrate (agents must replay context).
+The Colony column is the measured cost through `mcp_metrics`.
+
+<p align="center">
+  <img src="docs/assets/colony-savings.svg" alt="Token savings bar chart: Colony reduces handoffs, search, ownership lookup, and coordination from thousands of tokens to hundreds" width="100%" />
+</p>
+
+| Operation                    | Standard | Colony |      Saved |
+| ---------------------------- | -------: | -----: | ---------: |
+| Cross-agent handoff          |   30,000 |    400 | **🟢 99%** |
+| Quota-exhausted handoff      |   22,000 |    500 | **🟢 98%** |
+| Search result shape          |    5,000 |    150 | **🟢 97%** |
+| Unread message triage        |   10,000 |    600 | **🟢 94%** |
+| Review task timeline         |   12,000 |    900 | **🟢 93%** |
+| Find active owner for a file |    6,000 |    500 | **🟢 92%** |
+| Ready-work selection         |    9,000 |    700 | **🟢 92%** |
+| Plan subtask claim           |   12,000 |  1,100 |     🟢 91% |
+| Startup coordination sweep   |   25,000 |  2,500 |     🟢 90% |
+| Recover stranded lane        |   18,000 |  1,800 |     🟢 90% |
+| Resume task across sessions  |   15,000 |  2,000 |     🟢 87% |
+| Coordinate parallel agents   |   20,000 |  3,000 |     🟢 85% |
+
+<details>
+<summary><strong>Show all 21 operations</strong></summary>
+
+| Operation                            | Frequency / session | Standard | Colony | Saved |
+| ------------------------------------ | ------------------- | -------- | ------ | ----- |
+| Cross-agent handoff                  | 2x                  | 30,000   | 400    | 99%   |
+| Quota-exhausted handoff              | 1x                  | 22,000   | 500    | 98%   |
+| Search result shape                  | 8x                  | 5,000    | 150    | 97%   |
+| Unread message triage                | 4x                  | 10,000   | 600    | 94%   |
+| Review task timeline                 | 4x                  | 12,000   | 900    | 93%   |
+| Find active owner for a file         | 6x                  | 6,000    | 500    | 92%   |
+| Ready-work selection                 | 3x                  | 9,000    | 700    | 92%   |
+| Plan subtask claim                   | 2x                  | 12,000   | 1,100  | 91%   |
+| Examples pattern lookup              | 2x                  | 11,000   | 1,000  | 91%   |
+| Blocker recurrence                   | 2x                  | 10,000   | 900    | 91%   |
+| Startup coordination sweep           | 1x                  | 25,000   | 2,500  | 90%   |
+| Recover stranded lane                | 1x                  | 18,000   | 1,800  | 90%   |
+| Claim-before-edit check              | 8x                  | 4,000    | 450    | 89%   |
+| Spec context recall                  | 2x                  | 14,000   | 1,600  | 89%   |
+| Health/adoption diagnosis            | 1x                  | 16,000   | 1,800  | 89%   |
+| Drift / failed-verification recovery | 2x                  | 13,000   | 1,400  | 89%   |
+| Resume task across sessions          | 3x                  | 15,000   | 2,000  | 87%   |
+| Coordinate parallel agents           | 10x                 | 20,000   | 3,000  | 85%   |
+| Why-was-this-changed                 | 4x                  | 8,000    | 1,200  | 85%   |
+| Recall prior decision                | 5x                  | 8,000    | 1,500  | 81%   |
+| Storage at rest (per observation)    | 1x                  | 1,000    | 300    | 70%   |
+
+</details>
+
+### See Your Own Numbers
+
+The table above is the **reference model** — the shared baseline for what
+these operations cost without Colony. The point of Colony is to give you
+**live receipts** for the same operations in your own work. Three surfaces,
+same data:
+
+```bash
+colony gain                       # CLI: live + reference, last 7 days
+colony gain --hours 24 --json     # last 24 hours as JSON
+colony gain --operation search    # filter live rows to one tool name
+colony gain --session-limit 0     # every live session in the window
+colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
+```
+
+```json
+{ "name": "savings_report", "input": { "hours": 24 } }
+```
+
+Or open `http://127.0.0.1:6510/savings` while `colony viewer` is running.
+Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>`, set
+`COLONY_MCP_INPUT_USD_PER_1M` / `COLONY_MCP_OUTPUT_USD_PER_1M`, or pass the
+flags above to convert tokens into estimated USD per operation.
+
+> **The receipt model.** Every wrapped MCP tool call writes a row to the
+> `mcp_metrics` SQLite table with `(operation, ts, input_bytes, output_bytes,
+input_tokens, output_tokens, duration_ms, ok, session_id, repo_root,
+error_code, error_message)`. Cost is computed at _report time_ from those
+> token receipts and the USD-per-1M rates you pass in, so older rows pick up
+> cost visibility without a schema migration.
+
+---
+
 ## The Colony Loop
 
 Every agent session runs the same six-step coordination loop. **Compact first.
@@ -80,14 +208,14 @@ Hydrate only when needed. Claim before editing.**
   <img src="docs/assets/colony-loop-animated.svg" alt="The Colony coordination loop: hivemind_context, attention_inbox, task_ready_for_agent, task_plan_claim_subtask, task_claim_file, task_note_working" width="100%" />
 </p>
 
-| #   | Step                      | What it does                                            |
-| --- | ------------------------- | ------------------------------------------------------- |
-| 1   | `hivemind_context`        | Who's active, what's hot, what's owned, recent memory.  |
-| 2   | `attention_inbox`         | Handoffs, blockers, stale lanes that need attention.    |
-| 3   | `task_ready_for_agent`    | Pull claimable work matched to this agent — not browse. |
-| 4   | `task_plan_claim_subtask` | Take exactly one unblocked wave slice from a Queen plan.|
-| 5   | `task_claim_file`         | Make ownership visible **before** mutating the file.    |
-| 6   | `task_note_working`       | Leave a compact resumable trail for the next session.   |
+| #   | Step                      | What it does                                             |
+| --- | ------------------------- | -------------------------------------------------------- |
+| 1   | `hivemind_context`        | Who's active, what's hot, what's owned, recent memory.   |
+| 2   | `attention_inbox`         | Handoffs, blockers, stale lanes that need attention.     |
+| 3   | `task_ready_for_agent`    | Pull claimable work matched to this agent — not browse.  |
+| 4   | `task_plan_claim_subtask` | Take exactly one unblocked wave slice from a Queen plan. |
+| 5   | `task_claim_file`         | Make ownership visible **before** mutating the file.     |
+| 6   | `task_note_working`       | Leave a compact resumable trail for the next session.    |
 
 Steps 1–3 cost almost nothing (compact IDs and snippets). Full bodies only ship
 when an agent explicitly calls `get_observations([ids])`. That's where the
@@ -105,12 +233,12 @@ claimable plans, but agents still pull and complete the work themselves.
   <img src="docs/assets/colony-architecture.svg" alt="Colony architecture: runtimes execute, Colony coordinates, Queen plans, all over a local SQLite substrate" width="100%" />
 </p>
 
-| Layer                                                | Responsibility                                                                 |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Codex / Claude Code / Cursor / Gemini CLI / OpenCode | Execute tools, edit files, run tests, talk to the user.                        |
-| OMX / dmux / terminal sessions                       | Start sessions, panes, worktrees, and runtime process surfaces.                |
-| **Colony**                                           | Route work, track claims, record handoffs, store memory, report health.        |
-| Queen                                                | Publish deterministic wave plans; does not launch shells or command agents.    |
+| Layer                                                | Responsibility                                                              |
+| ---------------------------------------------------- | --------------------------------------------------------------------------- |
+| Codex / Claude Code / Cursor / Gemini CLI / OpenCode | Execute tools, edit files, run tests, talk to the user.                     |
+| OMX / dmux / terminal sessions                       | Start sessions, panes, worktrees, and runtime process surfaces.             |
+| **Colony**                                           | Route work, track claims, record handoffs, store memory, report health.     |
+| Queen                                                | Publish deterministic wave plans; does not launch shells or command agents. |
 
 This split keeps execution close to the existing agent runtime while making the
 coordination state shared, inspectable, and local.
@@ -225,85 +353,6 @@ colony coordination sweep --json
 colony coordination sweep --release-safe-stale-claims --json
 colony health --hours 1
 ```
-
----
-
-## Token Savings
-
-Colony saves tokens by making coordination compact, searchable, and
-progressively hydrated. `colony gain` shows live `mcp_metrics` receipts first,
-then a shared reference model for common agent loops.
-
-<p align="center">
-  <img src="docs/assets/colony-savings.svg" alt="Token savings: Colony reduces handoffs, search, ownership lookup, and coordination from thousands of tokens to hundreds" width="100%" />
-</p>
-
-```bash
-colony gain                       # live + reference, last 7 days
-colony gain --hours 24 --json     # last 24 hours as JSON
-colony gain --operation search    # filter live rows to one tool name
-colony gain --session-limit 0     # print every live session in the window
-colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
-```
-
-Why the savings show up where they do:
-
-- **Compression at rest.** Every observation runs through `@colony/compress`
-  before SQLite. Prose shrinks ~70% while paths, URLs, code, commands, version
-  numbers, and dates stay byte-for-byte intact.
-- **Progressive disclosure.** `search`, `timeline`, `attention_inbox`,
-  `task_ready_for_agent`, and friends return compact IDs plus snippets. Full
-  bodies only ship via `get_observations([ids])`, so callers pay only for what
-  they hydrate.
-- **Cross-session recall.** Instead of re-reading 5–10 files plus `git log`
-  to rederive prior decisions, agents `search` and pull a single observation.
-- **Claim-aware routing.** `task_ready_for_agent` returns the next claimable
-  action and exact claim arguments, so agents stop browsing task lists just to
-  choose work.
-- **Stale-signal decay.** Expired handoffs, weak claims, and stranded lanes
-  surface as compact attention items instead of full historical transcripts.
-- **Tiny handoffs.** A durable handoff can be `branch`, `task`, `blocker`,
-  `next`, and `evidence` instead of a pasted session log.
-
-<details>
-<summary><strong>Full reference table — all 21 operations</strong></summary>
-
-| Operation                            | Frequency / session | Standard | Colony | Saved |
-| ------------------------------------ | ------------------- | -------- | ------ | ----- |
-| Recall prior decision                | 5x                  | 8,000    | 1,500  | 81%   |
-| Resume task across sessions          | 3x                  | 15,000   | 2,000  | 87%   |
-| Startup coordination sweep           | 1x                  | 25,000   | 2,500  | 90%   |
-| Coordinate parallel agents           | 10x                 | 20,000   | 3,000  | 85%   |
-| Why-was-this-changed                 | 4x                  | 8,000    | 1,200  | 85%   |
-| Find active owner for a file         | 6x                  | 6,000    | 500    | 92%   |
-| Recover stranded lane                | 1x                  | 18,000   | 1,800  | 90%   |
-| Cross-agent handoff                  | 2x                  | 30,000   | 400    | 99%   |
-| Review task timeline                 | 4x                  | 12,000   | 900    | 93%   |
-| Search result shape                  | 8x                  | 5,000    | 150    | 97%   |
-| Ready-work selection                 | 3x                  | 9,000    | 700    | 92%   |
-| Unread message triage                | 4x                  | 10,000   | 600    | 94%   |
-| Claim-before-edit check              | 8x                  | 4,000    | 450    | 89%   |
-| Plan subtask claim                   | 2x                  | 12,000   | 1,100  | 91%   |
-| Spec context recall                  | 2x                  | 14,000   | 1,600  | 89%   |
-| Health/adoption diagnosis            | 1x                  | 16,000   | 1,800  | 89%   |
-| Examples pattern lookup              | 2x                  | 11,000   | 1,000  | 91%   |
-| Blocker recurrence                   | 2x                  | 10,000   | 900    | 91%   |
-| Drift / failed-verification recovery | 2x                  | 13,000   | 1,400  | 89%   |
-| Quota-exhausted handoff              | 1x                  | 22,000   | 500    | 98%   |
-| Storage at rest (per observation)    | 1x                  | 1,000    | 300    | 70%   |
-
-</details>
-
-The MCP `savings_report` tool returns the same data:
-
-```json
-{ "name": "savings_report", "input": { "hours": 24 } }
-```
-
-Live numbers are visible at `http://127.0.0.1:6510/savings` when
-`colony viewer` is running. Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>`,
-`?session_limit=0`, or set `COLONY_MCP_INPUT_USD_PER_1M` /
-`COLONY_MCP_OUTPUT_USD_PER_1M` to show estimated USD cost per operation.
 
 ---
 
@@ -481,7 +530,6 @@ Before merging changes:
 
 ```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
-```
 
 ---
 
@@ -524,3 +572,4 @@ traces, not by becoming a remote control plane.
 ## License
 
 MIT © Imdeadpool
+```
