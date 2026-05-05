@@ -16,7 +16,8 @@ export type GuardedClaimStatus =
   | 'takeover_recommended'
   | 'blocked_active_owner'
   | 'invalid_path'
-  | 'task_not_found';
+  | 'task_not_found'
+  | 'protected_branch_rejected';
 
 export interface GuardedClaimResult {
   status: GuardedClaimStatus;
@@ -70,6 +71,24 @@ export function guardedClaimFile(
         warning: `Task is on protected base branch '${task.branch}'. Per worktree-discipline contract, claims should land on an agent/* branch inside .omc/agent-worktrees/. Start a worktree with 'gx branch start "<task>" "<agent>"' before claiming.`,
       }
     : undefined;
+  // Hard reject claims on protected base branches when the setting is on
+  // and the caller hasn't asked for the soft-warning escape hatch via
+  // env. This is the lever that stops health's "claims on protected
+  // branches" from drifting back to non-zero after a sweep.
+  if (
+    protectedBranchWarning &&
+    store.settings.rejectProtectedBranchClaims === true &&
+    process.env.COLONY_ALLOW_PROTECTED_CLAIM !== '1' &&
+    args.dryRun !== true
+  ) {
+    return {
+      status: 'protected_branch_rejected',
+      task_id: args.task_id,
+      file_path: filePath,
+      protected_branch: protectedBranchWarning,
+      recommendation: `Move work to an agent/* worktree before claiming. Run 'gx branch start "<task>" "<agent>"' to start a lane, or set COLONY_ALLOW_PROTECTED_CLAIM=1 to bypass once.`,
+    };
+  }
   const withWarning = <T extends GuardedClaimResult>(result: T): T =>
     protectedBranchWarning ? { ...result, protected_branch: protectedBranchWarning } : result;
 

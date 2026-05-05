@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { Command } from 'commander';
+import { Command, type ParseOptions } from 'commander';
 import { maybeReexecAfterAutoBuild } from './auto-build.js';
 import { registerAgentsCommand } from './commands/agents.js';
 import { registerBackfillCommand } from './commands/backfill.js';
@@ -93,6 +93,17 @@ export function createProgram(): Command {
   registerResumeCommand(program);
   registerRescueCommand(program);
 
+  // Canonicalize the lowercase `-v` shorthand to `-V` inside parseAsync so
+  // commander's two-flag `.version()` registration handles it from every
+  // entry path — bin shim, tests calling parseAsync directly, embedded
+  // callers that build the program. (Pre-PR-#444, the for-loop in the
+  // bin-entry block missed test-driven parseAsync calls.)
+  const originalParseAsync = program.parseAsync.bind(program);
+  program.parseAsync = ((argv?: readonly string[], options?: ParseOptions) => {
+    const adjusted = argv?.map((arg) => (arg === '-v' ? '-V' : arg));
+    return originalParseAsync(adjusted, options);
+  }) as Command['parseAsync'];
+
   return program;
 }
 
@@ -105,12 +116,6 @@ if (isMainEntry()) {
     if (err.code === 'EPIPE') process.exit(0);
     throw err;
   });
-  // Canonicalize the lowercase `-v` shorthand to `-V` so commander's two-flag
-  // `.version()` registration handles it. Pre-empts argv only at the bin
-  // entrypoint, never inside imported helpers.
-  for (let i = 2; i < process.argv.length; i++) {
-    if (process.argv[i] === '-v') process.argv[i] = '-V';
-  }
   createProgram()
     .parseAsync(process.argv)
     .catch((err) => {

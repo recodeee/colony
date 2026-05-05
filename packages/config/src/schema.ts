@@ -52,6 +52,20 @@ export const SettingsSchema = z
       .positive()
       .default(240)
       .describe('Minutes before a file claim is downgraded from active ownership to stale/weak.'),
+    coordinationSweepIntervalMinutes: z
+      .number()
+      .int()
+      .nonnegative()
+      .default(60)
+      .describe(
+        'Minutes between automatic coordination-sweep passes in the worker. Each pass downgrades stale claims and releases expired quota-pending claims so health metrics self-heal without manual intervention. Set to 0 to disable.',
+      ),
+    rejectProtectedBranchClaims: z
+      .boolean()
+      .default(true)
+      .describe(
+        'If true, MCP task_claim_file rejects claims targeting tasks bound to protected branches (main/master/dev). Override per-call with the COLONY_ALLOW_PROTECTED_CLAIM=1 env var. Set to false to restore the historical soft-warning behavior.',
+      ),
     protected_files: z
       .array(z.string().min(1))
       .default([...DEFAULT_PROTECTED_FILES])

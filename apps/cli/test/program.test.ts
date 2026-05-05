@@ -56,7 +56,7 @@ describe('Colony CLI program', () => {
       Cross-agent persistent memory with compressed storage.
 
       Options:
-        -v, -V, --version                                 output the version number
+        -V, --version                                     output the version number
         -h, --help                                        display help for command
 
       Commands:

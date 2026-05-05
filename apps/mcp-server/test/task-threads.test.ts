@@ -57,8 +57,13 @@ function seedTwoSessionTask(repoRoot = '/repo'): {
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'colony-task-threads-'));
-  store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings: defaultSettings });
-  const server = buildServer(store, defaultSettings);
+  // These tests verify claim contention semantics, not branch policy.
+  // Disable the protected-branch guard so the existing fixtures (most
+  // of which use branch:'main' for brevity) keep exercising the
+  // contention-resolution code paths they were written for.
+  const settings = { ...defaultSettings, rejectProtectedBranchClaims: false };
+  store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings });
+  const server = buildServer(store, settings);
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'test', version: '0.0.0' });
   await Promise.all([server.connect(serverT), client.connect(clientT)]);
