@@ -3314,7 +3314,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       prompt: codexPrompt({
         goal: 'repair Queen plan state before treating subtasks as ready work',
         current: `${queenStateRepair.plan_slug} is ${queenStateRepair.state} with ${queenStateRepair.remaining_subtask_count} remaining subtask(s)`,
-        inspect: 'colony queen sweep --json, colony health --json, mcp__colony__task_plan_list',
+        inspect:
+          'colony queen sweep --json, colony coordination sweep --archive-completed-plans, colony health --json, mcp__colony__task_plan_list',
         acceptance:
           'completed plans are archived, inactive plans are reactivated, orphan subtasks are deleted, or a replacement plan is published',
       }),
