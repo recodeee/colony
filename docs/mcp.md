@@ -1647,6 +1647,7 @@ The lane introduces several observation kinds on the parent spec task and on the
 - `plan-archived` — written on the parent spec task when auto-archive succeeds. Carries `archived_path`, `merged_root_hash`, `applied`.
 - `plan-archive-blocked` — written when auto-archive is ready but the three-way merge has conflicts. Carries `conflicts` (the conflict set) and `applied` (the deltas that did merge cleanly).
 - `plan-archive-error` — written when auto-archive throws. Carries the error message in `metadata.error`. The sub-task completion still succeeded; auto-archive errors never tear down completion.
+- `reflexion` — reserved for one-line lessons from failure, expiry, rollback, or success outcomes. Carries the shared `ReflexionMetadata` payload from `@colony/core`; writers store the summary/reflection through `MemoryStore.addObservation`, so the body is compressed.
 
 ## Contract stability
 
