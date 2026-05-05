@@ -186,7 +186,7 @@ export function ingestOmxRuntimeSummary(
     content: contentFromSummary(summary),
     compressed: false,
     intensity: null,
-    ts: summary.ts,
+    ts: Math.max(summary.ts, Date.now()),
     task_id: taskId,
     metadata: compactObject({
       kind: 'omx-runtime-summary',
@@ -194,6 +194,7 @@ export function ingestOmxRuntimeSummary(
       agent: summary.agent,
       repo_root: summary.repo_root,
       branch: summary.branch,
+      summary_ts: summary.ts,
       quota_warning: summary.quota_warning,
       runtime_model_error: summary.runtime_model_error,
       last_prompt_summary: summary.last_prompt_summary,
@@ -339,8 +340,9 @@ export function discoverOmxRuntimeSummaryStats(
         for (const sessionId of normalizeActiveSessions(input.active_sessions)) {
           sessionIds.add(sessionId);
         }
+        const freshnessTs = runtimeSummaryFreshnessTs(input, normalized.ts, source.modifiedTimeMs);
         latestSummaryTs =
-          latestSummaryTs === null ? normalized.ts : Math.max(latestSummaryTs, normalized.ts);
+          latestSummaryTs === null ? freshnessTs : Math.max(latestSummaryTs, freshnessTs);
         warningCount += normalized.warnings.length + normalizeWarningList(input.warnings).length;
         for (const filePath of normalizeRecentEditPaths(input)) {
           if (!editPaths.includes(filePath)) editPaths.push(filePath);
@@ -661,6 +663,38 @@ function runtimeBridgeStatus(input: {
 }): OmxRuntimeBridgeStatus {
   if (input.summaries_ingested <= 0 || input.latest_summary_ts === null) return 'unavailable';
   return input.now - input.latest_summary_ts > input.staleMs ? 'stale' : 'available';
+}
+
+function runtimeSummaryFreshnessTs(
+  input: OmxRuntimeSummaryInput,
+  summaryTs: number,
+  sourceModifiedTimeMs: number | null,
+): number {
+  let latest = summaryTs;
+  const latestLifecycleEventTs = latestRuntimeLifecycleEventTs(input);
+  if (latestLifecycleEventTs !== null) latest = Math.max(latest, latestLifecycleEventTs);
+  if (sourceModifiedTimeMs !== null && hasRuntimeActivityData(input)) {
+    latest = Math.max(latest, sourceModifiedTimeMs);
+  }
+  return latest;
+}
+
+function latestRuntimeLifecycleEventTs(input: OmxRuntimeSummaryInput): number | null {
+  let latest: number | null = null;
+  for (const event of normalizeRuntimeLifecycleEvents(input)) {
+    if (event.ts === null) continue;
+    latest = latest === null ? event.ts : Math.max(latest, event.ts);
+  }
+  return latest;
+}
+
+function hasRuntimeActivityData(input: OmxRuntimeSummaryInput): boolean {
+  return (
+    normalizeRuntimeLifecycleEvents(input).length > 0 ||
+    normalizeRecentEditPaths(input).length > 0 ||
+    normalizeActiveSessions(input.active_sessions).length > 0 ||
+    normalizeFileFocus(input.active_file_focus).length > 0
+  );
 }
 
 function normalizeActiveSessions(value: unknown): string[] {

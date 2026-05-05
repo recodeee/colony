@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -140,6 +140,7 @@ describe('OMX runtime summaries', () => {
         ],
       }),
     );
+    utimesSync(path, new Date('2026-04-29T12:00:00.000Z'), new Date('2026-04-29T12:00:00.000Z'));
 
     const stats = discoverOmxRuntimeSummaryStats({
       paths: [path],
@@ -157,6 +158,86 @@ describe('OMX runtime summaries', () => {
         measurable_edits: 1,
         edits_claimed_before: 1,
       },
+    });
+  });
+
+  it('uses fresh lifecycle events when the summary timestamp lags', () => {
+    dir = mkdtempSync(join(tmpdir(), 'colony-omx-runtime-summary-fresh-events-'));
+    const repoRoot = join(dir, 'repo');
+    const path = join(dir, 'colony-runtime-summary.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@fresh-events',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: '2026-04-29T12:00:00.000Z',
+        lifecycle_events: [
+          {
+            event_id: 'evt_pre',
+            event_type: 'pre_tool_use',
+            timestamp: '2026-04-29T12:29:59.000Z',
+            extracted_paths: ['apps/cli/src/commands/health.ts'],
+          },
+          {
+            event_id: 'evt_post',
+            parent_event_id: 'evt_pre',
+            event_type: 'post_tool_use',
+            timestamp: '2026-04-29T12:29:59.100Z',
+            extracted_paths: ['apps/cli/src/commands/health.ts'],
+          },
+        ],
+      }),
+    );
+    utimesSync(path, new Date('2026-04-29T12:00:00.000Z'), new Date('2026-04-29T12:00:00.000Z'));
+
+    const stats = discoverOmxRuntimeSummaryStats({
+      paths: [path],
+      since: 0,
+      now: Date.parse('2026-04-29T12:30:00.000Z'),
+      staleMs: 60_000,
+    });
+
+    expect(stats).toMatchObject({
+      status: 'available',
+      latest_summary_ts: Date.parse('2026-04-29T12:29:59.100Z'),
+      claim_before_edit: {
+        hook_capable_edits: 1,
+        pre_tool_use_signals: 1,
+      },
+    });
+  });
+
+  it('uses fresh file mtime when runtime activity exists but the payload timestamp lags', () => {
+    dir = mkdtempSync(join(tmpdir(), 'colony-omx-runtime-summary-fresh-mtime-'));
+    const repoRoot = join(dir, 'repo');
+    const path = join(dir, 'colony-runtime-summary.json');
+    const now = Date.parse('2026-04-29T12:30:00.000Z');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@fresh-mtime',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: '2026-04-29T12:00:00.000Z',
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+      }),
+    );
+    utimesSync(path, new Date(now - 1_000), new Date(now - 1_000));
+
+    const stats = discoverOmxRuntimeSummaryStats({
+      paths: [path],
+      since: 0,
+      now,
+      staleMs: 60_000,
+    });
+
+    expect(stats).toMatchObject({
+      status: 'available',
+      latest_summary_ts: now - 1_000,
+      recent_edit_paths: ['apps/cli/src/commands/health.ts'],
     });
   });
 });
