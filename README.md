@@ -56,6 +56,22 @@ Stale signals evaporate.
 Colony turns multi-agent work into a measurable local loop instead of a pile of
 terminal sessions and stale notes.
 
+### Duplicate Work Example
+
+A human can ask Codex and Claude to solve the same runtime-manifest bug at the
+same time. Without a shared loop, both agents might diagnose the Turbopack root
+escape, edit the same schema file, and race two PRs for one fix.
+
+With Colony, both agents start from `hivemind_context`, `attention_inbox`, and
+`task_ready_for_agent`. The first agent records the diagnosis, claims the
+task/files, and posts the intended fix. The second agent sees the live claim and
+prior diagnosis before editing, so it can stand down, review, or take a
+different unclaimed lane instead of producing a duplicate patch.
+
+Colony does not run the agents for you. It makes duplicate work visible early,
+turns one solution into one implementation branch, and keeps the evidence in a
+shared task thread.
+
 > **The Colony loop**
 >
 > `hivemind_context` -> `attention_inbox` -> `task_ready_for_agent` -> `task_plan_claim_subtask` -> `task_claim_file` -> `task_note_working`
