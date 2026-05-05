@@ -50,6 +50,7 @@ const DEFAULT_HOURS = 24;
 const DEFAULT_RECENT_WINDOW_HOURS = 1;
 const HEALTH_TOOL_LIMIT = 5;
 const QUOTA_RELAY_EXAMPLE_LIMIT = 5;
+const QUOTA_RELAY_FILE_PREVIEW_LIMIT = 2;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
 const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
@@ -1392,7 +1393,12 @@ function formatQuotaRelayExamples(examples: QuotaRelayExample[]): string[] {
 }
 
 function formatQuotaRelayFiles(files: string[]): string {
-  return files.length > 0 ? files.join(', ') : '-';
+  if (files.length === 0) return '-';
+  const preview = files.slice(0, QUOTA_RELAY_FILE_PREVIEW_LIMIT);
+  const remaining = files.length - preview.length;
+  const suffix = remaining > 0 ? `, +${remaining} more` : '';
+  const label = files.length === 1 ? 'file' : 'files';
+  return `${files.length} ${label}: ${preview.join(', ')}${suffix}`;
 }
 
 function formatMalformedSummaryExamples(
@@ -2956,6 +2962,27 @@ function quotaRelayActionHint(payload: SignalHealthPayload): {
   };
 }
 
+function liveContentionCurrent(payload: LiveContentionPayload): string {
+  const firstConflict = payload.top_conflicts[0];
+  const firstFile = firstConflict ? `; first ${firstConflict.file_path}` : '';
+  return `${payload.live_file_contentions} conflict(s), ${payload.dirty_contended_files} dirty${firstFile}`;
+}
+
+function liveContentionResolutionHint(payload: LiveContentionPayload): {
+  action: string;
+  tool_call?: string;
+  command?: string;
+} | null {
+  const firstAction = payload.recommended_actions[0];
+  if (!firstAction) return null;
+  const owner = `${firstAction.owner} ${shortSession(firstAction.session_id)}`.trim();
+  return {
+    action: `Resolve ${firstAction.file_path} first: ${firstAction.action} for owner ${owner} (${firstAction.reason}).`,
+    ...(firstAction.mcp_tool_hint ? { tool_call: firstAction.mcp_tool_hint } : {}),
+    ...(firstAction.command ? { command: firstAction.command } : {}),
+  };
+}
+
 function runtimeBridgeAction(payload: ColonyHealthPayloadWithoutHints): string {
   if (payload.omx_runtime_bridge.status === 'stale') {
     return 'Metric unreliable: refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits before judging claim failures.';
@@ -2973,21 +3000,24 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   const hints: ActionHint[] = [];
   const liveContention = payload.live_contention_health;
   if (liveContention.live_file_contentions > 0) {
+    const resolutionHint = liveContentionResolutionHint(liveContention);
     hints.push({
       metric: 'live file contentions',
       status: 'bad',
-      current: `${liveContention.live_file_contentions} conflict(s), ${liveContention.dirty_contended_files} dirty`,
+      current: liveContentionCurrent(liveContention),
       target: '0 conflicts',
       action:
+        resolutionHint?.action ??
         'Resolve same-file multi-owner claims before running broad verification or trusting branch health.',
       readiness_scope: 'execution_safety',
       priority: 1,
       tool_call:
+        resolutionHint?.tool_call ??
         'mcp__colony__hivemind_context({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>", files: ["<file>"] })',
-      command: 'colony health --json',
+      command: resolutionHint?.command ?? 'colony health --json',
       prompt: codexPrompt({
         goal: 'resolve live same-file ownership conflicts before branch verification',
-        current: `${liveContention.live_file_contentions} live file contentions; ${liveContention.dirty_contended_files} dirty contended files`,
+        current: liveContentionCurrent(liveContention),
         inspect:
           'colony health --json, mcp__colony__hivemind_context, mcp__colony__attention_inbox',
         acceptance:
