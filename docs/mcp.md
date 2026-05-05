@@ -1441,12 +1441,15 @@ Find the next task to claim for this agent. Use this when deciding what to work 
     "session_id": "sess_def",
     "agent": "codex",
     "repo_root": "/abs/repo",
-    "limit": 5
+    "limit": 5,
+    "auto_claim": true
   }
 }
 ```
 
 Returns `{ ready, total_available, next_action }`. Each `ready` entry includes `priority`, `plan_slug`, `subtask_index`, `wave_index`, `wave_name`, `blocked_by_count`, `title`, `capability_hint`, `file_scope`, `fit_score`, compact `reason`, and `reasoning`. Claimable `ready` entries also include `next_tool: "task_plan_claim_subtask"`, exact copy-paste `claim_args`, `codex_mcp_call`, and `next_action_reason` so agents can claim instead of stopping at discovery. `reason` is one of `continue_current_task`, `urgent_override`, or `ready_high_score`. Blocked work is filtered out, and conflicting active file claims lower the score. When ready work exists, `next_action` points at `task_plan_claim_subtask` with the top ready entry's `plan_slug` and `subtask_index`; if the top reason is `continue_current_task`, keep working the already-claimed sub-task.
+
+`auto_claim` defaults to `true`. When set, the server claims the unambiguous ready sub-task in the same MCP call and reports the outcome in `auto_claimed: { ok, plan_slug, subtask_index, task_id, branch, file_scope }`, plus a `next_action` of `Auto-claimed <slug>/sub-<n>: claim files before edits with task_claim_file, then post task_note_working.` The auto-claim only fires when `next_tool` would be `task_plan_claim_subtask` and `assigned_agent` matches the caller — cross-agent picks and ambiguous routings still defer to an explicit claim call. Pass `auto_claim: false` for browse-only callers that should not change ownership state. Because the loop closes inside one MCP call, the dashboard's `task_ready_for_agent -> task_plan_claim_subtask` conversion metric reads near-zero in normal operation; `colony health` suppresses the false-positive nag when claims are happening via this path (signature: `from_calls > 0`, `to_calls === 0`, `claimed > 0`).
 
 When claimable work exists, the response also includes exact routing fields:
 
