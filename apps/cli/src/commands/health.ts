@@ -534,7 +534,16 @@ interface ReadinessSummaryPayload {
   signal_evaporation: ReadinessSummaryItem;
 }
 
-type ReadinessScope = keyof ReadinessSummaryPayload | 'adoption_followup';
+type ReadinessSummaryKey = keyof ReadinessSummaryPayload;
+type ReadinessScope = ReadinessSummaryKey | 'adoption_followup';
+
+const READINESS_LABELS: Record<ReadinessSummaryKey, string> = {
+  coordination_readiness: 'Coordination loop',
+  execution_safety: 'Edit safety',
+  queen_plan_readiness: 'Plan readiness',
+  working_state_migration: 'Working notes',
+  signal_evaporation: 'Stale signals',
+};
 
 export interface ColonyHealthPayload {
   generated_at: string;
@@ -790,6 +799,9 @@ export function formatColonyHealthOutput(
   const lines = [
     kleur.bold('colony health'),
     kleur.dim(`window: last ${payload.window_hours}h`),
+    '',
+    kleur.bold('At a glance'),
+    ...formatHealthAtAGlance(payload, visibleHints),
     '',
     kleur.bold('Health focus'),
     ...formatHealthFocus(payload, visibleHints, { verbose: Boolean(options.verbose) }),
@@ -1187,6 +1199,60 @@ function readinessSummaryPayload(
   };
 }
 
+function formatHealthAtAGlance(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
+  const entries = readinessEntries(payload.readiness_summary);
+  const bad = entries.filter(([, item]) => item.status === 'bad');
+  const ok = entries.filter(([, item]) => item.status === 'ok');
+  const topHint = visibleHints[0];
+  const nextStep = topHint ? preferredAction(topHint) : null;
+  const lines = [
+    `  overall: ${formatOverallReadiness(bad.length, ok.length)}`,
+    `  needs work: ${bad.length > 0 ? bad.map(([scope]) => READINESS_LABELS[scope]).join(', ') : 'none'}`,
+  ];
+
+  if (topHint) {
+    lines.push(
+      `  fix first: ${topHint.metric}`,
+      `  because: ${topHint.current}`,
+      `  do next: ${topHint.action}`,
+    );
+    if (nextStep) lines.push(`  run: ${nextStep}`);
+  } else {
+    lines.push('  fix first: none', '  do next: keep current loop');
+  }
+
+  lines.push('  areas:');
+  for (const [scope, item] of entries) {
+    lines.push(`    ${formatReadinessBadge(item.status)} ${READINESS_LABELS[scope]} (${scope})`);
+  }
+  return lines;
+}
+
+function readinessEntries(
+  summary: ReadinessSummaryPayload,
+): Array<[ReadinessSummaryKey, ReadinessSummaryItem]> {
+  return Object.entries(summary) as Array<[ReadinessSummaryKey, ReadinessSummaryItem]>;
+}
+
+function formatOverallReadiness(badCount: number, okCount: number): string {
+  if (badCount > 0)
+    return kleur.red(`needs attention (${badCount} area${badCount === 1 ? '' : 's'})`);
+  if (okCount > 0) return kleur.yellow(`watch (${okCount} area${okCount === 1 ? '' : 's'})`);
+  return kleur.green('ready');
+}
+
+function preferredAction(hint: ActionHint): string | null {
+  if (hint.command) return `cmd: ${hint.command}`;
+  if (hint.tool_call) return `tool: ${hint.tool_call}`;
+  return null;
+}
+
+function formatReadinessBadge(status: ReadinessStatus): string {
+  if (status === 'good') return kleur.green('[ready]');
+  if (status === 'bad') return kleur.red('[fix]');
+  return kleur.yellow('[watch]');
+}
+
 function formatReadinessSummary(summary: ReadinessSummaryPayload): string[] {
   return [
     ...formatReadinessItem('coordination_readiness', summary.coordination_readiness),
@@ -1197,8 +1263,11 @@ function formatReadinessSummary(summary: ReadinessSummaryPayload): string[] {
   ];
 }
 
-function formatReadinessItem(label: string, item: ReadinessSummaryItem): string[] {
-  const lines = [`  ${label.padEnd(25)} ${formatReadinessStatus(item.status)} ${item.evidence}`];
+function formatReadinessItem(label: ReadinessSummaryKey, item: ReadinessSummaryItem): string[] {
+  const lines = [
+    `  ${formatReadinessStatus(item.status)} ${READINESS_LABELS[label]} (${label})`,
+    `    evidence: ${item.evidence}`,
+  ];
   if (item.root_cause) {
     lines.push(
       `    root cause: ${item.root_cause.summary}`,

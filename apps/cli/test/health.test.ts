@@ -347,6 +347,14 @@ describe('colony health payload', () => {
 
     const text = formatColonyHealthOutput(payload);
     expect(text).toContain('colony health');
+    expect(text).toContain('At a glance');
+    expect(text.indexOf('At a glance')).toBeLessThan(text.indexOf('Health focus'));
+    expect(text).toContain('needs work:');
+    expect(text).toContain('fix first:');
+    expect(text).toContain('areas:');
+    expect(text).toContain('Coordination loop (coordination_readiness)');
+    expect(text).toContain('Edit safety (execution_safety)');
+    expect(text).toContain('evidence: MCP share');
     expect(text).toContain('Readiness summary');
     expect(text.indexOf('Readiness summary')).toBeLessThan(text.indexOf('Colony MCP share'));
     expect(text).toContain('coordination_readiness');
