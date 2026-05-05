@@ -325,18 +325,38 @@ export function buildTaskPreface(
     unreadMessages = [];
   }
   const others = thread.participants().filter((p) => p.session_id !== input.session_id);
+  // The Joined-with line was the headline source of session-start preface
+  // bloat: long-running task threads accumulate dozens of stale participants
+  // (resumed sessions, prior worktrees) and the unbounded list dwarfed the
+  // signal we actually care about — who is alive on this branch *right now*.
+  // Filter to participants with at least one observation in the last hour
+  // and cap the surfaced list. Anyone still active outside the window can
+  // be re-discovered via attention_inbox.
+  const RECENT_PARTICIPANT_WINDOW_MS = 60 * 60_000;
+  const PARTICIPANT_DISPLAY_CAP = 8;
+  const recentSinceMs = Date.now() - RECENT_PARTICIPANT_WINDOW_MS;
+  const recentOthers = others.filter(
+    (p) => store.storage.lastObservationTsForSession(p.session_id) >= recentSinceMs,
+  );
+  const visibleOthers = recentOthers.slice(0, PARTICIPANT_DISPLAY_CAP);
+  const hiddenOthersCount = recentOthers.length - visibleOthers.length;
 
   const lines: string[] = [];
   if (
-    others.length > 0 ||
+    recentOthers.length > 0 ||
     pending.length > 0 ||
     pendingWakes.length > 0 ||
     unreadMessages.length > 0
   ) {
-    const who =
-      others.length > 0
-        ? others.map((p) => `${p.agent}@${p.session_id.slice(0, 8)}`).join(', ')
-        : 'you only';
+    let who: string;
+    if (visibleOthers.length === 0) {
+      who = 'you only';
+    } else {
+      const rendered = visibleOthers
+        .map((p) => `${p.agent}@${p.session_id.slice(0, 8)}`)
+        .join(', ');
+      who = hiddenOthersCount > 0 ? `${rendered} (+${hiddenOthersCount} more)` : rendered;
+    }
     lines.push(
       `## Task thread #${thread.task_id} (${detected.branch})`,
       `Joined with: ${who}. Post coordination via MCP tools task_post / task_claim_file / task_hand_off.`,

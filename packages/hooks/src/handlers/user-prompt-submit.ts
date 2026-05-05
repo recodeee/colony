@@ -65,10 +65,27 @@ export function buildConflictPreface(store: MemoryStore, session_id: string): st
 
   const lines = ['## Files being actively edited by other sessions'];
   for (const [sess, paths] of bySession) {
-    lines.push(`  ${sess}: ${paths.join(', ')}`);
+    // Truncate session_id to match the 8-char shorthand used in the
+    // Joined-with line; strip the long agent-worktree prefix from paths
+    // so a cross-sandbox edit shows the touched file rather than 80
+    // characters of identical worktree noise. Both turn this preface
+    // from a per-turn token sink into something an agent can read.
+    lines.push(`  ${sess.slice(0, 8)}: ${paths.map(compactConflictPath).join(', ')}`);
   }
   lines.push('Coordinate via task_post or task_hand_off before editing these files.');
   return lines.join('\n');
+}
+
+/**
+ * Strip the `<some-prefix>/.omx/agent-worktrees/<sandbox-dir>/` (or
+ * `.omc/...`) lead-in from a claimed file path. The worktree slug is
+ * always recoverable from the (session_id, task_id) pair, so the path
+ * the agent actually cares about — the file inside the sandbox — is
+ * the only useful suffix to surface.
+ */
+function compactConflictPath(file_path: string): string {
+  const match = file_path.match(/^(.*?\/)?\.om[xc]\/agent-worktrees\/[^/]+\/(.+)$/);
+  return match?.[2] ?? file_path;
 }
 
 /**
