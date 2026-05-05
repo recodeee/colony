@@ -945,14 +945,26 @@ real use.
 
 ## Contributing
 
-Use Colony on real work, then report the places where coordination felt wrong:
-stale claims, confusing handoffs, missing session context, noisy proposals,
-stranded sessions, hot files that were missed, or edits that should have been
-claimed before mutation.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the current policy. Today's
+contribution path is:
 
-For code changes, prefer small observable primitives over central
-orchestration. Colony should help agents coordinate by leaving durable local
-traces, not by becoming a remote control plane.
+```bash
+gx branch start "<task>" "<agent-name>"
+```
+
+Then use Colony on real work: start with `hivemind_context`,
+`attention_inbox`, and `task_ready_for_agent`; claim files before mutation;
+leave `task_note_working` or `task_post` breadcrumbs; verify the touched
+behavior; and finish with a PR through `gx branch finish --via-pr`.
+
+Every PR should report where coordination felt wrong: stale claims, confusing
+handoffs, missing session context, noisy proposals, stranded sessions, missed
+hot files, or edits that should have been claimed before mutation. If nothing
+felt wrong, say `Coordination friction: none observed`.
+
+For code changes, prefer small observable primitives over central orchestration.
+Colony should help agents coordinate by leaving durable local traces, not by
+becoming a remote control plane.
 
 ---
 
