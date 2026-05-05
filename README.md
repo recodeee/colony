@@ -1,6 +1,5 @@
 <h1 align="center">
   <img src="docs/assets/colony-logo.png" alt="Colony logo" width="88" />
-  Colony
 </h1>
 
 <p align="center">
