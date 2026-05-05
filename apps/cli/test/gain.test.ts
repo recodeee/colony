@@ -3,6 +3,12 @@ import type { McpMetricsAggregateRow } from '@colony/storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { writeGainReport, writeLiveSection, writeReferenceSection } from '../src/commands/gain.js';
 
+const COST_BASIS = {
+  input_usd_per_1m_tokens: 1,
+  output_usd_per_1m_tokens: 2,
+  configured: true,
+};
+
 describe('gain command output', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -20,12 +26,24 @@ describe('gain command output', () => {
       calls: 2,
       ok_count: 1,
       error_count: 1,
+      error_reasons: [
+        {
+          error_code: 'TASK_NOT_FOUND',
+          error_message: 'task 6 not found',
+          count: 1,
+          last_ts: Date.now(),
+        },
+      ],
       input_bytes: 100,
       output_bytes: 200,
       total_bytes: 300,
       input_tokens: 25,
       output_tokens: 50,
       total_tokens: 75,
+      input_cost_usd: 0.000025,
+      output_cost_usd: 0.0001,
+      total_cost_usd: 0.000125,
+      avg_cost_usd: 0.000063,
       avg_input_tokens: 13,
       avg_output_tokens: 25,
       total_duration_ms: 40,
@@ -33,14 +51,19 @@ describe('gain command output', () => {
       last_ts: Date.now(),
     };
 
-    writeLiveSection([row], row, 24, undefined);
+    writeLiveSection([row], row, COST_BASIS, 24, undefined);
 
     expect(output).toContain('OK');
     expect(output).toContain('Tok total');
+    expect(output).toContain('Cost');
+    expect(output).toContain('$0.000125');
     expect(output).toContain('Bytes');
     expect(output).toContain('Avg in');
     expect(output).toContain('Avg out');
     expect(output).toContain('Last');
+    expect(output).toContain('Top error reasons');
+    expect(output).toContain('TASK_NOT_FOUND');
+    expect(output).toContain('task 6 not found');
     expect(output).toContain('search');
     expect(output).toContain('75');
     expect(output).toContain('300');
@@ -58,12 +81,17 @@ describe('gain command output', () => {
       calls: 1,
       ok_count: 1,
       error_count: 0,
+      error_reasons: [],
       input_bytes: 100,
       output_bytes: 200,
       total_bytes: 300,
       input_tokens: 25,
       output_tokens: 50,
       total_tokens: 75,
+      input_cost_usd: 0.000025,
+      output_cost_usd: 0.0001,
+      total_cost_usd: 0.000125,
+      avg_cost_usd: 0.000125,
       avg_input_tokens: 25,
       avg_output_tokens: 50,
       total_duration_ms: 40,
@@ -89,12 +117,13 @@ describe('gain command output', () => {
       },
       [row],
       row,
+      COST_BASIS,
       24,
       undefined,
     );
 
     expect(output.indexOf('colony gain — live mcp_metrics')).toBeLessThan(
-      output.indexOf('colony gain — reference model'),
+      output.indexOf('colony gain — reference model (static)'),
     );
   });
 
@@ -123,7 +152,8 @@ describe('gain command output', () => {
       },
     );
 
-    expect(output).toContain('colony gain — reference model');
+    expect(output).toContain('colony gain — reference model (static)');
+    expect(output).toContain('Static total / session');
     expect(output).not.toContain('What gets cut');
     expect(output).not.toContain('Colony:  search -> get_observations IDs');
     expect(output).not.toContain('Cuts:    re-reading PR threads + scrollback');

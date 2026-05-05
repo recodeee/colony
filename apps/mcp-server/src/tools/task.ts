@@ -164,6 +164,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
       reply_to: z.number().int().positive().optional(),
     },
     wrapHandler('task_post', async ({ task_id, session_id, kind, content, reply_to }) => {
+      if (!store.storage.getTask(task_id)) {
+        return mcpErrorResponse('TASK_NOT_FOUND', `task ${task_id} not found`, {
+          task_id,
+          hint: 'Use task_note_working when the active task id is unknown or stale.',
+        });
+      }
       const thread = new TaskThread(store, task_id);
       const id = thread.post({
         session_id,

@@ -18,6 +18,7 @@ export function createMetricsWrapper(store: MemoryStore | null | undefined): Too
       const start = Date.now();
       const inputBytes = byteLengthOf(handlerArgs[0]);
       const inputTokens = tokenCountOf(handlerArgs[0]);
+      const context = metricContextOf(handlerArgs[0]);
       let result: unknown;
       try {
         result = handler(...handlerArgs);
@@ -25,27 +26,32 @@ export function createMetricsWrapper(store: MemoryStore | null | undefined): Too
         recordSafe(store, {
           ts: start,
           operation: name,
+          ...context,
           input_bytes: inputBytes,
           output_bytes: 0,
           input_tokens: inputTokens,
           output_tokens: 0,
           duration_ms: Date.now() - start,
           ok: false,
+          ...errorMetricOf(err),
         });
         throw err;
       }
       if (isPromiseLike(result)) {
         return result.then(
           (resolved) => {
+            const responseError = responseErrorMetricOf(resolved);
             recordSafe(store, {
               ts: start,
               operation: name,
+              ...context,
               input_bytes: inputBytes,
               output_bytes: byteLengthOf(resolved),
               input_tokens: inputTokens,
               output_tokens: tokenCountOf(resolved),
               duration_ms: Date.now() - start,
-              ok: true,
+              ok: responseError === null,
+              ...(responseError ?? {}),
             });
             return resolved;
           },
@@ -53,26 +59,31 @@ export function createMetricsWrapper(store: MemoryStore | null | undefined): Too
             recordSafe(store, {
               ts: start,
               operation: name,
+              ...context,
               input_bytes: inputBytes,
               output_bytes: 0,
               input_tokens: inputTokens,
               output_tokens: 0,
               duration_ms: Date.now() - start,
               ok: false,
+              ...errorMetricOf(err),
             });
             throw err;
           },
         ) as ReturnType<typeof handler>;
       }
+      const responseError = responseErrorMetricOf(result);
       recordSafe(store, {
         ts: start,
         operation: name,
+        ...context,
         input_bytes: inputBytes,
         output_bytes: byteLengthOf(result),
         input_tokens: inputTokens,
         output_tokens: tokenCountOf(result),
         duration_ms: Date.now() - start,
-        ok: true,
+        ok: responseError === null,
+        ...(responseError ?? {}),
       });
       return result as ReturnType<typeof handler>;
     }) as typeof handler;
@@ -81,6 +92,85 @@ export function createMetricsWrapper(store: MemoryStore | null | undefined): Too
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
   return Boolean(value) && typeof (value as { then?: unknown }).then === 'function';
+}
+
+function metricContextOf(value: unknown): Pick<MetricRecord, 'session_id' | 'repo_root'> {
+  if (!isRecord(value)) return {};
+  const sessionId = stringField(value.session_id) ?? stringField(value.current_session_id);
+  const repoRoot = stringField(value.repo_root);
+  const context: Pick<MetricRecord, 'session_id' | 'repo_root'> = {};
+  if (sessionId !== undefined) context.session_id = sessionId;
+  if (repoRoot !== undefined) context.repo_root = repoRoot;
+  return context;
+}
+
+function responseErrorMetricOf(
+  value: unknown,
+): Pick<MetricRecord, 'error_code' | 'error_message'> | null {
+  if (!isRecord(value) || value.isError !== true) return null;
+  const payload = firstTextPayload(value.content);
+  if (payload) {
+    try {
+      const parsed = JSON.parse(payload) as unknown;
+      if (isRecord(parsed)) {
+        return metricErrorFields(
+          boundedString(stringField(parsed.code), 120),
+          boundedString(stringField(parsed.error) ?? stringField(parsed.message), 500),
+        );
+      }
+    } catch {
+      return metricErrorFields(undefined, boundedString(payload, 500));
+    }
+  }
+  return metricErrorFields(undefined, 'MCP tool returned isError=true');
+}
+
+function errorMetricOf(err: unknown): Pick<MetricRecord, 'error_code' | 'error_message'> {
+  const code = isRecord(err) ? boundedString(stringField(err.code), 120) : undefined;
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : serialize(err) || String(err);
+  return metricErrorFields(
+    code ?? (err instanceof Error && err.name !== 'Error' ? err.name : undefined),
+    boundedString(message, 500),
+  );
+}
+
+function metricErrorFields(
+  code: string | undefined,
+  message: string | undefined,
+): Pick<MetricRecord, 'error_code' | 'error_message'> {
+  const fields: Pick<MetricRecord, 'error_code' | 'error_message'> = {};
+  if (code !== undefined) fields.error_code = code;
+  if (message !== undefined) fields.error_message = message;
+  return fields;
+}
+
+function firstTextPayload(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const item of content) {
+    if (isRecord(item) && item.type === 'text') {
+      const text = stringField(item.text);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function boundedString(value: string | undefined, limit: number): string | undefined {
+  if (value === undefined) return undefined;
+  return value.length <= limit ? value : value.slice(0, limit);
 }
 
 function serialize(value: unknown): string {
@@ -111,12 +201,16 @@ function tokenCountOf(value: unknown): number {
 interface MetricRecord {
   ts: number;
   operation: string;
+  session_id?: string | null;
+  repo_root?: string | null;
   input_bytes: number;
   output_bytes: number;
   input_tokens: number;
   output_tokens: number;
   duration_ms: number;
   ok: boolean;
+  error_code?: string | null;
+  error_message?: string | null;
 }
 
 function recordSafe(store: MemoryStore, metric: MetricRecord): void {

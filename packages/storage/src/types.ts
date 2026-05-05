@@ -265,18 +265,34 @@ export interface NewTaskEmbedding {
 export interface NewMcpMetric {
   ts: number;
   operation: string;
+  session_id?: string | null;
+  repo_root?: string | null;
   input_bytes: number;
   output_bytes: number;
   input_tokens: number;
   output_tokens: number;
   duration_ms: number;
   ok: boolean;
+  error_code?: string | null;
+  error_message?: string | null;
 }
 
 export interface AggregateMcpMetricsOptions {
   since?: number;
   until?: number;
   operation?: string;
+  cost?: McpMetricsCostOptions;
+}
+
+export interface McpMetricsCostOptions {
+  input_usd_per_1m_tokens?: number | undefined;
+  output_usd_per_1m_tokens?: number | undefined;
+}
+
+export interface McpMetricsCostBasis {
+  input_usd_per_1m_tokens: number;
+  output_usd_per_1m_tokens: number;
+  configured: boolean;
 }
 
 export interface McpMetricsAggregateRow {
@@ -284,12 +300,17 @@ export interface McpMetricsAggregateRow {
   calls: number;
   ok_count: number;
   error_count: number;
+  error_reasons: McpMetricsErrorReason[];
   input_bytes: number;
   output_bytes: number;
   total_bytes: number;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  input_cost_usd: number;
+  output_cost_usd: number;
+  total_cost_usd: number;
+  avg_cost_usd: number;
   avg_input_tokens: number;
   avg_output_tokens: number;
   total_duration_ms: number;
@@ -297,10 +318,18 @@ export interface McpMetricsAggregateRow {
   last_ts: number | null;
 }
 
+export interface McpMetricsErrorReason {
+  error_code: string | null;
+  error_message: string | null;
+  count: number;
+  last_ts: number | null;
+}
+
 export interface McpMetricsAggregate {
   since: number;
   until: number;
   operation?: string;
+  cost_basis: McpMetricsCostBasis;
   totals: McpMetricsAggregateRow;
   operations: McpMetricsAggregateRow[];
 }
@@ -315,4 +344,12 @@ export interface McpMetricsRawRow {
   out_tokens: number;
   total_ms: number;
   last_ts: number;
+}
+
+export interface McpMetricsErrorReasonRawRow {
+  operation?: string;
+  error_code: string | null;
+  error_message: string | null;
+  count: number;
+  last_ts: number | null;
 }

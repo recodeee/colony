@@ -221,6 +221,89 @@ describe('MCP server', () => {
     );
   });
 
+  it('savings_report returns per-operation cost when rates are provided', async () => {
+    store.storage.recordMcpMetric({
+      ts: Date.now(),
+      operation: 'search',
+      input_bytes: 100,
+      output_bytes: 200,
+      input_tokens: 1000,
+      output_tokens: 2000,
+      duration_ms: 12,
+      ok: true,
+    });
+
+    const res = await client.callTool({
+      name: 'savings_report',
+      arguments: { hours: 1, input_usd_per_1m: 1, output_usd_per_1m: 2 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      live: {
+        cost_basis: { configured: boolean };
+        totals: { total_cost_usd: number; avg_cost_usd: number };
+        operations: Array<{ operation: string; total_cost_usd: number; avg_cost_usd: number }>;
+      };
+    };
+
+    expect(payload.live.cost_basis.configured).toBe(true);
+    expect(payload.live.totals.total_cost_usd).toBeCloseTo(0.005, 12);
+    expect(payload.live.totals.avg_cost_usd).toBeCloseTo(0.005, 12);
+    expect(payload.live.operations[0]).toMatchObject({
+      operation: 'search',
+      total_cost_usd: 0.005,
+      avg_cost_usd: 0.005,
+    });
+  });
+
+  it('task_post reports a structured error for stale task ids', async () => {
+    store.startSession({ id: 's-post', ide: 'test', cwd: '/tmp' });
+
+    const res = await client.callTool({
+      name: 'task_post',
+      arguments: {
+        task_id: 999,
+        session_id: 's-post',
+        kind: 'note',
+        content: 'stale task id',
+      },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as { code: string; error: string; hint: string };
+    expect(res.isError).toBe(true);
+    expect(payload.code).toBe('TASK_NOT_FOUND');
+    expect(payload.hint).toContain('task_note_working');
+
+    const metric = store.storage.aggregateMcpMetrics({ since: 0, operation: 'task_post' })
+      .operations[0];
+    expect(metric?.error_reasons[0]).toMatchObject({
+      error_code: 'TASK_NOT_FOUND',
+      count: 1,
+    });
+  });
+
+  it('spec_change_open reports a structured error when SPEC.md is missing', async () => {
+    store.startSession({ id: 's-spec', ide: 'test', cwd: dir });
+    const repoRoot = join(dir, 'repo-without-spec');
+    mkdirSync(repoRoot, { recursive: true });
+
+    const res = await client.callTool({
+      name: 'spec_change_open',
+      arguments: {
+        repo_root: repoRoot,
+        slug: 'missing-root-spec',
+        session_id: 's-spec',
+        agent: 'codex',
+      },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as { code: string; error: string; repo_root: string };
+    expect(res.isError).toBe(true);
+    expect(payload.code).toBe('SPEC_ROOT_NOT_FOUND');
+    expect(payload.repo_root).toBe(repoRoot);
+    expect(payload.error).toContain('SPEC.md not found');
+  });
+
   it('keeps claim-before-edit language discoverable and soft', async () => {
     const { tools } = await client.listTools();
     const byName = new Map(tools.map((tool) => [tool.name, tool]));

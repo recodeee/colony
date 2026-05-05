@@ -276,12 +276,14 @@ Colony saves tokens by making coordination compact, searchable, and
 progressively hydrated. `colony gain` shows live `mcp_metrics` receipts first,
 then a shared reference model for common agent loops. Live numbers are recorded
 by the MCP server on every wrapped tool call into the `mcp_metrics` SQLite
-table.
+table. The reference model is static by design; its total is not derived from
+the live window.
 
 ```bash
 colony gain                       # CLI: live + reference, last 7 days
 colony gain --hours 24 --json     # last 24 hours as JSON
 colony gain --operation search    # filter live rows to one tool name
+colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
 ```
 
 | Operation | Frequency / session | Standard | Colony | Saved |
@@ -331,14 +333,19 @@ The MCP `savings_report` tool returns the same data:
 ```
 
 Live numbers are visible at <http://127.0.0.1:6510/savings> when `colony viewer`
-is running. Reference rows are shared across CLI, MCP, and viewer through
+is running. Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>` or set
+`COLONY_MCP_INPUT_USD_PER_1M` / `COLONY_MCP_OUTPUT_USD_PER_1M` to show estimated
+USD cost per operation. Reference rows are shared across CLI, MCP, and viewer through
 `packages/core/src/savings-reference.ts` — update once, three surfaces
 update together.
 
 `mcp_metrics` is a runtime debug aid: per-call `(operation, ts, input_bytes,
-output_bytes, input_tokens, output_tokens, duration_ms, ok)` rows recorded by
-the metrics wrapper in `apps/mcp-server`. When live token usage looks wrong,
-inspect `mcp_metrics` to see which tool is heavy.
+output_bytes, input_tokens, output_tokens, duration_ms, ok, session_id,
+repo_root, error_code, error_message)` rows recorded by the metrics wrapper in
+`apps/mcp-server`. When live token usage looks wrong, inspect `mcp_metrics` to
+see which tool is heavy and why recent failures happened. Monetary cost is
+computed at report time from live token receipts and caller-provided
+USD-per-1M rates, so older rows gain cost visibility without a schema migration.
 
 ---
 

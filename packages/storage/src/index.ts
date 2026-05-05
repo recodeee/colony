@@ -64,6 +64,9 @@ export type {
   NewTaskEmbedding,
   NewMcpMetric,
   AggregateMcpMetricsOptions,
+  McpMetricsCostOptions,
+  McpMetricsCostBasis,
+  McpMetricsErrorReason,
   McpMetricsAggregate,
   McpMetricsAggregateRow,
 } from './types.js';

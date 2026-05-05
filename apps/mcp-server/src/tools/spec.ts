@@ -24,7 +24,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
     { repo_root: z.string().min(1) },
     wrapHandler('spec_read', async ({ repo_root }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
-      const spec = repo.readRoot();
+      const spec = readRootOrError(repo, repo_root);
+      if ('isError' in spec) return spec;
       return {
         content: [
           {
@@ -79,12 +80,19 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     wrapHandler('spec_change_open', async ({ repo_root, slug, session_id, agent, proposal }) => {
       const repo = new SpecRepository({ repoRoot: repo_root, store });
-      const result = repo.openChange({
-        slug,
-        session_id,
-        agent,
-        ...(proposal !== undefined ? { proposal } : {}),
-      });
+      let result: ReturnType<SpecRepository['openChange']>;
+      try {
+        result = repo.openChange({
+          slug,
+          session_id,
+          agent,
+          ...(proposal !== undefined ? { proposal } : {}),
+        });
+      } catch (err) {
+        const missingRoot = specRootMissingResponse(err, repo_root);
+        if (missingRoot) return missingRoot;
+        throw err;
+      }
       return {
         content: [
           {
@@ -280,4 +288,27 @@ export function register(server: McpServer, ctx: ToolContext): void {
       };
     }),
   );
+}
+
+function readRootOrError(
+  repo: SpecRepository,
+  repoRoot: string,
+): ReturnType<SpecRepository['readRoot']> | ReturnType<typeof mcpErrorResponse> {
+  try {
+    return repo.readRoot();
+  } catch (err) {
+    const missingRoot = specRootMissingResponse(err, repoRoot);
+    if (missingRoot) return missingRoot;
+    throw err;
+  }
+}
+
+function specRootMissingResponse(
+  err: unknown,
+  repoRoot: string,
+): ReturnType<typeof mcpErrorResponse> | null {
+  if (err instanceof Error && err.message.startsWith('SPEC.md not found')) {
+    return mcpErrorResponse('SPEC_ROOT_NOT_FOUND', err.message, { repo_root: repoRoot });
+  }
+  return null;
 }

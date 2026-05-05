@@ -18,6 +18,9 @@ import type {
   LinkedTask,
   McpMetricsAggregate,
   McpMetricsAggregateRow,
+  McpMetricsCostBasis,
+  McpMetricsErrorReason,
+  McpMetricsErrorReasonRawRow,
   McpMetricsRawRow,
   NewAgentProfile,
   NewExample,
@@ -1059,24 +1062,29 @@ export class Storage {
     this.db
       .prepare(
         `INSERT INTO mcp_metrics(
-          ts, operation, input_bytes, output_bytes, input_tokens, output_tokens, duration_ms, ok
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          ts, operation, session_id, repo_root, input_bytes, output_bytes, input_tokens, output_tokens, duration_ms, ok, error_code, error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         metric.ts,
         metric.operation,
+        metric.session_id ?? null,
+        metric.repo_root ?? null,
         metric.input_bytes,
         metric.output_bytes,
         metric.input_tokens,
         metric.output_tokens,
         metric.duration_ms,
         metric.ok ? 1 : 0,
+        metric.error_code ?? null,
+        metric.error_message ?? null,
       );
   }
 
   aggregateMcpMetrics(opts: AggregateMcpMetricsOptions = {}): McpMetricsAggregate {
     const since = opts.since ?? 0;
     const until = opts.until ?? Date.now();
+    const costBasis = normalizeMcpCostBasis(opts.cost);
     const filters: string[] = ['ts >= ?', 'ts <= ?'];
     const args: Array<number | string> = [since, until];
     if (opts.operation !== undefined) {
@@ -1101,6 +1109,8 @@ export class Storage {
           ORDER BY out_tokens DESC, calls DESC`,
       )
       .all(...args) as McpMetricsRawRow[];
+    const errorReasonsByOperation = this.mcpMetricErrorReasonsByOperation(where, args);
+    const totalErrorReasons = this.mcpMetricErrorReasons(where, args);
     const totalsRow = this.db
       .prepare(
         `SELECT COUNT(*) AS calls,
@@ -1114,24 +1124,82 @@ export class Storage {
            ${where}`,
       )
       .get(...args) as Omit<McpMetricsRawRow, 'operation' | 'last_ts'> | undefined;
-    const operations: McpMetricsAggregateRow[] = rows.map((row) => buildAggregateRow(row));
+    const operations: McpMetricsAggregateRow[] = rows.map((row) =>
+      buildAggregateRow(row, costBasis, errorReasonsByOperation.get(row.operation) ?? []),
+    );
     return {
       since,
       until,
       ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
-      totals: buildAggregateRow({
-        operation: '__total__',
-        calls: totalsRow?.calls ?? 0,
-        ok_count: totalsRow?.ok_count ?? 0,
-        in_bytes: totalsRow?.in_bytes ?? 0,
-        out_bytes: totalsRow?.out_bytes ?? 0,
-        in_tokens: totalsRow?.in_tokens ?? 0,
-        out_tokens: totalsRow?.out_tokens ?? 0,
-        total_ms: totalsRow?.total_ms ?? 0,
-        last_ts: 0,
-      }),
+      cost_basis: costBasis,
+      totals: buildAggregateRow(
+        {
+          operation: '__total__',
+          calls: totalsRow?.calls ?? 0,
+          ok_count: totalsRow?.ok_count ?? 0,
+          in_bytes: totalsRow?.in_bytes ?? 0,
+          out_bytes: totalsRow?.out_bytes ?? 0,
+          in_tokens: totalsRow?.in_tokens ?? 0,
+          out_tokens: totalsRow?.out_tokens ?? 0,
+          total_ms: totalsRow?.total_ms ?? 0,
+          last_ts: 0,
+        },
+        costBasis,
+        totalErrorReasons,
+      ),
       operations,
     };
+  }
+
+  private mcpMetricErrorReasonsByOperation(
+    where: string,
+    args: ReadonlyArray<number | string>,
+  ): Map<string, McpMetricsErrorReason[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT operation,
+                error_code,
+                error_message,
+                COUNT(*) AS count,
+                MAX(ts) AS last_ts
+           FROM mcp_metrics
+           ${where}
+            AND ok = 0
+          GROUP BY operation, error_code, error_message
+          ORDER BY operation ASC, count DESC, last_ts DESC`,
+      )
+      .all(...args) as McpMetricsErrorReasonRawRow[];
+    const byOperation = new Map<string, McpMetricsErrorReason[]>();
+    for (const row of rows) {
+      const operation = row.operation;
+      if (!operation) continue;
+      const reasons = byOperation.get(operation) ?? [];
+      if (reasons.length >= 3) continue;
+      reasons.push(normalizeMcpErrorReason(row));
+      byOperation.set(operation, reasons);
+    }
+    return byOperation;
+  }
+
+  private mcpMetricErrorReasons(
+    where: string,
+    args: ReadonlyArray<number | string>,
+  ): McpMetricsErrorReason[] {
+    const rows = this.db
+      .prepare(
+        `SELECT error_code,
+                error_message,
+                COUNT(*) AS count,
+                MAX(ts) AS last_ts
+           FROM mcp_metrics
+           ${where}
+            AND ok = 0
+          GROUP BY error_code, error_message
+          ORDER BY count DESC, last_ts DESC
+          LIMIT 3`,
+      )
+      .all(...args) as McpMetricsErrorReasonRawRow[];
+    return rows.map((row) => normalizeMcpErrorReason(row));
   }
 
   countEmbeddings(filter?: { model: string; dim: number }): number {
@@ -3219,7 +3287,8 @@ function comparableFilePath(filePath: string, repoRoot: string | null): string {
   const absolutePath = resolve(normalizedPath);
   const rel = relative(root, absolutePath);
   if (rel === '') return '.';
-  if (!rel.startsWith('..') && !isAbsolute(rel)) return stripManagedWorktreePrefix(normalizeSlashes(rel));
+  if (!rel.startsWith('..') && !isAbsolute(rel))
+    return stripManagedWorktreePrefix(normalizeSlashes(rel));
   return stripManagedWorktreePrefix(normalizeSlashes(absolutePath));
 }
 
@@ -3236,9 +3305,7 @@ function comparableFilePath(filePath: string, repoRoot: string | null): string {
  */
 function stripManagedWorktreePrefix(value: string): string {
   if (!value) return value;
-  const match = value.match(
-    /(^|\/)\.(?:omx|omc)\/agent-worktrees\/[^/]+\/(.*)$/,
-  );
+  const match = value.match(/(^|\/)\.(?:omx|omc)\/agent-worktrees\/[^/]+\/(.*)$/);
   if (!match || match[2] === undefined) return value;
   const rest = match[2];
   return rest === '' ? '.' : rest;
@@ -3300,7 +3367,11 @@ function sumKindCounts(rows: KindCount[]): number {
   return rows.reduce((sum, row) => sum + row.count, 0);
 }
 
-function buildAggregateRow(row: McpMetricsRawRow): McpMetricsAggregateRow {
+function buildAggregateRow(
+  row: McpMetricsRawRow,
+  costBasis: McpMetricsCostBasis,
+  errorReasons: ReadonlyArray<McpMetricsErrorReason>,
+): McpMetricsAggregateRow {
   const calls = row.calls ?? 0;
   const okCount = row.ok_count ?? 0;
   const inBytes = row.in_bytes ?? 0;
@@ -3308,23 +3379,68 @@ function buildAggregateRow(row: McpMetricsRawRow): McpMetricsAggregateRow {
   const inTokens = row.in_tokens ?? 0;
   const outTokens = row.out_tokens ?? 0;
   const totalMs = row.total_ms ?? 0;
+  const inputCost = metricCostUsd(inTokens, costBasis.input_usd_per_1m_tokens);
+  const outputCost = metricCostUsd(outTokens, costBasis.output_usd_per_1m_tokens);
+  const totalCost = roundMetricCost(inputCost + outputCost);
   return {
     operation: row.operation,
     calls,
     ok_count: okCount,
     error_count: Math.max(0, calls - okCount),
+    error_reasons: [...errorReasons],
     input_bytes: inBytes,
     output_bytes: outBytes,
     total_bytes: inBytes + outBytes,
     input_tokens: inTokens,
     output_tokens: outTokens,
     total_tokens: inTokens + outTokens,
+    input_cost_usd: inputCost,
+    output_cost_usd: outputCost,
+    total_cost_usd: totalCost,
+    avg_cost_usd: calls === 0 ? 0 : roundMetricCost(totalCost / calls),
     avg_input_tokens: calls === 0 ? 0 : Math.round(inTokens / calls),
     avg_output_tokens: calls === 0 ? 0 : Math.round(outTokens / calls),
     total_duration_ms: totalMs,
     avg_duration_ms: calls === 0 ? 0 : Math.round(totalMs / calls),
     last_ts: row.last_ts ? row.last_ts : null,
   };
+}
+
+function normalizeMcpErrorReason(row: McpMetricsErrorReasonRawRow): McpMetricsErrorReason {
+  return {
+    error_code: emptyToNull(row.error_code),
+    error_message: emptyToNull(row.error_message),
+    count: row.count ?? 0,
+    last_ts: row.last_ts ?? null,
+  };
+}
+
+function emptyToNull(value: string | null): string | null {
+  return value && value.trim() !== '' ? value : null;
+}
+
+function normalizeMcpCostBasis(
+  cost: AggregateMcpMetricsOptions['cost'] | undefined,
+): McpMetricsCostBasis {
+  const inputRate = normalizeMcpCostRate(cost?.input_usd_per_1m_tokens);
+  const outputRate = normalizeMcpCostRate(cost?.output_usd_per_1m_tokens);
+  return {
+    input_usd_per_1m_tokens: inputRate,
+    output_usd_per_1m_tokens: outputRate,
+    configured: inputRate > 0 || outputRate > 0,
+  };
+}
+
+function normalizeMcpCostRate(value: number | undefined): number {
+  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function metricCostUsd(tokens: number, usdPer1mTokens: number): number {
+  return roundMetricCost((tokens / 1_000_000) * usdPer1mTokens);
+}
+
+function roundMetricCost(value: number): number {
+  return Number(value.toFixed(12));
 }
 
 function normalizeTaskIds(taskIds: number[] | undefined): number[] {
