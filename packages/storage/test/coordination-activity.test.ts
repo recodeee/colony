@@ -472,6 +472,84 @@ describe('colony health read queries', () => {
     });
   });
 
+  it('matches task_claim_file claims to lifecycle edits across canonical path variants', () => {
+    const repoRoot = '/repo';
+    const branch = 'agent/codex/path-match';
+    const worktree = `${repoRoot}/.omx/agent-worktrees/colony__codex__path-match`;
+    const worktreeSubdir = `${worktree}/packages/api`;
+    session('codex@canonical-paths', 1_000, {
+      cwd: repoRoot,
+      metadata: { repo_root: repoRoot, branch, worktree_path: repoRoot },
+    });
+    const task = storage.findOrCreateTask({
+      title: 'canonical path variants',
+      repo_root: repoRoot,
+      branch,
+      created_by: 'codex@canonical-paths',
+    });
+    storage.addTaskParticipant({
+      task_id: task.id,
+      session_id: 'codex@canonical-paths',
+      agent: 'codex',
+    });
+
+    claim('codex@canonical-paths', 'src/primary-vs-worktree.ts', 2_000, {
+      task_id: task.id,
+    });
+    toolUse(
+      'codex@canonical-paths',
+      'Edit',
+      3_000,
+      `${worktree}/src/primary-vs-worktree.ts`,
+      { repo_root: worktree, branch, worktree_path: worktree },
+    );
+
+    claim('codex@canonical-paths', 'src/absolute-edit.ts', 4_000, { task_id: task.id });
+    toolUse('codex@canonical-paths', 'Edit', 5_000, `${repoRoot}/src/absolute-edit.ts`, {
+      repo_root: repoRoot,
+      branch,
+      worktree_path: worktree,
+    });
+
+    claim('codex@canonical-paths', 'packages/api/nested.ts', 6_000, { task_id: task.id });
+    toolUse(
+      'codex@canonical-paths',
+      'Edit',
+      7_000,
+      `${repoRoot}/.omx/agent-worktrees/colony__codex__path-match/packages/api/nested.ts`,
+      { repo_root: repoRoot, branch, worktree_path: worktreeSubdir },
+    );
+
+    claim('codex@canonical-paths', 'src/same-file.ts', 8_000, { task_id: task.id });
+    toolUse('codex@canonical-paths', 'Edit', 9_000, 'src/same-file.ts', {
+      repo_root: worktree,
+      branch,
+      worktree_path: worktree,
+    });
+
+    const stats = storage.claimBeforeEditStats(0);
+    expect(stats).toMatchObject({
+      edit_tool_calls: 4,
+      edits_with_file_path: 4,
+      edits_claimed_before: 4,
+      claim_miss_reasons: {
+        no_claim_for_file: 0,
+        path_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 0,
+        worktree_path_mismatch: 0,
+        pre_tool_use_missing: 0,
+      },
+    });
+    expect(stats.claim_match_sources).toMatchObject({
+      exact_session: 4,
+      repo_branch: 0,
+      worktree: 0,
+      agent_lane: 0,
+    });
+    expect(stats.nearest_claim_examples).toEqual([]);
+  });
+
   it('reports the in-window same-lane claim that triggered path_mismatch', () => {
     const repoRoot = '/repo';
     session('codex@trigger', 1_000, { metadata: { repo_root: repoRoot, branch: 'agent/lane' } });

@@ -3246,7 +3246,15 @@ function stripManagedWorktreePrefix(value: string): string {
 
 function normalizeRoot(value: string | null): string | null {
   const trimmed = value?.trim();
-  return trimmed ? normalizeSlashes(resolve(trimmed)) : null;
+  if (!trimmed) return null;
+  return canonicalManagedWorktreeRoot(normalizeSlashes(resolve(trimmed)));
+}
+
+function canonicalManagedWorktreeRoot(value: string): string {
+  const marker = /\/\.(?:omx|omc)\/agent-worktrees\/[^/]+(?:\/|$)/;
+  const match = marker.exec(value);
+  if (!match || match.index === 0) return value;
+  return value.slice(0, match.index);
 }
 
 function normalizeAgentIdentity(value: string | null): string | null {
