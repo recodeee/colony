@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Storage } from '../src/index.js';
+import { isProtectedBranch, PROTECTED_BRANCH_NAMES, Storage } from '../src/index.js';
 
 let dir: string;
 let storage: Storage;
@@ -644,5 +644,336 @@ describe('Storage', () => {
     expect(storage.pendingHandoffs(task.id).map((row) => row.id)).toEqual([liveId]);
     expect(storage.getObservation(expiredId)).toBeDefined();
     expect(storage.getObservation(legacyExpiredId)).toBeDefined();
+  });
+});
+
+describe('isProtectedBranch', () => {
+  it('returns true for canonical protected base branches', () => {
+    expect(isProtectedBranch('main')).toBe(true);
+    expect(isProtectedBranch('master')).toBe(true);
+    expect(isProtectedBranch('dev')).toBe(true);
+    expect(isProtectedBranch('develop')).toBe(true);
+    expect(isProtectedBranch('production')).toBe(true);
+    expect(isProtectedBranch('release')).toBe(true);
+  });
+
+  it('normalizes case and surrounding whitespace before lookup', () => {
+    expect(isProtectedBranch('  Main  ')).toBe(true);
+    expect(isProtectedBranch('MASTER')).toBe(true);
+    expect(isProtectedBranch('Dev')).toBe(true);
+  });
+
+  it('returns false for agent branches and unknown names', () => {
+    expect(isProtectedBranch('agent/claude/health-fix')).toBe(false);
+    expect(isProtectedBranch('feature/x')).toBe(false);
+    expect(isProtectedBranch('main-fork')).toBe(false);
+    expect(isProtectedBranch('')).toBe(false);
+    expect(isProtectedBranch('   ')).toBe(false);
+    expect(isProtectedBranch(null)).toBe(false);
+    expect(isProtectedBranch(undefined)).toBe(false);
+  });
+
+  it('exposes the protected set as a frozen lookup', () => {
+    expect(PROTECTED_BRANCH_NAMES.has('main')).toBe(true);
+    expect(PROTECTED_BRANCH_NAMES.has('agent/claude/x')).toBe(false);
+  });
+});
+
+describe('Storage.sweepStaleClaims', () => {
+  let dir: string;
+  let storage: Storage;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'colony-sweep-'));
+    storage = new Storage(join(dir, 'test.db'));
+  });
+  afterEach(() => {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('demotes active claims older than the cutoff and leaves fresh ones alone', () => {
+    storage.createSession({
+      id: 'sess-old',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 0,
+      metadata: null,
+    });
+    storage.createSession({
+      id: 'sess-new',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 0,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'sweep-target',
+      repo_root: '/repo',
+      branch: 'agent/claude/sweep',
+      created_by: 'sess-old',
+    });
+    storage.claimFile({ task_id: task.id, file_path: 'src/old.ts', session_id: 'sess-old' });
+    storage.claimFile({ task_id: task.id, file_path: 'src/new.ts', session_id: 'sess-new' });
+
+    const oldClaim = storage.getClaim(task.id, 'src/old.ts');
+    expect(oldClaim?.state).toBe('active');
+    const claimedAt = oldClaim?.claimed_at ?? 0;
+    const now = claimedAt + 5 * 60_000;
+    const result = storage.sweepStaleClaims({ stale_after_ms: 60_000, now });
+
+    expect(result.swept).toBe(2);
+    expect(result.demoted.map((c) => c.file_path).sort()).toEqual(['src/new.ts', 'src/old.ts']);
+    expect(storage.getClaim(task.id, 'src/old.ts')?.state).toBe('weak_expired');
+    expect(storage.getClaim(task.id, 'src/new.ts')?.state).toBe('weak_expired');
+  });
+
+  it('skips claims younger than stale_after_ms', () => {
+    storage.createSession({
+      id: 'sess-fresh',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 0,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'fresh-target',
+      repo_root: '/repo',
+      branch: 'agent/claude/fresh',
+      created_by: 'sess-fresh',
+    });
+    storage.claimFile({ task_id: task.id, file_path: 'src/fresh.ts', session_id: 'sess-fresh' });
+    const claimedAt = storage.getClaim(task.id, 'src/fresh.ts')?.claimed_at ?? 0;
+    const now = claimedAt + 30_000;
+    const result = storage.sweepStaleClaims({ stale_after_ms: 60_000, now });
+
+    expect(result.swept).toBe(0);
+    expect(result.demoted).toEqual([]);
+    expect(storage.getClaim(task.id, 'src/fresh.ts')?.state).toBe('active');
+  });
+
+  it('does not redemote already-weak claims', () => {
+    storage.createSession({
+      id: 'sess-weak',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 0,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'weak-target',
+      repo_root: '/repo',
+      branch: 'agent/claude/weak',
+      created_by: 'sess-weak',
+    });
+    storage.claimFile({ task_id: task.id, file_path: 'src/already.ts', session_id: 'sess-weak' });
+    const handoffId = storage.insertObservation({
+      session_id: 'sess-weak',
+      kind: 'handoff',
+      content: 'h',
+      compressed: false,
+      intensity: null,
+      ts: 0,
+      task_id: task.id,
+      reply_to: null,
+      metadata: { kind: 'handoff', status: 'pending' },
+    });
+    storage.markClaimHandoffPending({
+      task_id: task.id,
+      file_path: 'src/already.ts',
+      session_id: 'sess-weak',
+      expires_at: 0,
+      handoff_observation_id: handoffId,
+    });
+    storage.markClaimWeakExpired({
+      task_id: task.id,
+      file_path: 'src/already.ts',
+      session_id: 'sess-weak',
+      handoff_observation_id: handoffId,
+    });
+    expect(storage.getClaim(task.id, 'src/already.ts')?.state).toBe('weak_expired');
+
+    const claimedAt = storage.getClaim(task.id, 'src/already.ts')?.claimed_at ?? 0;
+    const result = storage.sweepStaleClaims({
+      stale_after_ms: 1,
+      now: claimedAt + 60 * 60_000,
+    });
+    expect(result.swept).toBe(0);
+    expect(storage.getClaim(task.id, 'src/already.ts')?.state).toBe('weak_expired');
+  });
+
+  it('respects the limit option for bounded sweeps', () => {
+    storage.createSession({
+      id: 'sess-many',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 0,
+      metadata: null,
+    });
+    const task = storage.findOrCreateTask({
+      title: 'many-target',
+      repo_root: '/repo',
+      branch: 'agent/claude/many',
+      created_by: 'sess-many',
+    });
+    for (let i = 0; i < 5; i++) {
+      storage.claimFile({
+        task_id: task.id,
+        file_path: `src/file-${i}.ts`,
+        session_id: 'sess-many',
+      });
+    }
+    const result = storage.sweepStaleClaims({
+      stale_after_ms: 0,
+      now: Date.now() + 60 * 60_000,
+      limit: 2,
+    });
+    expect(result.swept).toBe(2);
+    expect(result.demoted).toHaveLength(2);
+  });
+});
+
+describe('Storage.findCompletedQueenPlans', () => {
+  let dir: string;
+  let storage: Storage;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'colony-plans-'));
+    storage = new Storage(join(dir, 'test.db'));
+    storage.createSession({
+      id: 'planner',
+      ide: 'claude-code',
+      cwd: '/repo',
+      started_at: 0,
+      metadata: null,
+    });
+  });
+  afterEach(() => {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makePlan(slug: string, subStatuses: Array<'available' | 'claimed' | 'completed'>) {
+    const parent = storage.findOrCreateTask({
+      title: `parent-${slug}`,
+      repo_root: '/repo',
+      branch: `spec/${slug}`,
+      created_by: 'planner',
+    });
+    const subTaskIds: number[] = [];
+    subStatuses.forEach((status, idx) => {
+      const sub = storage.findOrCreateTask({
+        title: `${slug}-sub-${idx}`,
+        repo_root: '/repo',
+        branch: `spec/${slug}/sub-${idx}`,
+        created_by: 'planner',
+      });
+      subTaskIds.push(sub.id);
+      storage.insertObservation({
+        session_id: 'planner',
+        kind: 'plan-subtask-claim',
+        content: `${slug} sub-${idx} ${status}`,
+        compressed: false,
+        intensity: null,
+        ts: Date.now() + idx,
+        task_id: sub.id,
+        reply_to: null,
+        metadata: { kind: 'plan-subtask-claim', status },
+      });
+    });
+    return { parent, subTaskIds };
+  }
+
+  it('returns plans whose every sub-task latest claim is completed', () => {
+    makePlan('done-plan', ['completed', 'completed']);
+    const result = storage.findCompletedQueenPlans('/repo');
+    expect(result).toHaveLength(1);
+    expect(result[0]?.plan_slug).toBe('done-plan');
+    expect(result[0]?.subtask_count).toBe(2);
+  });
+
+  it('excludes plans with at least one non-completed sub-task', () => {
+    makePlan('partial-plan', ['completed', 'claimed']);
+    expect(storage.findCompletedQueenPlans('/repo')).toEqual([]);
+  });
+
+  it('respects the latest claim observation when status changes over time', () => {
+    const { subTaskIds } = makePlan('progressive-plan', ['claimed']);
+    storage.insertObservation({
+      session_id: 'planner',
+      kind: 'plan-subtask-claim',
+      content: 'progressive-plan sub-0 completed',
+      compressed: false,
+      intensity: null,
+      ts: Date.now() + 1000,
+      task_id: subTaskIds[0]!,
+      reply_to: null,
+      metadata: { kind: 'plan-subtask-claim', status: 'completed' },
+    });
+    const result = storage.findCompletedQueenPlans('/repo');
+    expect(result.map((r) => r.plan_slug)).toEqual(['progressive-plan']);
+  });
+
+  it('excludes plans whose parent is already archived', () => {
+    makePlan('already-archived', ['completed']);
+    storage.archiveQueenPlan({ repo_root: '/repo', plan_slug: 'already-archived' });
+    expect(storage.findCompletedQueenPlans('/repo')).toEqual([]);
+  });
+
+  it('excludes plans without a parent row', () => {
+    const orphan = storage.findOrCreateTask({
+      title: 'orphan-sub',
+      repo_root: '/repo',
+      branch: 'spec/orphan/sub-0',
+      created_by: 'planner',
+    });
+    storage.insertObservation({
+      session_id: 'planner',
+      kind: 'plan-subtask-claim',
+      content: 'orphan sub-0 completed',
+      compressed: false,
+      intensity: null,
+      ts: Date.now(),
+      task_id: orphan.id,
+      reply_to: null,
+      metadata: { kind: 'plan-subtask-claim', status: 'completed' },
+    });
+    expect(storage.findCompletedQueenPlans('/repo')).toEqual([]);
+  });
+
+  it('filters by repo_root when provided', () => {
+    makePlan('repo-a-plan', ['completed']);
+    const otherParent = storage.findOrCreateTask({
+      title: 'other',
+      repo_root: '/other',
+      branch: 'spec/other-plan',
+      created_by: 'planner',
+    });
+    void otherParent;
+    const otherSub = storage.findOrCreateTask({
+      title: 'other-sub',
+      repo_root: '/other',
+      branch: 'spec/other-plan/sub-0',
+      created_by: 'planner',
+    });
+    storage.insertObservation({
+      session_id: 'planner',
+      kind: 'plan-subtask-claim',
+      content: 'other sub-0 completed',
+      compressed: false,
+      intensity: null,
+      ts: Date.now(),
+      task_id: otherSub.id,
+      reply_to: null,
+      metadata: { kind: 'plan-subtask-claim', status: 'completed' },
+    });
+    expect(storage.findCompletedQueenPlans('/repo').map((r) => r.plan_slug)).toEqual([
+      'repo-a-plan',
+    ]);
+    expect(storage.findCompletedQueenPlans('/other').map((r) => r.plan_slug)).toEqual([
+      'other-plan',
+    ]);
+    expect(storage.findCompletedQueenPlans().map((r) => r.plan_slug).sort()).toEqual([
+      'other-plan',
+      'repo-a-plan',
+    ]);
   });
 });

@@ -1,4 +1,4 @@
-export { Storage } from './storage.js';
+export { Storage, PROTECTED_BRANCH_NAMES, isProtectedBranch } from './storage.js';
 export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from './claim-path.js';
 export type { ClaimPathContext, RepoFilePathContext } from './claim-path.js';
 export {
