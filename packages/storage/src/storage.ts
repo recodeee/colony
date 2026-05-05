@@ -21,6 +21,7 @@ import type {
   McpMetricsCostBasis,
   McpMetricsErrorReason,
   McpMetricsErrorReasonRawRow,
+  McpMetricsOperationRawRow,
   McpMetricsRawRow,
   McpMetricsSessionAggregateRow,
   McpMetricsSessionRawRow,
@@ -1101,6 +1102,12 @@ export class Storage {
         `SELECT operation,
                 COUNT(*) AS calls,
                 SUM(ok) AS ok_count,
+                SUM(CASE WHEN ok = 1 THEN input_tokens + output_tokens ELSE 0 END) AS success_tokens,
+                SUM(CASE WHEN ok = 0 THEN input_tokens + output_tokens ELSE 0 END) AS error_tokens,
+                MAX(input_tokens) AS max_in_tokens,
+                MAX(output_tokens) AS max_out_tokens,
+                MAX(input_tokens + output_tokens) AS max_total_tokens,
+                MAX(duration_ms) AS max_ms,
                 SUM(input_bytes) AS in_bytes,
                 SUM(output_bytes) AS out_bytes,
                 SUM(input_tokens) AS in_tokens,
@@ -1112,13 +1119,19 @@ export class Storage {
           GROUP BY operation
           ORDER BY out_tokens DESC, calls DESC`,
       )
-      .all(...args) as McpMetricsRawRow[];
+      .all(...args) as McpMetricsOperationRawRow[];
     const errorReasonsByOperation = this.mcpMetricErrorReasonsByOperation(where, args);
     const totalErrorReasons = this.mcpMetricErrorReasons(where, args);
     const totalsRow = this.db
       .prepare(
         `SELECT COUNT(*) AS calls,
                 SUM(ok) AS ok_count,
+                SUM(CASE WHEN ok = 1 THEN input_tokens + output_tokens ELSE 0 END) AS success_tokens,
+                SUM(CASE WHEN ok = 0 THEN input_tokens + output_tokens ELSE 0 END) AS error_tokens,
+                MAX(input_tokens) AS max_in_tokens,
+                MAX(output_tokens) AS max_out_tokens,
+                MAX(input_tokens + output_tokens) AS max_total_tokens,
+                MAX(duration_ms) AS max_ms,
                 SUM(input_bytes) AS in_bytes,
                 SUM(output_bytes) AS out_bytes,
                 SUM(input_tokens) AS in_tokens,
@@ -1128,7 +1141,7 @@ export class Storage {
            FROM mcp_metrics
            ${where}`,
       )
-      .get(...args) as Omit<McpMetricsRawRow, 'operation'> | undefined;
+      .get(...args) as Omit<McpMetricsOperationRawRow, 'operation'> | undefined;
     const operations: McpMetricsAggregateRow[] = rows.map((row) =>
       buildAggregateRow(row, costBasis, errorReasonsByOperation.get(row.operation) ?? []),
     );
@@ -1137,6 +1150,12 @@ export class Storage {
         operation: '__total__',
         calls: totalsRow?.calls ?? 0,
         ok_count: totalsRow?.ok_count ?? 0,
+        success_tokens: totalsRow?.success_tokens ?? 0,
+        error_tokens: totalsRow?.error_tokens ?? 0,
+        max_in_tokens: totalsRow?.max_in_tokens ?? 0,
+        max_out_tokens: totalsRow?.max_out_tokens ?? 0,
+        max_total_tokens: totalsRow?.max_total_tokens ?? 0,
+        max_ms: totalsRow?.max_ms ?? 0,
         in_bytes: totalsRow?.in_bytes ?? 0,
         out_bytes: totalsRow?.out_bytes ?? 0,
         in_tokens: totalsRow?.in_tokens ?? 0,
@@ -3418,12 +3437,15 @@ function sumKindCounts(rows: KindCount[]): number {
 }
 
 function buildAggregateRow(
-  row: McpMetricsRawRow,
+  row: McpMetricsOperationRawRow,
   costBasis: McpMetricsCostBasis,
   errorReasons: ReadonlyArray<McpMetricsErrorReason>,
 ): McpMetricsAggregateRow {
   const calls = row.calls ?? 0;
   const okCount = row.ok_count ?? 0;
+  const errorCount = Math.max(0, calls - okCount);
+  const successTokens = row.success_tokens ?? 0;
+  const errorTokens = row.error_tokens ?? 0;
   const inBytes = row.in_bytes ?? 0;
   const outBytes = row.out_bytes ?? 0;
   const inTokens = row.in_tokens ?? 0;
@@ -3436,8 +3458,16 @@ function buildAggregateRow(
     operation: row.operation,
     calls,
     ok_count: okCount,
-    error_count: Math.max(0, calls - okCount),
+    error_count: errorCount,
     error_reasons: [...errorReasons],
+    success_tokens: successTokens,
+    error_tokens: errorTokens,
+    avg_success_tokens: okCount === 0 ? 0 : Math.round(successTokens / okCount),
+    avg_error_tokens: errorCount === 0 ? 0 : Math.round(errorTokens / errorCount),
+    max_input_tokens: row.max_in_tokens ?? 0,
+    max_output_tokens: row.max_out_tokens ?? 0,
+    max_total_tokens: row.max_total_tokens ?? 0,
+    max_duration_ms: row.max_ms ?? 0,
     input_bytes: inBytes,
     output_bytes: outBytes,
     total_bytes: inBytes + outBytes,

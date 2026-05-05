@@ -46,6 +46,17 @@ const SESSION_ROW: McpMetricsSessionAggregateRow = {
   last_ts: Date.now(),
 };
 
+const METRIC_DETAIL = {
+  success_tokens: 50,
+  error_tokens: 25,
+  avg_success_tokens: 50,
+  avg_error_tokens: 25,
+  max_input_tokens: 25,
+  max_output_tokens: 50,
+  max_total_tokens: 75,
+  max_duration_ms: 40,
+};
+
 describe('gain command output', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -71,6 +82,7 @@ describe('gain command output', () => {
           last_ts: Date.now(),
         },
       ],
+      ...METRIC_DETAIL,
       input_bytes: 100,
       output_bytes: 200,
       total_bytes: 300,
@@ -115,6 +127,56 @@ describe('gain command output', () => {
     expect(output).toContain('300');
   });
 
+  it('prints operation detail metrics when filtered to one operation', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    const row: McpMetricsAggregateRow = {
+      operation: 'task_claim_quota_release_expired',
+      calls: 2,
+      ok_count: 1,
+      error_count: 1,
+      error_reasons: [],
+      ...METRIC_DETAIL,
+      input_bytes: 100,
+      output_bytes: 200,
+      total_bytes: 300,
+      input_tokens: 25,
+      output_tokens: 50,
+      total_tokens: 75,
+      input_cost_usd: 0.000025,
+      output_cost_usd: 0.0001,
+      total_cost_usd: 0.000125,
+      avg_cost_usd: 0.000063,
+      avg_input_tokens: 13,
+      avg_output_tokens: 25,
+      total_duration_ms: 40,
+      avg_duration_ms: 20,
+      last_ts: Date.now(),
+    };
+
+    writeLiveSection(
+      [row],
+      row,
+      SESSION_SUMMARY,
+      [SESSION_ROW],
+      COST_BASIS,
+      168,
+      'task_claim_quota_release_expired',
+    );
+
+    expect(output).toContain('Operation detail');
+    expect(output).toContain('Success tokens: 50');
+    expect(output).toContain('Error tokens: 25');
+    expect(output).toContain('Avg success: 50');
+    expect(output).toContain('Avg error: 25');
+    expect(output).toContain('Max tokens: 75');
+    expect(output).toContain('Max ms: 40');
+  });
+
   it('prints the most frequent error reason in the overview', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
@@ -141,6 +203,7 @@ describe('gain command output', () => {
       total_duration_ms: 40,
       avg_duration_ms: 20,
       last_ts: Date.now(),
+      ...METRIC_DETAIL,
     };
     const searchRow: McpMetricsAggregateRow = {
       ...baseRow,
@@ -201,6 +264,7 @@ describe('gain command output', () => {
       ok_count: 1,
       error_count: 0,
       error_reasons: [],
+      ...METRIC_DETAIL,
       input_bytes: 100,
       output_bytes: 200,
       total_bytes: 300,

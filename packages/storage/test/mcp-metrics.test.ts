@@ -76,6 +76,14 @@ describe('mcp_metrics storage', () => {
         last_ts: 1_000,
       },
     ]);
+    expect(search.success_tokens).toBe(110 + 220);
+    expect(search.error_tokens).toBe(25 + 50);
+    expect(search.avg_success_tokens).toBe(Math.round((110 + 220) / 2));
+    expect(search.avg_error_tokens).toBe(25 + 50);
+    expect(search.max_input_tokens).toBe(25);
+    expect(search.max_output_tokens).toBe(200);
+    expect(search.max_total_tokens).toBe(220);
+    expect(search.max_duration_ms).toBe(6);
     expect(search.input_tokens).toBe(10 + 20 + 25);
     expect(search.output_tokens).toBe(100 + 200 + 50);
     expect(search.total_tokens).toBe(search.input_tokens + search.output_tokens);
@@ -172,6 +180,10 @@ describe('mcp_metrics storage', () => {
     const empty = storage.aggregateMcpMetrics({ since: 0 });
     expect(empty.totals.calls).toBe(0);
     expect(empty.totals.total_tokens).toBe(0);
+    expect(empty.totals.success_tokens).toBe(0);
+    expect(empty.totals.error_tokens).toBe(0);
+    expect(empty.totals.max_total_tokens).toBe(0);
+    expect(empty.totals.max_duration_ms).toBe(0);
     expect(empty.totals.total_cost_usd).toBe(0);
     expect(empty.totals.error_reasons).toEqual([]);
     expect(empty.cost_basis.configured).toBe(false);

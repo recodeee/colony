@@ -339,7 +339,38 @@ export function writeLiveSection(
     )}\n`,
   );
   writeLiveErrorReasons(rows, totals);
+  writeOperationDetail(rows, operationFilter);
   writeLiveSessionSection(sessionSummary, sessions, costBasis);
+}
+
+function writeOperationDetail(
+  rows: ReadonlyArray<McpMetricsAggregateRow>,
+  operationFilter: string | undefined,
+): void {
+  if (operationFilter === undefined) return;
+  const row = rows.find((candidate) => candidate.operation === operationFilter);
+  if (row === undefined) return;
+  const w = process.stdout;
+  w.write('\n');
+  w.write(`${kleur.bold('Operation detail')}\n`);
+  w.write(
+    [
+      `${kleur.dim('Success tokens:')} ${formatTokens(row.success_tokens)}`,
+      `${kleur.dim('Error tokens:')} ${formatTokens(row.error_tokens)}`,
+      `${kleur.dim('Avg success:')} ${formatTokens(row.avg_success_tokens)}`,
+      `${kleur.dim('Avg error:')} ${formatTokens(row.avg_error_tokens)}`,
+    ].join('  '),
+  );
+  w.write('\n');
+  w.write(
+    [
+      `${kleur.dim('Max tokens:')} ${formatTokens(row.max_total_tokens)}`,
+      `${kleur.dim('Max in:')} ${formatTokens(row.max_input_tokens)}`,
+      `${kleur.dim('Max out:')} ${formatTokens(row.max_output_tokens)}`,
+      `${kleur.dim('Max ms:')} ${row.max_duration_ms}`,
+    ].join('  '),
+  );
+  w.write('\n');
 }
 
 function writeLiveOverview(
