@@ -14,6 +14,7 @@ interface SweepOpts {
   releaseSameBranchDuplicates?: boolean;
   releaseSafeStaleClaims?: boolean;
   releaseExpiredQuota?: boolean;
+  releaseAgedQuotaMinutes?: string;
   json?: boolean;
 }
 
@@ -43,6 +44,10 @@ export function registerCoordinationCommand(program: Command): void {
       '--release-expired-quota',
       'downgrade quota-pending claims past their TTL to weak_expired and mark linked relays expired; audit history retained',
     )
+    .option(
+      '--release-aged-quota-minutes <minutes>',
+      'release every quota-pending claim aged at-or-above this many minutes regardless of TTL; audit history retained',
+    )
     .option('--json', 'emit sweep result as JSON')
     .action(async (opts: SweepOpts) => {
       const repoRoot = resolve(opts.repoRoot ?? process.cwd());
@@ -54,6 +59,16 @@ export function registerCoordinationCommand(program: Command): void {
         opts.releaseSafeStaleClaims === true && opts.dryRun !== true;
       const releaseExpiredQuotaClaims =
         opts.releaseExpiredQuota === true && opts.dryRun !== true;
+      const releaseAgedQuotaMinutes = parseAgedQuotaMinutes(opts.releaseAgedQuotaMinutes);
+      if (releaseAgedQuotaMinutes === 'invalid') {
+        process.stderr.write(
+          `${kleur.red('error')} --release-aged-quota-minutes expects a non-negative number\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const releaseAgedQuotaPendingMinutes =
+        releaseAgedQuotaMinutes !== null && opts.dryRun !== true ? releaseAgedQuotaMinutes : null;
       const settings = loadSettings();
       await withStore(settings, (store) => {
         const result = buildCoordinationSweep(store, {
@@ -63,6 +78,9 @@ export function registerCoordinationCommand(program: Command): void {
           release_same_branch_duplicates: releaseSameBranchDuplicates,
           release_safe_stale_claims: releaseSafeStaleClaims,
           release_expired_quota_claims: releaseExpiredQuotaClaims,
+          ...(releaseAgedQuotaPendingMinutes !== null
+            ? { release_aged_quota_pending_minutes: releaseAgedQuotaPendingMinutes }
+            : {}),
         });
         if (opts.json) {
           process.stdout.write(
@@ -77,6 +95,7 @@ export function registerCoordinationCommand(program: Command): void {
               releaseSameBranchDuplicates,
               releaseSafeStaleClaims,
               releaseExpiredQuotaClaims,
+              releaseAgedQuotaPendingMinutes,
             }),
           })}\n`,
         );
@@ -279,13 +298,26 @@ function appliedSweepModes(opts: {
   releaseSameBranchDuplicates: boolean;
   releaseSafeStaleClaims: boolean;
   releaseExpiredQuotaClaims: boolean;
+  releaseAgedQuotaPendingMinutes: number | null;
 }): string[] {
   const modes: string[] = [];
   if (opts.releaseStaleBlockers) modes.push('release-stale-blockers');
   if (opts.releaseSameBranchDuplicates) modes.push('release-same-branch-duplicates');
   if (opts.releaseSafeStaleClaims) modes.push('release-safe-stale-claims');
   if (opts.releaseExpiredQuotaClaims) modes.push('release-expired-quota');
+  if (opts.releaseAgedQuotaPendingMinutes !== null) {
+    modes.push(`release-aged-quota>=${opts.releaseAgedQuotaPendingMinutes}m`);
+  }
   return modes;
+}
+
+function parseAgedQuotaMinutes(value: string | undefined): number | null | 'invalid' {
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  if (trimmed === '') return 'invalid';
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return 'invalid';
+  return parsed;
 }
 
 function renderSweepMode(appliedModes: string[]): string {
