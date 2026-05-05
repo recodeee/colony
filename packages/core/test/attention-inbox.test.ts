@@ -340,6 +340,48 @@ describe('buildAttentionInbox', () => {
     expect(audit.stale_claim_signals.stale_claim_count).toBe(1);
   });
 
+  it('releases expired quota claims with long worktree file paths', () => {
+    const t0 = Date.parse('2026-05-01T10:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    seed('codex-old', 'codex-new');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'agent/codex/long-quota-path',
+      session_id: 'codex-old',
+    });
+    thread.join('codex-old', 'codex');
+    thread.join('codex-new', 'codex');
+    const longPath =
+      'gitguardex/.omx/agent-worktrees/gitguardex__codex__add-fff-and-rtk-setup-doctor-dependencie-2026-05-05-08-18/templates/AGENTS.multiagent-safety.md';
+    thread.claimFile({ session_id: 'codex-old', file_path: longPath });
+    const relayId = thread.relay({
+      from_session_id: 'codex-old',
+      from_agent: 'codex',
+      reason: 'quota',
+      one_line: 'quota stopped long path work',
+      base_branch: 'main',
+      expires_in_ms: 60_000,
+    });
+
+    vi.setSystemTime(t0 + 2 * 60_000);
+    expect(() =>
+      thread.releaseExpiredQuotaClaims({
+        session_id: 'codex-new',
+        handoff_observation_id: relayId,
+        now: Date.now(),
+      }),
+    ).not.toThrow();
+
+    expect(store.storage.getClaim(thread.task_id, longPath)).toMatchObject({
+      state: 'weak_expired',
+      handoff_observation_id: relayId,
+    });
+    const reflexions = store.storage.taskObservationsByKind(thread.task_id, 'reflexion', 10);
+    const reflexionMeta = JSON.parse(reflexions[0]?.metadata ?? '{}');
+    expect(reflexionMeta.observation_summary.length).toBeLessThanOrEqual(240);
+  });
+
   it('caps stalled lane rows while preserving the total count', () => {
     const repo = join(dir, 'repo-stalled-lanes');
     const sessionDir = join(repo, '.omx', 'state', 'active-sessions');

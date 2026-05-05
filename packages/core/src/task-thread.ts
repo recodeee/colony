@@ -1795,7 +1795,7 @@ export class TaskThread {
           task_id: this.task_id,
           kind: 'rollback',
           action: 'quota claim released',
-          observation_summary: `claim ${claim.file_path} rolled back to weak_expired`,
+          observation_summary: `quota claim rolled back to weak_expired for task ${this.task_id}`,
           reflection: 'expired quota claims should be weakened before another agent proceeds',
           source_kind: 'claim-weakened',
           source_observation_id: auditObservationId,
