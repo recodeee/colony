@@ -35,7 +35,37 @@ case "${COLONY_BRIDGE_FAST:-1}" in
 esac
 
 # Non-bridge-lifecycle commands take the unchanged Node path.
-if [ "$FAST" != "1" ] || [ "$1" != "bridge" ] || [ "$2" != "lifecycle" ] || ! command -v curl >/dev/null 2>&1; then
+if [ "$FAST" != "1" ] || [ "$1" != "bridge" ] || [ "$2" != "lifecycle" ]; then
+  exec node "$NODE_CLI" "$@"
+fi
+
+# Prefer the native bridge client when one exists for this platform. It
+# handles arg parsing, the daemon POST, and the in-process Node fallback
+# itself in ~5-10 ms total (vs ~50 ms for the sh+curl path below). When
+# the binary is absent (unsupported platform, or not built locally) we
+# fall through to the portable shell+curl implementation.
+PLATFORM=""
+case "$(uname -s 2>/dev/null)" in
+  Linux)  KERNEL=linux ;;
+  Darwin) KERNEL=darwin ;;
+  *)      KERNEL="" ;;
+esac
+case "$(uname -m 2>/dev/null)" in
+  x86_64|amd64) ARCH=x64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) ARCH="" ;;
+esac
+if [ -n "$KERNEL" ] && [ -n "$ARCH" ]; then
+  PLATFORM="${KERNEL}-${ARCH}"
+fi
+NATIVE="$DIR/colony-bridge-${PLATFORM}"
+if [ -n "$PLATFORM" ] && [ -x "$NATIVE" ] && [ "${COLONY_BRIDGE_NATIVE:-1}" != "0" ]; then
+  exec "$NATIVE" "$@"
+fi
+
+# No native binary — keep going with the portable shell path. We need
+# curl from here on; if it isn't installed, fall through to Node.
+if ! command -v curl >/dev/null 2>&1; then
   exec node "$NODE_CLI" "$@"
 fi
 

@@ -156,9 +156,9 @@ async function main() {
     try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
   });
 
-  const healthy = await waitForHealth(PORT, 5_000);
+  const healthy = await waitForHealth(PORT, 15_000);
   if (!healthy) {
-    process.stderr.write('bench: worker did not become healthy within 5s — aborting\n');
+    process.stderr.write('bench: worker did not become healthy within 15s — aborting\n');
     process.exit(1);
   }
 
@@ -169,22 +169,39 @@ async function main() {
     COLONY_NO_AUTOSTART: '1',
   };
 
-  // Warmup: 2 events on each path, not measured.
+  // Warmup on each path (not measured) so file-system caches and JIT are
+  // hot before the timed runs.
   await runOnce(mkenvelope(-1), { ...baseEnv });
-  await runOnce(mkenvelope(-2), { ...baseEnv, COLONY_BRIDGE_FAST: '0' });
+  await runOnce(mkenvelope(-2), { ...baseEnv, COLONY_BRIDGE_NATIVE: '0' });
+  await runOnce(mkenvelope(-3), { ...baseEnv, COLONY_BRIDGE_FAST: '0' });
 
-  const fast = await bench('fast (daemon)', { ...baseEnv });
-  const slow = await bench('slow (force-fallback)', { ...baseEnv, COLONY_BRIDGE_FAST: '0' });
+  // Three paths the wrapper might take, in increasing per-event overhead:
+  //   native: rust binary handles arg parse + HTTP + (fallback if needed)
+  //   curl:   sh + curl (today's portable fast path; binary disabled)
+  //   node:   no fast path; full in-process Node CLI per event (legacy)
+  const native = await bench('native (rust)', { ...baseEnv });
+  const curl   = await bench('curl  (shell)', { ...baseEnv, COLONY_BRIDGE_NATIVE: '0' });
+  const node   = await bench('node  (legacy)', { ...baseEnv, COLONY_BRIDGE_FAST: '0' });
 
   console.log('');
-  console.log(fmt(fast));
-  console.log(fmt(slow));
+  console.log(fmt(native));
+  console.log(fmt(curl));
+  console.log(fmt(node));
   console.log('');
-  if (slow.meanMs > 0) {
-    const speedup = slow.meanMs / fast.meanMs;
-    const meanSavedMs = slow.meanMs - fast.meanMs;
-    console.log(`speedup (mean): ${speedup.toFixed(1)}x   saved: ${meanSavedMs.toFixed(1)}ms/event`);
-    console.log(`speedup (p95):  ${(slow.p95Ms / fast.p95Ms).toFixed(1)}x`);
+  if (node.meanMs > 0) {
+    const speedupNativeVsNode = node.meanMs / native.meanMs;
+    const speedupNativeVsCurl = curl.meanMs / native.meanMs;
+    const meanSavedVsNode = node.meanMs - native.meanMs;
+    const meanSavedVsCurl = curl.meanMs - native.meanMs;
+    console.log(
+      `speedup native vs node (mean): ${speedupNativeVsNode.toFixed(1)}x   saved ${meanSavedVsNode.toFixed(1)}ms/event`,
+    );
+    console.log(
+      `speedup native vs curl (mean): ${speedupNativeVsCurl.toFixed(1)}x   saved ${meanSavedVsCurl.toFixed(1)}ms/event`,
+    );
+    console.log(
+      `speedup native vs node  (p95): ${(node.p95Ms / native.p95Ms).toFixed(1)}x`,
+    );
   }
 
   worker.kill('SIGTERM');
