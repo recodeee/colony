@@ -52,11 +52,13 @@ until an agent explicitly hydrates the full record. The result is measurable —
 
 ---
 
-## The Problem: Two Agents, One Bug, Two Patches
+## The Problem: One Failing Test, Two Agent Fixes
 
-A human can ask Codex and Claude to solve the same runtime-manifest bug at the
-same time. Without a shared loop, both agents diagnose the same Turbopack root
-escape, edit the same schema file, and race two PRs for one fix.
+During a run, multiple agents can hit the same failing runtime-manifest test.
+Without a shared coordination loop, each agent may independently diagnose the
+same Turbopack root-escape bug, patch the same schema file, and race separate
+PRs for one fix. Eventually one agent lands the repair, but the others have
+already spent tokens, touched overlapping files, and created cleanup work.
 
 <p align="center">
   <img src="docs/assets/colony-vs.svg" alt="Without Colony two agents collide on the same file. With Colony the second agent reads a live claim and stands down." width="100%" />
@@ -75,7 +77,7 @@ shared task thread.
 | Without Colony                         | With Colony                                     |
 | -------------------------------------- | ----------------------------------------------- |
 | Agents collide on the same files.      | Agents claim files before edits.                |
-| Humans schedule parallel work by hand. | Agents pull ready subtasks from Colony.         |
+| Agents chase the same failure alone.   | Agents pull ready subtasks from Colony.         |
 | Progress is trapped in chat windows.   | Working state is saved to task threads.         |
 | Old claims and handoffs stay noisy.    | Signals decay, expire, and can be swept.        |
 | Follow-up ideas disappear.             | Proposals can be reinforced and promoted.       |
