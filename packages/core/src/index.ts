@@ -69,6 +69,12 @@ export {
   type RufloBridgeObservationMetadata,
 } from './ruflo-bridge.js';
 export { hybridRank } from './ranker.js';
+export {
+  REFLEXION_OBSERVATION_KIND,
+  REFLEXION_REWARD_BY_KIND,
+  type ReflexionKind,
+  type ReflexionMetadata,
+} from './reflexion.js';
 export type { SearchResult, GetObservationsOptions, Observation, Session } from './types.js';
 export { createSessionId } from './ids.js';
 export { inferIdeFromSessionId } from './infer-ide.js';
