@@ -2902,6 +2902,59 @@ describe('colony health payload', () => {
     }
   });
 
+  it('does not mark the OMX runtime bridge stale when fresh runtime activity updated the summary file', () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-fresh-mtime-'));
+    const stateDir = path.join(repoRoot, '.omx', 'state');
+    const summaryPath = path.join(stateDir, 'colony-runtime-summary.json');
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      summaryPath,
+      JSON.stringify({
+        schema: 'colony-runtime-summary-v1',
+        session_id: 'codex@fresh-mtime',
+        agent: 'codex',
+        repo_root: repoRoot,
+        timestamp: new Date(NOW - 30 * 60_000).toISOString(),
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+      }),
+    );
+    fs.utimesSync(summaryPath, new Date(NOW - 1_000), new Date(NOW - 1_000));
+    try {
+      const payload = buildColonyHealthPayload(
+        fakeStorage({
+          calls: healthyWindowCalls(),
+          claimBeforeEdit: {
+            edit_tool_calls: 0,
+            edits_with_file_path: 0,
+            edits_claimed_before: 0,
+          },
+        }),
+        {
+          since: SINCE,
+          window_hours: 24,
+          now: NOW,
+          codex_sessions_root: NO_CODEX_ROOT,
+          repo_root: repoRoot,
+          omx_runtime_summary_global_dir: null,
+          omx_runtime_summary_stale_ms: 15 * 60_000,
+        },
+      );
+
+      expect(payload.omx_runtime_bridge).toMatchObject({
+        status: 'available',
+        summaries_ingested: 1,
+        latest_summary_age_ms: 1_000,
+        recent_edit_paths: ['apps/cli/src/commands/health.ts'],
+      });
+      expect(payload.action_hints).not.toContainEqual(
+        expect.objectContaining({ metric: 'OMX runtime bridge' }),
+      );
+      expect(formatColonyHealthOutput(payload)).toContain('status:              available');
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('shows OMX runtime bridge stale when the latest v1 summary is old', () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-omx-stale-'));
     const stateDir = path.join(repoRoot, '.omx', 'state');
