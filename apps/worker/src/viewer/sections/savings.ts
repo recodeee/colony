@@ -1,8 +1,4 @@
-import {
-  SAVINGS_REFERENCE_ROWS,
-  type SavingsReferenceRow,
-  savingsReferenceTotals,
-} from '@colony/core';
+import { type SavingsLiveComparison, savingsLiveComparison } from '@colony/core';
 import type { McpMetricsAggregate, McpMetricsAggregateRow } from '@colony/storage';
 import { html, layout, raw } from '../html.js';
 
@@ -12,72 +8,102 @@ export interface SavingsPagePayload {
 }
 
 export function renderSavingsPage(payload: SavingsPagePayload): string {
-  const referenceTotals = savingsReferenceTotals();
   const live = renderLiveTable(payload.live, payload.windowHours);
-  const reference = renderReferenceTable(SAVINGS_REFERENCE_ROWS, referenceTotals);
+  const comparison = renderLiveComparisonTable(
+    savingsLiveComparison(payload.live.operations),
+    payload.windowHours,
+  );
   const body = html`
     <p><a href="/">&larr; back to sessions</a></p>
     <h2>Token savings</h2>
     <p class="meta">
       Live <code>mcp_metrics</code> receipts recorded by the wrapping MCP handler, followed by a
-      reference model for common coordination loops. Token counts use
+      live comparison model for common coordination loops. Token counts use
       <code>@colony/compress#countTokens</code>, the same primitive as observation receipts.
       Monetary cost uses the configured USD per 1M token rates when present.
-      The reference table is static; live operation and session tables move with the window.
+      The comparison table moves with the live window; unmatched operations stay visible in the
+      raw live table.
     </p>
     ${raw(live)}
-    ${raw(reference)}
+    ${raw(comparison)}
   `;
   return layout('agents-hivemind · savings', body);
 }
 
-function renderReferenceTable(
-  rows: ReadonlyArray<SavingsReferenceRow>,
-  totals: ReturnType<typeof savingsReferenceTotals>,
-): string {
-  const body = rows
+function renderLiveComparisonTable(comparison: SavingsLiveComparison, windowHours: number): string {
+  if (comparison.rows.length === 0) {
+    return html`
+      <div class="card">
+        <h2>Live comparison: standard vs. colony (last ${windowHours}h)</h2>
+        <p class="meta">
+          No live operations matched the reference aliases in this window. The static catalog is
+          still available from <code>colony gain --reference</code> and
+          <code>savings_report.reference</code>.
+        </p>
+      </div>`;
+  }
+  const rows = comparison.rows
     .map(
       (row) => html`
         <tr>
           <td><strong>${row.operation}</strong></td>
-          <td class="num">${row.frequency_per_session}x</td>
+          <td class="num">${row.calls}</td>
           <td class="num">${formatTokens(row.baseline_tokens)}</td>
           <td class="num">${formatTokens(row.colony_tokens)}</td>
           <td class="num savings-cell">${row.savings_pct}%</td>
+          <td><code>${row.matched_operations.join(', ')}</code></td>
         </tr>`,
     )
     .join('');
+  const unmatched = renderUnmatchedComparisonSummary(comparison);
   return html`
     <div class="card">
-      <h2>Reference model: standard vs. colony (static)</h2>
-      <p class="meta">
-        Static estimated per-session token loops for common coordination work. This total does not
-        move with the live window. Source:
-        <code>packages/core/src/savings-reference.ts</code>.
-      </p>
+      <h2>Live comparison: standard vs. colony (last ${windowHours}h)</h2>
+      <p class="meta">${comparison.note}</p>
       <table class="savings-table">
         <thead>
           <tr>
             <th>Operation</th>
-            <th class="num">Freq</th>
+            <th class="num">Calls</th>
             <th class="num">Standard</th>
             <th class="num">Colony</th>
             <th class="num">Saved</th>
+            <th>Matched ops</th>
           </tr>
         </thead>
-        <tbody>${raw(body)}</tbody>
+        <tbody>${raw(rows)}</tbody>
         <tfoot>
           <tr>
-            <td><strong>Static total / session</strong></td>
+            <td><strong>Live matched total</strong></td>
+            <td class="num"><strong>${comparison.totals.calls}</strong></td>
+            <td class="num"><strong>${formatTokens(comparison.totals.baseline_tokens)}</strong></td>
+            <td class="num"><strong>${formatTokens(comparison.totals.colony_tokens)}</strong></td>
+            <td class="num savings-cell"><strong>${comparison.totals.savings_pct}%</strong></td>
             <td></td>
-            <td class="num">${formatTokens(totals.baseline_tokens)}</td>
-            <td class="num">${formatTokens(totals.colony_tokens)}</td>
-            <td class="num savings-cell"><strong>${totals.savings_pct}%</strong></td>
           </tr>
         </tfoot>
       </table>
+      ${raw(unmatched)}
       ${raw(savingsTableStyle)}
     </div>`;
+}
+
+function renderUnmatchedComparisonSummary(comparison: SavingsLiveComparison): string {
+  if (comparison.totals.unmatched_calls === 0) return '';
+  const operations = comparison.unmatched_operations
+    .slice(0, 8)
+    .map((row) => `${row.operation}:${row.calls}`)
+    .join(', ');
+  const suffix =
+    comparison.unmatched_operations.length > 8
+      ? `, +${comparison.unmatched_operations.length - 8} more`
+      : '';
+  return html`
+    <p class="meta">
+      Unmatched live operations: ${comparison.totals.unmatched_calls} calls,
+      ${formatTokens(comparison.totals.unmatched_colony_tokens)} tokens
+      (<code>${operations}${suffix}</code>).
+    </p>`;
 }
 
 function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string {
@@ -129,6 +155,7 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
         </tfoot>
       </table>
       ${raw(sessions)}
+      ${raw(savingsTableStyle)}
     </div>`;
 }
 

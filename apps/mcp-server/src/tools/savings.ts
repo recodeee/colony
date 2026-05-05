@@ -1,4 +1,8 @@
-import { SAVINGS_REFERENCE_ROWS, savingsReferenceTotals } from '@colony/core';
+import {
+  SAVINGS_REFERENCE_ROWS,
+  savingsLiveComparison,
+  savingsReferenceTotals,
+} from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
@@ -8,9 +12,7 @@ const HOUR_MS = 60 * 60_000;
 
 /**
  * Reports live per-operation token usage recorded by the metrics wrapper plus
- * reference savings rows for common coordination loops. Two sections by design:
- * live rows are actual mcp_metrics receipts, while reference rows remain an
- * illustrative comparison model.
+ * a live comparison model for common coordination loops.
  *
  * Progressive disclosure: the response is compact — counts, totals, and
  * per-op rows. No observation bodies, no event timelines.
@@ -21,7 +23,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'savings_report',
-    'Report colony token savings: live per-operation mcp_metrics usage/cost plus reference rows for common dev-loop operations. Pass since_ms or hours to scope the live window; default is 24h. Pass operation to filter live rows to one tool name. Pass input/output USD-per-1M rates or set COLONY_MCP_* env vars to estimate monetary cost.',
+    'Report colony token savings: live per-operation mcp_metrics usage/cost plus a live comparison model for common dev-loop operations. Pass since_ms or hours to scope the live window; default is 24h. Pass operation to filter live rows to one tool name. Pass input/output USD-per-1M rates or set COLONY_MCP_* env vars to estimate monetary cost.',
     {
       since_ms: z
         .number()
@@ -91,6 +93,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           },
         });
         const totals = savingsReferenceTotals();
+        const comparison = savingsLiveComparison(live.operations);
         return {
           content: [
             {
@@ -106,9 +109,10 @@ export function register(server: McpServer, ctx: ToolContext): void {
                   session_summary: live.session_summary,
                   sessions: live.sessions,
                 },
+                comparison,
                 reference: {
                   kind: 'static_per_session_model',
-                  note: 'Static estimated per-session token cost for common coordination loops, with vs. without colony. This total is not derived from the live mcp_metrics window. Source: packages/core/src/savings-reference.ts.',
+                  note: 'Static estimated per-session token cost catalog for common coordination loops. Runtime comparison lives in comparison and is derived from the live mcp_metrics window. Source: packages/core/src/savings-reference.ts.',
                   rows: SAVINGS_REFERENCE_ROWS,
                   totals,
                 },

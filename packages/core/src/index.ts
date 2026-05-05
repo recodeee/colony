@@ -1,7 +1,13 @@
 export { MemoryStore, type Embedder } from './memory-store.js';
 export {
   SAVINGS_REFERENCE_ROWS,
+  savingsLiveComparison,
   savingsReferenceTotals,
+  type SavingsLiveComparison,
+  type SavingsLiveComparisonRow,
+  type SavingsLiveComparisonTotals,
+  type SavingsLiveMetricRow,
+  type SavingsLiveUnmatchedOperation,
   type SavingsReferenceRow,
   type SavingsReferenceTotals,
 } from './savings-reference.js';

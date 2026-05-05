@@ -244,6 +244,11 @@ describe('MCP server', () => {
         totals: { total_cost_usd: number; avg_cost_usd: number };
         operations: Array<{ operation: string; total_cost_usd: number; avg_cost_usd: number }>;
       };
+      comparison: {
+        kind: string;
+        totals: { calls: number; baseline_tokens: number; colony_tokens: number };
+        rows: Array<{ operation: string; calls: number; matched_operations: string[] }>;
+      };
     };
 
     expect(payload.live.cost_basis.configured).toBe(true);
@@ -253,6 +258,17 @@ describe('MCP server', () => {
       operation: 'search',
       total_cost_usd: 0.005,
       avg_cost_usd: 0.005,
+    });
+    expect(payload.comparison.kind).toBe('live_window_reference_model');
+    expect(payload.comparison.rows[0]).toMatchObject({
+      operation: 'Search result shape',
+      calls: 1,
+      matched_operations: ['search'],
+    });
+    expect(payload.comparison.totals).toMatchObject({
+      calls: 1,
+      baseline_tokens: 5000,
+      colony_tokens: 3000,
     });
   });
 

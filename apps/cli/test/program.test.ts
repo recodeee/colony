@@ -100,7 +100,7 @@ describe('Colony CLI program', () => {
         examples_query [options] <query>                  Search example concepts with compact foraged hits
         examples_integrate_plan [options] <example_name>  Plan concept ports from an indexed example
         foraging                                          Index and query <repo_root>/examples food sources
-        gain [options]                                    Show colony token savings: live mcp_metrics receipts + reference model
+        gain [options]                                    Show colony token savings: live mcp_metrics receipts + comparison model
         queen                                             Queen coordination helpers for published plan lanes
         resume                                            Build read-only recovery packets
         rescue                                            Clean up stranded sessions safely

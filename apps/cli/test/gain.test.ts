@@ -115,7 +115,7 @@ describe('gain command output', () => {
     expect(output).toContain('300');
   });
 
-  it('prints live metrics before the reference model', () => {
+  it('prints live metrics before the live comparison model', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
       output += String(chunk);
@@ -148,12 +148,13 @@ describe('gain command output', () => {
     writeGainReport(
       [
         {
-          operation: 'Recall prior decision',
+          operation: 'Search result shape',
           frequency_per_session: 5,
-          baseline_tokens: 8000,
-          colony_tokens: 1500,
-          savings_pct: 81,
-          rationale: 'search -> get_observations IDs vs re-reading PR threads + scrollback',
+          baseline_tokens: 5000,
+          colony_tokens: 150,
+          savings_pct: 97,
+          rationale: 'compact IDs + snippets vs inline full bodies',
+          mcp_operations: ['search'],
         },
       ],
       {
@@ -171,8 +172,11 @@ describe('gain command output', () => {
     );
 
     expect(output.indexOf('colony gain — live mcp_metrics')).toBeLessThan(
-      output.indexOf('colony gain — reference model (static)'),
+      output.indexOf('colony gain — live comparison model'),
     );
+    expect(output).toContain('Search result shape');
+    expect(output).toContain('Live matched total');
+    expect(output).not.toContain('Static total / session');
   });
 
   it('keeps reference output compact without the cut explainer', () => {
@@ -191,6 +195,7 @@ describe('gain command output', () => {
           colony_tokens: 1500,
           savings_pct: 81,
           rationale: 'search -> get_observations IDs vs re-reading PR threads + scrollback',
+          mcp_operations: ['recall_session'],
         },
       ],
       {

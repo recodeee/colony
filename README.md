@@ -483,20 +483,6 @@ Before merging changes:
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
 ```
 
-Publish-path changes should also run:
-
-```bash
-bash scripts/e2e-publish.sh
-```
-
-Do not run `npm publish` from the repository root. Publish through the root
-wrapper:
-
-```bash
-pnpm publish:cli:dry-run
-pnpm publish:cli
-```
-
 ---
 
 ## Architecture Rules
