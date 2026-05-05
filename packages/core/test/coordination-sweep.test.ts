@@ -337,6 +337,8 @@ describe('buildCoordinationSweep stale claim cleanup', () => {
     });
 
     expect(applied.summary.released_aged_quota_pending_claim_count).toBe(1);
+    expect(applied.summary.released_quota_pending_claims).toBe(1);
+    expect(applied.safe_cleanup.released_quota_pending_claims).toBe(1);
     expect(applied.released_expired_quota_pending_claims).toEqual([
       expect.objectContaining({
         task_id: taskId,

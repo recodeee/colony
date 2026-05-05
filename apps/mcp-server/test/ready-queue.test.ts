@@ -586,6 +586,51 @@ describe('task_ready_for_agent', () => {
     });
   });
 
+  it('skips auto_claim when multiple ready sub-tasks are available', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'First ambiguous task',
+            description: 'One of two available subtasks.',
+            file_scope: ['apps/api/ambiguous-a.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Second ambiguous task',
+            description: 'Another available subtask.',
+            file_scope: ['apps/api/ambiguous-b.ts'],
+            capability_hint: 'api_work',
+          },
+        ],
+        { slug: 'ambiguous-auto-claim-plan' },
+      ),
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: true,
+    });
+
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0, 1]);
+    expect(result.claim_args).toMatchObject({
+      plan_slug: 'ambiguous-auto-claim-plan',
+      subtask_index: 0,
+      session_id: 'agent-session',
+      agent: 'codex',
+    });
+    expect(result.auto_claimed).toMatchObject({
+      ok: false,
+      plan_slug: 'ambiguous-auto-claim-plan',
+      subtask_index: 0,
+      code: 'AUTO_CLAIM_AMBIGUOUS',
+    });
+    expect(store.storage.listClaims(taskIdForSubtask('ambiguous-auto-claim-plan', 0))).toEqual([]);
+    expect(store.storage.listClaims(taskIdForSubtask('ambiguous-auto-claim-plan', 1))).toEqual([]);
+  });
+
   it('skips auto_claim when no claimable sub-task is ready', async () => {
     const result = await call<ReadyResult>('task_ready_for_agent', {
       session_id: 'agent-session',
@@ -857,6 +902,7 @@ describe('task_ready_for_agent', () => {
       agent: 'codex',
       repo_root: repoRoot,
       limit: 10,
+      auto_claim: false,
     });
 
     const quota = result.ready[0] as unknown as QuotaRelayReadyEntry;
@@ -967,6 +1013,7 @@ describe('task_ready_for_agent', () => {
       agent: 'codex',
       repo_root: repoRoot,
       limit: 10,
+      auto_claim: false,
     });
 
     expect(result.total_available).toBe(2);
@@ -980,7 +1027,7 @@ describe('task_ready_for_agent', () => {
     expect(result.next_tool).toBe('task_claim_quota_accept');
   });
 
-  it('surfaces expired quota relays with active files ahead of ordinary new work', async () => {
+  it('skips expired nonblocking quota relays so ordinary ready work can proceed', async () => {
     const t0 = Date.parse('2026-05-01T11:00:00.000Z');
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(t0);
@@ -994,7 +1041,7 @@ describe('task_ready_for_agent', () => {
         [
           {
             title: 'Ordinary after expired relay',
-            description: 'Ready but lower priority than active expired quota files.',
+            description: 'Ready work should not be masked by expired nonblocking quota files.',
             file_scope: ['apps/api/ordinary-after-expired-relay.ts'],
             capability_hint: 'api_work',
           },
@@ -1015,53 +1062,48 @@ describe('task_ready_for_agent', () => {
       agent: 'codex',
       repo_root: repoRoot,
       limit: 10,
+      auto_claim: false,
     });
 
-    const quota = result.ready[0] as unknown as QuotaRelayReadyEntry;
-    expect(result.total_available).toBe(2);
-    expect(result.next_tool).toBe('task_claim_quota_accept');
-    expect(quota).toMatchObject({
-      kind: 'quota_relay_ready',
-      priority: 1,
-      task_id: taskId,
-      old_session_id: 'quota-session',
-      files: [filePath],
-      file_count: 1,
-      active_files: [filePath],
-      active_file_count: 1,
-      evidence: `observation ${relayId} relay: RELAY from codex (quota) -> any`,
-      next: 'quota stopped this task',
-      expires_at: t0 + 60_000,
-      has_active_files: true,
-      blocks_downstream: false,
-      quota_observation_id: relayId,
-      quota_observation_kind: 'relay',
-      claim_args: {
-        task_id: taskId,
-        session_id: 'agent-session',
-        agent: 'codex',
-        handoff_observation_id: relayId,
-      },
-    });
-    expect(result.ready[1]).toMatchObject({
+    expect(result.total_available).toBe(1);
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(
+      result.ready.some(
+        (entry) => (entry as unknown as { kind?: string }).kind === 'quota_relay_ready',
+      ),
+    ).toBe(false);
+    expect(result.ready[0]).toMatchObject({
       plan_slug: 'ordinary-after-expired-relay-plan',
       subtask_index: 0,
     });
 
-    const accepted = await call<QuotaAcceptResult>(quota.next_tool, quota.claim_args);
-    expect(accepted).toMatchObject({
-      status: 'accepted',
-      accepted_files: [filePath],
-      previous_session_ids: ['quota-session'],
+    new TaskThread(store, taskId).join('agent-session', 'codex');
+    const released = await call<{
+      status: string;
+      released_claims: Array<{ file_path: string; state: string }>;
+    }>('task_claim_quota_release_expired', {
+      task_id: taskId,
+      session_id: 'agent-session',
+      handoff_observation_id: relayId,
     });
-    expect(store.storage.listClaims(taskId)).toEqual([
-      expect.objectContaining({
-        file_path: filePath,
-        session_id: 'agent-session',
-        state: 'active',
-        handoff_observation_id: null,
-      }),
-    ]);
+    expect(released).toMatchObject({
+      status: 'released_expired',
+      released_claims: [{ file_path: filePath, state: 'weak_expired' }],
+    });
+
+    const afterRelease = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+      auto_claim: false,
+    });
+    expect(afterRelease.total_available).toBe(1);
+    expect(
+      afterRelease.ready.some(
+        (entry) => (entry as unknown as { kind?: string }).kind === 'quota_relay_ready',
+      ),
+    ).toBe(false);
   });
 
   it('keeps quota relay ready payloads compact for many files and long handoffs', async () => {

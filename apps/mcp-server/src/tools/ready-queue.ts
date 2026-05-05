@@ -274,6 +274,19 @@ async function maybeAutoClaim(
   ) {
     return result;
   }
+  if (!isUnambiguousAutoClaim(result, claim_args)) {
+    return {
+      ...result,
+      auto_claimed: {
+        ok: false,
+        plan_slug: claim_args.plan_slug,
+        subtask_index: claim_args.subtask_index,
+        code: 'AUTO_CLAIM_AMBIGUOUS',
+        message:
+          'auto_claim skipped: more than one ready item is available; call task_plan_claim_subtask with the exact claim_args to choose explicitly.',
+      },
+    };
+  }
   const claimResult = attemptClaimPlanSubtask(store, {
     plan_slug: claim_args.plan_slug,
     subtask_index: claim_args.subtask_index,
@@ -304,6 +317,26 @@ async function maybeAutoClaim(
       message: claimResult.message,
     },
   };
+}
+
+function isUnambiguousAutoClaim(
+  result: ReadyForAgentResult,
+  claimArgs: TaskPlanClaimArgs,
+): boolean {
+  if (result.total_available !== 1) return false;
+  const claimablePlanEntries = result.ready.filter(isClaimableReadySubtask);
+  if (claimablePlanEntries.length !== 1) return false;
+  const [entry] = claimablePlanEntries;
+  if (!entry) return false;
+  return (
+    entry.plan_slug === claimArgs.plan_slug &&
+    entry.subtask_index === claimArgs.subtask_index &&
+    entry.assigned_agent === claimArgs.agent
+  );
+}
+
+function isClaimableReadySubtask(entry: ReadyQueueEntry): entry is ReadySubtaskWithWarnings {
+  return !isQuotaRelayReady(entry) && entry.next_tool === 'task_plan_claim_subtask';
 }
 
 export async function buildReadyForAgent(
@@ -983,6 +1016,8 @@ function quotaRelayReadyItems(
       store.storage.getSession(group.old_owner_session_id)?.ide ??
       null;
     const ageMs = Math.max(0, now - obs.ts);
+    const expired = expiresAt !== null && now >= expiresAt;
+    if ((expired || allActiveFiles.length === 0) && !blocksDownstream) continue;
 
     ready.push({
       kind: QUOTA_RELAY_READY_KIND,

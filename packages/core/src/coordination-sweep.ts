@@ -469,6 +469,8 @@ export function buildCoordinationSweep(
     typeof opts.release_aged_quota_pending_minutes === 'number'
       ? releaseAgedQuotaPendingClaims(store, agedQuotaPendingClaims, now)
       : [];
+  const releasedQuotaPendingClaimCount =
+    released_expired_quota_pending_claims.length + released_aged_quota_pending_claims.length;
   const archived_completed_plans =
     opts.archive_completed_plans === true ? archiveCompletedPlans(store, opts) : [];
   const remainingStaleClaims = filterRemainingStaleClaims(staleClaims, staleClaimCleanup);
@@ -502,7 +504,7 @@ export function buildCoordinationSweep(
     expired_weak_claims: expiredWeakClaims,
     cleanup: staleClaimCleanup,
     recommended_actions,
-    released_expired_quota_pending_claim_count: released_expired_quota_pending_claims.length,
+    released_quota_pending_claim_count: releasedQuotaPendingClaimCount,
   });
 
   return {
@@ -1178,7 +1180,7 @@ function safeCleanupReport(args: {
   expired_weak_claims: ExpiredWeakClaimSignal[];
   cleanup: StaleClaimCleanupResult;
   recommended_actions: string[];
-  released_expired_quota_pending_claim_count: number;
+  released_quota_pending_claim_count: number;
 }): CoordinationSweepSafeCleanupReport {
   const skipped = args.cleanup.skipped_dirty_claims;
   return {
@@ -1186,7 +1188,7 @@ function safeCleanupReport(args: {
     expired_or_weak_claims: args.expired_weak_claims.length,
     quota_pending_claims: args.stale_claims.filter((claim) => claim.state === 'handoff_pending')
       .length,
-    released_quota_pending_claims: args.released_expired_quota_pending_claim_count,
+    released_quota_pending_claims: args.released_quota_pending_claim_count,
     released_claims: args.cleanup.released_stale_claims.length,
     downgraded_claims: args.cleanup.downgraded_stale_claims.length,
     skipped_dirty_claims: skipped.filter((claim) => claim.reason === 'dirty_worktree').length,
@@ -1198,10 +1200,7 @@ function safeCleanupReport(args: {
   };
 }
 
-function collectExpiredQuotaPendingClaims(
-  signals: ClaimSignal[],
-  now: number,
-): ClaimSignal[] {
+function collectExpiredQuotaPendingClaims(signals: ClaimSignal[], now: number): ClaimSignal[] {
   const seen = new Set<string>();
   const out: ClaimSignal[] = [];
   for (const claim of signals) {
