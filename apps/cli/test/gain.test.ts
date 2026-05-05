@@ -115,6 +115,79 @@ describe('gain command output', () => {
     expect(output).toContain('300');
   });
 
+  it('prints the most frequent error reason in the overview', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    const baseRow: Omit<
+      McpMetricsAggregateRow,
+      'operation' | 'calls' | 'ok_count' | 'error_count' | 'error_reasons'
+    > = {
+      input_bytes: 100,
+      output_bytes: 200,
+      total_bytes: 300,
+      input_tokens: 25,
+      output_tokens: 50,
+      total_tokens: 75,
+      input_cost_usd: 0.000025,
+      output_cost_usd: 0.0001,
+      total_cost_usd: 0.000125,
+      avg_cost_usd: 0.000063,
+      avg_input_tokens: 13,
+      avg_output_tokens: 25,
+      total_duration_ms: 40,
+      avg_duration_ms: 20,
+      last_ts: Date.now(),
+    };
+    const searchRow: McpMetricsAggregateRow = {
+      ...baseRow,
+      operation: 'search',
+      calls: 2,
+      ok_count: 1,
+      error_count: 1,
+      error_reasons: [
+        {
+          error_code: 'SEARCH_FAILED',
+          error_message: 'single search failure',
+          count: 1,
+          last_ts: Date.now() - 1000,
+        },
+      ],
+    };
+    const readyRow: McpMetricsAggregateRow = {
+      ...baseRow,
+      operation: 'task_ready_for_agent',
+      calls: 4,
+      ok_count: 1,
+      error_count: 3,
+      error_reasons: [
+        {
+          error_code: 'TASK_NOT_FOUND',
+          error_message: 'task 6 not found',
+          count: 3,
+          last_ts: Date.now(),
+        },
+      ],
+    };
+
+    writeLiveSection(
+      [searchRow, readyRow],
+      readyRow,
+      SESSION_SUMMARY,
+      [SESSION_ROW],
+      COST_BASIS,
+      168,
+      undefined,
+    );
+
+    expect(output).toContain(
+      'Needs attention: 3x task_ready_for_agent TASK_NOT_FOUND - task 6 not found',
+    );
+  });
+
   it('prints live metrics before the live comparison model', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
