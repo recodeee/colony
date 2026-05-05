@@ -1,8 +1,10 @@
 import { loadSettings } from '@colony/config';
 import {
   SAVINGS_REFERENCE_ROWS,
+  type SavingsLiveComparison,
   type SavingsReferenceRow,
   type SavingsReferenceTotals,
+  savingsLiveComparison,
   savingsReferenceTotals,
 } from '@colony/core';
 import type {
@@ -23,17 +25,19 @@ interface GainOptions {
   sessionLimit?: string;
   inputCostPer1m?: string;
   outputCostPer1m?: string;
+  reference?: boolean;
 }
 
 export function registerGainCommand(program: Command): void {
   program
     .command('gain')
-    .description('Show colony token savings: live mcp_metrics receipts + reference model')
+    .description('Show colony token savings: live mcp_metrics receipts + comparison model')
     .option('--json', 'emit structured JSON')
     .option('--hours <n>', 'live window in hours (default 168 = 7 days)')
     .option('--since <ms>', 'absolute epoch-ms cutoff; overrides --hours')
     .option('--operation <name>', 'filter live rows to one operation')
     .option('--session-limit <n>', 'number of live sessions to print (default 12; 0 = all)')
+    .option('--reference', 'also print the static per-session reference catalog')
     .option(
       '--input-cost-per-1m <usd>',
       'USD rate per 1M input tokens; env COLONY_MCP_INPUT_USD_PER_1M',
@@ -70,6 +74,7 @@ export function registerGainCommand(program: Command): void {
       );
 
       const referenceTotals = savingsReferenceTotals();
+      const comparison = savingsLiveComparison(live.operations);
       const payload = {
         reference: {
           kind: 'static_per_session_model',
@@ -77,6 +82,7 @@ export function registerGainCommand(program: Command): void {
           rows: SAVINGS_REFERENCE_ROWS,
           totals: referenceTotals,
         },
+        comparison,
         live: {
           window: { since, until: now, hours: windowHours },
           ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
@@ -103,6 +109,7 @@ export function registerGainCommand(program: Command): void {
         live.cost_basis,
         windowHours,
         opts.operation,
+        opts.reference === true,
       );
     });
 }
@@ -117,7 +124,9 @@ export function writeGainReport(
   costBasis: McpMetricsCostBasis,
   hours: number,
   operationFilter: string | undefined,
+  includeReference = false,
 ): void {
+  const comparison = savingsLiveComparison(liveRows, referenceRows);
   writeLiveSection(
     liveRows,
     liveTotals,
@@ -128,7 +137,66 @@ export function writeGainReport(
     operationFilter,
   );
   process.stdout.write('\n');
-  writeReferenceSection(referenceRows, referenceTotals);
+  writeLiveComparisonSection(comparison, hours, operationFilter);
+  if (includeReference) {
+    process.stdout.write('\n');
+    writeReferenceSection(referenceRows, referenceTotals);
+  }
+}
+
+export function writeLiveComparisonSection(
+  comparison: SavingsLiveComparison,
+  hours: number,
+  operationFilter: string | undefined,
+): void {
+  const w = process.stdout;
+  const filter = operationFilter ? ` (op=${operationFilter})` : '';
+  w.write(`${kleur.bold(`colony gain — live comparison model (last ${hours}h${filter})`)}\n`);
+  if (comparison.rows.length === 0) {
+    w.write(
+      kleur.dim(
+        'No live operations matched the reference aliases in this window. Use --reference for the static catalog.\n',
+      ),
+    );
+    writeUnmatchedComparisonSummary(comparison);
+    return;
+  }
+  w.write(`${kleur.dim(`${comparison.note}\n\n`)}`);
+  const head = padRow(
+    ['Operation', 'Calls', 'Standard', 'Colony', 'Saved', 'Matched ops'],
+    [32, 7, 9, 9, 7, 32],
+  );
+  w.write(`${kleur.dim(head)}\n`);
+  for (const row of comparison.rows) {
+    w.write(
+      `${padRow(
+        [
+          row.operation,
+          String(row.calls),
+          formatTokens(row.baseline_tokens),
+          formatTokens(row.colony_tokens),
+          formatSavingsPct(row.savings_pct),
+          truncate(row.matched_operations.join(', '), 32),
+        ],
+        [32, 7, 9, 9, 7, 32],
+      )}\n`,
+    );
+  }
+  w.write(`${kleur.dim('-'.repeat(104))}\n`);
+  w.write(
+    `${padRow(
+      [
+        kleur.bold('Live matched total'),
+        String(comparison.totals.calls),
+        formatTokens(comparison.totals.baseline_tokens),
+        formatTokens(comparison.totals.colony_tokens),
+        formatSavingsPct(comparison.totals.savings_pct),
+        '',
+      ],
+      [32, 7, 9, 9, 7, 32],
+    )}\n`,
+  );
+  writeUnmatchedComparisonSummary(comparison);
 }
 
 export function writeReferenceSection(
@@ -335,6 +403,25 @@ function writeLiveErrorReasons(
   }
 }
 
+function writeUnmatchedComparisonSummary(comparison: SavingsLiveComparison): void {
+  if (comparison.totals.unmatched_calls === 0) return;
+  const operations = comparison.unmatched_operations
+    .slice(0, 8)
+    .map((row) => `${row.operation}:${row.calls}`)
+    .join(', ');
+  const suffix =
+    comparison.unmatched_operations.length > 8
+      ? `, +${comparison.unmatched_operations.length - 8} more`
+      : '';
+  process.stdout.write(
+    kleur.dim(
+      `Unmatched live operations: ${comparison.totals.unmatched_calls} calls, ${formatTokens(
+        comparison.totals.unmatched_colony_tokens,
+      )} tokens (${operations}${suffix}).\n`,
+    ),
+  );
+}
+
 function costOptionsFromCli(opts: GainOptions): {
   input_usd_per_1m_tokens?: number;
   output_usd_per_1m_tokens?: number;
@@ -364,6 +451,11 @@ function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function formatSavingsPct(n: number): string {
+  const value = `${n}%`;
+  return n < 0 ? kleur.red(value) : kleur.green(value);
 }
 
 function formatCostBasis(costBasis: McpMetricsCostBasis): string {

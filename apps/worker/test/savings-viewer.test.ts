@@ -72,18 +72,19 @@ function aggregate(): McpMetricsAggregate {
 }
 
 describe('savings viewer', () => {
-  it('renders live receipts before the compact reference model', () => {
+  it('renders live receipts before the live comparison model', () => {
     const page = renderSavingsPage({ live: aggregate(), windowHours: 24 });
 
     expect(page.indexOf('Live: mcp_metrics')).toBeLessThan(
-      page.indexOf('Reference model: standard vs. colony (static)'),
+      page.indexOf('Live comparison: standard vs. colony'),
     );
     expect(page).not.toContain('search -> get_observations IDs vs re-reading PR threads');
     expect(page).toContain('Live sessions');
     expect(page).toContain('avg/session 2 calls');
     expect(page).toContain('019df99a-');
-    expect(page).toContain('Unread message triage');
-    expect(page).toContain('Static total / session');
+    expect(page).toContain('Search result shape');
+    expect(page).toContain('Live matched total');
+    expect(page).not.toContain('Static total / session');
     expect(page).toContain('$0.000200');
   });
 });
