@@ -115,6 +115,21 @@ MCP workflow:
    sub-task completes and `auto_archive` is enabled, the parent plan archives
    automatically unless conflicts block it.
 
+For plans that never opted into `auto_archive`, operators can clear the
+"completed but unarchived" backlog in bulk:
+
+```bash
+colony coordination sweep --archive-completed-plans --repo-root <path>
+```
+
+This drives `Storage.findCompletedQueenPlans` to scan every `spec/<slug>` /
+`spec/<slug>/sub-N` task tree, identify plans whose every sub-task's latest
+`plan-subtask-claim` observation is `metadata.status='completed'`, and
+archive them via `archiveQueenPlan` without per-plan opt-in. Idempotent:
+already-archived plans are skipped. The sweep result includes
+`archived_completed_plans` (rows) and `summary.archived_completed_plan_count`
+(count) for downstream tooling. Skipped automatically under `--dry-run`.
+
 ## ordered waves
 
 Queen can describe an ordered plan as waves without creating a scheduler. A
