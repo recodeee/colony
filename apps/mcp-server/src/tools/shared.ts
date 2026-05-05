@@ -266,6 +266,7 @@ export function mcpErrorResponse(
     | TaskThreadErrorCode
     | 'SPEC_TASK_NOT_FOUND'
     | 'SPEC_CHANGE_NOT_FOUND'
+    | 'SPEC_ROOT_NOT_FOUND'
     | 'PLAN_INVALID_DEPENDENCY'
     | 'PLAN_INVALID_WAVE_DEPENDENCY'
     | 'PLAN_SCOPE_OVERLAP'

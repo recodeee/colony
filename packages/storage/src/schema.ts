@@ -244,12 +244,16 @@ CREATE TABLE IF NOT EXISTS mcp_metrics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts INTEGER NOT NULL,
   operation TEXT NOT NULL,
+  session_id TEXT,
+  repo_root TEXT,
   input_bytes INTEGER NOT NULL,
   output_bytes INTEGER NOT NULL,
   input_tokens INTEGER NOT NULL,
   output_tokens INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL,
-  ok INTEGER NOT NULL DEFAULT 1
+  ok INTEGER NOT NULL DEFAULT 1,
+  error_code TEXT,
+  error_message TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_op_ts ON mcp_metrics(operation, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_ts ON mcp_metrics(ts DESC);
@@ -288,8 +292,29 @@ export const COLUMN_MIGRATIONS: ReadonlyArray<{ table: string; column: string; s
     column: 'handoff_observation_id',
     sql: 'ALTER TABLE task_claims ADD COLUMN handoff_observation_id INTEGER REFERENCES observations(id) ON DELETE SET NULL',
   },
+  {
+    table: 'mcp_metrics',
+    column: 'session_id',
+    sql: 'ALTER TABLE mcp_metrics ADD COLUMN session_id TEXT',
+  },
+  {
+    table: 'mcp_metrics',
+    column: 'repo_root',
+    sql: 'ALTER TABLE mcp_metrics ADD COLUMN repo_root TEXT',
+  },
+  {
+    table: 'mcp_metrics',
+    column: 'error_code',
+    sql: 'ALTER TABLE mcp_metrics ADD COLUMN error_code TEXT',
+  },
+  {
+    table: 'mcp_metrics',
+    column: 'error_message',
+    sql: 'ALTER TABLE mcp_metrics ADD COLUMN error_message TEXT',
+  },
 ];
 
 export const POST_MIGRATION_SQL = `
 CREATE INDEX IF NOT EXISTS idx_observations_task ON observations(task_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_metrics_error_ts ON mcp_metrics(ok, error_code, ts DESC);
 `;

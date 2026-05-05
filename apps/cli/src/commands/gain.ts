@@ -5,7 +5,7 @@ import {
   type SavingsReferenceTotals,
   savingsReferenceTotals,
 } from '@colony/core';
-import type { McpMetricsAggregateRow } from '@colony/storage';
+import type { McpMetricsAggregateRow, McpMetricsCostBasis } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { withStorage } from '../util/store.js';
@@ -15,6 +15,8 @@ interface GainOptions {
   hours?: string;
   since?: string;
   operation?: string;
+  inputCostPer1m?: string;
+  outputCostPer1m?: string;
 }
 
 export function registerGainCommand(program: Command): void {
@@ -25,6 +27,14 @@ export function registerGainCommand(program: Command): void {
     .option('--hours <n>', 'live window in hours (default 168 = 7 days)')
     .option('--since <ms>', 'absolute epoch-ms cutoff; overrides --hours')
     .option('--operation <name>', 'filter live rows to one operation')
+    .option(
+      '--input-cost-per-1m <usd>',
+      'USD rate per 1M input tokens; env COLONY_MCP_INPUT_USD_PER_1M',
+    )
+    .option(
+      '--output-cost-per-1m <usd>',
+      'USD rate per 1M output tokens; env COLONY_MCP_OUTPUT_USD_PER_1M',
+    )
     .action(async (opts: GainOptions) => {
       const settings = loadSettings();
       const hoursArg = opts.hours ? Number(opts.hours) : undefined;
@@ -44,6 +54,7 @@ export function registerGainCommand(program: Command): void {
             since,
             until: now,
             ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
+            cost: costOptionsFromCli(opts),
           }),
         { readonly: true },
       );
@@ -51,12 +62,15 @@ export function registerGainCommand(program: Command): void {
       const referenceTotals = savingsReferenceTotals();
       const payload = {
         reference: {
+          kind: 'static_per_session_model',
+          note: 'Static hand-authored comparison model; not derived from the live mcp_metrics window.',
           rows: SAVINGS_REFERENCE_ROWS,
           totals: referenceTotals,
         },
         live: {
           window: { since, until: now, hours: windowHours },
           ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
+          cost_basis: live.cost_basis,
           totals: live.totals,
           operations: live.operations,
         },
@@ -72,6 +86,7 @@ export function registerGainCommand(program: Command): void {
         referenceTotals,
         live.operations,
         live.totals,
+        live.cost_basis,
         windowHours,
         opts.operation,
       );
@@ -83,10 +98,11 @@ export function writeGainReport(
   referenceTotals: SavingsReferenceTotals,
   liveRows: ReadonlyArray<McpMetricsAggregateRow>,
   liveTotals: McpMetricsAggregateRow,
+  costBasis: McpMetricsCostBasis,
   hours: number,
   operationFilter: string | undefined,
 ): void {
-  writeLiveSection(liveRows, liveTotals, hours, operationFilter);
+  writeLiveSection(liveRows, liveTotals, costBasis, hours, operationFilter);
   process.stdout.write('\n');
   writeReferenceSection(referenceRows, referenceTotals);
 }
@@ -96,9 +112,11 @@ export function writeReferenceSection(
   totals: SavingsReferenceTotals,
 ): void {
   const w = process.stdout;
-  w.write(`${kleur.bold('colony gain — reference model')}\n`);
+  w.write(`${kleur.bold('colony gain — reference model (static)')}\n`);
   w.write(
-    kleur.dim('Estimated per-session loops for comparison; live receipts above are current.\n\n'),
+    kleur.dim(
+      'Static estimated per-session loops for comparison. This total does not move with the live window.\n\n',
+    ),
   );
   const head = padRow(['Operation', 'Freq', 'Standard', 'Colony', 'Saved'], [32, 5, 9, 9, 6]);
   w.write(`${kleur.dim(head)}\n`);
@@ -117,7 +135,7 @@ export function writeReferenceSection(
   w.write(
     `${padRow(
       [
-        kleur.bold('Total / session'),
+        kleur.bold('Static total / session'),
         '',
         formatTokens(totals.baseline_tokens),
         formatTokens(totals.colony_tokens),
@@ -131,6 +149,7 @@ export function writeReferenceSection(
 export function writeLiveSection(
   rows: ReadonlyArray<McpMetricsAggregateRow>,
   totals: McpMetricsAggregateRow,
+  costBasis: McpMetricsCostBasis,
   hours: number,
   operationFilter: string | undefined,
 ): void {
@@ -147,7 +166,9 @@ export function writeLiveSection(
   }
   w.write(
     kleur.dim(
-      'input/output measured by @colony/compress#countTokens; bytes are raw JSON payload sizes; ok=successful calls, err=throws.\n\n',
+      `input/output measured by @colony/compress#countTokens; cost ${formatCostBasis(
+        costBasis,
+      )}; ok=successful calls, err=throws or MCP isError.\n\n`,
     ),
   );
   const head = padRow(
@@ -159,13 +180,15 @@ export function writeLiveSection(
       'Tok in',
       'Tok out',
       'Tok total',
+      'Cost',
+      'Avg cost',
       'Bytes',
       'Avg in',
       'Avg out',
       'Avg ms',
       'Last',
     ],
-    [30, 6, 5, 5, 8, 8, 10, 8, 7, 8, 7, 10],
+    [30, 6, 5, 5, 8, 8, 10, 11, 11, 8, 7, 8, 7, 10],
   );
   w.write(`${kleur.dim(head)}\n`);
   for (const row of rows) {
@@ -177,15 +200,17 @@ export function writeLiveSection(
       formatTokens(row.input_tokens),
       formatTokens(row.output_tokens),
       formatTokens(row.total_tokens),
+      formatUsd(row.total_cost_usd, costBasis),
+      formatUsd(row.avg_cost_usd, costBasis),
       formatTokens(row.total_bytes),
       formatTokens(row.avg_input_tokens),
       formatTokens(row.avg_output_tokens),
       String(row.avg_duration_ms),
       formatLastSeen(row.last_ts),
     ];
-    w.write(`${padRow(cells, [30, 6, 5, 5, 8, 8, 10, 8, 7, 8, 7, 10])}\n`);
+    w.write(`${padRow(cells, [30, 6, 5, 5, 8, 8, 10, 11, 11, 8, 7, 8, 7, 10])}\n`);
   }
-  w.write(`${kleur.dim('-'.repeat(126))}\n`);
+  w.write(`${kleur.dim('-'.repeat(150))}\n`);
   const totalLastTs = totals.last_ts ?? latestMetricTs(rows);
   w.write(
     `${padRow(
@@ -197,21 +222,108 @@ export function writeLiveSection(
         formatTokens(totals.input_tokens),
         formatTokens(totals.output_tokens),
         formatTokens(totals.total_tokens),
+        formatUsd(totals.total_cost_usd, costBasis),
+        formatUsd(totals.avg_cost_usd, costBasis),
         formatTokens(totals.total_bytes),
         formatTokens(totals.avg_input_tokens),
         formatTokens(totals.avg_output_tokens),
         String(totals.avg_duration_ms),
         formatLastSeen(totalLastTs),
       ],
-      [30, 6, 5, 5, 8, 8, 10, 8, 7, 8, 7, 10],
+      [30, 6, 5, 5, 8, 8, 10, 11, 11, 8, 7, 8, 7, 10],
     )}\n`,
   );
+  writeLiveErrorReasons(rows, totals);
+}
+
+function writeLiveErrorReasons(
+  rows: ReadonlyArray<McpMetricsAggregateRow>,
+  totals: McpMetricsAggregateRow,
+): void {
+  if (totals.error_count === 0) return;
+  const w = process.stdout;
+  w.write('\n');
+  w.write(`${kleur.bold('Top error reasons')}\n`);
+  w.write(`${kleur.dim(padRow(['Operation', 'Err', 'Code', 'Message'], [30, 6, 24, 72]))}\n`);
+  for (const row of rows.filter((r) => r.error_count > 0)) {
+    const reason = row.error_reasons[0] ?? {
+      error_code: null,
+      error_message: null,
+      count: row.error_count,
+      last_ts: null,
+    };
+    w.write(
+      `${padRow(
+        [
+          row.operation,
+          kleur.red(String(reason.count)),
+          formatErrorCode(reason.error_code),
+          formatErrorMessage(reason.error_message),
+        ],
+        [30, 6, 24, 72],
+      )}\n`,
+    );
+  }
+}
+
+function costOptionsFromCli(opts: GainOptions): {
+  input_usd_per_1m_tokens?: number;
+  output_usd_per_1m_tokens?: number;
+} {
+  const inputRate = parseCostRate(opts.inputCostPer1m, process.env.COLONY_MCP_INPUT_USD_PER_1M);
+  const outputRate = parseCostRate(opts.outputCostPer1m, process.env.COLONY_MCP_OUTPUT_USD_PER_1M);
+  return {
+    ...(inputRate !== undefined ? { input_usd_per_1m_tokens: inputRate } : {}),
+    ...(outputRate !== undefined ? { output_usd_per_1m_tokens: outputRate } : {}),
+  };
+}
+
+function parseCostRate(raw: string | undefined, fallback: string | undefined): number | undefined {
+  const value = raw ?? fallback;
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function formatCostBasis(costBasis: McpMetricsCostBasis): string {
+  if (!costBasis.configured) {
+    return 'not configured (pass --input-cost-per-1m/--output-cost-per-1m or env)';
+  }
+  return `USD @ in=${formatRate(costBasis.input_usd_per_1m_tokens)}/1M out=${formatRate(
+    costBasis.output_usd_per_1m_tokens,
+  )}/1M`;
+}
+
+function formatRate(value: number): string {
+  if (value === 0) return '$0';
+  return `$${value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+}
+
+function formatUsd(value: number, costBasis: McpMetricsCostBasis): string {
+  if (!costBasis.configured) return '-';
+  if (value === 0) return '$0';
+  if (value < 0.000001) return '<$0.000001';
+  if (value < 0.01) return `$${value.toFixed(6)}`;
+  return `$${value.toFixed(4)}`;
+}
+
+function formatErrorCode(value: string | null): string {
+  return value ?? 'UNKNOWN';
+}
+
+function formatErrorMessage(value: string | null): string {
+  return truncate(value ?? 'older row; no error detail recorded', 72);
+}
+
+function truncate(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  return `${value.slice(0, Math.max(0, limit - 3))}...`;
 }
 
 function latestMetricTs(rows: ReadonlyArray<McpMetricsAggregateRow>): number | null {

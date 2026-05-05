@@ -53,6 +53,36 @@ describe('metrics wrapper', () => {
     expect(row.calls).toBe(1);
     expect(row.error_count).toBe(1);
     expect(row.output_tokens).toBe(0);
+    expect(row.error_reasons[0]).toMatchObject({
+      error_message: 'boom',
+      count: 1,
+    });
+  });
+
+  it('records ok=false and structured reason when a handler returns isError', async () => {
+    const wrap = createMetricsWrapper(store);
+    const handler = wrap('structured-error', async (_args: Record<string, never>) => ({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ code: 'TASK_NOT_FOUND', error: 'task 6 not found' }),
+        },
+      ],
+      isError: true,
+    }));
+    const result = await handler({});
+    expect(result.isError).toBe(true);
+    const agg = store.storage.aggregateMcpMetrics({ since: 0 });
+    const row = agg.operations.find((r) => r.operation === 'structured-error');
+    if (!row) throw new Error('expected structured-error row');
+    expect(row.calls).toBe(1);
+    expect(row.error_count).toBe(1);
+    expect(row.output_tokens).toBeGreaterThan(0);
+    expect(row.error_reasons[0]).toMatchObject({
+      error_code: 'TASK_NOT_FOUND',
+      error_message: 'task 6 not found',
+      count: 1,
+    });
   });
 
   it('is a passthrough when no store is configured', async () => {

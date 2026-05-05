@@ -95,7 +95,13 @@ export function buildApp(
   });
 
   app.get('/api/colony/savings', (c) => {
-    const { live, hours } = readSavingsPayload(store, c.req.query('hours'), c.req.query('since'));
+    const { live, hours } = readSavingsPayload(
+      store,
+      c.req.query('hours'),
+      c.req.query('since'),
+      c.req.query('input_usd_per_1m'),
+      c.req.query('output_usd_per_1m'),
+    );
     return c.json({
       live,
       window: { hours, since: live.since, until: live.until },
@@ -319,7 +325,13 @@ export function buildApp(
   });
 
   app.get('/savings', (c) => {
-    const { live, hours } = readSavingsPayload(store, c.req.query('hours'), c.req.query('since'));
+    const { live, hours } = readSavingsPayload(
+      store,
+      c.req.query('hours'),
+      c.req.query('since'),
+      c.req.query('input_usd_per_1m'),
+      c.req.query('output_usd_per_1m'),
+    );
     return c.html(renderSavingsPage({ live, windowHours: hours }));
   });
 
@@ -333,13 +345,24 @@ function readSavingsPayload(
   store: MemoryStore,
   hoursQuery: string | undefined,
   sinceQuery: string | undefined,
+  inputCostQuery: string | undefined,
+  outputCostQuery: string | undefined,
 ): { live: ReturnType<MemoryStore['storage']['aggregateMcpMetrics']>; hours: number } {
   const parsedHours = hoursQuery !== undefined ? Number(hoursQuery) : Number.NaN;
   const hours =
     Number.isFinite(parsedHours) && parsedHours > 0 ? parsedHours : DEFAULT_SAVINGS_HOURS;
   const now = Date.now();
   const sinceFromQuery = parseSinceQuery(sinceQuery, now - hours * SAVINGS_HOUR_MS);
-  const live = store.storage.aggregateMcpMetrics({ since: sinceFromQuery, until: now });
+  const inputRate = parseCostRate(inputCostQuery, process.env.COLONY_MCP_INPUT_USD_PER_1M);
+  const outputRate = parseCostRate(outputCostQuery, process.env.COLONY_MCP_OUTPUT_USD_PER_1M);
+  const live = store.storage.aggregateMcpMetrics({
+    since: sinceFromQuery,
+    until: now,
+    cost: {
+      ...(inputRate !== undefined ? { input_usd_per_1m_tokens: inputRate } : {}),
+      ...(outputRate !== undefined ? { output_usd_per_1m_tokens: outputRate } : {}),
+    },
+  });
   return { live, hours };
 }
 
@@ -349,6 +372,13 @@ function parseSinceQuery(raw: string | undefined, fallback: number): number {
   if (Number.isFinite(numeric) && numeric >= 0) return numeric;
   const parsedDate = Date.parse(raw);
   return Number.isFinite(parsedDate) ? parsedDate : fallback;
+}
+
+function parseCostRate(raw: string | undefined, fallback: string | undefined): number | undefined {
+  const value = raw ?? fallback;
+  if (value === undefined || value.trim() === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 type RescueMode = 'preview' | 'apply';

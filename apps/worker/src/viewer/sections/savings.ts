@@ -22,6 +22,8 @@ export function renderSavingsPage(payload: SavingsPagePayload): string {
       Live <code>mcp_metrics</code> receipts recorded by the wrapping MCP handler, followed by a
       reference model for common coordination loops. Token counts use
       <code>@colony/compress#countTokens</code>, the same primitive as observation receipts.
+      Monetary cost uses the configured USD per 1M token rates when present.
+      The reference table is static; the live table is the moving window.
     </p>
     ${raw(live)}
     ${raw(reference)}
@@ -47,9 +49,10 @@ function renderReferenceTable(
     .join('');
   return html`
     <div class="card">
-      <h2>Reference model: standard vs. colony</h2>
+      <h2>Reference model: standard vs. colony (static)</h2>
       <p class="meta">
-        Estimated per-session token loops for common coordination work. Source:
+        Static estimated per-session token loops for common coordination work. This total does not
+        move with the live window. Source:
         <code>packages/core/src/savings-reference.ts</code>.
       </p>
       <table class="savings-table">
@@ -65,7 +68,7 @@ function renderReferenceTable(
         <tbody>${raw(body)}</tbody>
         <tfoot>
           <tr>
-            <td><strong>Total / session</strong></td>
+            <td><strong>Static total / session</strong></td>
             <td></td>
             <td class="num">${formatTokens(totals.baseline_tokens)}</td>
             <td class="num">${formatTokens(totals.colony_tokens)}</td>
@@ -88,12 +91,14 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
         </p>
       </div>`;
   }
-  const rows = agg.operations.map(renderLiveRow).join('');
+  const rows = agg.operations.map((row) => renderLiveRow(row, agg.cost_basis)).join('');
   return html`
     <div class="card">
       <h2>Live: mcp_metrics (last ${windowHours}h)</h2>
       <p class="meta">
-        Per-operation token usage measured at the MCP boundary. err = handler throws.
+        Per-operation token usage measured at the MCP boundary. ${costBasisText(
+          agg.cost_basis,
+        )} err = handler throws or MCP <code>isError</code>.
       </p>
       <table class="savings-table">
         <thead>
@@ -103,6 +108,8 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
             <th class="num">Err</th>
             <th class="num">Tokens in</th>
             <th class="num">Tokens out</th>
+            <th class="num">Cost</th>
+            <th class="num">Avg cost</th>
             <th class="num">Avg ms</th>
           </tr>
         </thead>
@@ -114,6 +121,8 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
             <td class="num">${formatErr(agg.totals.error_count)}</td>
             <td class="num"><strong>${formatTokens(agg.totals.input_tokens)}</strong></td>
             <td class="num"><strong>${formatTokens(agg.totals.output_tokens)}</strong></td>
+            <td class="num"><strong>${formatUsd(agg.totals.total_cost_usd, agg.cost_basis.configured)}</strong></td>
+            <td class="num">${formatUsd(agg.totals.avg_cost_usd, agg.cost_basis.configured)}</td>
             <td class="num">${agg.totals.avg_duration_ms}</td>
           </tr>
         </tfoot>
@@ -121,7 +130,10 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
     </div>`;
 }
 
-function renderLiveRow(row: McpMetricsAggregateRow): string {
+function renderLiveRow(
+  row: McpMetricsAggregateRow,
+  costBasis: McpMetricsAggregate['cost_basis'],
+): string {
   return html`
     <tr>
       <td><code>${row.operation}</code></td>
@@ -129,8 +141,19 @@ function renderLiveRow(row: McpMetricsAggregateRow): string {
       <td class="num">${raw(formatErr(row.error_count))}</td>
       <td class="num">${formatTokens(row.input_tokens)}</td>
       <td class="num">${formatTokens(row.output_tokens)}</td>
+      <td class="num">${formatUsd(row.total_cost_usd, costBasis.configured)}</td>
+      <td class="num">${formatUsd(row.avg_cost_usd, costBasis.configured)}</td>
       <td class="num">${row.avg_duration_ms}</td>
     </tr>`;
+}
+
+function costBasisText(costBasis: McpMetricsAggregate['cost_basis']): string {
+  if (!costBasis.configured) {
+    return 'Cost rates are not configured; pass query params input_usd_per_1m/output_usd_per_1m or set env rates.';
+  }
+  return `Cost uses USD rates in=${formatRate(
+    costBasis.input_usd_per_1m_tokens,
+  )}/1M, out=${formatRate(costBasis.output_usd_per_1m_tokens)}/1M.`;
 }
 
 function formatErr(count: number): string {
@@ -142,6 +165,19 @@ function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function formatRate(value: number): string {
+  if (value === 0) return '$0';
+  return `$${value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+}
+
+function formatUsd(value: number, configured: boolean): string {
+  if (!configured) return '-';
+  if (value === 0) return '$0';
+  if (value < 0.000001) return '<$0.000001';
+  if (value < 0.01) return `$${value.toFixed(6)}`;
+  return `$${value.toFixed(4)}`;
 }
 
 const savingsTableStyle = `

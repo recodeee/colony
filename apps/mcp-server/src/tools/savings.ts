@@ -21,7 +21,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'savings_report',
-    'Report colony token savings: live per-operation mcp_metrics usage plus reference rows for common dev-loop operations. Pass since_ms or hours to scope the live window; default is 24h. Pass operation to filter live rows to one tool name.',
+    'Report colony token savings: live per-operation mcp_metrics usage/cost plus reference rows for common dev-loop operations. Pass since_ms or hours to scope the live window; default is 24h. Pass operation to filter live rows to one tool name. Pass input/output USD-per-1M rates or set COLONY_MCP_* env vars to estimate monetary cost.',
     {
       since_ms: z
         .number()
@@ -40,38 +40,76 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .min(1)
         .optional()
         .describe('filter live rows by exact operation name (e.g. "search")'),
+      input_usd_per_1m: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe(
+          'USD price per 1M input tokens; falls back to COLONY_MCP_INPUT_USD_PER_1M when omitted',
+        ),
+      output_usd_per_1m: z
+        .number()
+        .nonnegative()
+        .optional()
+        .describe(
+          'USD price per 1M output tokens; falls back to COLONY_MCP_OUTPUT_USD_PER_1M when omitted',
+        ),
     },
-    wrapHandler('savings_report', async ({ since_ms, hours, operation }) => {
-      const now = Date.now();
-      const windowHours = hours ?? DEFAULT_WINDOW_HOURS;
-      const since = since_ms ?? now - windowHours * HOUR_MS;
-      const live = store.storage.aggregateMcpMetrics({
-        since,
-        until: now,
-        ...(operation !== undefined ? { operation } : {}),
-      });
-      const totals = savingsReferenceTotals();
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              live: {
-                note: 'Recorded mcp_metrics receipts for the requested window. input_tokens / output_tokens come from @colony/compress#countTokens — same primitive as observation token receipts.',
-                window: { since: live.since, until: live.until, hours: windowHours },
-                ...(operation !== undefined ? { operation } : {}),
-                totals: live.totals,
-                operations: live.operations,
-              },
-              reference: {
-                note: 'Estimated per-session token cost for common coordination loops, with vs. without colony. Source: packages/core/src/savings-reference.ts.',
-                rows: SAVINGS_REFERENCE_ROWS,
-                totals,
-              },
-            }),
+    wrapHandler(
+      'savings_report',
+      async ({ since_ms, hours, operation, input_usd_per_1m, output_usd_per_1m }) => {
+        const now = Date.now();
+        const windowHours = hours ?? DEFAULT_WINDOW_HOURS;
+        const since = since_ms ?? now - windowHours * HOUR_MS;
+        const inputRate = parseCostRate(input_usd_per_1m, process.env.COLONY_MCP_INPUT_USD_PER_1M);
+        const outputRate = parseCostRate(
+          output_usd_per_1m,
+          process.env.COLONY_MCP_OUTPUT_USD_PER_1M,
+        );
+        const live = store.storage.aggregateMcpMetrics({
+          since,
+          until: now,
+          ...(operation !== undefined ? { operation } : {}),
+          cost: {
+            ...(inputRate !== undefined ? { input_usd_per_1m_tokens: inputRate } : {}),
+            ...(outputRate !== undefined ? { output_usd_per_1m_tokens: outputRate } : {}),
           },
-        ],
-      };
-    }),
+        });
+        const totals = savingsReferenceTotals();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                live: {
+                  note: 'Recorded mcp_metrics receipts for the requested window. input_tokens / output_tokens come from @colony/compress#countTokens; error_reasons are populated for new thrown/isError calls.',
+                  window: { since: live.since, until: live.until, hours: windowHours },
+                  ...(operation !== undefined ? { operation } : {}),
+                  cost_basis: live.cost_basis,
+                  totals: live.totals,
+                  operations: live.operations,
+                },
+                reference: {
+                  kind: 'static_per_session_model',
+                  note: 'Static estimated per-session token cost for common coordination loops, with vs. without colony. This total is not derived from the live mcp_metrics window. Source: packages/core/src/savings-reference.ts.',
+                  rows: SAVINGS_REFERENCE_ROWS,
+                  totals,
+                },
+              }),
+            },
+          ],
+        };
+      },
+    ),
   );
+}
+
+function parseCostRate(
+  value: number | undefined,
+  fallback: string | undefined,
+): number | undefined {
+  if (value !== undefined) return Number.isFinite(value) && value >= 0 ? value : undefined;
+  if (fallback === undefined || fallback.trim() === '') return undefined;
+  const parsed = Number(fallback);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }

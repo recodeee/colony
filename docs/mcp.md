@@ -1649,6 +1649,8 @@ Args:
 - `since_ms?` — absolute epoch-ms cutoff for the live window. Takes precedence over `hours`.
 - `hours?` — relative live window in hours. Defaults to 24, max 720 (30d).
 - `operation?` — filter live rows to one tool name (e.g. `"search"`).
+- `input_usd_per_1m?` — USD price per 1M input tokens. Falls back to `COLONY_MCP_INPUT_USD_PER_1M`.
+- `output_usd_per_1m?` — USD price per 1M output tokens. Falls back to `COLONY_MCP_OUTPUT_USD_PER_1M`.
 
 Response shape:
 
@@ -1657,18 +1659,20 @@ Response shape:
   "live": {
     "note": "Recorded mcp_metrics receipts for the requested window.",
     "window": { "since": 1730000000000, "until": 1730086400000, "hours": 24 },
-    "totals": { "operation": "__total__", "calls": 1284, "ok_count": 1280, "error_count": 4, "input_tokens": 153000, "output_tokens": 482000, "total_tokens": 635000, "avg_input_tokens": 119, "avg_output_tokens": 376, "total_duration_ms": 4310, "avg_duration_ms": 3, "last_ts": 1730086391120 },
-    "operations": [{ "operation": "search", "calls": 412, "ok_count": 411, "error_count": 1, "...": "..." }]
+    "cost_basis": { "input_usd_per_1m_tokens": 1.25, "output_usd_per_1m_tokens": 10, "configured": true },
+    "totals": { "operation": "__total__", "calls": 1284, "ok_count": 1280, "error_count": 4, "error_reasons": [{ "error_code": "TASK_NOT_FOUND", "error_message": "task 6 not found", "count": 2, "last_ts": 1730086391120 }], "input_tokens": 153000, "output_tokens": 482000, "total_tokens": 635000, "total_cost_usd": 5.01125, "avg_cost_usd": 0.003903, "avg_input_tokens": 119, "avg_output_tokens": 376, "total_duration_ms": 4310, "avg_duration_ms": 3, "last_ts": 1730086391120 },
+    "operations": [{ "operation": "search", "calls": 412, "ok_count": 411, "error_count": 1, "error_reasons": [], "...": "..." }]
   },
   "reference": {
-    "note": "Estimated per-session token cost for common coordination loops, with vs. without colony.",
+    "kind": "static_per_session_model",
+    "note": "Static estimated per-session token cost for common coordination loops, with vs. without colony. This total is not derived from the live mcp_metrics window.",
     "rows": [{ "operation": "...", "frequency_per_session": 5, "baseline_tokens": 8000, "colony_tokens": 1500, "savings_pct": 81, "rationale": "..." }],
     "totals": { "baseline_tokens": 802000, "colony_tokens": 83900, "savings_pct": 90 }
   }
 }
 ```
 
-Live tokens are counted with `@colony/compress#countTokens` — the same primitive that produces observation token receipts, so values line up across surfaces. The reference table is sourced from `packages/core/src/savings-reference.ts`; the CLI command `colony gain` and the worker's `/savings` page render the same payload.
+Live tokens are counted with `@colony/compress#countTokens` — the same primitive that produces observation token receipts, so values line up across surfaces. Estimated USD cost is computed at report time from the live token totals and caller-provided USD-per-1M rates; unset rates keep `cost_basis.configured=false` and report zero cost fields. New failure rows record `error_code` / `error_message`; older failure rows may have unknown reason fields. The reference table is static and sourced from `packages/core/src/savings-reference.ts`; the CLI command `colony gain` and the worker's `/savings` page render the same payload.
 
 ## Plan observation kinds
 
