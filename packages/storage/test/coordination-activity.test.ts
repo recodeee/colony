@@ -471,6 +471,45 @@ describe('colony health read queries', () => {
       },
     });
   });
+
+  it('reports the in-window same-lane claim that triggered path_mismatch', () => {
+    const repoRoot = '/repo';
+    session('codex@trigger', 1_000, { metadata: { repo_root: repoRoot, branch: 'agent/lane' } });
+
+    // Old same-file claim, far outside the 5-minute window. The previous
+    // implementation would surface this as the nearest_claim_example because
+    // it ranked highest by file-match priority, which contradicts the
+    // path_mismatch label.
+    const oldSameFileClaimTs = 10_000;
+    claim('codex@trigger', 'apps/api/foo.ts', oldSameFileClaimTs, {
+      metadata: { repo_root: repoRoot, branch: 'agent/lane' },
+    });
+
+    // Recent same-lane claim for a DIFFERENT file. This is what triggers
+    // path_mismatch.
+    const editTs = oldSameFileClaimTs + 600_000; // 10 minutes later
+    const triggerClaimTs = editTs - 30_000; // 30 seconds before edit
+    claim('codex@trigger', 'apps/api/bar.ts', triggerClaimTs, {
+      metadata: { repo_root: repoRoot, branch: 'agent/lane' },
+    });
+    toolUse('codex@trigger', 'Edit', editTs, 'apps/api/foo.ts', {
+      repo_root: repoRoot,
+      branch: 'agent/lane',
+    });
+
+    const stats = storage.claimBeforeEditStats(0);
+    expect(stats.claim_miss_reasons).toMatchObject({ path_mismatch: 1 });
+    const example = stats.nearest_claim_examples?.find((entry) => entry.reason === 'path_mismatch');
+    expect(example).toBeDefined();
+    expect(example).toMatchObject({
+      claim_file_path: 'apps/api/bar.ts',
+      claim_ts: triggerClaimTs,
+      relation: expect.objectContaining({
+        same_file_path: false,
+        claim_before_edit: true,
+      }),
+    });
+  });
 });
 
 describe('fileHeat', () => {

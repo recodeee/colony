@@ -2620,9 +2620,15 @@ function claimBeforeEditCorrelation(
       isPriorClaimWithinWindow(edit, claim, claimWindowMs),
     );
     if (claimBeforeEditMatchSource(edit, priorSameFileClaims)) continue;
-    const reason = claimMissReason(edit, claimRows, signalRows, claimWindowMs);
-    missReasons[reason]++;
-    pushNearestClaimExample(nearestClaimExamples, reason, edit, claimRows);
+    const outcome = claimMissOutcome(edit, claimRows, signalRows, claimWindowMs);
+    missReasons[outcome.reason]++;
+    pushNearestClaimExample(
+      nearestClaimExamples,
+      outcome.reason,
+      edit,
+      claimRows,
+      outcome.triggering_claim,
+    );
   }
   return {
     edits_claimed_before: editsClaimedBefore,
@@ -2685,22 +2691,33 @@ function hasUnambiguousAgentLaneMatch(
   return new Set(matches.map((claim) => claim.session_id)).size === 1;
 }
 
-function claimMissReason(
+type ClaimMissOutcome = {
+  reason: ClaimMissReason;
+  /**
+   * The claim row that actually drove the bucket assignment, if any. The
+   * report previously surfaced the closest-by-rank claim, which for a
+   * `path_mismatch` could be a same-file claim 4+ days old (outside the
+   * 5-minute window) and contradicted the bucket label. Carrying the
+   * triggering claim through lets the report show the real culprit.
+   */
+  triggering_claim: ClaimBeforeEditRow | null;
+};
+
+function claimMissOutcome(
   edit: ClaimBeforeEditRow,
   claimRows: ClaimBeforeEditRow[],
   signalRows: ClaimBeforeEditRow[],
   claimWindowMs: number,
-): ClaimMissReason {
+): ClaimMissOutcome {
   const sameFileClaims = claimRows
     .filter((claim) => claim.file_path !== null && sameComparableFilePath(edit, claim))
     .sort((a, b) => claimDistance(edit, a) - claimDistance(edit, b) || a.id - b.id);
 
-  if (
-    sameFileClaims.some(
-      (claim) => claim.ts > edit.ts && claimDistance(edit, claim) <= claimWindowMs,
-    )
-  ) {
-    return 'claim_after_edit';
+  const afterEditSameFile = sameFileClaims.find(
+    (claim) => claim.ts > edit.ts && claimDistance(edit, claim) <= claimWindowMs,
+  );
+  if (afterEditSameFile) {
+    return { reason: 'claim_after_edit', triggering_claim: afterEditSameFile };
   }
 
   const priorSameFileClaims = sameFileClaims.filter((claim) =>
@@ -2709,36 +2726,37 @@ function claimMissReason(
   const nearestPriorSameFile = priorSameFileClaims[0];
   if (nearestPriorSameFile) {
     if (knownRootMismatch(edit.repo_root, nearestPriorSameFile.repo_root)) {
-      return 'repo_root_mismatch';
+      return { reason: 'repo_root_mismatch', triggering_claim: nearestPriorSameFile };
     }
     if (knownValueMismatch(edit.branch, nearestPriorSameFile.branch)) {
-      return 'branch_mismatch';
+      return { reason: 'branch_mismatch', triggering_claim: nearestPriorSameFile };
     }
     if (knownRootMismatch(edit.worktree_path, nearestPriorSameFile.worktree_path)) {
-      return 'worktree_path_mismatch';
+      return { reason: 'worktree_path_mismatch', triggering_claim: nearestPriorSameFile };
     }
     if (nearestPriorSameFile.session_id !== edit.session_id) {
-      return 'session_id_mismatch';
+      return { reason: 'session_id_mismatch', triggering_claim: nearestPriorSameFile };
     }
   }
 
-  if (
-    claimRows.some(
+  const pathMismatchTrigger = claimRows
+    .filter(
       (claim) =>
         claim.ts <= edit.ts &&
         claimDistance(edit, claim) <= claimWindowMs &&
         !sameComparableFilePath(edit, claim) &&
         sameClaimLaneOrSession(edit, claim),
     )
-  ) {
-    return 'path_mismatch';
+    .sort((a, b) => claimDistance(edit, a) - claimDistance(edit, b) || a.id - b.id)[0];
+  if (pathMismatchTrigger) {
+    return { reason: 'path_mismatch', triggering_claim: pathMismatchTrigger };
   }
 
   if (!hasRelatedPreToolUseSignal(edit, signalRows, claimWindowMs)) {
-    return 'pre_tool_use_missing';
+    return { reason: 'pre_tool_use_missing', triggering_claim: null };
   }
 
-  return 'no_claim_for_file';
+  return { reason: 'no_claim_for_file', triggering_claim: null };
 }
 
 function pushNearestClaimExample(
@@ -2746,9 +2764,10 @@ function pushNearestClaimExample(
   reason: ClaimMissReason,
   edit: ClaimBeforeEditRow,
   claimRows: ClaimBeforeEditRow[],
+  triggeringClaim: ClaimBeforeEditRow | null = null,
 ): void {
   if (examples.length >= DEFAULT_NEAREST_CLAIM_EXAMPLE_LIMIT) return;
-  const nearest = nearestClaimCandidate(edit, claimRows);
+  const nearest = triggeringClaim ?? nearestClaimCandidate(edit, claimRows);
   examples.push(toNearestClaimExample(reason, edit, nearest));
 }
 
