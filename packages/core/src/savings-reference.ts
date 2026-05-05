@@ -62,6 +62,13 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     'hivemind_context + task_note_working vs re-deriving from 5–10 files',
   ),
   row(
+    'Startup coordination sweep',
+    1,
+    25_000,
+    2_500,
+    'hivemind_context + attention_inbox vs serial git/status/task scans',
+  ),
+  row(
     'Coordinate parallel agents',
     10,
     20_000,
@@ -76,6 +83,20 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     'search filename → get_observations vs git log + blame + read file',
   ),
   row(
+    'Find active owner for a file',
+    6,
+    6_000,
+    500,
+    'claim index lookup vs repo-wide grep + branch/worktree inspection',
+  ),
+  row(
+    'Recover stranded lane',
+    1,
+    18_000,
+    1_800,
+    'attention_inbox stalled lanes + relays vs manual worktree archaeology',
+  ),
+  row(
     'Cross-agent handoff',
     2,
     30_000,
@@ -83,11 +104,25 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     'task_hand_off (branch/task/next/evidence) vs full session log dump',
   ),
   row(
+    'Review task timeline',
+    4,
+    12_000,
+    900,
+    'task_timeline IDs first, hydrate only selected observations',
+  ),
+  row(
     'Search result shape',
     8,
     5_000,
     150,
     'compact IDs + snippets vs inline full bodies (hydrate via get_observations)',
+  ),
+  row(
+    'Ready-work selection',
+    3,
+    9_000,
+    700,
+    'task_ready_for_agent returns one claimable next tool instead of browsing task lists',
   ),
   row(
     'Storage at rest (per observation)',

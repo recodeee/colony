@@ -26,6 +26,12 @@ Colony is not a hosted control plane and it does not run your agents. Codex,
 Claude Code, Cursor, OMX, dmux, and other runtimes still execute work. Colony
 is the shared local substrate they use to coordinate.
 
+It is built for the expensive part of multi-agent work: avoiding repeated
+context reloads. Claims, handoffs, timelines, and prior decisions stay compact
+until an agent explicitly hydrates the full record. The result is measurable:
+`colony gain` reports both the shared reference model below and live
+`mcp_metrics` rows from your local MCP server.
+
 ```text
 Runtimes run agents.
 Colony coordinates agents.
@@ -258,9 +264,11 @@ decay or be swept.
 
 ## Token Savings
 
-Colony saves tokens in two ways. The reference table is hand-authored and
-illustrative; the live numbers are recorded by the MCP server on every wrapped
-tool call into the `mcp_metrics` SQLite table.
+Colony saves tokens by making coordination compact, searchable, and
+progressively hydrated. The table below is a hand-authored reference model for
+common agent loops. Live numbers are recorded by the MCP server on every wrapped
+tool call into the `mcp_metrics` SQLite table, so teams can compare the
+reference story with their own usage.
 
 ```bash
 colony gain                       # CLI: reference + live, last 7 days
@@ -272,17 +280,32 @@ colony gain --operation search    # filter live rows to one tool name
 | --- | --- | --- | --- | --- |
 | Recall prior decision | 5x | 8,000 | 1,500 | 81% |
 | Resume task across sessions | 3x | 15,000 | 2,000 | 87% |
+| Startup coordination sweep | 1x | 25,000 | 2,500 | 90% |
 | Coordinate parallel agents | 10x | 20,000 | 3,000 | 85% |
 | Why-was-this-changed | 4x | 8,000 | 1,200 | 85% |
+| Find active owner for a file | 6x | 6,000 | 500 | 92% |
+| Recover stranded lane | 1x | 18,000 | 1,800 | 90% |
 | Cross-agent handoff | 2x | 30,000 | 400 | 99% |
+| Review task timeline | 4x | 12,000 | 900 | 93% |
 | Search result shape | 8x | 5,000 | 150 | 97% |
+| Ready-work selection | 3x | 9,000 | 700 | 92% |
 | Storage at rest (per observation) | 1x | 1,000 | 300 | 70% |
 
-Colony's three savings levers:
+These rows are estimates, not a benchmark claim. Their purpose is to show where
+the context cost disappears:
 
 - **Compression at rest.** Every observation runs through `@colony/compress` before SQLite. Prose shrinks ~70% while paths, URLs, code, commands, version numbers, and dates stay byte-for-byte intact.
-- **Progressive disclosure.** `search`, `timeline`, `attention_inbox`, and friends return compact IDs plus snippets. Full bodies only ship via `get_observations([ids])`, so callers pay only for what they hydrate.
-- **Cross-session recall.** Instead of re-reading 5–10 files plus git log to rederive prior decisions, agents `search` and pull a single observation.
+- **Progressive disclosure.** `search`, `timeline`, `attention_inbox`, `task_ready_for_agent`, and friends return compact IDs plus snippets. Full bodies only ship via `get_observations([ids])`, so callers pay only for what they hydrate.
+- **Cross-session recall.** Instead of re-reading 5-10 files plus git log to rederive prior decisions, agents `search` and pull a single observation.
+- **Claim-aware routing.** `task_ready_for_agent` returns the next claimable action and exact claim arguments, so agents stop browsing task lists just to choose work.
+- **Stale-signal decay.** Expired handoffs, weak claims, and stranded lanes surface as compact attention items instead of full historical transcripts.
+- **Tiny handoffs.** A durable handoff can be `branch`, `task`, `blocker`, `next`, and `evidence` instead of a pasted session log.
+
+For a publishable summary: Colony replaces repeated repo scans, chat-history
+scrollback, and full-log handoffs with compact SQLite observations. Agents read
+small coordination records first, then hydrate only the records needed for the
+current step. That is why savings are highest for handoffs, ready-work
+selection, timeline review, and search-heavy recovery work.
 
 The MCP `savings_report` tool returns the same data:
 
