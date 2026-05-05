@@ -192,11 +192,14 @@ export function writeLiveSection(
   }
   w.write(
     kleur.dim(
-      `input/output measured by @colony/compress#countTokens; cost ${formatCostBasis(
+      `Measured by @colony/compress#countTokens. Cost: ${formatCostBasis(
         costBasis,
-      )}; ok=successful calls, err=throws or MCP isError.\n\n`,
+      )}. OK=successful calls; Err=throws or MCP isError.\n`,
     ),
   );
+  writeLiveOverview(rows, totals, sessionSummary, costBasis);
+  w.write('\n');
+  w.write(`${kleur.bold('Operations')}\n`);
   const head = padRow(
     [
       'Operation',
@@ -261,6 +264,52 @@ export function writeLiveSection(
   );
   writeLiveErrorReasons(rows, totals);
   writeLiveSessionSection(sessionSummary, sessions, costBasis);
+}
+
+function writeLiveOverview(
+  rows: ReadonlyArray<McpMetricsAggregateRow>,
+  totals: McpMetricsAggregateRow,
+  sessionSummary: McpMetricsSessionSummary,
+  costBasis: McpMetricsCostBasis,
+): void {
+  const w = process.stdout;
+  const totalLastTs = totals.last_ts ?? latestMetricTs(rows);
+  const errorRate = formatPercent(totals.error_count, totals.calls);
+  const errorStatus =
+    totals.error_count > 0
+      ? kleur.red(`${totals.error_count} (${errorRate})`)
+      : kleur.green('0 (0%)');
+
+  w.write(`${kleur.bold('At a glance')}\n`);
+  w.write(
+    [
+      `${kleur.dim('Calls:')} ${totals.calls}`,
+      `${kleur.dim('OK:')} ${totals.ok_count}`,
+      `${kleur.dim('Errors:')} ${errorStatus}`,
+      `${kleur.dim('Tokens:')} ${formatTokens(totals.total_tokens)}`,
+      `${kleur.dim('Avg ms:')} ${totals.avg_duration_ms}`,
+      `${kleur.dim('Last:')} ${formatLastSeen(totalLastTs)}`,
+    ].join('  '),
+  );
+  w.write('\n');
+  w.write(
+    [
+      `${kleur.dim('Sessions:')} ${sessionSummary.session_count}`,
+      `${kleur.dim('Avg/session:')} ${sessionSummary.avg_calls} calls, ${formatTokens(
+        sessionSummary.avg_total_tokens,
+      )} tokens`,
+      `${kleur.dim('Cost total:')} ${formatUsd(totals.total_cost_usd, costBasis)}`,
+    ].join('  '),
+  );
+  w.write('\n');
+
+  const topError = findTopErrorReason(rows);
+  if (topError !== null) {
+    w.write(
+      `${kleur.red('Needs attention:')} ${topError.count}x ${topError.operation} ` +
+        `${formatErrorCode(topError.error_code)} - ${formatErrorMessage(topError.error_message)}\n`,
+    );
+  }
 }
 
 function writeLiveSessionSection(
@@ -335,6 +384,45 @@ function writeLiveErrorReasons(
   }
 }
 
+function findTopErrorReason(rows: ReadonlyArray<McpMetricsAggregateRow>): {
+  operation: string;
+  count: number;
+  error_code: string | null;
+  error_message: string | null;
+} | null {
+  let top: {
+    operation: string;
+    count: number;
+    error_code: string | null;
+    error_message: string | null;
+  } | null = null;
+
+  for (const row of rows) {
+    for (const reason of row.error_reasons) {
+      if (top === null || reason.count > top.count) {
+        top = {
+          operation: row.operation,
+          count: reason.count,
+          error_code: reason.error_code,
+          error_message: reason.error_message,
+        };
+      }
+    }
+    if (row.error_reasons.length === 0 && row.error_count > 0) {
+      if (top === null || row.error_count > top.count) {
+        top = {
+          operation: row.operation,
+          count: row.error_count,
+          error_code: null,
+          error_message: null,
+        };
+      }
+    }
+  }
+
+  return top;
+}
+
 function costOptionsFromCli(opts: GainOptions): {
   input_usd_per_1m_tokens?: number;
   output_usd_per_1m_tokens?: number;
@@ -386,6 +474,13 @@ function formatUsd(value: number, costBasis: McpMetricsCostBasis): string {
   if (value < 0.000001) return '<$0.000001';
   if (value < 0.01) return `$${value.toFixed(6)}`;
   return `$${value.toFixed(4)}`;
+}
+
+function formatPercent(part: number, whole: number): string {
+  if (whole <= 0) return '0%';
+  const value = (part / whole) * 100;
+  if (Number.isInteger(value)) return `${value}%`;
+  return `${value.toFixed(1)}%`;
 }
 
 function formatErrorCode(value: string | null): string {

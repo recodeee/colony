@@ -90,6 +90,12 @@ describe('gain command output', () => {
 
     writeLiveSection([row], row, SESSION_SUMMARY, [SESSION_ROW], COST_BASIS, 24, undefined);
 
+    expect(output).toContain('At a glance');
+    expect(output).toContain('Calls: 2');
+    expect(output).toContain('Errors: 1 (50%)');
+    expect(output).toContain('Cost total: $0.000125');
+    expect(output).toContain('Needs attention: 1x search TASK_NOT_FOUND - task 6 not found');
+    expect(output).toContain('Operations');
     expect(output).toContain('OK');
     expect(output).toContain('Tok total');
     expect(output).toContain('Cost');
