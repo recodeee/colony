@@ -1,6 +1,6 @@
 import type { McpMetricsAggregateRow } from '@colony/storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { writeLiveSection } from '../src/commands/gain.js';
+import { writeLiveSection, writeReferenceSection } from '../src/commands/gain.js';
 
 describe('gain command output', () => {
   afterEach(() => {
@@ -43,5 +43,35 @@ describe('gain command output', () => {
     expect(output).toContain('search');
     expect(output).toContain('75');
     expect(output).toContain('300');
+  });
+
+  it('explains which standard loop the reference rows cut', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    writeReferenceSection(
+      [
+        {
+          operation: 'Recall prior decision',
+          frequency_per_session: 5,
+          baseline_tokens: 8000,
+          colony_tokens: 1500,
+          savings_pct: 81,
+          rationale: 'search -> get_observations IDs vs re-reading PR threads + scrollback',
+        },
+      ],
+      {
+        baseline_tokens: 40_000,
+        colony_tokens: 7500,
+        savings_pct: 81,
+      },
+    );
+
+    expect(output).toContain('What gets cut');
+    expect(output).toContain('Colony:  search -> get_observations IDs');
+    expect(output).toContain('Cuts:    re-reading PR threads + scrollback');
   });
 });
