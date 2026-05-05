@@ -164,6 +164,29 @@ describe('runHook', () => {
     expect(tl[0]?.metadata).toMatchObject({ tool: 'Bash' });
   });
 
+  it('post-tool-use truncates tool payloads without storing lone surrogates', async () => {
+    await runHook('session-start', { session_id: 'sess-utf8', ide: 'claude-code' }, { store });
+    const emoji = String.fromCodePoint(0x1f600);
+    const r = await runHook(
+      'post-tool-use',
+      {
+        session_id: 'sess-utf8',
+        ide: 'claude-code',
+        tool: 'Bash',
+        tool_input: { command: 'ls' },
+        tool_output: `${'x'.repeat(499)}${emoji}y`,
+      },
+      { store },
+    );
+
+    expect(r.ok).toBe(true);
+    const content = store.timeline('sess-utf8')[0]?.content ?? '';
+    expect(content).toContain(`${emoji}…`);
+    expect(content).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it('post-tool-use surfaces Bash git, file, and redirect operations as coordination events', async () => {
     await runHook('session-start', { session_id: 'sess-bash', ide: 'codex' }, { store });
     const r = await runHook(

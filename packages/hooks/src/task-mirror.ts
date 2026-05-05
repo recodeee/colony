@@ -4,6 +4,7 @@ import {
   detectRepoBranch,
   inferIdeFromSessionId,
 } from '@colony/core';
+import { stringifyShortUtf8Safe } from './text.js';
 import type { HookInput } from './types.js';
 
 const TASK_MIRROR_TOOLS = new Set(['TaskCreate', 'TaskUpdate']);
@@ -166,12 +167,5 @@ function slugSegment(value: string): string {
 }
 
 function stringifyShort(v: unknown): string {
-  if (v == null) return '';
-  if (typeof v === 'string') return v.length > 500 ? `${v.slice(0, 500)}...` : v;
-  try {
-    const s = JSON.stringify(v);
-    return s.length > 500 ? `${s.slice(0, 500)}...` : s;
-  } catch {
-    return String(v);
-  }
+  return stringifyShortUtf8Safe(v);
 }

@@ -10,6 +10,7 @@ import {
 import { activeTaskCandidatesForSession, autoClaimFileForSession } from '../auto-claim.js';
 import { type BashCoordinationEvent, parseBashCoordinationEvents } from '../bash-parser.js';
 import { ensureHookTaskForSession, mirrorTaskToolUse } from '../task-mirror.js';
+import { stringifyShortUtf8Safe } from '../text.js';
 import type { HookInput } from '../types.js';
 
 /**
@@ -627,12 +628,5 @@ export function reinforceAdjacentProposals(
 }
 
 function stringifyShort(v: unknown): string {
-  if (v == null) return '';
-  if (typeof v === 'string') return v.length > 500 ? `${v.slice(0, 500)}…` : v;
-  try {
-    const s = JSON.stringify(v);
-    return s.length > 500 ? `${s.slice(0, 500)}…` : s;
-  } catch {
-    return String(v);
-  }
+  return stringifyShortUtf8Safe(v, '…');
 }
