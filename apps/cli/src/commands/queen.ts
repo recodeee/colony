@@ -231,12 +231,20 @@ export function registerQueenCommand(program: Command): void {
       const settings = loadSettings();
       await withStore(settings, (store) => {
         store.startSession({ id: QUEEN_SESSION_ID, ide: QUEEN_AGENT, cwd: repoRoot });
-        const plan = queenPlans(store, repoRoot).find((candidate) => candidate.plan_slug === slug);
-        if (!plan) throw new Error(`queen plan not found: ${slug}`);
-        const claimed = plan.subtasks.filter((subtask) => subtask.status === 'claimed');
-        if (claimed.length > 0 && opts.force !== true) {
+        // Look the parent task up directly by branch instead of going through
+        // queenPlans(): orphan plans (auto-plan, codex-published execution
+        // safety lanes) typically have no `queen` participant, so the queen
+        // listing filter would refuse to surface them — exactly the case
+        // archive needs to handle.
+        const parent = store.storage.findTaskByBranch(repoRoot, `spec/${slug}`);
+        if (!parent) throw new Error(`queen plan not found: ${slug}`);
+        const claimedCount = store.storage.countClaimedQueenPlanSubtasks({
+          repo_root: repoRoot,
+          plan_slug: slug,
+        });
+        if (claimedCount > 0 && opts.force !== true) {
           throw new Error(
-            `queen plan ${slug} has ${claimed.length} claimed sub-task(s); pass --force to archive anyway`,
+            `queen plan ${slug} has ${claimedCount} claimed sub-task(s); pass --force to archive anyway`,
           );
         }
         const result = store.storage.archiveQueenPlan({ repo_root: repoRoot, plan_slug: slug });

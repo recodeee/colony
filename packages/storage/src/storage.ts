@@ -1195,6 +1195,23 @@ export class Storage {
     return { parent_task_id: parent.id, archived_rows: archived };
   }
 
+  /**
+   * Count `status='claimed'` sub-task rows for a queen plan. Exposed so
+   * `colony queen archive` can refuse without `--force` when an active
+   * agent might be relying on the lane.
+   */
+  countClaimedQueenPlanSubtasks(args: { repo_root: string; plan_slug: string }): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM tasks
+          WHERE repo_root = ?
+            AND status = 'claimed'
+            AND branch LIKE ? || '%'`,
+      )
+      .get(args.repo_root, `spec/${args.plan_slug}/sub-`) as { count: number } | undefined;
+    return row?.count ?? 0;
+  }
+
   addTaskParticipant(p: { task_id: number; session_id: string; agent: string }): void {
     // INSERT OR IGNORE: a session re-entering the same task (resume/clear)
     // must not double-join and must not clobber the original joined_at.
