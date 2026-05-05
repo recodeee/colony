@@ -268,6 +268,46 @@ describe('TaskThread', () => {
     expect(thread.pendingHandoffsFor('claude', 'claude')).toHaveLength(0);
   });
 
+  it('expiredQuotaHandoffsFor records one expiry reflexion when surfacing an expired handoff', () => {
+    const t0 = Date.parse('2026-05-01T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    seed('claude', 'codex');
+    const thread = TaskThread.open(store, {
+      repo_root: '/r',
+      branch: 'x',
+      session_id: 'claude',
+    });
+    thread.join('claude', 'claude');
+    thread.join('codex', 'codex');
+    const handoffId = thread.handOff({
+      from_session_id: 'claude',
+      from_agent: 'claude',
+      to_agent: 'any',
+      summary: 'quota expired',
+      reason: 'quota_exhausted',
+      expires_in_ms: 1,
+    });
+
+    vi.setSystemTime(t0 + 1000);
+    expect(thread.expiredQuotaHandoffsFor('codex', 'codex').map((h) => h.id)).toEqual([
+      handoffId,
+    ]);
+    expect(thread.expiredQuotaHandoffsFor('codex', 'codex').map((h) => h.id)).toEqual([
+      handoffId,
+    ]);
+
+    const reflexions = store.storage.taskObservationsByKind(thread.task_id, 'reflexion', 10);
+    expect(reflexions).toHaveLength(1);
+    expect(JSON.parse(reflexions[0]?.metadata ?? '{}')).toMatchObject({
+      kind: 'expiry',
+      reward: -0.5,
+      source_kind: 'handoff',
+      source_observation_id: handoffId,
+      idempotency_key: `handoff-expiry:${handoffId}`,
+    });
+  });
+
   it('computes expiry for legacy handoffs missing expires_at', () => {
     seed('claude', 'codex');
     const thread = TaskThread.open(store, {

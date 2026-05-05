@@ -10,6 +10,7 @@ import {
   guardedClaimFile,
   listPlans,
   readSubtaskByBranch,
+  recordReflexion,
   resolveManagedRepoRoot,
 } from '@colony/core';
 import {
@@ -991,7 +992,7 @@ function runAutoArchiveIfReady(
     const merge = engine.merge(currentRoot, baseRoot, change);
 
     if (!merge.clean) {
-      store.addObservation({
+      const blockedObservationId = store.addObservation({
         session_id: args.session_id,
         task_id: args.parent_spec_task_id,
         kind: 'plan-archive-blocked',
@@ -1001,6 +1002,21 @@ function runAutoArchiveIfReady(
           conflicts: merge.conflicts,
           applied: merge.applied,
         },
+      });
+      recordReflexion(store, {
+        session_id: args.session_id,
+        task_id: args.parent_spec_task_id,
+        kind: 'failure',
+        action: 'plan archive blocked',
+        observation_summary: `plan ${args.plan_slug} archive blocked by ${merge.conflicts.length} conflict(s)`,
+        reflection: 'plan archive conflicts need manual spec merge resolution',
+        source_kind: 'plan-archive-blocked',
+        source_observation_id: blockedObservationId,
+        idempotency_key: `plan-archive-blocked:${args.plan_slug}:${merge.conflicts
+          .map((conflict) => `${conflict.target}:${conflict.reason}`)
+          .join(',')}`,
+        reply_to: blockedObservationId,
+        tags: ['plan', 'archive'],
       });
       return {
         status: 'blocked',
