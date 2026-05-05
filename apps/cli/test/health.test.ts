@@ -1205,13 +1205,13 @@ describe('colony health payload', () => {
     expect(text).toContain('quota expired:    1');
     expect(text).toContain('quota top action: release expired task 1 relay #8');
     expect(text).toContain(
-      'Top action: release expired task 1 relay #8 (src/quota-expired.ts). Release expired quota-pending claims with task_claim_quota_release_expired; this keeps audit history and removes active blockers.',
+      'Top action: release expired task 1 relay #8 (1 file: src/quota-expired.ts). Release expired quota-pending claims with task_claim_quota_release_expired; this keeps audit history and removes active blockers.',
     );
 
     const verboseText = formatColonyHealthOutput(payload, { verbose: true });
     expect(verboseText).toContain('quota relay examples:');
     expect(verboseText).toContain(
-      'task_id=1 old_owner=codex/quota-old age=20m files=src/quota-expired.ts state=expired recommended_action=release expired',
+      'task_id=1 old_owner=codex/quota-old age=20m files=1 file: src/quota-expired.ts state=expired recommended_action=release expired',
     );
     expect(verboseText).toContain(
       'tool: mcp__colony__task_claim_quota_release_expired({ task_id: 1, session_id: "<session_id>", handoff_observation_id: 8 })',
@@ -1220,7 +1220,7 @@ describe('colony health payload', () => {
       'cmd:  colony task quota-release-expired --task-id 1 --handoff-observation-id 8 --session <session_id>',
     );
     expect(verboseText).toContain(
-      'task_id=1 old_owner=codex/quota age=10m files=src/quota.ts state=active recommended_action=accept',
+      'task_id=1 old_owner=codex/quota age=10m files=1 file: src/quota.ts state=active recommended_action=accept',
     );
     expect(verboseText).toContain(
       'decline/reroute: mcp__colony__task_claim_quota_decline({ task_id: 1, session_id: "<session_id>", handoff_observation_id: 7, reason: "<reason>" })',
@@ -1323,8 +1323,117 @@ describe('colony health payload', () => {
     );
     expect(formatColonyHealthOutput(payload)).toContain('quota top action: none');
     expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
-      'task_id=1 old_owner=codex/quota-done age=5m files=src/accepted.ts state=accepted recommended_action=none',
+      'task_id=1 old_owner=codex/quota-done age=5m files=1 file: src/accepted.ts state=accepted recommended_action=none',
     );
+  });
+
+  it('keeps 24h issue-window contention and quota fixes compact and actionable', () => {
+    const quotaFiles = [
+      '.omx/agent-worktrees/recodee__codex__add-fff-mcp-search-guidance/AGENTS.md',
+      'gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js',
+      'gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/test/doctor.test.js',
+      'gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/test/setup.test.js',
+    ];
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: healthyWindowCalls(),
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+        tasks: [
+          { id: 1, repo_root: '/repo', branch: 'dev' },
+          { id: 2, repo_root: '/repo', branch: 'main' },
+          { id: 3, repo_root: '/repo', branch: 'agent/codex/quota' },
+        ],
+        observationsByTask: {
+          3: [
+            observation(21615, 'handoff', NOW - 2 * 60_000, {
+              kind: 'handoff',
+              reason: 'quota',
+              status: 'pending',
+              from_session_id: 'quota-owner',
+              from_agent: 'codex',
+              expires_at: NOW - 60_000,
+            }),
+          ],
+        },
+        claimsByTask: {
+          1: [
+            {
+              task_id: 1,
+              file_path: 'README.md',
+              session_id: '003bdaee-1891-44e1-b867-b67aabc883e5',
+              claimed_at: NOW - 60_000,
+            },
+          ],
+          2: [
+            {
+              task_id: 2,
+              file_path: 'README.md',
+              session_id: 'codex-main-session',
+              claimed_at: NOW - 60_000,
+            },
+          ],
+          3: quotaFiles.map((filePath) => ({
+            task_id: 3,
+            file_path: filePath,
+            session_id: 'quota-owner',
+            claimed_at: NOW - 2 * 60_000,
+            state: 'handoff_pending' as const,
+            expires_at: NOW - 60_000,
+            handoff_observation_id: 21615,
+          })),
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        claim_stale_minutes: 240,
+        codex_sessions_root: NO_CODEX_ROOT,
+        repo_root: '/repo',
+      },
+    );
+
+    expect(payload.live_contention_health).toMatchObject({
+      live_file_contentions: 1,
+      protected_file_contentions: 1,
+      dirty_contended_files: 0,
+    });
+    expect(payload.signal_health.quota_pending_claims).toBe(4);
+    expect(payload.signal_health.quota_relay_actions.top_action).toBe('release expired');
+
+    const text = formatColonyHealthOutput(payload);
+    const focus = outputSection(text, 'Health focus');
+    expect(focus).toContain(
+      'top blocker: live file contentions: 1 conflict(s), 0 dirty; first README.md',
+    );
+    expect(focus).toContain(
+      'next action: Resolve README.md first: require explicit takeover for owner unknown 003bdaee-18... (owner identity is unknown).',
+    );
+    expect(focus).toContain(
+      "cmd:  colony lane takeover 003bdaee-1891-44e1-b867-b67aabc883e5 --file README.md --reason 'owner identity is unknown'",
+    );
+
+    const nextFixes = outputSection(text, 'Next fixes');
+    expect(nextFixes).toContain(
+      '1. live file contentions: 1 conflict(s), 0 dirty; first README.md',
+    );
+    expect(nextFixes).toContain(
+      'Resolve README.md first: require explicit takeover for owner unknown 003bdaee-18... (owner identity is unknown).',
+    );
+    expect(nextFixes).toContain(
+      'tool: task_claim_file(task_id=1, session_id="<requester_session_id>", file_path="README.md", note="after explicit takeover")',
+    );
+    expect(text).toContain(
+      'quota top action: release expired task 3 handoff #21615 (4 files: .omx/agent-worktrees/recodee__codex__add-fff-mcp-search-guidance/AGENTS.md, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js, +2 more)',
+    );
+    expect(text).toContain(
+      'Top action: release expired task 3 handoff #21615 (4 files: .omx/agent-worktrees/recodee__codex__add-fff-mcp-search-guidance/AGENTS.md, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js, +2 more). Release expired quota-pending claims with task_claim_quota_release_expired',
+    );
+    expect(text).not.toContain('test/doctor.test.js, gitguardex');
   });
 
   it('emits parseable JSON with the same top-level sections', () => {
@@ -1542,7 +1651,7 @@ describe('colony health payload', () => {
     });
     expect(payload.action_hints[0]).toMatchObject({
       metric: 'live file contentions',
-      current: '1 conflict(s), 1 dirty',
+      current: '1 conflict(s), 1 dirty; first src/shared.ts',
       command: 'colony health --json',
     });
     expect(payload.action_hints).toEqual(
