@@ -1,0 +1,22 @@
+[package]
+name = "colony-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny native HTTP client for the colony worker daemon's bridge-lifecycle fast path."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "colony-bridge"
+path = "src/main.rs"
+
+[profile.release]
+# Optimize for minimal cold-start latency and small binary size — this
+# tool runs once per IDE tool event and the per-event startup cost is
+# the whole reason it exists. Strip symbols and use lto/codegen-units=1
+# for tighter binaries; opt-level "z" prefers size over micro-optimizations.
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

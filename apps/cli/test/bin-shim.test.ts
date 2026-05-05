@@ -160,4 +160,26 @@ describe('bin/colony.sh', () => {
     expect(result.log).toContain('lifecycle');
     expect(result.log).not.toContain('--json');
   });
+
+  it('falls back to Node when COLONY_BRIDGE_NATIVE=0 forces the curl path with daemon down', () => {
+    // Disabling the native binary should land us on the curl path; with
+    // a definitely-unreachable port that path also falls through to Node.
+    // Stdin must arrive at the stub intact (rule-10 contract via curl branch).
+    const envelope = '{"event_id":"e_native_off_1","event_name":"pre_tool_use"}';
+    const result = runShim(
+      ['bridge', 'lifecycle', '--json', '--ide', 'codex', '--cwd', '/tmp'],
+      {
+        stdin: envelope,
+        env: { COLONY_WORKER_PORT: freeUnusedPort(), COLONY_BRIDGE_NATIVE: '0' },
+        nodeStub: stubNode,
+        logFile: stubLog,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.log).toContain('bridge');
+    expect(result.log).toContain('lifecycle');
+    expect(result.log).toContain('--json');
+    expect(result.log).toContain(`STDIN_BEGIN\n${envelope}`);
+  });
 });
