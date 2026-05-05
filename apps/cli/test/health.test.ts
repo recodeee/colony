@@ -351,12 +351,17 @@ describe('colony health payload', () => {
     expect(text.indexOf('At a glance')).toBeLessThan(text.indexOf('Health focus'));
     expect(text).toContain('needs work:');
     expect(text).toContain('fix first:');
+    expect(text).toContain('why:');
+    expect(text).toContain('next:');
+    expect(text).toContain('command:');
     expect(text).toContain('areas:');
     expect(text).toContain('Coordination loop (coordination_readiness)');
     expect(text).toContain('Edit safety (execution_safety)');
     expect(text).toContain('evidence: MCP share');
     expect(text).toContain('Readiness summary');
-    expect(text.indexOf('Readiness summary')).toBeLessThan(text.indexOf('Colony MCP share'));
+    expect(text.indexOf('Readiness summary')).toBeLessThan(text.indexOf('Next fixes'));
+    expect(text.indexOf('Next fixes')).toBeLessThan(text.indexOf('Detailed diagnostics'));
+    expect(text.indexOf('Detailed diagnostics')).toBeLessThan(text.indexOf('Colony MCP share'));
     expect(text).toContain('coordination_readiness');
     expect(text).toContain('execution_safety');
     expect(text).toContain('queen_plan_readiness');
@@ -390,6 +395,9 @@ describe('colony health payload', () => {
     expect(text).toContain('current wave:                       Wave 1');
     expect(text).toContain('stale claims blocking downstream:   0');
     expect(text).toContain('Next fixes');
+    expect(text).toContain('now:');
+    expect(text).toContain('target:');
+    expect(text).toContain('next:');
     expect(text).toContain('Adoption thresholds');
     expect(text).toContain('task_list > task_ready_for_agent');
     expect(text).toContain('task_list-first sessions: 2');

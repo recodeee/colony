@@ -809,6 +809,19 @@ export function formatColonyHealthOutput(
     kleur.bold('Readiness summary'),
     ...formatReadinessSummary(payload.readiness_summary),
     '',
+    kleur.bold('Next fixes'),
+    ...formatNextFixes(payload, visibleHints),
+  ];
+
+  if (options.prompts) {
+    lines.push('', kleur.bold('Codex prompt snippets'), ...formatPromptSnippets(visibleHints));
+  }
+
+  lines.push(
+    '',
+    kleur.bold('Detailed diagnostics'),
+    kleur.dim('  Telemetry below explains the action plan above. Use --json for automation.'),
+    '',
     kleur.bold('Colony MCP share'),
     `  all tools: ${countRatio(
       payload.colony_mcp_share.colony_mcp_tool_calls,
@@ -820,7 +833,7 @@ export function formatColonyHealthOutput(
       payload.colony_mcp_share.mcp_tool_calls,
       payload.colony_mcp_share.share_of_mcp_tool_calls,
     )}`,
-  ];
+  );
 
   if (payload.colony_mcp_share.source_breakdown.codex_rollouts > 0) {
     lines.push(
@@ -1028,35 +1041,6 @@ export function formatColonyHealthOutput(
     }
   }
 
-  lines.push('', kleur.bold('Next fixes'));
-  if (visibleHints.length === 0) {
-    if (payload.action_hints.length > 0) {
-      lines.push(kleur.green('  none: readiness bottlenecks meet current targets'));
-      lines.push(kleur.dim('  hidden: lower-priority follow-ups available with --verbose'));
-    } else {
-      lines.push(kleur.green('  none: tracked thresholds meet targets'));
-    }
-  } else {
-    visibleHints.forEach((hint, index) => {
-      lines.push(
-        `  ${index + 1}. ${hint.metric}: ${hint.current} (target ${hint.target}) - ${hint.action}`,
-      );
-      if (hint.tool_call) lines.push(kleur.dim(`     tool: ${hint.tool_call}`));
-      if (hint.command) lines.push(kleur.dim(`     cmd:  ${hint.command}`));
-    });
-  }
-
-  if (options.prompts) {
-    lines.push('', kleur.bold('Codex prompt snippets'));
-    if (visibleHints.length === 0) {
-      lines.push(kleur.green('  none: tracked thresholds meet targets'));
-    } else {
-      visibleHints.forEach((hint, index) => {
-        lines.push(`  ${index + 1}. ${hint.prompt}`);
-      });
-    }
-  }
-
   lines.push('', kleur.bold('Adoption thresholds'));
   for (const signal of payload.adoption_thresholds.good) {
     lines.push(formatSignal(signal));
@@ -1199,6 +1183,35 @@ function readinessSummaryPayload(
   };
 }
 
+function formatNextFixes(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
+  if (visibleHints.length === 0) {
+    if (payload.action_hints.length > 0) {
+      return [
+        kleur.green('  none: readiness bottlenecks meet current targets'),
+        kleur.dim('  hidden: lower-priority follow-ups available with --verbose'),
+      ];
+    }
+    return [kleur.green('  none: tracked thresholds meet targets')];
+  }
+
+  return visibleHints.flatMap((hint, index) => {
+    const lines = [
+      `  ${index + 1}. ${hint.metric}: ${hint.current} (target ${hint.target}) - ${hint.action}`,
+      `     now: ${hint.current}`,
+      `     target: ${hint.target}`,
+      `     next: ${hint.action}`,
+    ];
+    if (hint.tool_call) lines.push(kleur.dim(`     tool: ${hint.tool_call}`));
+    if (hint.command) lines.push(kleur.dim(`     cmd:  ${hint.command}`));
+    return lines;
+  });
+}
+
+function formatPromptSnippets(visibleHints: ActionHint[]): string[] {
+  if (visibleHints.length === 0) return [kleur.green('  none: tracked thresholds meet targets')];
+  return visibleHints.map((hint, index) => `  ${index + 1}. ${hint.prompt}`);
+}
+
 function formatHealthAtAGlance(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
   const entries = readinessEntries(payload.readiness_summary);
   const bad = entries.filter(([, item]) => item.status === 'bad');
@@ -1213,12 +1226,12 @@ function formatHealthAtAGlance(payload: ColonyHealthPayload, visibleHints: Actio
   if (topHint) {
     lines.push(
       `  fix first: ${topHint.metric}`,
-      `  because: ${topHint.current}`,
-      `  do next: ${topHint.action}`,
+      `  why: ${topHint.current}`,
+      `  next: ${topHint.action}`,
     );
-    if (nextStep) lines.push(`  run: ${nextStep}`);
+    if (nextStep) lines.push(`  command: ${nextStep}`);
   } else {
-    lines.push('  fix first: none', '  do next: keep current loop');
+    lines.push('  fix first: none', '  next: keep current loop');
   }
 
   lines.push('  areas:');
