@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" role="img" aria-label="The Colony coordination loop: hivemind_context, attention_inbox, task_ready_for_agent, task_plan_claim_subtask, task_claim_file, task_note_working">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#0b1426"/>
+      <stop offset="100%" stop-color="#05080f"/>
+    </radialGradient>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.9"/>
+      <stop offset="55%" stop-color="#0ea5e9" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#0ea5e9" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="nodeFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Path for the hexagonal loop the packet travels along -->
+    <path id="loopPath"
+      d="M 245 140 L 450 100 L 655 140 L 720 270 L 655 400 L 450 440 L 245 400 L 180 270 Z"
+      fill="none"/>
+
+    <!-- Reusable node card -->
+    <symbol id="node" overflow="visible">
+      <rect x="-95" y="-32" width="190" height="64" rx="14" ry="14"
+        fill="url(#nodeFill)" stroke="#1e293b" stroke-width="1.5"/>
+    </symbol>
+  </defs>
+
+  <rect width="900" height="520" fill="url(#bg)"/>
+
+  <!-- Subtle grid -->
+  <g stroke="#0f172a" stroke-width="1" opacity="0.5">
+    <path d="M 0 130 H 900 M 0 270 H 900 M 0 410 H 900"/>
+    <path d="M 180 0 V 520 M 450 0 V 520 M 720 0 V 520"/>
+  </g>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+    <text x="450" y="42" text-anchor="middle" fill="#e2e8f0" font-size="22" font-weight="600">The Colony coordination loop</text>
+    <text x="450" y="64" text-anchor="middle" fill="#64748b" font-size="13">Compact first &#8226; hydrate only when needed &#8226; claim before editing</text>
+  </g>
+
+  <!-- Center core with breathing animation -->
+  <g transform="translate(450 270)">
+    <circle r="110" fill="url(#core)">
+      <animate attributeName="r" values="105;115;105" dur="4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.7;1;0.7" dur="4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="70" fill="#020617" stroke="#0891b2" stroke-width="1.5" opacity="0.9"/>
+    <circle r="70" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.5">
+      <animate attributeName="r" values="70;90;70" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.5;0;0.5" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <text y="-6" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="600">Colony</text>
+    <text y="18" text-anchor="middle" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" letter-spacing="1.5">LOCAL SUBSTRATE</text>
+  </g>
+
+  <!-- Animated path glow showing flow direction -->
+  <use href="#loopPath" stroke="#0e7490" stroke-width="2" opacity="0.35" stroke-dasharray="1 6"/>
+  <use href="#loopPath" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="8 12" opacity="0.7">
+    <animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/>
+  </use>
+
+  <!-- Three packets flowing along the loop, staggered -->
+  <g filter="url(#glow)">
+    <circle r="5" fill="#22d3ee">
+      <animateMotion dur="9s" repeatCount="indefinite" rotate="auto">
+        <mpath href="#loopPath"/>
+      </animateMotion>
+    </circle>
+    <circle r="4" fill="#a78bfa">
+      <animateMotion dur="9s" begin="-3s" repeatCount="indefinite" rotate="auto">
+        <mpath href="#loopPath"/>
+      </animateMotion>
+    </circle>
+    <circle r="4" fill="#34d399">
+      <animateMotion dur="9s" begin="-6s" repeatCount="indefinite" rotate="auto">
+        <mpath href="#loopPath"/>
+      </animateMotion>
+    </circle>
+  </g>
+
+  <!-- Nodes -->
+  <!-- 1 hivemind_context (top-left) -->
+  <g transform="translate(245 140)">
+    <use href="#node"/>
+    <circle cx="-72" cy="0" r="14" fill="#022c22" stroke="#10b981" stroke-width="1.5"/>
+    <text x="-72" y="4" text-anchor="middle" fill="#34d399" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">1</text>
+    <text x="-50" y="-6" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="600">hivemind_context</text>
+    <text x="-50" y="12" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">who is active, hot, owned</text>
+  </g>
+
+  <!-- 2 attention_inbox (top-right) -->
+  <g transform="translate(655 140)">
+    <use href="#node"/>
+    <circle cx="-72" cy="0" r="14" fill="#172554" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="-72" y="4" text-anchor="middle" fill="#60a5fa" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">2</text>
+    <text x="-50" y="-6" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="600">attention_inbox</text>
+    <text x="-50" y="12" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">handoffs &#8226; blockers &#8226; stale</text>
+  </g>
+
+  <!-- 3 task_ready_for_agent (right) -->
+  <g transform="translate(720 270)">
+    <use href="#node"/>
+    <circle cx="-72" cy="0" r="14" fill="#1e1b4b" stroke="#818cf8" stroke-width="1.5"/>
+    <text x="-72" y="4" text-anchor="middle" fill="#a5b4fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">3</text>
+    <text x="-50" y="-6" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600">task_ready_for_agent</text>
+    <text x="-50" y="12" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">pull work by fit</text>
+  </g>
+
+  <!-- 4 task_plan_claim_subtask (bottom-right) -->
+  <g transform="translate(655 400)">
+    <use href="#node"/>
+    <circle cx="-86" cy="0" r="14" fill="#3b0764" stroke="#a855f7" stroke-width="1.5"/>
+    <text x="-86" y="4" text-anchor="middle" fill="#c084fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">4</text>
+    <text x="-66" y="-6" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600">task_plan_claim_subtask</text>
+    <text x="-66" y="12" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">take one wave slice</text>
+  </g>
+
+  <!-- 5 task_claim_file (bottom-left) -->
+  <g transform="translate(245 400)">
+    <use href="#node"/>
+    <circle cx="-72" cy="0" r="14" fill="#3a1212" stroke="#f87171" stroke-width="1.5"/>
+    <text x="-72" y="4" text-anchor="middle" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">5</text>
+    <text x="-50" y="-6" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="600">task_claim_file</text>
+    <text x="-50" y="12" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">claim before edit</text>
+  </g>
+
+  <!-- 6 task_note_working (left) -->
+  <g transform="translate(180 270)">
+    <use href="#node"/>
+    <circle cx="-72" cy="0" r="14" fill="#422006" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="-72" y="4" text-anchor="middle" fill="#fcd34d" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">6</text>
+    <text x="-50" y="-6" fill="#e2e8f0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="600">task_note_working</text>
+    <text x="-50" y="12" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">leave resumable state</text>
+  </g>
+
+  <!-- Footer hint -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <rect x="170" y="478" width="560" height="28" rx="8" fill="#020617" stroke="#1e293b"/>
+    <text x="450" y="496" text-anchor="middle" fill="#94a3b8" font-size="12">
+      Start with context &#8594; pull ready work &#8594; claim &#8594; leave a resumable trail
+    </text>
+  </g>
+</svg>

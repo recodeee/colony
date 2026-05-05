@@ -1,90 +1,168 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360" role="img" aria-labelledby="title desc">
-  <title id="title">Colony architecture diagram</title>
-  <desc id="desc">Architecture diagram showing agents and IDE hooks feeding Colony MCP and storage, with Queen plans and the viewer reading local state.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" role="img" aria-label="Colony architecture: agent runtimes execute, Colony coordinates, Queen plans, all over a local SQLite substrate">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#07110f"/>
-      <stop offset="1" stop-color="#111827"/>
+    <linearGradient id="archBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a1426"/>
+      <stop offset="100%" stop-color="#04080f"/>
     </linearGradient>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10Z" fill="#64748b"/>
-    </marker>
-    <style>
-      text{fill:#e5e7eb;font-family:Arial,sans-serif;letter-spacing:0}
-      .card{fill:#0b0f14;stroke:#253040;stroke-width:1.2}
-      .core{fill:#052e2b;stroke:#34d399;stroke-width:1.8}
-      .store{fill:#111827;stroke:#60a5fa;stroke-width:1.4}
-      .queen{fill:#2a1f05;stroke:#f59e0b;stroke-width:1.4}
-      .line{stroke:#64748b;stroke-width:1.5;fill:none;marker-end:url(#arrow)}
-      .soft{stroke:#334155;stroke-width:1.2;fill:none}
-      .label{font-family:Arial,sans-serif;fill:#e5e7eb;letter-spacing:0}
-      .muted{fill:#94a3b8}
-      .mono{font-family:monospace;letter-spacing:0}
-      .tiny{font-size:12px}
-      .small{font-size:14px}
-    </style>
+    <linearGradient id="layer1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e1b4b" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1e1b4b" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="layer2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e7490" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#0e7490" stop-opacity="0.25"/>
+    </linearGradient>
+    <linearGradient id="layer3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.15"/>
+    </linearGradient>
+    <linearGradient id="layer4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <filter id="archGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
-  <rect width="900" height="360" rx="22" fill="url(#bg)"/>
-  <rect x="1" y="1" width="898" height="358" rx="21" fill="none" stroke="#1f2937"/>
-  <text fill="#e5e7eb" class="label" x="34" y="44" font-size="25" font-weight="720">Local-first coordination architecture</text>
-  <text fill="#94a3b8" class="label muted" x="34" y="68" font-size="14">Agents keep their normal runtime. Colony supplies local traces, ownership, routing, and task memory.</text>
-  <g transform="translate(34 104)">
-    <rect class="card" x="0" y="0" width="170" height="195" rx="14"/>
-    <text font-size="12" fill="#e5e7eb" class="label small" x="18" y="28" font-weight="700">Agent runtimes</text>
-    <g class="mono tiny">
-      <text font-size="12" fill="#94a3b8" class="label muted" x="18" y="60">Claude Code</text>
-      <text font-size="12" fill="#94a3b8" class="label muted" x="18" y="86">Codex</text>
-      <text font-size="12" fill="#94a3b8" class="label muted" x="18" y="112">Cursor</text>
-      <text font-size="12" fill="#94a3b8" class="label muted" x="18" y="138">Gemini CLI</text>
-      <text font-size="12" fill="#94a3b8" class="label muted" x="18" y="164">OpenCode</text>
+
+  <rect width="900" height="460" fill="url(#archBg)"/>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="450" y="36" text-anchor="middle" fill="#e2e8f0" font-size="20" font-weight="600">How Colony fits</text>
+    <text x="450" y="54" text-anchor="middle" fill="#64748b" font-size="12">Runtimes execute. Colony coordinates. Queen plans. All local-first.</text>
+  </g>
+
+  <!-- Layer 1: Runtimes -->
+  <g transform="translate(80 80)">
+    <rect width="740" height="78" rx="10" fill="url(#layer1)" stroke="#312e81" stroke-width="1"/>
+    <text x="22" y="28" fill="#a5b4fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">RUNTIMES</text>
+    <text x="22" y="46" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">execute tools, edit files, run tests</text>
+
+    <!-- runtime pills -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+      <g transform="translate(220 50)">
+        <rect x="-44" y="-14" width="88" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
+        <text y="3" text-anchor="middle" fill="#c7d2fe">Claude Code</text>
+      </g>
+      <g transform="translate(320 50)">
+        <rect x="-30" y="-14" width="60" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
+        <text y="3" text-anchor="middle" fill="#c7d2fe">Codex</text>
+      </g>
+      <g transform="translate(400 50)">
+        <rect x="-30" y="-14" width="60" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
+        <text y="3" text-anchor="middle" fill="#c7d2fe">Cursor</text>
+      </g>
+      <g transform="translate(490 50)">
+        <rect x="-44" y="-14" width="88" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
+        <text y="3" text-anchor="middle" fill="#c7d2fe">Gemini CLI</text>
+      </g>
+      <g transform="translate(600 50)">
+        <rect x="-44" y="-14" width="88" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
+        <text y="3" text-anchor="middle" fill="#c7d2fe">OpenCode</text>
+      </g>
+      <g transform="translate(700 50)">
+        <rect x="-30" y="-14" width="60" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
+        <text y="3" text-anchor="middle" fill="#c7d2fe">&#8230;</text>
+      </g>
     </g>
-    <circle cx="135" cy="56" r="5" fill="#34d399"/>
-    <circle cx="135" cy="82" r="5" fill="#60a5fa"/>
-    <circle cx="135" cy="108" r="5" fill="#f472b6"/>
-    <circle cx="135" cy="134" r="5" fill="#fbbf24"/>
-    <circle cx="135" cy="160" r="5" fill="#a78bfa"/>
   </g>
-  <g transform="translate(250 104)">
-    <rect class="card" x="0" y="0" width="170" height="195" rx="14"/>
-    <text font-size="12" fill="#e5e7eb" class="label small" x="18" y="28" font-weight="700">Install surface</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="18" y="61">hooks</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="18" y="88">stdio MCP config</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="18" y="115">lifecycle events</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="18" y="142">tool observations</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="18" y="169">session heartbeat</text>
+
+  <!-- Down arrows: runtimes -> Colony -->
+  <g stroke="#475569" stroke-width="1" fill="none">
+    <path d="M 250 162 V 188" marker-end="url(#archArrow)">
+      <animate attributeName="stroke" values="#475569;#22d3ee;#475569" dur="3s" repeatCount="indefinite"/>
+    </path>
+    <path d="M 450 162 V 188" marker-end="url(#archArrow)">
+      <animate attributeName="stroke" values="#475569;#22d3ee;#475569" dur="3s" begin="0.6s" repeatCount="indefinite"/>
+    </path>
+    <path d="M 650 162 V 188" marker-end="url(#archArrow)">
+      <animate attributeName="stroke" values="#475569;#22d3ee;#475569" dur="3s" begin="1.2s" repeatCount="indefinite"/>
+    </path>
   </g>
-  <g transform="translate(466 86)">
-    <rect class="core" x="0" y="0" width="190" height="230" rx="18"/>
-    <text fill="#e5e7eb" class="label" x="31" y="35" font-size="22" font-weight="760">Colony</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="31" y="62">MCP server</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="31" y="88">MemoryStore</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="31" y="114">task threads</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="31" y="140">claims + handoffs</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="31" y="166">attention inbox</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="31" y="192">ready work router</text>
-    <circle cx="154" cy="35" r="15" fill="#34d399" opacity="0.2"/>
-    <circle cx="154" cy="35" r="6" fill="#bbf7d0"/>
+
+  <defs>
+    <marker id="archArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#22d3ee"/>
+    </marker>
+  </defs>
+
+  <!-- Layer 2: COLONY (the substrate, prominent) -->
+  <g transform="translate(80 195)">
+    <rect width="740" height="92" rx="12" fill="url(#layer2)" stroke="#22d3ee" stroke-width="1.5" filter="url(#archGlow)">
+      <animate attributeName="stroke-opacity" values="0.8;1;0.8" dur="3s" repeatCount="indefinite"/>
+    </rect>
+    <text x="22" y="28" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">COLONY &#8226; LOCAL COORDINATION SUBSTRATE</text>
+    <text x="22" y="46" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">routes work, tracks claims, records handoffs, stores memory, reports health</text>
+
+    <!-- capability chips -->
+    <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="10.5">
+      <g transform="translate(60 70)">
+        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">claims</text>
+      </g>
+      <g transform="translate(160 70)">
+        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">handoffs</text>
+      </g>
+      <g transform="translate(260 70)">
+        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">memory</text>
+      </g>
+      <g transform="translate(360 70)">
+        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">routing</text>
+      </g>
+      <g transform="translate(460 70)">
+        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">health</text>
+      </g>
+      <g transform="translate(560 70)">
+        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">search</text>
+      </g>
+      <g transform="translate(660 70)">
+        <rect x="-50" y="-11" width="100" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
+        <text y="3" text-anchor="middle" fill="#67e8f9">savings_report</text>
+      </g>
+    </g>
   </g>
-  <g transform="translate(708 96)">
-    <rect class="store" x="0" y="0" width="154" height="82" rx="14"/>
-    <text font-size="12" fill="#e5e7eb" class="label small" x="19" y="29" font-weight="700">Local state</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="19" y="56">~/.colony/data.db</text>
-    <rect class="queen" x="0" y="106" width="154" height="82" rx="14"/>
-    <text font-size="12" fill="#e5e7eb" class="label small" x="19" y="135" font-weight="700">Queen</text>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="19" y="162">claimable waves</text>
+
+  <!-- Layer 3: Queen (sits beside, publishes plans down into Colony) -->
+  <g transform="translate(80 305)">
+    <rect width="500" height="62" rx="10" fill="url(#layer3)" stroke="#7c3aed" stroke-width="1"/>
+    <text x="22" y="26" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">QUEEN &#8226; PLAN PUBLISHER</text>
+    <text x="22" y="46" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">deterministic wave plans &#8226; does not launch shells, does not command agents</text>
   </g>
-  <g transform="translate(466 322)">
-    <rect x="0" y="-40" width="396" height="40" rx="12" fill="#0b0f14" stroke="#253040"/>
-    <text font-size="12" fill="#94a3b8" class="label muted mono tiny" x="18" y="-15">viewer reads the same local traces; agents remain terminal-first</text>
+
+  <!-- Sessions / OMX (peer of Queen) -->
+  <g transform="translate(600 305)">
+    <rect width="220" height="62" rx="10" fill="#0f172a" stroke="#475569" stroke-width="1"/>
+    <text x="20" y="26" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">OMX / DMUX</text>
+    <text x="20" y="46" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">sessions &#8226; panes &#8226; worktrees</text>
   </g>
-  <path class="line" d="M204 201H242"/>
-  <path class="line" d="M420 201H458"/>
-  <path class="line" d="M656 137H700"/>
-  <path class="line" d="M656 241H700"/>
-  <path class="soft" d="M785 178C785 225 735 260 664 275"/>
-  <path class="soft" d="M542 315C511 305 493 289 493 269"/>
-  <g transform="translate(285 313)">
-    <rect x="0" y="-31" width="128" height="31" rx="15" fill="#172554" stroke="#2563eb"/>
-    <text font-size="12" fill="#e5e7eb" class="label mono tiny" x="18" y="-11">mcp__colony__*</text>
+
+  <!-- Queen -> Colony arrow -->
+  <g fill="none" stroke="#a78bfa" stroke-width="1" opacity="0.7">
+    <path d="M 330 305 V 290" marker-end="url(#queenArrow)"/>
+  </g>
+  <defs>
+    <marker id="queenArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <!-- Layer 4: Storage substrate -->
+  <g transform="translate(80 385)">
+    <rect width="740" height="58" rx="10" fill="url(#layer4)" stroke="#1e293b" stroke-width="1"/>
+    <text x="22" y="22" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">~/.colony</text>
+    <text x="22" y="42" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">SQLite + FTS5 &#8226; compressed prose &#8226; local embeddings &#8226; mcp_metrics</text>
+
+    <!-- pulsing dot showing it's live -->
+    <circle cx="710" cy="29" r="4" fill="#10b981">
+      <animate attributeName="opacity" values="1;0.3;1" dur="1.4s" repeatCount="indefinite"/>
+    </circle>
+    <text x="724" y="33" fill="#10b981" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">live</text>
   </g>
 </svg>

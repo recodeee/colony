@@ -1,0 +1,183 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" role="img" aria-label="Token savings: Colony makes coordination compact and progressively hydrated, reducing tokens by 70 to 99 percent">
+  <defs>
+    <linearGradient id="savingsBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#06121f"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </linearGradient>
+    <linearGradient id="standardBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7f1d1d"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="colonyBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#065f46"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <filter id="barGlow">
+      <feGaussianBlur stdDeviation="1.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="900" height="420" fill="url(#savingsBg)"/>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="450" y="36" text-anchor="middle" fill="#e2e8f0" font-size="20" font-weight="600">Where the tokens go</text>
+    <text x="450" y="56" text-anchor="middle" fill="#64748b" font-size="12">Standard agent loop vs Colony &#8226; compact routing, progressive hydration, tiny handoffs</text>
+  </g>
+
+  <!-- Legend -->
+  <g transform="translate(620 80)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">
+    <rect width="14" height="10" fill="url(#standardBar)" rx="2"/>
+    <text x="20" y="9" fill="#94a3b8">standard</text>
+    <rect x="80" width="14" height="10" fill="url(#colonyBar)" rx="2"/>
+    <text x="100" y="9" fill="#94a3b8">colony</text>
+  </g>
+
+  <!-- Helper grid -->
+  <g stroke="#1e293b" stroke-width="1" stroke-dasharray="2 4" opacity="0.6">
+    <line x1="280" y1="100" x2="280" y2="380"/>
+    <line x1="380" y1="100" x2="380" y2="380"/>
+    <line x1="480" y1="100" x2="480" y2="380"/>
+    <line x1="580" y1="100" x2="580" y2="380"/>
+    <line x1="680" y1="100" x2="680" y2="380"/>
+  </g>
+
+  <!-- Row template: label, two bars (standard width = base, colony width = small), savings badge -->
+  <!-- Bars start at x=280 -->
+  <!-- Max width = 420 px = 30000 tokens -->
+
+  <!-- Bars use animateTransform scale to grow from left, so static frame still shows them -->
+  <!-- Row 1: Cross-agent handoff (99%) - 30000 vs 400 -->
+  <g transform="translate(0 100)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Cross-agent handoff</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">30,000 &#8594; 400 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="420" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.1s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="6" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.6s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">99%</text>
+    </g>
+  </g>
+
+  <!-- Row 2: Quota-exhausted handoff (98%) - 22000 vs 500 -->
+  <g transform="translate(0 138)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Quota-exhausted handoff</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">22,000 &#8594; 500 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="308" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.2s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="7" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.7s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">98%</text>
+    </g>
+  </g>
+
+  <!-- Row 3: Search result shape (97%) - 5000 vs 150 -->
+  <g transform="translate(0 176)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Search result shape</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">5,000 &#8594; 150 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="70" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.3s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="3" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.8s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">97%</text>
+    </g>
+  </g>
+
+  <!-- Row 4: Find active owner (92%) - 6000 vs 500 -->
+  <g transform="translate(0 214)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Find active owner for a file</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">6,000 &#8594; 500 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="84" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.4s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="7" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.9s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">92%</text>
+    </g>
+  </g>
+
+  <!-- Row 5: Startup coordination sweep (90%) - 25000 vs 2500 -->
+  <g transform="translate(0 252)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Startup coordination sweep</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">25,000 &#8594; 2,500 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="350" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.5s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="35" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="1.0s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">90%</text>
+    </g>
+  </g>
+
+  <!-- Row 6: Resume task across sessions (87%) - 15000 vs 2000 -->
+  <g transform="translate(0 290)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Resume task across sessions</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">15,000 &#8594; 2,000 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="210" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.6s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="28" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="1.1s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">87%</text>
+    </g>
+  </g>
+
+  <!-- Row 7: Storage at rest (70%) - 1000 vs 300 -->
+  <g transform="translate(0 328)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="270" y="14" text-anchor="end" fill="#cbd5e1" font-size="12">Storage at rest (per observation)</text>
+    <text x="270" y="28" text-anchor="end" fill="#64748b" font-size="10">1,000 &#8594; 300 tokens</text>
+    <g transform="translate(280 0)">
+      <rect x="0" y="6" width="14" height="10" fill="url(#standardBar)" rx="2">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="0.7s" fill="freeze" additive="sum"/>
+      </rect>
+      <rect x="0" y="20" width="4.2" height="10" fill="url(#colonyBar)" rx="2" filter="url(#barGlow)">
+        <animateTransform attributeName="transform" type="scale" from="0 1" to="1 1" dur="1.2s" begin="1.2s" fill="freeze" additive="sum"/>
+      </rect>
+    </g>
+    <g transform="translate(720 20)">
+      <rect x="0" y="-12" width="48" height="22" rx="11" fill="#022c22" stroke="#10b981"/>
+      <text x="24" y="3" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700">70%</text>
+    </g>
+  </g>
+
+  <!-- Bottom note - simplified to avoid tspan wrap issues -->
+  <g transform="translate(0 400)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="450" y="0" text-anchor="middle" fill="#64748b" font-size="11" font-style="italic">
+      Reference model from `colony gain`. Live numbers come from the `mcp_metrics` SQLite table.
+    </text>
+  </g>
+</svg>

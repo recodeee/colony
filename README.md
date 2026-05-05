@@ -1,7 +1,7 @@
 # Colony
 
 <p align="center">
-  <img src="docs/assets/colony_hero.png" alt="Colony - local-first coordination for coding agents" width="860" />
+  <img src="docs/assets/colony-hero.svg" alt="Colony — local-first coordination for coding agents" width="100%" />
 </p>
 
 <p align="center">
@@ -22,27 +22,43 @@ colony install --ide codex
 colony health
 ```
 
-Colony is not a hosted control plane and it does not run your agents. Codex,
+Colony is **not a hosted control plane** and it does not run your agents. Codex,
 Claude Code, Cursor, OMX, dmux, and other runtimes still execute work. Colony
 is the shared local substrate they use to coordinate.
 
 It is built for the expensive part of multi-agent work: avoiding repeated
 context reloads. Claims, handoffs, timelines, and prior decisions stay compact
-until an agent explicitly hydrates the full record. The result is measurable:
+until an agent explicitly hydrates the full record. The result is measurable —
 `colony gain` reports both the shared reference model below and live
 `mcp_metrics` rows from your local MCP server.
 
-```text
-Runtimes run agents.
-Colony coordinates agents.
-Queen publishes claimable plans.
-Agents pull ready work.
-Stale signals evaporate.
-```
+> Runtimes run agents.
+> **Colony** coordinates agents.
+> Queen publishes claimable plans.
+> Agents pull ready work.
+> Stale signals evaporate.
 
 ---
 
-## Why Colony Exists
+## The Problem: Two Agents, One Bug, Two Patches
+
+A human can ask Codex and Claude to solve the same runtime-manifest bug at the
+same time. Without a shared loop, both agents diagnose the same Turbopack root
+escape, edit the same schema file, and race two PRs for one fix.
+
+<p align="center">
+  <img src="docs/assets/colony-vs.svg" alt="Without Colony two agents collide on the same file. With Colony the second agent reads a live claim and stands down." width="100%" />
+</p>
+
+With Colony, both agents start from `hivemind_context`, `attention_inbox`, and
+`task_ready_for_agent`. The first agent records the diagnosis, claims the
+task and files, and posts the intended fix. The second agent sees the live
+claim and prior diagnosis **before editing**, so it can stand down, review, or
+take a different unclaimed lane.
+
+Colony does not run the agents for you. It makes duplicate work visible early,
+turns one solution into one implementation branch, and keeps the evidence in a
+shared task thread.
 
 | Without Colony                         | With Colony                                     |
 | -------------------------------------- | ----------------------------------------------- |
@@ -53,78 +69,51 @@ Stale signals evaporate.
 | Follow-up ideas disappear.             | Proposals can be reinforced and promoted.       |
 | Task lists become browsing surfaces.   | `task_ready_for_agent` becomes the work picker. |
 
-Colony turns multi-agent work into a measurable local loop instead of a pile of
-terminal sessions and stale notes.
-
-### Duplicate Work Example
-
-A human can ask Codex and Claude to solve the same runtime-manifest bug at the
-same time. Without a shared loop, both agents might diagnose the Turbopack root
-escape, edit the same schema file, and race two PRs for one fix.
-
-With Colony, both agents start from `hivemind_context`, `attention_inbox`, and
-`task_ready_for_agent`. The first agent records the diagnosis, claims the
-task/files, and posts the intended fix. The second agent sees the live claim and
-prior diagnosis before editing, so it can stand down, review, or take a
-different unclaimed lane instead of producing a duplicate patch.
-
-Colony does not run the agents for you. It makes duplicate work visible early,
-turns one solution into one implementation branch, and keeps the evidence in a
-shared task thread.
-
-> **The Colony loop**
->
-> `hivemind_context` -> `attention_inbox` -> `task_ready_for_agent` -> `task_plan_claim_subtask` -> `task_claim_file` -> `task_note_working`
->
-> Compact first. Hydrate only when needed. Claim before editing.
-
-<p align="center">
-  <img src="docs/assets/colony_loop.png" alt="Colony startup and execution loop" width="900" />
-</p>
-
 ---
 
-## What Colony Can Do Right Now
+## The Colony Loop
+
+Every agent session runs the same six-step coordination loop. **Compact first.
+Hydrate only when needed. Claim before editing.**
 
 <p align="center">
-  <img src="docs/assets/colony-capabilities.png" alt="Current Colony capabilities: install, observe, coordinate, plan, recover, and inspect" width="900" />
+  <img src="docs/assets/colony-loop-animated.svg" alt="The Colony coordination loop: hivemind_context, attention_inbox, task_ready_for_agent, task_plan_claim_subtask, task_claim_file, task_note_working" width="100%" />
 </p>
 
-| Capability                 | Current surface                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| Install runtime hooks      | `colony install --ide claude-code`, `codex`, `cursor`, `gemini-cli`, `opencode` |
-| Capture local observations | lifecycle hooks, prompt events, tool events, session heartbeat                  |
-| Search prior work          | `colony search`, MCP `search`, `timeline`, `get_observations`                   |
-| See active lanes           | MCP `hivemind_context`, `attention_inbox`, CLI coordination reports             |
-| Claim work safely          | `task_ready_for_agent`, `task_plan_claim_subtask`, `task_claim_file`            |
-| Coordinate agents          | `task_post`, `task_message`, handoffs, working notes                            |
-| Publish wave plans         | Queen plans and `task_plan_*` MCP tools                                         |
-| Clean stale signals        | `colony coordination sweep`, `colony queen sweep`, health fix plans             |
-| Inspect the graph          | `colony viewer` local read-only graph                                           |
-| Measure token savings      | `colony gain`, MCP `savings_report`, viewer `/savings`                          |
-| Prove behavior             | `colony health`, smoke tests, adoption metrics                                  |
+| #   | Step                      | What it does                                            |
+| --- | ------------------------- | ------------------------------------------------------- |
+| 1   | `hivemind_context`        | Who's active, what's hot, what's owned, recent memory.  |
+| 2   | `attention_inbox`         | Handoffs, blockers, stale lanes that need attention.    |
+| 3   | `task_ready_for_agent`    | Pull claimable work matched to this agent — not browse. |
+| 4   | `task_plan_claim_subtask` | Take exactly one unblocked wave slice from a Queen plan.|
+| 5   | `task_claim_file`         | Make ownership visible **before** mutating the file.    |
+| 6   | `task_note_working`       | Leave a compact resumable trail for the next session.   |
 
-Use Colony when you run more than one coding agent in the same repo, use
-worktrees or parallel branches, need local-first memory, or want stale claims
-and handoffs to stop shaping current work.
+Steps 1–3 cost almost nothing (compact IDs and snippets). Full bodies only ship
+when an agent explicitly calls `get_observations([ids])`. That's where the
+token savings come from.
 
 ---
 
 ## How It Fits
 
+Colony sits between the runtimes that execute work and the local SQLite store
+that persists state. Queen is a peer, not a controller — it publishes
+claimable plans, but agents still pull and complete the work themselves.
+
+<p align="center">
+  <img src="docs/assets/colony-architecture.svg" alt="Colony architecture: runtimes execute, Colony coordinates, Queen plans, all over a local SQLite substrate" width="100%" />
+</p>
+
 | Layer                                                | Responsibility                                                                 |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Codex / Claude Code / Cursor / Gemini CLI / OpenCode | Execute tools, edit files, run tests, talk to the user.                        |
 | OMX / dmux / terminal sessions                       | Start sessions, panes, worktrees, and runtime process surfaces.                |
-| Colony                                               | Route work, track claims, record handoffs, store memory, report health.        |
-| Queen                                                | Publish deterministic wave plans; it does not launch shells or command agents. |
+| **Colony**                                           | Route work, track claims, record handoffs, store memory, report health.        |
+| Queen                                                | Publish deterministic wave plans; does not launch shells or command agents.    |
 
 This split keeps execution close to the existing agent runtime while making the
 coordination state shared, inspectable, and local.
-
-<p align="center">
-  <img src="docs/assets/colony-architecture.png" alt="Colony architecture diagram" width="900" />
-</p>
 
 ---
 
@@ -150,63 +139,39 @@ Check the install:
 colony status
 ```
 
-Requirements:
-
-- Node.js 20+
-- pnpm for repository development
-- local SQLite state under `~/.colony`
+**Requirements:** Node.js 20+, pnpm for repository development, local SQLite
+state under `~/.colony`.
 
 ---
 
 ## Daily Workflow
 
 ```bash
-colony health
-colony health --fix-plan
-colony status
-colony search "error or decision"
-colony coordination sweep --json
-colony coordination sweep --release-safe-stale-claims --json
-colony queen sweep
-colony viewer
-pnpm smoke:codex-omx-pretool
-pnpm smoke:health-repair-loop
+colony health                            # readiness, adoption, stale signals
+colony health --fix-plan                 # guided recovery plan
+colony status                            # storage, IDEs, worker, memory
+colony search "error or decision"        # search prior observations
+colony coordination sweep --json         # report stale claims, expired handoffs
+colony queen sweep                       # find stalled or unclaimed plans
+colony viewer                            # local read-only graph at :6510
+pnpm smoke:codex-omx-pretool             # verify lifecycle bridge
+pnpm smoke:health-repair-loop            # prove bridge + cleanup compose
 ```
-
-| Command                         | Use                                                                              |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| `colony health`                 | Readiness, adoption, stale signals, note migration, claim-before-edit coverage.  |
-| `colony health --fix-plan`      | Guided recovery plan for missing hooks, stale claims, and weak coordination.     |
-| `colony status`                 | Storage, installed IDEs, worker state, memory counts, embedding status.          |
-| `colony search "<query>"`       | Search prior observations and decisions.                                         |
-| `colony timeline <session-id>`  | Inspect one session chronologically.                                             |
-| `colony observe`                | Watch task threads and coordination state.                                       |
-| `colony coordination sweep`     | Report stale claims, expired handoffs/messages, decayed proposals, blocked work. |
-| `colony queen sweep`            | Find plans that are stalled, unclaimed, or ready to archive.                     |
-| `colony viewer`                 | Open the local read-only web viewer.                                             |
-| `pnpm smoke:codex-omx-pretool`  | Verify the Codex/OMX lifecycle bridge and claim-before-edit telemetry.           |
-| `pnpm smoke:health-repair-loop` | Prove bridge, quota cleanup, Queen claim, and health recommendations compose.    |
 
 Installed Codex and Claude hooks inject the quota-safe operating contract:
 start with `hivemind_context`, then `attention_inbox`, then
 `task_ready_for_agent`; accept or decline handoffs, claim files before edits,
 keep `task_note_working` current, run focused verification, and hand off before
-quota/session stop.
+quota or session stop.
 
 ---
 
 ## Health
 
-`colony health` shows whether agents are only reading Colony or actually
-coordinating through it.
-
-The first screen is action-first: bad readiness areas are grouped into the
-next exact command or MCP call, and lower-priority follow-ups stay hidden until
-`--verbose`.
-
-<p align="center">
-  <img src="docs/assets/colony-health.png" alt="Colony health readiness summary" width="900" />
-</p>
+`colony health` shows whether agents are only **reading** Colony or actually
+**coordinating** through it. The first screen is action-first: bad readiness
+areas are grouped into the next exact command or MCP call. Lower-priority
+follow-ups stay hidden until `--verbose`.
 
 ```text
 Readiness summary
@@ -219,14 +184,14 @@ Readiness summary
 
 Healthy runs trend toward:
 
-| Metric                                            | Target                               |
-| ------------------------------------------------- | ------------------------------------ |
-| `hivemind_context -> attention_inbox`             | 50%+                                 |
-| `attention_inbox -> task_ready_for_agent`         | 90%+                                 |
-| `task_ready_for_agent -> task_plan_claim_subtask` | 30%+ when plans exist                |
-| claim-before-edit                                 | 50%+                                 |
-| Colony note share                                 | 70%+                                 |
-| stale claims                                      | near zero active-impact stale claims |
+| Metric                                            | Target                |
+| ------------------------------------------------- | --------------------- |
+| `hivemind_context -> attention_inbox`             | 50%+                  |
+| `attention_inbox -> task_ready_for_agent`         | 90%+                  |
+| `task_ready_for_agent -> task_plan_claim_subtask` | 30%+ when plans exist |
+| claim-before-edit                                 | 50%+                  |
+| Colony note share                                 | 70%+                  |
+| stale claims                                      | near zero active      |
 
 | If this is red            | First move                                                  |
 | ------------------------- | ----------------------------------------------------------- |
@@ -251,8 +216,8 @@ When `task_claim_file before edits` says `metric unreliable`, fix runtime
 bridge or metadata first. Do not treat a bad claim ratio as agent discipline
 until `omx_runtime_bridge.status` is fresh and edit events carry paths.
 
-Safe stale-claim cleanup is opt-in because releasing a claim changes who may edit
-a file:
+Safe stale-claim cleanup is opt-in because releasing a claim changes who may
+edit a file:
 
 ```bash
 colony health --fix-plan
@@ -263,41 +228,45 @@ colony health --hours 1
 
 ---
 
-## Live Graph
-
-The local viewer renders active sessions, tool calls, handoffs, messages, file
-claims, stalled lanes, and shared work traces.
-
-<p align="center">
-  <img src="docs/assets/colony-graph-live.png" alt="Colony live graph showing active agent sessions, MCP tool calls, handoffs, shares, and claims" width="900" />
-</p>
-
-```bash
-colony viewer
-```
-
-Use it to see active vs stalled lanes, who is claiming work, whether
-`task_ready_for_agent` is replacing `task_list`, and which stale traces should
-decay or be swept.
-
----
-
 ## Token Savings
 
 Colony saves tokens by making coordination compact, searchable, and
 progressively hydrated. `colony gain` shows live `mcp_metrics` receipts first,
-including measured per-session totals, then a shared reference model for common
-agent loops. Live numbers are recorded by the MCP server on every wrapped tool
-call into the `mcp_metrics` SQLite table. The reference model remains static by
-design; live session averages are derived from the moving window.
+then a shared reference model for common agent loops.
+
+<p align="center">
+  <img src="docs/assets/colony-savings.svg" alt="Token savings: Colony reduces handoffs, search, ownership lookup, and coordination from thousands of tokens to hundreds" width="100%" />
+</p>
 
 ```bash
-colony gain                       # CLI: live + reference, last 7 days
+colony gain                       # live + reference, last 7 days
 colony gain --hours 24 --json     # last 24 hours as JSON
 colony gain --operation search    # filter live rows to one tool name
 colony gain --session-limit 0     # print every live session in the window
 colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
 ```
+
+Why the savings show up where they do:
+
+- **Compression at rest.** Every observation runs through `@colony/compress`
+  before SQLite. Prose shrinks ~70% while paths, URLs, code, commands, version
+  numbers, and dates stay byte-for-byte intact.
+- **Progressive disclosure.** `search`, `timeline`, `attention_inbox`,
+  `task_ready_for_agent`, and friends return compact IDs plus snippets. Full
+  bodies only ship via `get_observations([ids])`, so callers pay only for what
+  they hydrate.
+- **Cross-session recall.** Instead of re-reading 5–10 files plus `git log`
+  to rederive prior decisions, agents `search` and pull a single observation.
+- **Claim-aware routing.** `task_ready_for_agent` returns the next claimable
+  action and exact claim arguments, so agents stop browsing task lists just to
+  choose work.
+- **Stale-signal decay.** Expired handoffs, weak claims, and stranded lanes
+  surface as compact attention items instead of full historical transcripts.
+- **Tiny handoffs.** A durable handoff can be `branch`, `task`, `blocker`,
+  `next`, and `evidence` instead of a pasted session log.
+
+<details>
+<summary><strong>Full reference table — all 21 operations</strong></summary>
 
 | Operation                            | Frequency / session | Standard | Colony | Saved |
 | ------------------------------------ | ------------------- | -------- | ------ | ----- |
@@ -323,21 +292,7 @@ colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
 | Quota-exhausted handoff              | 1x                  | 22,000   | 500    | 98%   |
 | Storage at rest (per observation)    | 1x                  | 1,000    | 300    | 70%   |
 
-These rows are estimates, not a benchmark claim. Their purpose is to show where
-the context cost disappears:
-
-- **Compression at rest.** Every observation runs through `@colony/compress` before SQLite. Prose shrinks ~70% while paths, URLs, code, commands, version numbers, and dates stay byte-for-byte intact.
-- **Progressive disclosure.** `search`, `timeline`, `attention_inbox`, `task_ready_for_agent`, and friends return compact IDs plus snippets. Full bodies only ship via `get_observations([ids])`, so callers pay only for what they hydrate.
-- **Cross-session recall.** Instead of re-reading 5-10 files plus git log to rederive prior decisions, agents `search` and pull a single observation.
-- **Claim-aware routing.** `task_ready_for_agent` returns the next claimable action and exact claim arguments, so agents stop browsing task lists just to choose work.
-- **Stale-signal decay.** Expired handoffs, weak claims, and stranded lanes surface as compact attention items instead of full historical transcripts.
-- **Tiny handoffs.** A durable handoff can be `branch`, `task`, `blocker`, `next`, and `evidence` instead of a pasted session log.
-
-For a publishable summary: Colony replaces repeated repo scans, chat-history
-scrollback, and full-log handoffs with compact SQLite observations. Agents read
-small coordination records first, then hydrate only the records needed for the
-current step. That is why savings are highest for handoffs, ready-work
-selection, timeline review, and search-heavy recovery work.
+</details>
 
 The MCP `savings_report` tool returns the same data:
 
@@ -345,21 +300,60 @@ The MCP `savings_report` tool returns the same data:
 { "name": "savings_report", "input": { "hours": 24 } }
 ```
 
-Live numbers are visible at <http://127.0.0.1:6510/savings> when `colony viewer`
-is running. Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>`,
+Live numbers are visible at `http://127.0.0.1:6510/savings` when
+`colony viewer` is running. Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>`,
 `?session_limit=0`, or set `COLONY_MCP_INPUT_USD_PER_1M` /
 `COLONY_MCP_OUTPUT_USD_PER_1M` to show estimated USD cost per operation.
-Reference rows are shared across CLI, MCP, and viewer through
-`packages/core/src/savings-reference.ts` — update once, three surfaces update
-together.
 
-`mcp_metrics` is a runtime debug aid: per-call `(operation, ts, input_bytes,
-output_bytes, input_tokens, output_tokens, duration_ms, ok, session_id,
-repo_root, error_code, error_message)` rows recorded by the metrics wrapper in
-`apps/mcp-server`. When live token usage looks wrong, inspect `mcp_metrics` to
-see which tool is heavy and why recent failures happened. Monetary cost is
-computed at report time from live token receipts and caller-provided
-USD-per-1M rates, so older rows gain cost visibility without a schema migration.
+---
+
+## Signal Lifecycle
+
+Colony follows a stigmergic model: agents leave local traces, other agents
+react to useful traces, and stale traces evaporate.
+
+<p align="center">
+  <img src="docs/assets/colony-signal-lifecycle.svg" alt="Signal lifecycle: fresh traces guide, useful traces are reinforced, stale traces decay and are swept" width="100%" />
+</p>
+
+| Biology            | Colony                                |
+| ------------------ | ------------------------------------- |
+| ant                | agent session                         |
+| nest               | repository                            |
+| pheromone          | claim, proposal, handoff, message     |
+| evaporation        | TTL, decay, sweep                     |
+| response threshold | agent profile plus ready-work ranking |
+| queen              | plan publisher, not commander         |
+
+Practical effects:
+
+- fresh claims warn other agents before they edit
+- old claims weaken so they stop blocking current work
+- proposals can be reinforced instead of lost
+- Queen waves unlock in order without assigning shells
+- agents hydrate only relevant observation bodies after compact routing
+
+---
+
+## What Colony Can Do Right Now
+
+| Capability                 | Current surface                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| Install runtime hooks      | `colony install --ide claude-code`, `codex`, `cursor`, `gemini-cli`, `opencode` |
+| Capture local observations | lifecycle hooks, prompt events, tool events, session heartbeat                  |
+| Search prior work          | `colony search`, MCP `search`, `timeline`, `get_observations`                   |
+| See active lanes           | MCP `hivemind_context`, `attention_inbox`, CLI coordination reports             |
+| Claim work safely          | `task_ready_for_agent`, `task_plan_claim_subtask`, `task_claim_file`            |
+| Coordinate agents          | `task_post`, `task_message`, handoffs, working notes                            |
+| Publish wave plans         | Queen plans and `task_plan_*` MCP tools                                         |
+| Clean stale signals        | `colony coordination sweep`, `colony queen sweep`, health fix plans             |
+| Inspect the graph          | `colony viewer` local read-only graph                                           |
+| Measure token savings      | `colony gain`, MCP `savings_report`, viewer `/savings`                          |
+| Prove behavior             | `colony health`, smoke tests, adoption metrics                                  |
+
+Use Colony when you run more than one coding agent in the same repo, use
+worktrees or parallel branches, need local-first memory, or want stale claims
+and handoffs to stop shaping current work.
 
 ---
 
@@ -419,40 +413,12 @@ Copy-paste startup:
 }
 ```
 
-When plan work is claimable, `task_ready_for_agent` returns `next_tool:
-"task_plan_claim_subtask"` plus exact `claim_args`. When no work is claimable,
-it returns an empty state that tells the agent to publish a Queen/task plan for
-multi-agent work.
+When plan work is claimable, `task_ready_for_agent` returns
+`next_tool: "task_plan_claim_subtask"` plus exact `claim_args`. When no work
+is claimable, it returns an empty state that tells the agent to publish a
+Queen/task plan for multi-agent work.
 
 Full MCP catalog: [docs/mcp.md](docs/mcp.md)
-
----
-
-## Signal Lifecycle
-
-<p align="center">
-  <img src="docs/assets/colony-signal-lifecycle.png" alt="Colony signal lifecycle from fresh traces to reinforcement, decay, expiry, and sweep" width="900" />
-</p>
-
-Colony follows a stigmergic model: agents leave local traces, other agents react
-to useful traces, and stale traces evaporate.
-
-| Biology            | Colony                                |
-| ------------------ | ------------------------------------- |
-| ant                | agent session                         |
-| nest               | repository                            |
-| pheromone          | claim, proposal, handoff, message     |
-| evaporation        | TTL, decay, sweep                     |
-| response threshold | agent profile plus ready-work ranking |
-| queen              | plan publisher, not commander         |
-
-Practical effects:
-
-- fresh claims warn other agents before they edit
-- old claims weaken so they stop blocking current work
-- proposals can be reinforced instead of lost
-- Queen waves unlock in order without assigning shells
-- agents hydrate only relevant observation bodies after compact routing
 
 ---
 
@@ -563,9 +529,9 @@ stale claims, confusing handoffs, missing session context, noisy proposals,
 stranded sessions, hot files that were missed, or edits that should have been
 claimed before mutation.
 
-For code changes, prefer small observable primitives over central orchestration.
-Colony should help agents coordinate by leaving durable local traces, not by
-becoming a remote control plane.
+For code changes, prefer small observable primitives over central
+orchestration. Colony should help agents coordinate by leaving durable local
+traces, not by becoming a remote control plane.
 
 ---
 

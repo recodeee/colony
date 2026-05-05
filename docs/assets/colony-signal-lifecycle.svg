@@ -1,85 +1,140 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360" role="img" aria-labelledby="title desc">
-  <title id="title">Colony signal lifecycle</title>
-  <desc id="desc">A lifecycle diagram showing claims, handoffs, and proposals moving from fresh traces through reinforcement, decay, expiry, sweep, and archive.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 360" role="img" aria-label="Signal lifecycle: fresh traces are reinforced or decay, expire, and are swept">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#08111c"/>
-      <stop offset="1" stop-color="#111827"/>
+    <linearGradient id="bgFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0a1628"/>
+      <stop offset="50%" stop-color="#0a1628"/>
+      <stop offset="100%" stop-color="#100a0e"/>
     </linearGradient>
-    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M0 0L10 5L0 10Z" fill="#64748b"/>
-    </marker>
-    <style>
-      text{fill:#e5e7eb;font-family:Arial,sans-serif;letter-spacing:0}
-      .panel{fill:#0b0f14;stroke:#253040;stroke-width:1.2}
-      .fresh{fill:#052e2b;stroke:#34d399;stroke-width:1.6}
-      .reinforced{fill:#211538;stroke:#a78bfa;stroke-width:1.5}
-      .weak{fill:#2a1f05;stroke:#f59e0b;stroke-width:1.5}
-      .expired{fill:#2b1118;stroke:#fb7185;stroke-width:1.5}
-      .archive{fill:#111827;stroke:#64748b;stroke-width:1.4}
-      .line{stroke:#64748b;stroke-width:1.5;fill:none;marker-end:url(#arrow)}
-      .dash{stroke:#f59e0b;stroke-width:1.4;fill:none;stroke-dasharray:6 7;marker-end:url(#arrow)}
-      .muted{fill:#94a3b8}
-      .mono{font-family:monospace;letter-spacing:0}
-      .tiny{font-size:12px}
-      .small{font-size:14px}
-    </style>
+    <linearGradient id="freshGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="decayGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.9"/>
+      <stop offset="40%" stop-color="#a78bfa" stop-opacity="0.7"/>
+      <stop offset="75%" stop-color="#f59e0b" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ef4444" stop-opacity="0.2"/>
+    </linearGradient>
+    <filter id="sigGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
-  <rect width="900" height="360" rx="22" fill="url(#bg)"/>
-  <rect x="1" y="1" width="898" height="358" rx="21" fill="none" stroke="#1f2937"/>
-  <text x="34" y="44" font-size="25" font-weight="720">Coordination signals have a lifecycle</text>
-  <text x="34" y="68" font-size="14" class="muted">Useful traces can be reinforced. Stale traces decay so they stop blocking current work.</text>
 
-  <g transform="translate(46 126)">
-    <rect class="fresh" width="146" height="86" rx="16"/>
-    <text x="20" y="32" font-size="15" font-weight="720">Fresh trace</text>
-    <text x="20" y="58" font-size="12" class="muted mono tiny">claim / handoff</text>
-    <text x="20" y="76" font-size="12" class="muted mono tiny">proposal / note</text>
+  <rect width="900" height="360" fill="url(#bgFade)"/>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="450" y="38" text-anchor="middle" fill="#e2e8f0" font-size="20" font-weight="600">Signal lifecycle</text>
+    <text x="450" y="58" text-anchor="middle" fill="#64748b" font-size="12">Fresh traces guide. Useful traces get reinforced. Stale traces evaporate.</text>
   </g>
 
-  <g transform="translate(244 126)">
-    <rect class="reinforced" width="146" height="86" rx="16"/>
-    <text x="20" y="32" font-size="15" font-weight="720">Reinforced</text>
-    <text x="20" y="58" font-size="12" class="muted mono tiny">message reply</text>
-    <text x="20" y="76" font-size="12" class="muted mono tiny">proposal support</text>
+  <!-- Timeline rail -->
+  <line x1="80" y1="200" x2="820" y2="200" stroke="#1e293b" stroke-width="1"/>
+  <line x1="80" y1="200" x2="820" y2="200" stroke="url(#decayGrad)" stroke-width="3" opacity="0.6"/>
+
+  <!-- Tick marks + labels -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" fill="#64748b">
+    <g transform="translate(120 200)">
+      <line y1="-6" y2="6" stroke="#475569"/>
+      <text y="22" text-anchor="middle">t=0</text>
+    </g>
+    <g transform="translate(310 200)">
+      <line y1="-6" y2="6" stroke="#475569"/>
+      <text y="22" text-anchor="middle">+30m</text>
+    </g>
+    <g transform="translate(500 200)">
+      <line y1="-6" y2="6" stroke="#475569"/>
+      <text y="22" text-anchor="middle">+2h</text>
+    </g>
+    <g transform="translate(690 200)">
+      <line y1="-6" y2="6" stroke="#475569"/>
+      <text y="22" text-anchor="middle">+TTL</text>
+    </g>
   </g>
 
-  <g transform="translate(442 126)">
-    <rect class="weak" width="146" height="86" rx="16"/>
-    <text x="20" y="32" font-size="15" font-weight="720">Weak / stale</text>
-    <text x="20" y="58" font-size="12" class="muted mono tiny">TTL passed</text>
-    <text x="20" y="76" font-size="12" class="muted mono tiny">owner inactive</text>
+  <!-- ============= STAGE 1: FRESH ============= -->
+  <g transform="translate(120 200)">
+    <!-- pulsing aura -->
+    <circle r="22" fill="#22d3ee" opacity="0.15">
+      <animate attributeName="r" values="20;30;20" dur="1.6s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.25;0;0.25" dur="1.6s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="14" fill="url(#freshGrad)" filter="url(#sigGlow)"/>
+    <circle r="14" fill="none" stroke="#67e8f9" stroke-width="1" opacity="0.7"/>
+    <text y="-46" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Fresh</text>
+    <text y="-30" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">claim posted</text>
   </g>
 
-  <g transform="translate(640 126)">
-    <rect class="expired" width="146" height="86" rx="16"/>
-    <text x="20" y="32" font-size="15" font-weight="720">Expired</text>
-    <text x="20" y="58" font-size="12" class="muted mono tiny">visible to audit</text>
-    <text x="20" y="76" font-size="12" class="muted mono tiny">not active ownership</text>
+  <!-- ============= STAGE 2: REINFORCED (branch up) ============= -->
+  <g transform="translate(310 200)">
+    <!-- branching arrow up -->
+    <path d="M 0 0 Q 0 -50 -10 -75" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.7"/>
+    <circle r="11" fill="#022c22" stroke="#34d399" stroke-width="1.5">
+      <animate attributeName="r" values="11;13;11" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M -3 0 L -1 3 L 4 -3" stroke="#6ee7b7" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- reinforced label up top -->
+    <g transform="translate(-10 -90)">
+      <rect x="-50" y="-14" width="100" height="22" rx="11" fill="#052e1f" stroke="#10b981"/>
+      <text y="2" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">reinforced &#8593;</text>
+    </g>
   </g>
 
-  <g transform="translate(361 260)">
-    <rect class="archive" width="178" height="56" rx="14"/>
-    <text x="30" y="25" font-size="15" font-weight="720">Sweep / archive</text>
-    <text x="30" y="43" font-size="12" class="muted mono tiny">keep proof, reduce noise</text>
+  <!-- ============= STAGE 3: DECAYING ============= -->
+  <g transform="translate(500 200)">
+    <circle r="11" fill="#3b2a0a" stroke="#f59e0b" stroke-width="1.5" opacity="0.9"/>
+    <!-- evaporation particles -->
+    <g fill="#fbbf24" opacity="0.8">
+      <circle r="1.5" cy="-14">
+        <animate attributeName="cy" values="-14;-44" dur="1.8s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.9;0" dur="1.8s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="1.2" cx="-5" cy="-14">
+        <animate attributeName="cy" values="-14;-50" dur="2.2s" begin="0.4s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.9;0" dur="2.2s" begin="0.4s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="1.2" cx="6" cy="-14">
+        <animate attributeName="cy" values="-14;-46" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+        <animate attributeName="opacity" values="0.9;0" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <text y="-50" text-anchor="middle" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Decaying</text>
+    <text y="-34" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">half-life ticks</text>
   </g>
 
-  <path class="line" d="M192 169H235"/>
-  <path class="line" d="M390 169H433"/>
-  <path class="line" d="M588 169H631"/>
-  <path class="line" d="M706 212C690 268 591 288 548 288"/>
-  <path class="line" d="M442 288H399"/>
-  <path class="dash" d="M317 126C330 88 517 88 517 126"/>
-
-  <g transform="translate(83 248)">
-    <rect class="panel" width="210" height="52" rx="12"/>
-    <text x="17" y="22" font-size="12" class="muted mono tiny">attention_inbox surfaces</text>
-    <text x="17" y="40" font-size="12" class="muted mono tiny">what still needs a reply</text>
+  <!-- ============= STAGE 4: EXPIRED / SWEEP ============= -->
+  <g transform="translate(690 200)">
+    <circle r="11" fill="none" stroke="#7f1d1d" stroke-width="1.2" stroke-dasharray="3 2" opacity="0.7">
+      <animate attributeName="opacity" values="0.7;0.2;0.7" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <line x1="-7" y1="-7" x2="7" y2="7" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
+    <line x1="-7" y1="7" x2="7" y2="-7" stroke="#ef4444" stroke-width="1.5" opacity="0.7"/>
+    <text y="-46" text-anchor="middle" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Expired</text>
+    <text y="-30" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">colony sweep</text>
   </g>
 
-  <g transform="translate(607 248)">
-    <rect class="panel" width="210" height="52" rx="12"/>
-    <text x="17" y="22" font-size="12" class="muted mono tiny">coordination sweep reports</text>
-    <text x="17" y="40" font-size="12" class="muted mono tiny">safe cleanup candidates</text>
+  <!-- Sweep brush passing through -->
+  <g filter="url(#sigGlow)" opacity="0.8">
+    <rect x="-30" y="180" width="30" height="40" rx="3" fill="#22d3ee" opacity="0.25">
+      <animate attributeName="x" values="-30;860" dur="9s" begin="2s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- Legend / Biology to Colony -->
+  <g transform="translate(80 290)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text fill="#64748b" font-size="11">Stigmergic model:</text>
+    <g transform="translate(115 0)">
+      <text fill="#94a3b8" font-size="11"><tspan fill="#67e8f9">pheromone</tspan> &#8594; claim &#8226; <tspan fill="#67e8f9">evaporation</tspan> &#8594; TTL/sweep &#8226; <tspan fill="#67e8f9">queen</tspan> &#8594; plan publisher (not commander)</text>
+    </g>
+  </g>
+
+  <!-- Bottom annotation: the 4 outcomes -->
+  <g transform="translate(0 320)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" fill="#64748b">
+    <text x="120" text-anchor="middle">warns other agents</text>
+    <text x="310" text-anchor="middle">promoted to plan</text>
+    <text x="500" text-anchor="middle">stops blocking work</text>
+    <text x="690" text-anchor="middle">removed from view</text>
   </g>
 </svg>
