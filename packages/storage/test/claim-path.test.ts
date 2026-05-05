@@ -85,6 +85,27 @@ describe('normalizeRepoFilePath', () => {
     );
   });
 
+  it('strips managed worktree prefixes from repo-scoped paths', () => {
+    const { repoRoot } = repoFixture();
+    const worktreeFile = join(
+      repoRoot,
+      '.omx',
+      'agent-worktrees',
+      'colony__codex__path-match',
+      'src',
+      'bridge.ts',
+    );
+
+    expect(normalizeRepoFilePath(repoRoot, repoRoot, worktreeFile)).toBe('src/bridge.ts');
+    expect(
+      normalizeClaimPath(
+        repoRoot,
+        repoRoot,
+        '.omc/agent-worktrees/colony__claude__path-match/packages/api/bridge.ts',
+      ),
+    ).toBe('packages/api/bridge.ts');
+  });
+
   it('collapses duplicate slashes in relative paths', () => {
     const { repoRoot } = repoFixture();
 

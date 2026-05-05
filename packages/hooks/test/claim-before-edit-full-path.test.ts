@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
-import { MemoryStore } from '@colony/core';
+import { MemoryStore, TaskThread } from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runOmxLifecycleEnvelope } from '../src/lifecycle-envelope.js';
@@ -101,6 +101,91 @@ describe('claim-before-edit full bridge path', () => {
       },
     });
     expect(stats.edits_claimed_before / stats.edits_with_file_path).toBeGreaterThan(0);
+  });
+
+  it('keeps a manual task_claim_file claim matched when the lifecycle edit path is in a managed worktree', async () => {
+    const sessionId = 'codex@managed-worktree-manual-claim';
+    const worktreePath = join(
+      repoRoot,
+      '.omx',
+      'agent-worktrees',
+      'colony__codex__manual-claim',
+    );
+    mkdirSync(join(worktreePath, 'src'), { recursive: true });
+
+    await emitLifecycle(10, {
+      event_id: 'evt_manual_claim_session_start',
+      event_name: 'session_start',
+      session_id: sessionId,
+      cwd: worktreePath,
+      repo_root: repoRoot,
+    });
+    await emitLifecycle(20, {
+      event_id: 'evt_manual_claim_task_bind',
+      event_name: 'task_bind',
+      session_id: sessionId,
+      cwd: worktreePath,
+      repo_root: repoRoot,
+    });
+    const taskId = store.storage.findActiveTaskForSession(sessionId);
+    expect(taskId).toBeDefined();
+    if (taskId === undefined) throw new Error('task was not bound');
+
+    new TaskThread(store, taskId).claimFile({
+      session_id: sessionId,
+      file_path: FILE_PATH,
+      note: 'manual task_claim_file',
+    });
+    expect(store.storage.getClaim(taskId, FILE_PATH)).toMatchObject({
+      session_id: sessionId,
+      file_path: FILE_PATH,
+    });
+
+    const absoluteWorktreeFile = join(worktreePath, FILE_PATH);
+    const tool_input = {
+      operation: 'replace',
+      paths: [{ path: absoluteWorktreeFile, role: 'target', kind: 'file' }],
+    };
+    await emitLifecycle(100, {
+      event_id: 'evt_manual_claim_edit_pre',
+      event_name: 'pre_tool_use',
+      session_id: sessionId,
+      cwd: worktreePath,
+      repo_root: worktreePath,
+      tool_name: 'Edit',
+      tool_input,
+    });
+    writeFileSync(absoluteWorktreeFile, 'export const example = 4;\n');
+    await emitLifecycle(200, {
+      event_id: 'evt_manual_claim_edit_post',
+      parent_event_id: 'evt_manual_claim_edit_pre',
+      event_name: 'post_tool_use',
+      session_id: sessionId,
+      cwd: worktreePath,
+      repo_root: worktreePath,
+      tool_name: 'Edit',
+      tool_input,
+      tool_response: { success: true },
+    });
+
+    const telemetry = store.storage.taskObservationsByKind(taskId, 'claim-before-edit');
+    expect(telemetry).toHaveLength(1);
+    expect(parseMetadata(telemetry[0]?.metadata)).toMatchObject({
+      outcome: 'edits_with_claim',
+      file_path: FILE_PATH,
+      tool: 'Edit',
+    });
+
+    expect(store.storage.claimBeforeEditStats(0)).toMatchObject({
+      edit_tool_calls: 1,
+      edits_with_file_path: 1,
+      edits_claimed_before: 1,
+      claim_miss_reasons: {
+        path_mismatch: 0,
+        repo_root_mismatch: 0,
+        worktree_path_mismatch: 0,
+      },
+    });
   });
 
   it('synthesizes pre_tool_use before post_tool_use telemetry when post arrives first', async () => {

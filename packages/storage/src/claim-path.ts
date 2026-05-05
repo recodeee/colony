@@ -52,7 +52,7 @@ export function normalizeRepoFilePath(
   const relativePath = absolutePath
     ? repoRelativePath({ absolutePath, repoRoot })
     : normalizeRelativePath(rawPath);
-  if (relativePath !== null) return relativePath;
+  if (relativePath !== null) return stripManagedWorktreePrefix(relativePath);
   if (absolutePath && repoRoot) return null;
   if (absolutePath) return normalizeSlashes(path.normalize(absolutePath));
   return normalizeRelativePath(rawPath);
@@ -120,6 +120,12 @@ function normalizeRelativePath(value: string): string {
   const normalized = normalizeSlashes(path.normalize(value));
   if (normalized === '.') return '.';
   return normalized.replace(/^(\.\/)+/, '');
+}
+
+function stripManagedWorktreePrefix(value: string): string {
+  const match = value.match(/(^|\/)\.(?:omx|omc)\/agent-worktrees\/[^/]+\/(.*)$/);
+  if (!match || match[2] === undefined) return value;
+  return match[2] === '' ? '.' : match[2];
 }
 
 function isPathInside(child: string, parent: string): boolean {

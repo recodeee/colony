@@ -1903,6 +1903,7 @@ function claimBeforeEditPayload(
     recent_hook_capable_edits: recent.recent_stats.edits_with_file_path,
     recent_pre_tool_use_signals: recentPreToolUseSignals,
     recent_pre_tool_use_missing: recentClaimMissReasons.pre_tool_use_missing,
+    recent_claim_mismatch_count: lifecycleClaimMismatchCount(recentClaimMissReasons),
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_miss_reasons: claimMissReasons,
     runtime_summary_recent_edit_paths: recent.omx_runtime_bridge.recent_edit_paths.length,
@@ -1978,6 +1979,7 @@ function lifecycleBridgeRootCause(input: {
   recent_hook_capable_edits: number;
   recent_pre_tool_use_signals: number;
   recent_pre_tool_use_missing: number;
+  recent_claim_mismatch_count: number;
   edits_without_claim_before: number;
   claim_miss_reasons: ClaimMissReasons;
   runtime_summary_recent_edit_paths: number;
@@ -1990,7 +1992,7 @@ function lifecycleBridgeRootCause(input: {
   const evidence = formatRootCauseEvidence(counters);
   const freshPreToolUseMissing =
     input.recent_hook_capable_edits > 0 && input.recent_pre_tool_use_missing > 0;
-  const noFreshBadEdits = !freshPreToolUseMissing;
+  const noFreshBadEdits = !freshPreToolUseMissing && input.recent_claim_mismatch_count === 0;
 
   if (
     input.runtime_bridge_status === 'available' &&
