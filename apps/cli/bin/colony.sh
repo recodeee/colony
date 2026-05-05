@@ -47,11 +47,6 @@ CWD=""
 JSON=""
 UNKNOWN=""
 
-# Save original argv so we can hand it back to Node on bail / fallback.
-# POSIX has no arrays — we re-shift a positional copy via a subshell-safe
-# trick: the parsed loop runs in this shell after we've recorded the
-# original via $@.
-ORIG_ARGC=$#
 shift 2
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -68,14 +63,10 @@ done
 # Bail to Node on unknown flags, missing --json (humans want pretty output),
 # or trailing positional args (we don't know how to forward them).
 if [ -n "$UNKNOWN" ] || [ "$JSON" != "1" ] || [ $# -gt 0 ]; then
-  # We've shifted past `bridge lifecycle`, but `exec node "$NODE_CLI" ...`
-  # needs the full original argv. Reconstruct: $ORIG_ARGC was the count
-  # before shift 2. We can't recover the consumed args without remembering
-  # them, so this branch is reached only when WE chose not to fast-path —
-  # in those cases the safest move is to forward the *current* state plus
-  # the known leading args we stripped. The leading two args are always
-  # `bridge lifecycle`; the parsed flags become explicit again.
-  set -- bridge lifecycle ${JSON:+--json} ${IDE:+--ide "$IDE"} ${CWD:+--cwd "$CWD"} "$@"
+  set -- bridge lifecycle
+  [ -n "$JSON" ] && set -- "$@" --json
+  [ -n "$IDE" ]  && set -- "$@" --ide "$IDE"
+  [ -n "$CWD" ]  && set -- "$@" --cwd "$CWD"
   exec node "$NODE_CLI" "$@"
 fi
 
@@ -108,4 +99,7 @@ fi
 
 # Daemon unreachable or non-200 — fall back to in-process Node with the
 # buffered envelope on stdin.
-node "$NODE_CLI" bridge lifecycle --json ${IDE:+--ide "$IDE"} ${CWD:+--cwd "$CWD"} <"$BODY"
+set -- bridge lifecycle --json
+[ -n "$IDE" ] && set -- "$@" --ide "$IDE"
+[ -n "$CWD" ] && set -- "$@" --cwd "$CWD"
+exec node "$NODE_CLI" "$@" <"$BODY"

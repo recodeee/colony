@@ -1083,4 +1083,87 @@ describe('worker HTTP', () => {
     expect(body.recent.length).toBeGreaterThan(0);
     expect(body.recent.some((r) => r.kind === 'wake_request')).toBe(true);
   });
+
+  describe('POST /api/bridge/lifecycle (daemon fast-path)', () => {
+    const baseEnvelope = {
+      schema: 'colony-omx-lifecycle-v1',
+      event_id: 'evt_daemon_fastpath_001',
+      event_name: 'pre_tool_use',
+      session_id: 'sess_daemon_fastpath',
+      agent: 'claude',
+      cwd: '/workspace/colony',
+      repo_root: '/workspace/colony',
+      branch: 'agent/claude/daemon-fastpath-test',
+      timestamp: '2026-05-05T22:00:00.000Z',
+      source: 'omx',
+      tool_name: 'Edit',
+      tool_input: {
+        operation: 'replace',
+        paths: [
+          { path: 'apps/worker/src/server.ts', role: 'target', kind: 'file' },
+        ],
+        input_summary: 'daemon fast-path round-trip test',
+        edit_count: 1,
+        file_count: 1,
+        redacted: true,
+      },
+    };
+
+    it('routes a valid envelope through the long-lived store', async () => {
+      const res = await app.request('/api/bridge/lifecycle', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-colony-ide': 'claude-code',
+          'x-colony-cwd': '/workspace/colony',
+        },
+        body: JSON.stringify(baseEnvelope),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        ok: boolean;
+        event_type?: string;
+        route?: string;
+        error?: string;
+      };
+      expect(body.ok).toBe(true);
+      expect(body.event_type).toBe('pre_tool_use');
+      // Session must have been created against the long-lived store, not a
+      // freshly-opened-and-closed one. Reading it back proves the daemon
+      // path is actually using the injected store.
+      expect(store.storage.getSession('sess_daemon_fastpath')).toBeDefined();
+    });
+
+    it('treats a duplicate envelope as a no-op route=duplicate', async () => {
+      const dupEnvelope = { ...baseEnvelope, event_id: 'evt_daemon_dup_001' };
+      const first = await app.request('/api/bridge/lifecycle', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(dupEnvelope),
+      });
+      expect(first.status).toBe(200);
+      const second = await app.request('/api/bridge/lifecycle', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(dupEnvelope),
+      });
+      expect(second.status).toBe(200);
+      const body = (await second.json()) as { ok: boolean; route?: string; duplicate?: boolean };
+      expect(body.ok).toBe(true);
+      expect(body.duplicate).toBe(true);
+      expect(body.route).toBe('duplicate');
+    });
+
+    it('returns ok:false on a malformed envelope without throwing', async () => {
+      const res = await app.request('/api/bridge/lifecycle', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"this":"is not a colony envelope"}',
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; error?: string };
+      expect(body.ok).toBe(false);
+      expect(typeof body.error).toBe('string');
+    });
+  });
 });
