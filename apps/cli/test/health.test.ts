@@ -1189,7 +1189,7 @@ describe('colony health payload', () => {
     expect(text).toContain('quota expired:    1');
     expect(text).toContain('quota top action: release expired task 1 relay #8');
     expect(text).toContain(
-      'Top action: release expired task 1 relay #8 (src/quota-expired.ts). Accept the quota relay, decline/reroute it, or release expired quota-pending claims',
+      'Top action: release expired task 1 relay #8 (src/quota-expired.ts). Release expired quota-pending claims with task_claim_quota_release_expired; this keeps audit history and removes active blockers.',
     );
 
     const verboseText = formatColonyHealthOutput(payload, { verbose: true });
@@ -2257,7 +2257,7 @@ describe('colony health payload', () => {
         metric: 'stale claims',
         current: '1',
         target: '0',
-        action: expect.stringContaining('coordination sweep/rescue'),
+        action: expect.stringContaining('dry stale-claim sweep'),
         tool_call: expect.stringContaining('mcp__colony__rescue_stranded_scan'),
         command: 'colony coordination sweep --json',
         prompt: expect.stringContaining('colony coordination sweep --json'),
@@ -2293,7 +2293,7 @@ describe('colony health payload', () => {
       'tool: mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim" })',
     );
     expect(text).toContain('cmd:  colony install --ide <ide>');
-    expect(text).toContain('stale claims: 1 (target 0) - Run colony coordination sweep/rescue');
+    expect(text).toContain('stale claims: 1 (target 0) - Run a dry stale-claim sweep');
     expect(text).toContain('cmd:  colony coordination sweep --json');
     expect(text).toContain(
       'task_post/task_note_working share: 0% (target 70%+) - Use task_note_working first',
@@ -2941,7 +2941,16 @@ describe('colony health payload', () => {
         summaries_ingested: 1,
         latest_summary_age_ms: 30 * 60_000,
       });
-      expect(formatColonyHealthOutput(payload)).toContain('status:              stale');
+      const text = formatColonyHealthOutput(payload);
+      const focus = outputSection(text, 'Health focus');
+      expect(text).toContain('status:              stale');
+      expect(focus).toContain('top blocker: OMX runtime bridge: stale');
+      expect(focus).toContain(
+        'next action: Metric unreliable: refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits before judging claim failures.',
+      );
+      expect(focus).toContain(
+        'cmd:  colony bridge runtime-summary --json --repo-root <repo_root> < .omx/state/colony-runtime-summary.json',
+      );
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }
