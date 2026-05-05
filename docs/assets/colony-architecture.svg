@@ -1,168 +1,416 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 460" role="img" aria-label="Colony architecture: agent runtimes execute, Colony coordinates, Queen plans, all over a local SQLite substrate">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" role="img" aria-label="Colony architecture: distinct agent runtimes send claims, handoffs, and observations into Colony's coordination modules; Queen publishes plans; everything persists to a local SQLite store">
   <defs>
-    <linearGradient id="archBg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0a1426"/>
-      <stop offset="100%" stop-color="#04080f"/>
+    <radialGradient id="bgRad" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#0a1830"/>
+      <stop offset="60%" stop-color="#040c1a"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </radialGradient>
+
+    <linearGradient id="coreGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0e7490" stop-opacity="0.55"/>
+      <stop offset="50%" stop-color="#0c4a6e" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#082f49" stop-opacity="0.6"/>
     </linearGradient>
-    <linearGradient id="layer1" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1e1b4b" stop-opacity="0.6"/>
-      <stop offset="100%" stop-color="#1e1b4b" stop-opacity="0.2"/>
+    <linearGradient id="coreEdge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0.3"/>
     </linearGradient>
-    <linearGradient id="layer2" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0e7490" stop-opacity="0.7"/>
-      <stop offset="100%" stop-color="#0e7490" stop-opacity="0.25"/>
-    </linearGradient>
-    <linearGradient id="layer3" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.5"/>
-      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0.15"/>
-    </linearGradient>
-    <linearGradient id="layer4" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0f172a"/>
+
+    <linearGradient id="modGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1c2c"/>
       <stop offset="100%" stop-color="#020617"/>
     </linearGradient>
-    <filter id="archGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="2" result="b"/>
+
+    <linearGradient id="queenGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b0764" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#1e1b4b" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <linearGradient id="runtimeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#030712"/>
+    </linearGradient>
+
+    <linearGradient id="drumBody" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="50%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <filter id="coreGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
-  </defs>
+    <filter id="dotGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="1.8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
 
-  <rect width="900" height="460" fill="url(#archBg)"/>
-
-  <!-- Title -->
-  <g font-family="ui-sans-serif, system-ui, sans-serif">
-    <text x="450" y="36" text-anchor="middle" fill="#e2e8f0" font-size="20" font-weight="600">How Colony fits</text>
-    <text x="450" y="54" text-anchor="middle" fill="#64748b" font-size="12">Runtimes execute. Colony coordinates. Queen plans. All local-first.</text>
-  </g>
-
-  <!-- Layer 1: Runtimes -->
-  <g transform="translate(80 80)">
-    <rect width="740" height="78" rx="10" fill="url(#layer1)" stroke="#312e81" stroke-width="1"/>
-    <text x="22" y="28" fill="#a5b4fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">RUNTIMES</text>
-    <text x="22" y="46" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">execute tools, edit files, run tests</text>
-
-    <!-- runtime pills -->
-    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
-      <g transform="translate(220 50)">
-        <rect x="-44" y="-14" width="88" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
-        <text y="3" text-anchor="middle" fill="#c7d2fe">Claude Code</text>
-      </g>
-      <g transform="translate(320 50)">
-        <rect x="-30" y="-14" width="60" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
-        <text y="3" text-anchor="middle" fill="#c7d2fe">Codex</text>
-      </g>
-      <g transform="translate(400 50)">
-        <rect x="-30" y="-14" width="60" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
-        <text y="3" text-anchor="middle" fill="#c7d2fe">Cursor</text>
-      </g>
-      <g transform="translate(490 50)">
-        <rect x="-44" y="-14" width="88" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
-        <text y="3" text-anchor="middle" fill="#c7d2fe">Gemini CLI</text>
-      </g>
-      <g transform="translate(600 50)">
-        <rect x="-44" y="-14" width="88" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
-        <text y="3" text-anchor="middle" fill="#c7d2fe">OpenCode</text>
-      </g>
-      <g transform="translate(700 50)">
-        <rect x="-30" y="-14" width="60" height="26" rx="13" fill="#0f172a" stroke="#6366f1"/>
-        <text y="3" text-anchor="middle" fill="#c7d2fe">&#8230;</text>
-      </g>
-    </g>
-  </g>
-
-  <!-- Down arrows: runtimes -> Colony -->
-  <g stroke="#475569" stroke-width="1" fill="none">
-    <path d="M 250 162 V 188" marker-end="url(#archArrow)">
-      <animate attributeName="stroke" values="#475569;#22d3ee;#475569" dur="3s" repeatCount="indefinite"/>
-    </path>
-    <path d="M 450 162 V 188" marker-end="url(#archArrow)">
-      <animate attributeName="stroke" values="#475569;#22d3ee;#475569" dur="3s" begin="0.6s" repeatCount="indefinite"/>
-    </path>
-    <path d="M 650 162 V 188" marker-end="url(#archArrow)">
-      <animate attributeName="stroke" values="#475569;#22d3ee;#475569" dur="3s" begin="1.2s" repeatCount="indefinite"/>
-    </path>
-  </g>
-
-  <defs>
-    <marker id="archArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#22d3ee"/>
-    </marker>
-  </defs>
-
-  <!-- Layer 2: COLONY (the substrate, prominent) -->
-  <g transform="translate(80 195)">
-    <rect width="740" height="92" rx="12" fill="url(#layer2)" stroke="#22d3ee" stroke-width="1.5" filter="url(#archGlow)">
-      <animate attributeName="stroke-opacity" values="0.8;1;0.8" dur="3s" repeatCount="indefinite"/>
-    </rect>
-    <text x="22" y="28" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">COLONY &#8226; LOCAL COORDINATION SUBSTRATE</text>
-    <text x="22" y="46" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">routes work, tracks claims, records handoffs, stores memory, reports health</text>
-
-    <!-- capability chips -->
-    <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="10.5">
-      <g transform="translate(60 70)">
-        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">claims</text>
-      </g>
-      <g transform="translate(160 70)">
-        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">handoffs</text>
-      </g>
-      <g transform="translate(260 70)">
-        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">memory</text>
-      </g>
-      <g transform="translate(360 70)">
-        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">routing</text>
-      </g>
-      <g transform="translate(460 70)">
-        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">health</text>
-      </g>
-      <g transform="translate(560 70)">
-        <rect x="-44" y="-11" width="88" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">search</text>
-      </g>
-      <g transform="translate(660 70)">
-        <rect x="-50" y="-11" width="100" height="22" rx="11" fill="#020617" stroke="#0e7490"/>
-        <text y="3" text-anchor="middle" fill="#67e8f9">savings_report</text>
-      </g>
-    </g>
-  </g>
-
-  <!-- Layer 3: Queen (sits beside, publishes plans down into Colony) -->
-  <g transform="translate(80 305)">
-    <rect width="500" height="62" rx="10" fill="url(#layer3)" stroke="#7c3aed" stroke-width="1"/>
-    <text x="22" y="26" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">QUEEN &#8226; PLAN PUBLISHER</text>
-    <text x="22" y="46" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">deterministic wave plans &#8226; does not launch shells, does not command agents</text>
-  </g>
-
-  <!-- Sessions / OMX (peer of Queen) -->
-  <g transform="translate(600 305)">
-    <rect width="220" height="62" rx="10" fill="#0f172a" stroke="#475569" stroke-width="1"/>
-    <text x="20" y="26" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">OMX / DMUX</text>
-    <text x="20" y="46" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">sessions &#8226; panes &#8226; worktrees</text>
-  </g>
-
-  <!-- Queen -> Colony arrow -->
-  <g fill="none" stroke="#a78bfa" stroke-width="1" opacity="0.7">
-    <path d="M 330 305 V 290" marker-end="url(#queenArrow)"/>
-  </g>
-  <defs>
-    <marker id="queenArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+    <marker id="arrowPurple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
       <path d="M 0 0 L 10 5 L 0 10 Z" fill="#a78bfa"/>
     </marker>
   </defs>
 
-  <!-- Layer 4: Storage substrate -->
-  <g transform="translate(80 385)">
-    <rect width="740" height="58" rx="10" fill="url(#layer4)" stroke="#1e293b" stroke-width="1"/>
-    <text x="22" y="22" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600" letter-spacing="1.5">~/.colony</text>
-    <text x="22" y="42" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">SQLite + FTS5 &#8226; compressed prose &#8226; local embeddings &#8226; mcp_metrics</text>
+  <rect width="960" height="580" fill="url(#bgRad)"/>
 
-    <!-- pulsing dot showing it's live -->
-    <circle cx="710" cy="29" r="4" fill="#10b981">
-      <animate attributeName="opacity" values="1;0.3;1" dur="1.4s" repeatCount="indefinite"/>
+  <!-- Background grid -->
+  <g stroke="#0c1a2e" stroke-width="1" opacity="0.6">
+    <path d="M 0 100 H 960 M 0 200 H 960 M 0 300 H 960 M 0 400 H 960 M 0 500 H 960"/>
+    <path d="M 120 0 V 580 M 320 0 V 580 M 480 0 V 580 M 640 0 V 580 M 840 0 V 580"/>
+  </g>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+    <text x="480" y="38" text-anchor="middle" fill="#f1f5f9" font-size="22" font-weight="600">How Colony fits</text>
+    <text x="480" y="60" text-anchor="middle" fill="#64748b" font-size="13">
+      <tspan fill="#a5b4fc">Runtimes execute.</tspan>
+      <tspan fill="#22d3ee" dx="6">Colony coordinates.</tspan>
+      <tspan fill="#c4b5fd" dx="6">Queen plans.</tspan>
+      <tspan dx="6">All local-first.</tspan>
+    </text>
+  </g>
+
+  <!-- ============================ TIER 1: RUNTIMES ============================ -->
+
+  <g transform="translate(120 84)">
+    <rect x="0" y="0" width="14" height="2" fill="#a5b4fc"/>
+    <text x="20" y="6" fill="#a5b4fc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-weight="600" letter-spacing="2">RUNTIMES</text>
+    <text x="86" y="6" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">execute tools &#8226; edit files &#8226; run tests</text>
+  </g>
+
+  <!-- Claude Code -->
+  <g transform="translate(120 100)">
+    <rect x="0" y="0" width="120" height="62" rx="10" fill="url(#runtimeGrad)" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="3" height="62" rx="1.5" fill="#d97706"/>
+    <g transform="translate(20 20)" fill="#d97706">
+      <path d="M -8 14 L -3 -8 L 3 -8 L 8 14 L 5 14 L 1 4 L -1 4 L -5 14 Z"/>
+    </g>
+    <text x="40" y="22" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">Claude Code</text>
+    <text x="40" y="38" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">terminal agent</text>
+    <text x="40" y="51" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">PreToolUse hook</text>
+  </g>
+
+  <!-- Codex -->
+  <g transform="translate(280 100)">
+    <rect x="0" y="0" width="120" height="62" rx="10" fill="url(#runtimeGrad)" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="3" height="62" rx="1.5" fill="#94a3b8"/>
+    <text x="20" y="26" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">&gt;_</text>
+    <text x="40" y="22" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">Codex</text>
+    <text x="40" y="38" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">CLI / OMX</text>
+    <text x="40" y="51" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">lifecycle bridge</text>
+  </g>
+
+  <!-- Cursor -->
+  <g transform="translate(420 100)">
+    <rect x="0" y="0" width="120" height="62" rx="10" fill="url(#runtimeGrad)" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="3" height="62" rx="1.5" fill="#cbd5e1"/>
+    <path d="M 134 14 L 146 22 L 139 24 L 137 32 Z" fill="#cbd5e1" transform="translate(-120 0)"/>
+    <text x="40" y="22" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">Cursor</text>
+    <text x="40" y="38" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">IDE agent</text>
+    <text x="40" y="51" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">MCP stdio</text>
+  </g>
+
+  <!-- Gemini CLI -->
+  <g transform="translate(560 100)">
+    <rect x="0" y="0" width="120" height="62" rx="10" fill="url(#runtimeGrad)" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="3" height="62" rx="1.5" fill="#60a5fa"/>
+    <g transform="translate(20 22)" fill="#60a5fa">
+      <path d="M 0 -10 L 2.5 -2.5 L 10 0 L 2.5 2.5 L 0 10 L -2.5 2.5 L -10 0 L -2.5 -2.5 Z"/>
+    </g>
+    <text x="40" y="22" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">Gemini CLI</text>
+    <text x="40" y="38" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">terminal agent</text>
+    <text x="40" y="51" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">tool events</text>
+  </g>
+
+  <!-- OpenCode -->
+  <g transform="translate(700 100)">
+    <rect x="0" y="0" width="120" height="62" rx="10" fill="url(#runtimeGrad)" stroke="#1e293b" stroke-width="1"/>
+    <rect x="0" y="0" width="3" height="62" rx="1.5" fill="#fb923c"/>
+    <text x="20" y="26" text-anchor="middle" fill="#fb923c" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">&lt;/&gt;</text>
+    <text x="40" y="22" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="600">OpenCode</text>
+    <text x="40" y="38" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">open-source agent</text>
+    <text x="40" y="51" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">prompt + tools</text>
+  </g>
+
+  <!-- + more pill -->
+  <g transform="translate(840 124)">
+    <rect x="0" y="0" width="60" height="28" rx="14" fill="#0a0f1a" stroke="#1e293b" stroke-dasharray="3 3"/>
+    <text x="30" y="18" text-anchor="middle" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">+ more</text>
+  </g>
+
+  <!-- ============================ FLOW: runtimes -> Colony ============================ -->
+
+  <g stroke="#1e293b" stroke-width="1" fill="none">
+    <line x1="180" y1="162" x2="180" y2="232"/>
+    <line x1="340" y1="162" x2="340" y2="232"/>
+    <line x1="480" y1="162" x2="480" y2="232"/>
+    <line x1="620" y1="162" x2="620" y2="232"/>
+    <line x1="760" y1="162" x2="760" y2="232"/>
+  </g>
+
+  <g stroke="#22d3ee" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.85">
+    <line x1="180" y1="162" x2="180" y2="232" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.4s" repeatCount="indefinite"/>
+    </line>
+    <line x1="340" y1="162" x2="340" y2="232" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.4s" begin="0.28s" repeatCount="indefinite"/>
+    </line>
+    <line x1="480" y1="162" x2="480" y2="232" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.4s" begin="0.56s" repeatCount="indefinite"/>
+    </line>
+    <line x1="620" y1="162" x2="620" y2="232" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.4s" begin="0.84s" repeatCount="indefinite"/>
+    </line>
+    <line x1="760" y1="162" x2="760" y2="232" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.4s" begin="1.12s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <g filter="url(#dotGlow)">
+    <circle cx="180" r="3" fill="#22d3ee">
+      <animate attributeName="cy" values="162;232" dur="1.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="1.4s" repeatCount="indefinite"/>
     </circle>
-    <text x="724" y="33" fill="#10b981" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">live</text>
+    <circle cx="340" r="3" fill="#34d399">
+      <animate attributeName="cy" values="162;232" dur="1.4s" begin="0.28s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="1.4s" begin="0.28s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="480" r="3" fill="#a78bfa">
+      <animate attributeName="cy" values="162;232" dur="1.4s" begin="0.56s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="1.4s" begin="0.56s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="620" r="3" fill="#fbbf24">
+      <animate attributeName="cy" values="162;232" dur="1.4s" begin="0.84s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="1.4s" begin="0.84s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="760" r="3" fill="#22d3ee">
+      <animate attributeName="cy" values="162;232" dur="1.4s" begin="1.12s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="1.4s" begin="1.12s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Flow legend - small badge between tiers -->
+  <g transform="translate(870 188)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <rect x="-2" y="-10" width="80" height="58" rx="6" fill="#020617" stroke="#1e293b" opacity="0.9"/>
+    <text x="6" y="2" fill="#475569" font-size="8.5" font-weight="600" letter-spacing="1">FLOW</text>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">
+      <circle cx="10" cy="14" r="2.5" fill="#22d3ee"/>
+      <text x="18" y="17" fill="#94a3b8">claims</text>
+      <circle cx="10" cy="26" r="2.5" fill="#a78bfa"/>
+      <text x="18" y="29" fill="#94a3b8">handoffs</text>
+      <circle cx="10" cy="38" r="2.5" fill="#34d399"/>
+      <text x="18" y="41" fill="#94a3b8">obs.</text>
+    </g>
+  </g>
+
+  <!-- ============================ TIER 2: COLONY ENGINE ============================ -->
+
+  <g transform="translate(60 240)" filter="url(#coreGlow)">
+    <rect width="840" height="170" rx="14" fill="url(#coreGrad)" stroke="url(#coreEdge)" stroke-width="1.5"/>
+    <rect width="840" height="170" rx="14" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.3">
+      <animate attributeName="opacity" values="0.15;0.45;0.15" dur="3s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- Header strip -->
+  <g transform="translate(60 240)">
+    <rect width="840" height="36" rx="14" fill="#022f3e"/>
+    <rect y="22" width="840" height="14" fill="#022f3e"/>
+    <line x1="0" y1="36" x2="840" y2="36" stroke="#0e7490" stroke-width="1" opacity="0.5"/>
+
+    <g transform="translate(22 18)">
+      <polygon points="0,-9 7.8,-4.5 7.8,4.5 0,9 -7.8,4.5 -7.8,-4.5" fill="#020617" stroke="#22d3ee" stroke-width="1.2"/>
+      <circle r="3" fill="#22d3ee">
+        <animate attributeName="r" values="2.5;3.8;2.5" dur="2.4s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+
+    <text x="42" y="22" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">Colony</text>
+    <text x="92" y="22" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="500">&#8226; local coordination substrate</text>
+
+    <g transform="translate(700 18)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">
+      <circle cx="0" cy="0" r="3" fill="#10b981">
+        <animate attributeName="opacity" values="1;0.4;1" dur="1.4s" repeatCount="indefinite"/>
+      </circle>
+      <text x="8" y="4" fill="#6ee7b7">MCP up</text>
+
+      <circle cx="64" cy="0" r="3" fill="#22d3ee">
+        <animate attributeName="opacity" values="1;0.4;1" dur="1.4s" begin="0.4s" repeatCount="indefinite"/>
+      </circle>
+      <text x="72" y="4" fill="#67e8f9">hooks</text>
+    </g>
+  </g>
+
+  <!-- 4 internal modules -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <!-- Claims & Locks -->
+    <g transform="translate(80 290)">
+      <rect width="190" height="100" rx="10" fill="url(#modGrad)" stroke="#0e7490" stroke-width="1"/>
+      <g transform="translate(20 22)">
+        <circle r="9" fill="#022c22" stroke="#10b981" stroke-width="1.2"/>
+        <path d="M -3 -1 V -3 a 3 3 0 0 1 6 0 V -1" stroke="#10b981" stroke-width="1.2" fill="none"/>
+        <rect x="-3.5" y="-1" width="7" height="6" rx="1" fill="#10b981"/>
+      </g>
+      <text x="38" y="21" fill="#f1f5f9" font-size="12" font-weight="600">Claims &amp; Locks</text>
+      <text x="38" y="34" fill="#64748b" font-size="10">claim before edit</text>
+      <line x1="14" y1="50" x2="176" y2="50" stroke="#1e293b"/>
+      <text x="14" y="66" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">task_claim_file</text>
+      <text x="14" y="80" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">task_plan_claim_subtask</text>
+      <text x="14" y="94" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">coordination sweep</text>
+    </g>
+
+    <!-- Routing & Inbox -->
+    <g transform="translate(285 290)">
+      <rect width="190" height="100" rx="10" fill="url(#modGrad)" stroke="#0e7490" stroke-width="1"/>
+      <g transform="translate(20 22)" stroke="#60a5fa" stroke-width="1.4" fill="none">
+        <path d="M -8 -7 L 8 -7 L 3 0 L 3 7 L -3 7 L -3 0 Z"/>
+      </g>
+      <text x="38" y="21" fill="#f1f5f9" font-size="12" font-weight="600">Routing &amp; Inbox</text>
+      <text x="38" y="34" fill="#64748b" font-size="10">pull, don&#8217;t browse</text>
+      <line x1="14" y1="50" x2="176" y2="50" stroke="#1e293b"/>
+      <text x="14" y="66" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">hivemind_context</text>
+      <text x="14" y="80" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">attention_inbox</text>
+      <text x="14" y="94" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">task_ready_for_agent</text>
+    </g>
+
+    <!-- Memory & Search -->
+    <g transform="translate(490 290)">
+      <rect width="190" height="100" rx="10" fill="url(#modGrad)" stroke="#0e7490" stroke-width="1"/>
+      <g transform="translate(20 22)" stroke="#a78bfa" stroke-width="1.4" fill="none">
+        <ellipse cx="0" cy="-4" rx="8" ry="3"/>
+        <path d="M -8 -4 V 4 a 8 3 0 0 0 16 0 V -4"/>
+        <path d="M -8 0 a 8 3 0 0 0 16 0"/>
+      </g>
+      <text x="38" y="21" fill="#f1f5f9" font-size="12" font-weight="600">Memory &amp; Search</text>
+      <text x="38" y="34" fill="#64748b" font-size="10">progressive hydration</text>
+      <line x1="14" y1="50" x2="176" y2="50" stroke="#1e293b"/>
+      <text x="14" y="66" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">search &#8226; timeline</text>
+      <text x="14" y="80" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">get_observations</text>
+      <text x="14" y="94" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">@colony/compress</text>
+    </g>
+
+    <!-- Health & Metrics -->
+    <g transform="translate(695 290)">
+      <rect width="190" height="100" rx="10" fill="url(#modGrad)" stroke="#0e7490" stroke-width="1"/>
+      <g transform="translate(20 22)" stroke="#f472b6" stroke-width="1.4" fill="none">
+        <path d="M -9 0 L -5 0 L -2 -5 L 2 5 L 5 0 L 9 0"/>
+      </g>
+      <text x="38" y="21" fill="#f1f5f9" font-size="12" font-weight="600">Health &amp; Metrics</text>
+      <text x="38" y="34" fill="#64748b" font-size="10">prove behavior</text>
+      <line x1="14" y1="50" x2="176" y2="50" stroke="#1e293b"/>
+      <text x="14" y="66" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">colony health</text>
+      <text x="14" y="80" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">colony gain</text>
+      <text x="14" y="94" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">savings_report</text>
+    </g>
+  </g>
+
+  <!-- ============================ TIER 3: QUEEN + OMX sidecars ============================ -->
+
+  <g transform="translate(60 435)">
+    <rect width="430" height="76" rx="12" fill="url(#queenGrad)" stroke="#a78bfa" stroke-width="1"/>
+
+    <g transform="translate(28 32)" fill="#c4b5fd">
+      <path d="M -10 4 L -10 -4 L -5 0 L 0 -8 L 5 0 L 10 -4 L 10 4 Z"/>
+      <circle cx="0" cy="-10" r="1.5"/>
+      <circle cx="-10" cy="-6" r="1.2"/>
+      <circle cx="10" cy="-6" r="1.2"/>
+    </g>
+
+    <text x="52" y="28" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">Queen</text>
+    <text x="92" y="28" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">&#8226; plan publisher</text>
+    <text x="52" y="46" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">deterministic wave plans</text>
+    <text x="52" y="62" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" font-style="italic">does not launch shells &#8226; does not command agents</text>
+
+    <g transform="translate(345 38)">
+      <text y="-12" text-anchor="middle" fill="#a78bfa" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9" letter-spacing="1">WAVE</text>
+      <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">
+        <rect x="-30" y="-4" width="18" height="14" rx="3" fill="#3b0764" stroke="#a78bfa"/>
+        <text x="-21" y="6" text-anchor="middle" fill="#c4b5fd">1</text>
+        <rect x="-9" y="-4" width="18" height="14" rx="3" fill="#3b0764" stroke="#a78bfa"/>
+        <text x="0" y="6" text-anchor="middle" fill="#c4b5fd">2</text>
+        <rect x="12" y="-4" width="18" height="14" rx="3" fill="#0f172a" stroke="#475569" stroke-dasharray="2 2"/>
+        <text x="21" y="6" text-anchor="middle" fill="#475569">3</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- Queen -> Colony arrow -->
+  <g fill="none">
+    <path d="M 130 435 V 415" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arrowPurple)" opacity="0.85"/>
+    <circle r="2.5" fill="#a78bfa" filter="url(#dotGlow)">
+      <animate attributeName="cx" values="130;130" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="430;415" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  <text x="138" y="425" fill="#a78bfa" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-style="italic">publishes plans</text>
+
+  <!-- OMX / dmux -->
+  <g transform="translate(510 435)">
+    <rect width="390" height="76" rx="12" fill="#0a0f1a" stroke="#334155" stroke-width="1"/>
+
+    <g transform="translate(28 32)" fill="none" stroke="#94a3b8" stroke-width="1.4">
+      <rect x="-12" y="-9" width="24" height="18" rx="2"/>
+      <path d="M -7 -3 L -3 0 L -7 3" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="0" y1="3" x2="6" y2="3" stroke-linecap="round"/>
+    </g>
+
+    <text x="52" y="28" fill="#f1f5f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">OMX / dmux</text>
+    <text x="138" y="28" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">&#8226; terminal session host</text>
+    <text x="52" y="46" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">sessions &#8226; panes &#8226; worktrees</text>
+    <text x="52" y="62" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" font-style="italic">starts processes &#8226; provides lifecycle bridge</text>
+
+    <g transform="translate(330 38)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">
+      <text y="-12" text-anchor="middle" fill="#94a3b8" letter-spacing="1">PANES</text>
+      <rect x="-22" y="-6" width="20" height="18" rx="2" fill="#020617" stroke="#475569"/>
+      <rect x="2" y="-6" width="20" height="18" rx="2" fill="#020617" stroke="#475569"/>
+      <line x1="-12" y1="-2" x2="-6" y2="-2" stroke="#475569"/>
+      <line x1="-12" y1="2" x2="-8" y2="2" stroke="#475569"/>
+      <line x1="8" y1="-2" x2="14" y2="-2" stroke="#475569"/>
+      <line x1="8" y1="2" x2="12" y2="2" stroke="#475569"/>
+    </g>
+  </g>
+
+  <!-- ============================ TIER 4: STORAGE DRUM ============================ -->
+
+  <!-- Colony -> Storage arrows (data persists down) - drawn first so they sit behind drum -->
+  <g fill="none" stroke="#1e293b" stroke-width="1">
+    <line x1="200" y1="410" x2="200" y2="528"/>
+    <line x1="480" y1="410" x2="480" y2="528"/>
+    <line x1="760" y1="410" x2="760" y2="528"/>
+  </g>
+  <g fill="none" stroke="#22d3ee" stroke-width="1.2" stroke-linecap="round" opacity="0.5">
+    <line x1="200" y1="410" x2="200" y2="528" stroke-dasharray="3 90">
+      <animate attributeName="stroke-dashoffset" values="93;0" dur="2.4s" repeatCount="indefinite"/>
+    </line>
+    <line x1="480" y1="410" x2="480" y2="528" stroke-dasharray="3 90">
+      <animate attributeName="stroke-dashoffset" values="93;0" dur="2.4s" begin="0.7s" repeatCount="indefinite"/>
+    </line>
+    <line x1="760" y1="410" x2="760" y2="528" stroke-dasharray="3 90">
+      <animate attributeName="stroke-dashoffset" values="93;0" dur="2.4s" begin="1.4s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <g transform="translate(60 530)">
+    <rect width="840" height="36" rx="6" fill="url(#drumBody)" stroke="#1e293b" stroke-width="1"/>
+    <line x1="0" y1="12" x2="840" y2="12" stroke="#0f172a" opacity="0.7"/>
+    <line x1="0" y1="24" x2="840" y2="24" stroke="#0f172a" opacity="0.7"/>
+
+    <g transform="translate(20 22)">
+      <g transform="translate(0 -3)" fill="none" stroke="#64748b" stroke-width="1.3">
+        <ellipse cx="0" cy="-2" rx="6" ry="2"/>
+        <path d="M -6 -2 V 2 a 6 2 0 0 0 12 0 V -2"/>
+      </g>
+      <text x="14" y="2" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600">~/.colony</text>
+      <text x="92" y="2" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">SQLite + FTS5 &#8226; compressed prose &#8226; local embeddings &#8226; mcp_metrics</text>
+    </g>
+
+    <g transform="translate(770 22)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">
+      <circle cx="0" cy="-2" r="3.5" fill="#10b981" filter="url(#dotGlow)">
+        <animate attributeName="opacity" values="1;0.3;1" dur="1.4s" repeatCount="indefinite"/>
+      </circle>
+      <text x="8" y="2" fill="#10b981">live</text>
+    </g>
   </g>
 </svg>
