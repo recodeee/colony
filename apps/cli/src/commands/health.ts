@@ -2994,10 +2994,23 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   const queenInactiveWithSubtasks =
     payload.queen_wave_health.active_plans === 0 &&
     payload.ready_to_claim_vs_claimed.plan_subtasks > 0;
+  // task_ready_for_agent now defaults to auto_claim=true, which closes the
+  // ready→claim loop inside the same MCP call without an explicit follow-up
+  // task_plan_claim_subtask invocation. The conversion metric only counts
+  // tool_use observations, so this read-as-zero on every health run even
+  // though sub-tasks are getting claimed. Detect that signature — agents
+  // are calling task_ready_for_agent, no explicit task_plan_claim_subtask
+  // follow-ups exist, but plan sub-tasks are claimed — and suppress the
+  // false-positive hint.
+  const autoClaimDominant =
+    readyToClaim.from_calls > 0 &&
+    readyToClaim.to_calls === 0 &&
+    payload.ready_to_claim_vs_claimed.claimed > 0;
   if (
     isBelowTarget(readyToClaim.conversion_rate, TARGET_READY_TO_CLAIM) &&
     !queenReadyWithoutClaims &&
-    !queenInactiveWithSubtasks
+    !queenInactiveWithSubtasks &&
+    !autoClaimDominant
   ) {
     const hasPlanSubtasks =
       payload.queen_wave_health.active_plans > 0 ||
