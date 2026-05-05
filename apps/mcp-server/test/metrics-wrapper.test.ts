@@ -43,7 +43,7 @@ describe('metrics wrapper', () => {
 
   it('records ok=false when an async handler throws and re-throws the error', async () => {
     const wrap = createMetricsWrapper(store);
-    const handler = wrap('failing', async () => {
+    const handler = wrap('failing', async (_args: Record<string, never>) => {
       throw new Error('boom');
     });
     await expect(handler({})).rejects.toThrow('boom');
@@ -57,7 +57,7 @@ describe('metrics wrapper', () => {
 
   it('is a passthrough when no store is configured', async () => {
     const wrap = createMetricsWrapper(null);
-    const handler = wrap('inert', async () => 'ok');
+    const handler = wrap('inert', async (_args: Record<string, never>) => 'ok');
     await expect(handler({})).resolves.toBe('ok');
   });
 
@@ -68,7 +68,7 @@ describe('metrics wrapper', () => {
     });
     closed.close();
     const wrap = createMetricsWrapper(closed);
-    const handler = wrap('search', async () => 'still-ok');
+    const handler = wrap('search', async (_args: Record<string, never>) => 'still-ok');
     await expect(handler({})).resolves.toBe('still-ok');
   });
 });

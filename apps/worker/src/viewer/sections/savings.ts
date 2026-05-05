@@ -1,6 +1,6 @@
 import {
-  type SavingsReferenceRow,
   SAVINGS_REFERENCE_ROWS,
+  type SavingsReferenceRow,
   savingsReferenceTotals,
 } from '@colony/core';
 import type { McpMetricsAggregate, McpMetricsAggregateRow } from '@colony/storage';
@@ -13,18 +13,18 @@ export interface SavingsPagePayload {
 
 export function renderSavingsPage(payload: SavingsPagePayload): string {
   const referenceTotals = savingsReferenceTotals();
-  const reference = renderReferenceTable(SAVINGS_REFERENCE_ROWS, referenceTotals);
   const live = renderLiveTable(payload.live, payload.windowHours);
+  const reference = renderReferenceTable(SAVINGS_REFERENCE_ROWS, referenceTotals);
   const body = html`
     <p><a href="/">&larr; back to sessions</a></p>
     <h2>Token savings</h2>
     <p class="meta">
-      Two views: hand-authored reference rows that estimate cost with vs. without colony, and
-      live <code>mcp_metrics</code> receipts recorded by the wrapping MCP handler. Token counts
-      use <code>@colony/compress#countTokens</code>, the same primitive as observation receipts.
+      Live <code>mcp_metrics</code> receipts recorded by the wrapping MCP handler, followed by a
+      reference model for common coordination loops. Token counts use
+      <code>@colony/compress#countTokens</code>, the same primitive as observation receipts.
     </p>
-    ${raw(reference)}
     ${raw(live)}
+    ${raw(reference)}
   `;
   return layout('agents-hivemind · savings', body);
 }
@@ -37,7 +37,7 @@ function renderReferenceTable(
     .map(
       (row) => html`
         <tr>
-          <td><strong>${row.operation}</strong><div class="meta">${row.rationale}</div></td>
+          <td><strong>${row.operation}</strong></td>
           <td class="num">${row.frequency_per_session}x</td>
           <td class="num">${formatTokens(row.baseline_tokens)}</td>
           <td class="num">${formatTokens(row.colony_tokens)}</td>
@@ -47,9 +47,9 @@ function renderReferenceTable(
     .join('');
   return html`
     <div class="card">
-      <h2>Reference: standard vs. colony</h2>
+      <h2>Reference model: standard vs. colony</h2>
       <p class="meta">
-        Per-session token estimates for common dev-loop operations. Source:
+        Estimated per-session token loops for common coordination work. Source:
         <code>packages/core/src/savings-reference.ts</code>.
       </p>
       <table class="savings-table">

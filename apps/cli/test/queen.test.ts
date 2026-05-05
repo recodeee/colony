@@ -86,8 +86,10 @@ describe('colony queen CLI', () => {
                                   local DB
         list [options]            List queen-published plans with sub-task rollup
         status [options] <slug>   Show one queen plan and its sub-task claim state
+        archive [options] <slug>  Archive an orphan queen plan whose openspec change
+                                  was never published
         sweep [options]           List queen plans needing attention: stalled,
-                                  unclaimed, ready to archive
+                                  unclaimed, ready to archive, orphaned, or inactive
         help [command]            display help for command
       "
     `);

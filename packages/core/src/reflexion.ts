@@ -34,7 +34,8 @@ export type ReflexionMetadata = {
     /** Deterministic from kind via REFLEXION_REWARD_BY_KIND, range -1..1. */
     reward: (typeof REFLEXION_REWARD_BY_KIND)[K];
   };
-}[ReflexionKind];
+}[ReflexionKind] &
+  Record<string, unknown>;
 
 export interface RecordReflexionArgs {
   session_id: string;
@@ -128,13 +129,13 @@ function hasRecentReflexion(
   store: MemoryStore,
   args: { task_id: number; idempotency_key: string; since: number },
 ): boolean {
-  return store.storage.taskObservationsByKind(args.task_id, REFLEXION_OBSERVATION_KIND, 200).some(
-    (row) => {
+  return store.storage
+    .taskObservationsByKind(args.task_id, REFLEXION_OBSERVATION_KIND, 200)
+    .some((row) => {
       if (row.ts < args.since) return false;
       const metadata = parseMetadata(row.metadata);
       return metadata.idempotency_key === args.idempotency_key;
-    },
-  );
+    });
 }
 
 function parseMetadata(raw: string | null): Record<string, unknown> {

@@ -7,11 +7,10 @@ const DEFAULT_WINDOW_HOURS = 24;
 const HOUR_MS = 60 * 60_000;
 
 /**
- * Reports both static reference savings and live per-operation token usage
- * recorded by the metrics wrapper. Two sections by design — the reference
- * rows are illustrative estimates ("what colony saves vs the standard loop"),
- * the live rows are actual mcp_metrics receipts ("what your agents really
- * spent through colony"). Mixing them produces a misleading comparison.
+ * Reports live per-operation token usage recorded by the metrics wrapper plus
+ * reference savings rows for common coordination loops. Two sections by design:
+ * live rows are actual mcp_metrics receipts, while reference rows remain an
+ * illustrative comparison model.
  *
  * Progressive disclosure: the response is compact — counts, totals, and
  * per-op rows. No observation bodies, no event timelines.
@@ -22,7 +21,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'savings_report',
-    'Report colony token savings: static reference rows for common dev-loop operations and live per-operation token usage from mcp_metrics over a window. Pass since_ms or hours to scope the live window; default is 24h. Pass operation to filter live rows to one tool name.',
+    'Report colony token savings: live per-operation mcp_metrics usage plus reference rows for common dev-loop operations. Pass since_ms or hours to scope the live window; default is 24h. Pass operation to filter live rows to one tool name.',
     {
       since_ms: z
         .number()
@@ -57,17 +56,17 @@ export function register(server: McpServer, ctx: ToolContext): void {
           {
             type: 'text',
             text: JSON.stringify({
-              reference: {
-                note: 'Hand-authored estimates of token cost per operation, with vs. without colony. Source: packages/core/src/savings-reference.ts.',
-                rows: SAVINGS_REFERENCE_ROWS,
-                totals,
-              },
               live: {
                 note: 'Recorded mcp_metrics receipts for the requested window. input_tokens / output_tokens come from @colony/compress#countTokens — same primitive as observation token receipts.',
                 window: { since: live.since, until: live.until, hours: windowHours },
                 ...(operation !== undefined ? { operation } : {}),
                 totals: live.totals,
                 operations: live.operations,
+              },
+              reference: {
+                note: 'Estimated per-session token cost for common coordination loops, with vs. without colony. Source: packages/core/src/savings-reference.ts.',
+                rows: SAVINGS_REFERENCE_ROWS,
+                totals,
               },
             }),
           },

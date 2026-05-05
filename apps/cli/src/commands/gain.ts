@@ -2,6 +2,7 @@ import { loadSettings } from '@colony/config';
 import {
   SAVINGS_REFERENCE_ROWS,
   type SavingsReferenceRow,
+  type SavingsReferenceTotals,
   savingsReferenceTotals,
 } from '@colony/core';
 import type { McpMetricsAggregateRow } from '@colony/storage';
@@ -19,7 +20,7 @@ interface GainOptions {
 export function registerGainCommand(program: Command): void {
   program
     .command('gain')
-    .description('Show colony token savings: static reference + live mcp_metrics receipts')
+    .description('Show colony token savings: live mcp_metrics receipts + reference model')
     .option('--json', 'emit structured JSON')
     .option('--hours <n>', 'live window in hours (default 168 = 7 days)')
     .option('--since <ms>', 'absolute epoch-ms cutoff; overrides --hours')
@@ -66,18 +67,39 @@ export function registerGainCommand(program: Command): void {
         return;
       }
 
-      writeReferenceSection(SAVINGS_REFERENCE_ROWS, referenceTotals);
-      writeLiveSection(live.operations, live.totals, windowHours, opts.operation);
+      writeGainReport(
+        SAVINGS_REFERENCE_ROWS,
+        referenceTotals,
+        live.operations,
+        live.totals,
+        windowHours,
+        opts.operation,
+      );
     });
+}
+
+export function writeGainReport(
+  referenceRows: ReadonlyArray<SavingsReferenceRow>,
+  referenceTotals: SavingsReferenceTotals,
+  liveRows: ReadonlyArray<McpMetricsAggregateRow>,
+  liveTotals: McpMetricsAggregateRow,
+  hours: number,
+  operationFilter: string | undefined,
+): void {
+  writeLiveSection(liveRows, liveTotals, hours, operationFilter);
+  process.stdout.write('\n');
+  writeReferenceSection(referenceRows, referenceTotals);
 }
 
 export function writeReferenceSection(
   rows: ReadonlyArray<SavingsReferenceRow>,
-  totals: ReturnType<typeof savingsReferenceTotals>,
+  totals: SavingsReferenceTotals,
 ): void {
   const w = process.stdout;
-  w.write(`${kleur.bold('colony gain — static reference')}\n`);
-  w.write(kleur.dim('Hand-authored estimates per session. See colony --help for details.\n\n'));
+  w.write(`${kleur.bold('colony gain — reference model')}\n`);
+  w.write(
+    kleur.dim('Estimated per-session loops for comparison; live receipts above are current.\n\n'),
+  );
   const head = padRow(['Operation', 'Freq', 'Standard', 'Colony', 'Saved'], [32, 5, 9, 9, 6]);
   w.write(`${kleur.dim(head)}\n`);
   for (const row of rows) {
@@ -104,34 +126,6 @@ export function writeReferenceSection(
       [32, 5, 9, 9, 6],
     )}\n\n`,
   );
-  writeReferenceCutsSection(rows);
-}
-
-function writeReferenceCutsSection(rows: ReadonlyArray<SavingsReferenceRow>): void {
-  const w = process.stdout;
-  w.write(`${kleur.bold('What gets cut')}\n`);
-  w.write(
-    kleur.dim(
-      'Each reference row compares the compact Colony path against the standard loop it replaces.\n\n',
-    ),
-  );
-  for (const row of rows) {
-    const cut = splitRationale(row.rationale);
-    w.write(`${kleur.bold(row.operation)}\n`);
-    w.write(`  Colony:  ${cut.colony}\n`);
-    w.write(`  Cuts:    ${cut.standard}\n`);
-  }
-  w.write('\n');
-}
-
-function splitRationale(rationale: string): { colony: string; standard: string } {
-  const separator = ' vs ';
-  const index = rationale.lastIndexOf(separator);
-  if (index === -1) return { colony: rationale, standard: 'manual context reconstruction' };
-  return {
-    colony: rationale.slice(0, index),
-    standard: rationale.slice(index + separator.length),
-  };
 }
 
 export function writeLiveSection(
