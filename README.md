@@ -44,14 +44,14 @@ Stale signals evaporate.
 
 ## Why Colony Exists
 
-| Without Colony | With Colony |
-| --- | --- |
-| Agents collide on the same files. | Agents claim files before edits. |
-| Humans schedule parallel work by hand. | Agents pull ready subtasks from Colony. |
-| Progress is trapped in chat windows. | Working state is saved to task threads. |
-| Old claims and handoffs stay noisy. | Signals decay, expire, and can be swept. |
-| Follow-up ideas disappear. | Proposals can be reinforced and promoted. |
-| Task lists become browsing surfaces. | `task_ready_for_agent` becomes the work picker. |
+| Without Colony                         | With Colony                                     |
+| -------------------------------------- | ----------------------------------------------- |
+| Agents collide on the same files.      | Agents claim files before edits.                |
+| Humans schedule parallel work by hand. | Agents pull ready subtasks from Colony.         |
+| Progress is trapped in chat windows.   | Working state is saved to task threads.         |
+| Old claims and handoffs stay noisy.    | Signals decay, expire, and can be swept.        |
+| Follow-up ideas disappear.             | Proposals can be reinforced and promoted.       |
+| Task lists become browsing surfaces.   | `task_ready_for_agent` becomes the work picker. |
 
 Colony turns multi-agent work into a measurable local loop instead of a pile of
 terminal sessions and stale notes.
@@ -90,19 +90,19 @@ shared task thread.
   <img src="docs/assets/colony-capabilities.png" alt="Current Colony capabilities: install, observe, coordinate, plan, recover, and inspect" width="900" />
 </p>
 
-| Capability | Current surface |
-| --- | --- |
-| Install runtime hooks | `colony install --ide claude-code`, `codex`, `cursor`, `gemini-cli`, `opencode` |
-| Capture local observations | lifecycle hooks, prompt events, tool events, session heartbeat |
-| Search prior work | `colony search`, MCP `search`, `timeline`, `get_observations` |
-| See active lanes | MCP `hivemind_context`, `attention_inbox`, CLI coordination reports |
-| Claim work safely | `task_ready_for_agent`, `task_plan_claim_subtask`, `task_claim_file` |
-| Coordinate agents | `task_post`, `task_message`, handoffs, working notes |
-| Publish wave plans | Queen plans and `task_plan_*` MCP tools |
-| Clean stale signals | `colony coordination sweep`, `colony queen sweep`, health fix plans |
-| Inspect the graph | `colony viewer` local read-only graph |
-| Measure token savings | `colony gain`, MCP `savings_report`, viewer `/savings` |
-| Prove behavior | `colony health`, smoke tests, adoption metrics |
+| Capability                 | Current surface                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| Install runtime hooks      | `colony install --ide claude-code`, `codex`, `cursor`, `gemini-cli`, `opencode` |
+| Capture local observations | lifecycle hooks, prompt events, tool events, session heartbeat                  |
+| Search prior work          | `colony search`, MCP `search`, `timeline`, `get_observations`                   |
+| See active lanes           | MCP `hivemind_context`, `attention_inbox`, CLI coordination reports             |
+| Claim work safely          | `task_ready_for_agent`, `task_plan_claim_subtask`, `task_claim_file`            |
+| Coordinate agents          | `task_post`, `task_message`, handoffs, working notes                            |
+| Publish wave plans         | Queen plans and `task_plan_*` MCP tools                                         |
+| Clean stale signals        | `colony coordination sweep`, `colony queen sweep`, health fix plans             |
+| Inspect the graph          | `colony viewer` local read-only graph                                           |
+| Measure token savings      | `colony gain`, MCP `savings_report`, viewer `/savings`                          |
+| Prove behavior             | `colony health`, smoke tests, adoption metrics                                  |
 
 Use Colony when you run more than one coding agent in the same repo, use
 worktrees or parallel branches, need local-first memory, or want stale claims
@@ -112,16 +112,12 @@ and handoffs to stop shaping current work.
 
 ## How It Fits
 
-<p align="center">
-  <img src="docs/assets/colony-vs-runtime.png" alt="Agent runtimes execute work while Colony coordinates tasks, claims, health, and memory" width="900" />
-</p>
-
-| Layer | Responsibility |
-| --- | --- |
-| Codex / Claude Code / Cursor / Gemini CLI / OpenCode | Execute tools, edit files, run tests, talk to the user. |
-| OMX / dmux / terminal sessions | Start sessions, panes, worktrees, and runtime process surfaces. |
-| Colony | Route work, track claims, record handoffs, store memory, report health. |
-| Queen | Publish deterministic wave plans; it does not launch shells or command agents. |
+| Layer                                                | Responsibility                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Codex / Claude Code / Cursor / Gemini CLI / OpenCode | Execute tools, edit files, run tests, talk to the user.                        |
+| OMX / dmux / terminal sessions                       | Start sessions, panes, worktrees, and runtime process surfaces.                |
+| Colony                                               | Route work, track claims, record handoffs, store memory, report health.        |
+| Queen                                                | Publish deterministic wave plans; it does not launch shells or command agents. |
 
 This split keeps execution close to the existing agent runtime while making the
 coordination state shared, inspectable, and local.
@@ -177,19 +173,19 @@ pnpm smoke:codex-omx-pretool
 pnpm smoke:health-repair-loop
 ```
 
-| Command | Use |
-| --- | --- |
-| `colony health` | Readiness, adoption, stale signals, note migration, claim-before-edit coverage. |
-| `colony health --fix-plan` | Guided recovery plan for missing hooks, stale claims, and weak coordination. |
-| `colony status` | Storage, installed IDEs, worker state, memory counts, embedding status. |
-| `colony search "<query>"` | Search prior observations and decisions. |
-| `colony timeline <session-id>` | Inspect one session chronologically. |
-| `colony observe` | Watch task threads and coordination state. |
-| `colony coordination sweep` | Report stale claims, expired handoffs/messages, decayed proposals, blocked work. |
-| `colony queen sweep` | Find plans that are stalled, unclaimed, or ready to archive. |
-| `colony viewer` | Open the local read-only web viewer. |
-| `pnpm smoke:codex-omx-pretool` | Verify the Codex/OMX lifecycle bridge and claim-before-edit telemetry. |
-| `pnpm smoke:health-repair-loop` | Prove bridge, quota cleanup, Queen claim, and health recommendations compose. |
+| Command                         | Use                                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------- |
+| `colony health`                 | Readiness, adoption, stale signals, note migration, claim-before-edit coverage.  |
+| `colony health --fix-plan`      | Guided recovery plan for missing hooks, stale claims, and weak coordination.     |
+| `colony status`                 | Storage, installed IDEs, worker state, memory counts, embedding status.          |
+| `colony search "<query>"`       | Search prior observations and decisions.                                         |
+| `colony timeline <session-id>`  | Inspect one session chronologically.                                             |
+| `colony observe`                | Watch task threads and coordination state.                                       |
+| `colony coordination sweep`     | Report stale claims, expired handoffs/messages, decayed proposals, blocked work. |
+| `colony queen sweep`            | Find plans that are stalled, unclaimed, or ready to archive.                     |
+| `colony viewer`                 | Open the local read-only web viewer.                                             |
+| `pnpm smoke:codex-omx-pretool`  | Verify the Codex/OMX lifecycle bridge and claim-before-edit telemetry.           |
+| `pnpm smoke:health-repair-loop` | Prove bridge, quota cleanup, Queen claim, and health recommendations compose.    |
 
 Installed Codex and Claude hooks inject the quota-safe operating contract:
 start with `hivemind_context`, then `attention_inbox`, then
@@ -223,33 +219,33 @@ Readiness summary
 
 Healthy runs trend toward:
 
-| Metric | Target |
-| --- | --- |
-| `hivemind_context -> attention_inbox` | 50%+ |
-| `attention_inbox -> task_ready_for_agent` | 90%+ |
-| `task_ready_for_agent -> task_plan_claim_subtask` | 30%+ when plans exist |
-| claim-before-edit | 50%+ |
-| Colony note share | 70%+ |
-| stale claims | near zero active-impact stale claims |
+| Metric                                            | Target                               |
+| ------------------------------------------------- | ------------------------------------ |
+| `hivemind_context -> attention_inbox`             | 50%+                                 |
+| `attention_inbox -> task_ready_for_agent`         | 90%+                                 |
+| `task_ready_for_agent -> task_plan_claim_subtask` | 30%+ when plans exist                |
+| claim-before-edit                                 | 50%+                                 |
+| Colony note share                                 | 70%+                                 |
+| stale claims                                      | near zero active-impact stale claims |
 
-| If this is red | First move |
-| --- | --- |
-| `coordination_readiness` | Check agent startup loop adoption. |
-| `execution_safety` | Run `pnpm smoke:codex-omx-pretool` and verify hook install. |
-| `queen_plan_readiness` | Publish or repair claimable Queen plans. |
-| `working_state_migration` | Use `task_note_working` instead of ad hoc notepads. |
-| `signal_evaporation` | Run a dry sweep, then explicit safe stale-claim cleanup. |
+| If this is red            | First move                                                  |
+| ------------------------- | ----------------------------------------------------------- |
+| `coordination_readiness`  | Check agent startup loop adoption.                          |
+| `execution_safety`        | Run `pnpm smoke:codex-omx-pretool` and verify hook install. |
+| `queen_plan_readiness`    | Publish or repair claimable Queen plans.                    |
+| `working_state_migration` | Use `task_note_working` instead of ad hoc notepads.         |
+| `signal_evaporation`      | Run a dry sweep, then explicit safe stale-claim cleanup.    |
 
 `execution_safety` includes a source-level `root_cause` in `--json` when edit
 telemetry cannot be trusted:
 
-| Root cause | Meaning | First command |
-| --- | --- | --- |
-| `lifecycle_bridge_unavailable` | runtime/lifecycle bridge is unavailable | `colony install --ide <ide>` then `pnpm smoke:codex-omx-pretool` |
-| `lifecycle_bridge_silent` | bridge is available, but PreToolUse edit-path telemetry is empty or near-zero | `colony install --ide <ide>` then `colony health --hours 1 --json` |
-| `lifecycle_paths_missing` | PreToolUse exists, but edit events lack `file_path` | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
-| `lifecycle_claim_mismatch` | paths exist, but claim metadata does not match edit scope | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
-| `no_hook_capable_edits` | the selected window has no file edit events to diagnose | `colony health --hours 1 --json` |
+| Root cause                     | Meaning                                                                       | First command                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `lifecycle_bridge_unavailable` | runtime/lifecycle bridge is unavailable                                       | `colony install --ide <ide>` then `pnpm smoke:codex-omx-pretool`                                  |
+| `lifecycle_bridge_silent`      | bridge is available, but PreToolUse edit-path telemetry is empty or near-zero | `colony install --ide <ide>` then `colony health --hours 1 --json`                                |
+| `lifecycle_paths_missing`      | PreToolUse exists, but edit events lack `file_path`                           | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
+| `lifecycle_claim_mismatch`     | paths exist, but claim metadata does not match edit scope                     | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
+| `no_hook_capable_edits`        | the selected window has no file edit events to diagnose                       | `colony health --hours 1 --json`                                                                  |
 
 When `task_claim_file before edits` says `metric unreliable`, fix runtime
 bridge or metadata first. Do not treat a bad claim ratio as agent discipline
@@ -303,29 +299,29 @@ colony gain --session-limit 0     # print every live session in the window
 colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
 ```
 
-| Operation | Frequency / session | Standard | Colony | Saved |
-| --- | --- | --- | --- | --- |
-| Recall prior decision | 5x | 8,000 | 1,500 | 81% |
-| Resume task across sessions | 3x | 15,000 | 2,000 | 87% |
-| Startup coordination sweep | 1x | 25,000 | 2,500 | 90% |
-| Coordinate parallel agents | 10x | 20,000 | 3,000 | 85% |
-| Why-was-this-changed | 4x | 8,000 | 1,200 | 85% |
-| Find active owner for a file | 6x | 6,000 | 500 | 92% |
-| Recover stranded lane | 1x | 18,000 | 1,800 | 90% |
-| Cross-agent handoff | 2x | 30,000 | 400 | 99% |
-| Review task timeline | 4x | 12,000 | 900 | 93% |
-| Search result shape | 8x | 5,000 | 150 | 97% |
-| Ready-work selection | 3x | 9,000 | 700 | 92% |
-| Unread message triage | 4x | 10,000 | 600 | 94% |
-| Claim-before-edit check | 8x | 4,000 | 450 | 89% |
-| Plan subtask claim | 2x | 12,000 | 1,100 | 91% |
-| Spec context recall | 2x | 14,000 | 1,600 | 89% |
-| Health/adoption diagnosis | 1x | 16,000 | 1,800 | 89% |
-| Examples pattern lookup | 2x | 11,000 | 1,000 | 91% |
-| Blocker recurrence | 2x | 10,000 | 900 | 91% |
-| Drift / failed-verification recovery | 2x | 13,000 | 1,400 | 89% |
-| Quota-exhausted handoff | 1x | 22,000 | 500 | 98% |
-| Storage at rest (per observation) | 1x | 1,000 | 300 | 70% |
+| Operation                            | Frequency / session | Standard | Colony | Saved |
+| ------------------------------------ | ------------------- | -------- | ------ | ----- |
+| Recall prior decision                | 5x                  | 8,000    | 1,500  | 81%   |
+| Resume task across sessions          | 3x                  | 15,000   | 2,000  | 87%   |
+| Startup coordination sweep           | 1x                  | 25,000   | 2,500  | 90%   |
+| Coordinate parallel agents           | 10x                 | 20,000   | 3,000  | 85%   |
+| Why-was-this-changed                 | 4x                  | 8,000    | 1,200  | 85%   |
+| Find active owner for a file         | 6x                  | 6,000    | 500    | 92%   |
+| Recover stranded lane                | 1x                  | 18,000   | 1,800  | 90%   |
+| Cross-agent handoff                  | 2x                  | 30,000   | 400    | 99%   |
+| Review task timeline                 | 4x                  | 12,000   | 900    | 93%   |
+| Search result shape                  | 8x                  | 5,000    | 150    | 97%   |
+| Ready-work selection                 | 3x                  | 9,000    | 700    | 92%   |
+| Unread message triage                | 4x                  | 10,000   | 600    | 94%   |
+| Claim-before-edit check              | 8x                  | 4,000    | 450    | 89%   |
+| Plan subtask claim                   | 2x                  | 12,000   | 1,100  | 91%   |
+| Spec context recall                  | 2x                  | 14,000   | 1,600  | 89%   |
+| Health/adoption diagnosis            | 1x                  | 16,000   | 1,800  | 89%   |
+| Examples pattern lookup              | 2x                  | 11,000   | 1,000  | 91%   |
+| Blocker recurrence                   | 2x                  | 10,000   | 900    | 91%   |
+| Drift / failed-verification recovery | 2x                  | 13,000   | 1,400  | 89%   |
+| Quota-exhausted handoff              | 1x                  | 22,000   | 500    | 98%   |
+| Storage at rest (per observation)    | 1x                  | 1,000    | 300    | 70%   |
 
 These rows are estimates, not a benchmark claim. Their purpose is to show where
 the context cost disappears:
@@ -374,30 +370,53 @@ Installs register the MCP server as `colony`, so tools appear as
 snippets, routing hints, and status rows first; full observation bodies only
 when requested.
 
-| Tool | Use |
-| --- | --- |
-| `hivemind_context` | Start/resume with active lanes, ownership, hot files, memory hits. |
-| `attention_inbox` | See handoffs, messages, blockers, stale cleanup, stalled lanes. |
-| `task_ready_for_agent` | Pull claimable work matched to the agent. |
-| `task_plan_claim_subtask` | Claim a Queen subtask and its file scope. |
-| `task_claim_file` | Make ownership visible before editing. |
-| `task_note_working` | Save compact resumable state. |
-| `task_message` | Send directed or broadcast agent coordination messages. |
-| `task_foraging_report` | Review weak proposals and promoted future work. |
-| `savings_report` | Live mcp_metrics rows + reference model; same data as `colony gain`. |
+| Tool                      | Use                                                                  |
+| ------------------------- | -------------------------------------------------------------------- |
+| `hivemind_context`        | Start/resume with active lanes, ownership, hot files, memory hits.   |
+| `attention_inbox`         | See handoffs, messages, blockers, stale cleanup, stalled lanes.      |
+| `task_ready_for_agent`    | Pull claimable work matched to the agent.                            |
+| `task_plan_claim_subtask` | Claim a Queen subtask and its file scope.                            |
+| `task_claim_file`         | Make ownership visible before editing.                               |
+| `task_note_working`       | Save compact resumable state.                                        |
+| `task_message`            | Send directed or broadcast agent coordination messages.              |
+| `task_foraging_report`    | Review weak proposals and promoted future work.                      |
+| `savings_report`          | Live mcp_metrics rows + reference model; same data as `colony gain`. |
 
 Copy-paste startup:
 
 ```json
-{ "name": "hivemind_context", "input": { "repo_root": "/abs/repo", "query": "current task or branch", "memory_limit": 3, "limit": 20 } }
+{
+  "name": "hivemind_context",
+  "input": {
+    "repo_root": "/abs/repo",
+    "query": "current task or branch",
+    "memory_limit": 3,
+    "limit": 20
+  }
+}
 ```
 
 ```json
-{ "name": "attention_inbox", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo" } }
+{
+  "name": "attention_inbox",
+  "input": {
+    "session_id": "sess_abc",
+    "agent": "codex",
+    "repo_root": "/abs/repo"
+  }
+}
 ```
 
 ```json
-{ "name": "task_ready_for_agent", "input": { "session_id": "sess_abc", "agent": "codex", "repo_root": "/abs/repo", "limit": 5 } }
+{
+  "name": "task_ready_for_agent",
+  "input": {
+    "session_id": "sess_abc",
+    "agent": "codex",
+    "repo_root": "/abs/repo",
+    "limit": 5
+  }
+}
 ```
 
 When plan work is claimable, `task_ready_for_agent` returns `next_tool:
@@ -418,14 +437,14 @@ Full MCP catalog: [docs/mcp.md](docs/mcp.md)
 Colony follows a stigmergic model: agents leave local traces, other agents react
 to useful traces, and stale traces evaporate.
 
-| Biology | Colony |
-| --- | --- |
-| ant | agent session |
-| nest | repository |
-| pheromone | claim, proposal, handoff, message |
-| evaporation | TTL, decay, sweep |
+| Biology            | Colony                                |
+| ------------------ | ------------------------------------- |
+| ant                | agent session                         |
+| nest               | repository                            |
+| pheromone          | claim, proposal, handoff, message     |
+| evaporation        | TTL, decay, sweep                     |
 | response threshold | agent profile plus ready-work ranking |
-| queen | plan publisher, not commander |
+| queen              | plan publisher, not commander         |
 
 Practical effects:
 
