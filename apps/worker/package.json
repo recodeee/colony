@@ -19,6 +19,7 @@
     "@colony/config": "workspace:*",
     "@colony/core": "workspace:*",
     "@colony/embedding": "workspace:*",
+    "@colony/hooks": "workspace:*",
     "@colony/process": "workspace:*",
     "@colony/storage": "workspace:*",
     "hono": "^4.6.10",

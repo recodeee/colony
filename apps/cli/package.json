@@ -29,10 +29,10 @@
   },
   "type": "module",
   "bin": {
-    "colony": "dist/index.js"
+    "colony": "bin/colony.sh"
   },
   "main": "./dist/index.js",
-  "files": ["dist", "hooks-scripts", "README.md", "LICENSE"],
+  "files": ["bin", "dist", "hooks-scripts", "README.md", "LICENSE"],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch --onSuccess \"node dist/index.js\"",

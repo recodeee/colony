@@ -13,6 +13,7 @@ import {
   readHivemind,
 } from '@colony/core';
 import { createEmbedder } from '@colony/embedding';
+import { runOmxLifecycleEnvelope } from '@colony/hooks';
 import { isMainEntry, notify, removePidFile, writePidFile } from '@colony/process';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -163,6 +164,24 @@ export function buildApp(
         500,
       );
     }
+  });
+
+  // Daemon fast-path for `colony bridge lifecycle`. The bin shim at
+  // apps/cli/bin/colony.sh POSTs the envelope here when the worker is up,
+  // skipping a per-event Node cold start. Falls through to the in-process
+  // Node CLI on any failure (see shim's stdin-replay logic), so writes
+  // still succeed when the daemon is down — that's the contract that
+  // keeps rule #10 in CLAUDE.md honored.
+  app.post('/api/bridge/lifecycle', async (c) => {
+    const ide = c.req.header('x-colony-ide')?.trim();
+    const cwd = c.req.header('x-colony-cwd')?.trim();
+    const payload: unknown = await c.req.json().catch(() => ({}));
+    const result = await runOmxLifecycleEnvelope(payload, {
+      store,
+      ...(ide ? { ide } : {}),
+      ...(cwd ? { defaultCwd: cwd } : {}),
+    });
+    return c.json(result);
   });
 
   app.get('/api/colony/tasks', (c) => {

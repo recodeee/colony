@@ -176,6 +176,9 @@ importers:
       '@colony/embedding':
         specifier: workspace:*
         version: link:../../packages/embedding
+      '@colony/hooks':
+        specifier: workspace:*
+        version: link:../../packages/hooks
       '@colony/process':
         specifier: workspace:*
         version: link:../../packages/process
