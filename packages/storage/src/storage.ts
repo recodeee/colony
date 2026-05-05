@@ -10,13 +10,18 @@ import {
 } from './tool-classes.js';
 import type {
   AgentProfileRow,
+  AggregateMcpMetricsOptions,
   ExampleRow,
   LaneRunState,
   LaneStateRow,
   LaneTakeoverResult,
   LinkedTask,
+  McpMetricsAggregate,
+  McpMetricsAggregateRow,
+  McpMetricsRawRow,
   NewAgentProfile,
   NewExample,
+  NewMcpMetric,
   NewObservation,
   NewPheromone,
   NewProposal,
@@ -1048,6 +1053,85 @@ export class Storage {
   countObservations(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS n FROM observations').get() as { n: number };
     return row.n;
+  }
+
+  recordMcpMetric(metric: NewMcpMetric): void {
+    this.db
+      .prepare(
+        `INSERT INTO mcp_metrics(
+          ts, operation, input_bytes, output_bytes, input_tokens, output_tokens, duration_ms, ok
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        metric.ts,
+        metric.operation,
+        metric.input_bytes,
+        metric.output_bytes,
+        metric.input_tokens,
+        metric.output_tokens,
+        metric.duration_ms,
+        metric.ok ? 1 : 0,
+      );
+  }
+
+  aggregateMcpMetrics(opts: AggregateMcpMetricsOptions = {}): McpMetricsAggregate {
+    const since = opts.since ?? 0;
+    const until = opts.until ?? Date.now();
+    const filters: string[] = ['ts >= ?', 'ts <= ?'];
+    const args: Array<number | string> = [since, until];
+    if (opts.operation !== undefined) {
+      filters.push('operation = ?');
+      args.push(opts.operation);
+    }
+    const where = `WHERE ${filters.join(' AND ')}`;
+    const rows = this.db
+      .prepare(
+        `SELECT operation,
+                COUNT(*) AS calls,
+                SUM(ok) AS ok_count,
+                SUM(input_bytes) AS in_bytes,
+                SUM(output_bytes) AS out_bytes,
+                SUM(input_tokens) AS in_tokens,
+                SUM(output_tokens) AS out_tokens,
+                SUM(duration_ms) AS total_ms,
+                MAX(ts) AS last_ts
+           FROM mcp_metrics
+           ${where}
+          GROUP BY operation
+          ORDER BY out_tokens DESC, calls DESC`,
+      )
+      .all(...args) as McpMetricsRawRow[];
+    const totalsRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS calls,
+                SUM(ok) AS ok_count,
+                SUM(input_bytes) AS in_bytes,
+                SUM(output_bytes) AS out_bytes,
+                SUM(input_tokens) AS in_tokens,
+                SUM(output_tokens) AS out_tokens,
+                SUM(duration_ms) AS total_ms
+           FROM mcp_metrics
+           ${where}`,
+      )
+      .get(...args) as Omit<McpMetricsRawRow, 'operation' | 'last_ts'> | undefined;
+    const operations: McpMetricsAggregateRow[] = rows.map((row) => buildAggregateRow(row));
+    return {
+      since,
+      until,
+      ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
+      totals: buildAggregateRow({
+        operation: '__total__',
+        calls: totalsRow?.calls ?? 0,
+        ok_count: totalsRow?.ok_count ?? 0,
+        in_bytes: totalsRow?.in_bytes ?? 0,
+        out_bytes: totalsRow?.out_bytes ?? 0,
+        in_tokens: totalsRow?.in_tokens ?? 0,
+        out_tokens: totalsRow?.out_tokens ?? 0,
+        total_ms: totalsRow?.total_ms ?? 0,
+        last_ts: 0,
+      }),
+      operations,
+    };
   }
 
   countEmbeddings(filter?: { model: string; dim: number }): number {
@@ -3206,6 +3290,33 @@ function kindCountsWithZeroes(kinds: string[], rows: KindCount[]): KindCount[] {
 
 function sumKindCounts(rows: KindCount[]): number {
   return rows.reduce((sum, row) => sum + row.count, 0);
+}
+
+function buildAggregateRow(row: McpMetricsRawRow): McpMetricsAggregateRow {
+  const calls = row.calls ?? 0;
+  const okCount = row.ok_count ?? 0;
+  const inBytes = row.in_bytes ?? 0;
+  const outBytes = row.out_bytes ?? 0;
+  const inTokens = row.in_tokens ?? 0;
+  const outTokens = row.out_tokens ?? 0;
+  const totalMs = row.total_ms ?? 0;
+  return {
+    operation: row.operation,
+    calls,
+    ok_count: okCount,
+    error_count: Math.max(0, calls - okCount),
+    input_bytes: inBytes,
+    output_bytes: outBytes,
+    total_bytes: inBytes + outBytes,
+    input_tokens: inTokens,
+    output_tokens: outTokens,
+    total_tokens: inTokens + outTokens,
+    avg_input_tokens: calls === 0 ? 0 : Math.round(inTokens / calls),
+    avg_output_tokens: calls === 0 ? 0 : Math.round(outTokens / calls),
+    total_duration_ms: totalMs,
+    avg_duration_ms: calls === 0 ? 0 : Math.round(totalMs / calls),
+    last_ts: row.last_ts ? row.last_ts : null,
+  };
 }
 
 function normalizeTaskIds(taskIds: number[] | undefined): number[] {

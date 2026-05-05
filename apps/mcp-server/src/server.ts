@@ -16,6 +16,7 @@ import * as handoff from './tools/handoff.js';
 import { createHeartbeatWrapper, installActiveSessionHeartbeat } from './tools/heartbeat.js';
 import * as hivemind from './tools/hivemind.js';
 import * as message from './tools/message.js';
+import { createMetricsWrapper } from './tools/metrics-wrapper.js';
 import * as planValidate from './tools/plan-validate.js';
 import * as plan from './tools/plan.js';
 import * as profile from './tools/profile.js';
@@ -25,6 +26,7 @@ import * as readyQueue from './tools/ready-queue.js';
 import * as recall from './tools/recall.js';
 import * as relay from './tools/relay.js';
 import * as rescue from './tools/rescue.js';
+import * as savings from './tools/savings.js';
 import * as search from './tools/search.js';
 import * as spec from './tools/spec.js';
 import * as startupPanel from './tools/startup-panel.js';
@@ -77,12 +79,17 @@ export function buildServer(
     return embedder;
   };
 
+  const heartbeat = createHeartbeatWrapper(store);
+  const metrics = createMetricsWrapper(store);
   const ctx: ToolContext = {
     store,
     settings,
     ...(options.planValidation !== undefined ? { planValidation: options.planValidation } : {}),
     resolveEmbedder,
-    wrapHandler: createHeartbeatWrapper(store),
+    // Heartbeat outer touches the active-session row before the handler runs;
+    // metrics inner measures handler input/output around the actual work so
+    // bookkeeping overhead does not skew duration_ms.
+    wrapHandler: (name, handler) => heartbeat(name, metrics(name, handler)),
   };
 
   // Registration order mirrors the pre-split monolithic server.ts so existing
@@ -105,6 +112,7 @@ export function buildServer(
   recall.register(server, ctx);
   suggest.register(server, ctx);
   rescue.register(server, ctx);
+  savings.register(server, ctx);
 
   // Autopilot lane (tick advisor + drift checker). Cheap compositions of
   // existing primitives; registered after the core surface so the heartbeat

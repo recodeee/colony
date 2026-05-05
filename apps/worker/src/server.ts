@@ -25,6 +25,7 @@ import {
   buildFileHeatRows,
   buildViewerAdoptionHealthPayload,
   renderIndex,
+  renderSavingsPage,
   renderSession,
 } from './viewer.js';
 
@@ -91,6 +92,14 @@ export function buildApp(
   app.get('/api/colony/adoption-health', (c) => {
     const since = parseSinceQuery(c.req.query('since'), Date.now() - 24 * 60 * 60_000);
     return c.json(buildViewerAdoptionHealthPayload(store, { since }));
+  });
+
+  app.get('/api/colony/savings', (c) => {
+    const { live, hours } = readSavingsPayload(store, c.req.query('hours'), c.req.query('since'));
+    return c.json({
+      live,
+      window: { hours, since: live.since, until: live.until },
+    });
   });
 
   app.get('/api/colony/stranded', (c) => {
@@ -309,7 +318,29 @@ export function buildApp(
     );
   });
 
+  app.get('/savings', (c) => {
+    const { live, hours } = readSavingsPayload(store, c.req.query('hours'), c.req.query('since'));
+    return c.html(renderSavingsPage({ live, windowHours: hours }));
+  });
+
   return app;
+}
+
+const DEFAULT_SAVINGS_HOURS = 24;
+const SAVINGS_HOUR_MS = 60 * 60_000;
+
+function readSavingsPayload(
+  store: MemoryStore,
+  hoursQuery: string | undefined,
+  sinceQuery: string | undefined,
+): { live: ReturnType<MemoryStore['storage']['aggregateMcpMetrics']>; hours: number } {
+  const parsedHours = hoursQuery !== undefined ? Number(hoursQuery) : Number.NaN;
+  const hours =
+    Number.isFinite(parsedHours) && parsedHours > 0 ? parsedHours : DEFAULT_SAVINGS_HOURS;
+  const now = Date.now();
+  const sinceFromQuery = parseSinceQuery(sinceQuery, now - hours * SAVINGS_HOUR_MS);
+  const live = store.storage.aggregateMcpMetrics({ since: sinceFromQuery, until: now });
+  return { live, hours };
 }
 
 function parseSinceQuery(raw: string | undefined, fallback: number): number {
