@@ -1,7 +1,7 @@
 # Colony
 
 <p align="center">
-  <img src="docs/assets/colony-hero.svg" alt="Colony - local-first coordination for coding agents" width="860" />
+  <img src="docs/assets/colony_hero.png" alt="Colony - local-first coordination for coding agents" width="860" />
 </p>
 
 <p align="center">
@@ -63,7 +63,7 @@ terminal sessions and stale notes.
 > Compact first. Hydrate only when needed. Claim before editing.
 
 <p align="center">
-  <img src="docs/assets/colony-loop.svg" alt="Colony startup and execution loop" width="900" />
+  <img src="docs/assets/colony_loop.png" alt="Colony startup and execution loop" width="900" />
 </p>
 
 ---
@@ -71,7 +71,7 @@ terminal sessions and stale notes.
 ## What Colony Can Do Right Now
 
 <p align="center">
-  <img src="docs/assets/colony-capabilities.svg" alt="Current Colony capabilities: install, observe, coordinate, plan, recover, and inspect" width="900" />
+  <img src="docs/assets/colony-capabilities.png" alt="Current Colony capabilities: install, observe, coordinate, plan, recover, and inspect" width="900" />
 </p>
 
 | Capability | Current surface |
@@ -97,7 +97,7 @@ and handoffs to stop shaping current work.
 ## How It Fits
 
 <p align="center">
-  <img src="docs/assets/colony-vs-runtime.svg" alt="Agent runtimes execute work while Colony coordinates tasks, claims, health, and memory" width="900" />
+  <img src="docs/assets/colony-vs-runtime.png" alt="Agent runtimes execute work while Colony coordinates tasks, claims, health, and memory" width="900" />
 </p>
 
 | Layer | Responsibility |
@@ -111,7 +111,7 @@ This split keeps execution close to the existing agent runtime while making the
 coordination state shared, inspectable, and local.
 
 <p align="center">
-  <img src="docs/assets/colony-architecture.svg" alt="Colony architecture diagram" width="900" />
+  <img src="docs/assets/colony-architecture.png" alt="Colony architecture diagram" width="900" />
 </p>
 
 ---
@@ -193,7 +193,7 @@ next exact command or MCP call, and lower-priority follow-ups stay hidden until
 `--verbose`.
 
 <p align="center">
-  <img src="docs/assets/colony-health.svg" alt="Colony health readiness summary" width="900" />
+  <img src="docs/assets/colony-health.png" alt="Colony health readiness summary" width="900" />
 </p>
 
 ```text
@@ -257,7 +257,7 @@ The local viewer renders active sessions, tool calls, handoffs, messages, file
 claims, stalled lanes, and shared work traces.
 
 <p align="center">
-  <img src="docs/assets/colony-graph-live.svg" alt="Colony live graph showing active agent sessions, MCP tool calls, handoffs, shares, and claims" width="900" />
+  <img src="docs/assets/colony-graph-live.png" alt="Colony live graph showing active agent sessions, MCP tool calls, handoffs, shares, and claims" width="900" />
 </p>
 
 ```bash
@@ -387,7 +387,7 @@ Full MCP catalog: [docs/mcp.md](docs/mcp.md)
 ## Signal Lifecycle
 
 <p align="center">
-  <img src="docs/assets/colony-signal-lifecycle.svg" alt="Colony signal lifecycle from fresh traces to reinforcement, decay, expiry, and sweep" width="900" />
+  <img src="docs/assets/colony-signal-lifecycle.png" alt="Colony signal lifecycle from fresh traces to reinforcement, decay, expiry, and sweep" width="900" />
 </p>
 
 Colony follows a stigmergic model: agents leave local traces, other agents react
