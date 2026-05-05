@@ -71,7 +71,7 @@ export function registerGainCommand(program: Command): void {
     });
 }
 
-function writeReferenceSection(
+export function writeReferenceSection(
   rows: ReadonlyArray<SavingsReferenceRow>,
   totals: ReturnType<typeof savingsReferenceTotals>,
 ): void {
@@ -104,6 +104,34 @@ function writeReferenceSection(
       [32, 5, 9, 9, 6],
     )}\n\n`,
   );
+  writeReferenceCutsSection(rows);
+}
+
+function writeReferenceCutsSection(rows: ReadonlyArray<SavingsReferenceRow>): void {
+  const w = process.stdout;
+  w.write(`${kleur.bold('What gets cut')}\n`);
+  w.write(
+    kleur.dim(
+      'Each reference row compares the compact Colony path against the standard loop it replaces.\n\n',
+    ),
+  );
+  for (const row of rows) {
+    const cut = splitRationale(row.rationale);
+    w.write(`${kleur.bold(row.operation)}\n`);
+    w.write(`  Colony:  ${cut.colony}\n`);
+    w.write(`  Cuts:    ${cut.standard}\n`);
+  }
+  w.write('\n');
+}
+
+function splitRationale(rationale: string): { colony: string; standard: string } {
+  const separator = ' vs ';
+  const index = rationale.lastIndexOf(separator);
+  if (index === -1) return { colony: rationale, standard: 'manual context reconstruction' };
+  return {
+    colony: rationale.slice(0, index),
+    standard: rationale.slice(index + separator.length),
+  };
 }
 
 export function writeLiveSection(
