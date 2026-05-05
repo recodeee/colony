@@ -261,3 +261,58 @@ export interface NewTaskEmbedding {
   observation_count: number;
   computed_at?: number;
 }
+
+export interface NewMcpMetric {
+  ts: number;
+  operation: string;
+  input_bytes: number;
+  output_bytes: number;
+  input_tokens: number;
+  output_tokens: number;
+  duration_ms: number;
+  ok: boolean;
+}
+
+export interface AggregateMcpMetricsOptions {
+  since?: number;
+  until?: number;
+  operation?: string;
+}
+
+export interface McpMetricsAggregateRow {
+  operation: string;
+  calls: number;
+  ok_count: number;
+  error_count: number;
+  input_bytes: number;
+  output_bytes: number;
+  total_bytes: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  avg_input_tokens: number;
+  avg_output_tokens: number;
+  total_duration_ms: number;
+  avg_duration_ms: number;
+  last_ts: number | null;
+}
+
+export interface McpMetricsAggregate {
+  since: number;
+  until: number;
+  operation?: string;
+  totals: McpMetricsAggregateRow;
+  operations: McpMetricsAggregateRow[];
+}
+
+export interface McpMetricsRawRow {
+  operation: string;
+  calls: number;
+  ok_count: number;
+  in_bytes: number;
+  out_bytes: number;
+  in_tokens: number;
+  out_tokens: number;
+  total_ms: number;
+  last_ts: number;
+}

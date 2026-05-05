@@ -62,4 +62,8 @@ export type {
   ExampleManifestKind,
   TaskEmbeddingRow,
   NewTaskEmbedding,
+  NewMcpMetric,
+  AggregateMcpMetricsOptions,
+  McpMetricsAggregate,
+  McpMetricsAggregateRow,
 } from './types.js';

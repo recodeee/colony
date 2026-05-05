@@ -235,6 +235,25 @@ CREATE TABLE IF NOT EXISTS task_embeddings (
 );
 CREATE INDEX IF NOT EXISTS idx_task_embeddings_model ON task_embeddings(model, dim);
 
+-- Per-call MCP token/duration receipts. One row per tool invocation, recorded
+-- by the wrapping handler in apps/mcp-server. input_tokens / output_tokens are
+-- estimated via @colony/compress#countTokens — same primitive that produces
+-- the observation token receipts, so the numbers line up across surfaces.
+-- ok=0 marks a thrown handler so failure rates are queryable.
+CREATE TABLE IF NOT EXISTS mcp_metrics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  operation TEXT NOT NULL,
+  input_bytes INTEGER NOT NULL,
+  output_bytes INTEGER NOT NULL,
+  input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  ok INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_metrics_op_ts ON mcp_metrics(operation, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_metrics_ts ON mcp_metrics(ts DESC);
+
 INSERT OR IGNORE INTO schema_version(version) VALUES (10);
 `;
 

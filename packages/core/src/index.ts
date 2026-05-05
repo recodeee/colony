@@ -1,5 +1,11 @@
 export { MemoryStore, type Embedder } from './memory-store.js';
 export {
+  SAVINGS_REFERENCE_ROWS,
+  savingsReferenceTotals,
+  type SavingsReferenceRow,
+  type SavingsReferenceTotals,
+} from './savings-reference.js';
+export {
   bulkRescueStrandedSessions,
   rescueStrandedSessions,
   type BulkStrandedClaim,

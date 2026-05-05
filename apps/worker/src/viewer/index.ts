@@ -15,6 +15,7 @@ import {
 import { renderDiagnostic, renderToolUsageHistogram } from './sections/diagnostic.js';
 import { buildFileHeatRows, renderFileHeatMap } from './sections/heat-map.js';
 import { renderHivemindDashboard } from './sections/hivemind.js';
+import { renderSavingsPage } from './sections/savings.js';
 import { type StrandedSessionSummary, renderStrandedSessions } from './sections/stranded.js';
 
 const DEFAULT_FILE_HEAT_HALF_LIFE_MINUTES = 30;
@@ -22,6 +23,8 @@ const DEFAULT_FILE_HEAT_HALF_LIFE_MINUTES = 30;
 export type ClaimCoverageSnapshot = ReturnType<MemoryStore['storage']['claimCoverageSnapshot']>;
 export type { StrandedSessionSummary };
 export { buildFileHeatRows };
+export { renderSavingsPage } from './sections/savings.js';
+export type { SavingsPagePayload } from './sections/savings.js';
 export { buildViewerAdoptionHealthPayload } from './sections/adoption-health.js';
 
 export function buildClaimCoverageSnapshot(
@@ -67,7 +70,7 @@ export function renderIndex(
     .join(' ');
   return layout(
     'agents-hivemind · sessions',
-    html`${raw(stranded)}${raw(dashboard)}${raw(colonyState)}<h2>Recent memory sessions</h2><p class="meta">${raw(summary)}</p>${raw(items)}`,
+    html`<p class="meta"><a href="/savings">token savings &rarr;</a></p>${raw(stranded)}${raw(dashboard)}${raw(colonyState)}<h2>Recent memory sessions</h2><p class="meta">${raw(summary)}</p>${raw(items)}`,
   );
 }
 

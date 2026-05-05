@@ -1637,6 +1637,36 @@ Returns:
 
 `drift_score` is `edits_without_claim.length / max(1, edited_files.length)` — the share of recent edits that fell outside the claim manifest. `next_tool` / `next_args` carry concrete `task_claim_file` payloads when drift exists, otherwise `null`. Edit-tool detection uses the canonical `FILE_EDIT_TOOLS` set from `@colony/storage`.
 
+## `savings_report`
+
+Reports colony token savings: hand-authored reference rows plus live per-operation usage from the `mcp_metrics` table.
+
+Args:
+
+- `since_ms?` — absolute epoch-ms cutoff for the live window. Takes precedence over `hours`.
+- `hours?` — relative live window in hours. Defaults to 24, max 720 (30d).
+- `operation?` — filter live rows to one tool name (e.g. `"search"`).
+
+Response shape:
+
+```json
+{
+  "reference": {
+    "note": "Hand-authored estimates of token cost per operation, with vs. without colony.",
+    "rows": [{ "operation": "...", "frequency_per_session": 5, "baseline_tokens": 8000, "colony_tokens": 1500, "savings_pct": 81, "rationale": "..." }],
+    "totals": { "baseline_tokens": 215000, "colony_tokens": 39000, "savings_pct": 82 }
+  },
+  "live": {
+    "note": "Recorded mcp_metrics receipts for the requested window.",
+    "window": { "since": 1730000000000, "until": 1730086400000, "hours": 24 },
+    "totals": { "operation": "__total__", "calls": 1284, "ok_count": 1280, "error_count": 4, "input_tokens": 153000, "output_tokens": 482000, "total_tokens": 635000, "avg_input_tokens": 119, "avg_output_tokens": 376, "total_duration_ms": 4310, "avg_duration_ms": 3, "last_ts": 1730086391120 },
+    "operations": [{ "operation": "search", "calls": 412, "ok_count": 411, "error_count": 1, "...": "..." }]
+  }
+}
+```
+
+Live tokens are counted with `@colony/compress#countTokens` — the same primitive that produces observation token receipts, so values line up across surfaces. The reference table is sourced from `packages/core/src/savings-reference.ts`; the CLI command `colony gain` and the worker's `/savings` page render the same payload.
+
 ## Plan observation kinds
 
 The lane introduces several observation kinds on the parent spec task and on the sub-task threads. They are written through `MemoryStore.addObservation`, so content is compressed and `metadata` carries the structured payload.

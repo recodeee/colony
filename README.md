@@ -79,6 +79,7 @@ terminal sessions and stale notes.
 | Publish wave plans | Queen plans and `task_plan_*` MCP tools |
 | Clean stale signals | `colony coordination sweep`, `colony queen sweep`, health fix plans |
 | Inspect the graph | `colony viewer` local read-only graph |
+| Measure token savings | `colony gain`, MCP `savings_report`, viewer `/savings` |
 | Prove behavior | `colony health`, smoke tests, adoption metrics |
 
 Use Colony when you run more than one coding agent in the same repo, use
@@ -255,6 +256,52 @@ decay or be swept.
 
 ---
 
+## Token Savings
+
+Colony saves tokens in two ways. The reference table is hand-authored and
+illustrative; the live numbers are recorded by the MCP server on every wrapped
+tool call into the `mcp_metrics` SQLite table.
+
+```bash
+colony gain                       # CLI: reference + live, last 7 days
+colony gain --hours 24 --json     # last 24 hours as JSON
+colony gain --operation search    # filter live rows to one tool name
+```
+
+| Operation | Frequency / session | Standard | Colony | Saved |
+| --- | --- | --- | --- | --- |
+| Recall prior decision | 5x | 8,000 | 1,500 | 81% |
+| Resume task across sessions | 3x | 15,000 | 2,000 | 87% |
+| Coordinate parallel agents | 10x | 20,000 | 3,000 | 85% |
+| Why-was-this-changed | 4x | 8,000 | 1,200 | 85% |
+| Cross-agent handoff | 2x | 30,000 | 400 | 99% |
+| Search result shape | 8x | 5,000 | 150 | 97% |
+| Storage at rest (per observation) | 1x | 1,000 | 300 | 70% |
+
+Colony's three savings levers:
+
+- **Compression at rest.** Every observation runs through `@colony/compress` before SQLite. Prose shrinks ~70% while paths, URLs, code, commands, version numbers, and dates stay byte-for-byte intact.
+- **Progressive disclosure.** `search`, `timeline`, `attention_inbox`, and friends return compact IDs plus snippets. Full bodies only ship via `get_observations([ids])`, so callers pay only for what they hydrate.
+- **Cross-session recall.** Instead of re-reading 5–10 files plus git log to rederive prior decisions, agents `search` and pull a single observation.
+
+The MCP `savings_report` tool returns the same data:
+
+```json
+{ "name": "savings_report", "input": { "hours": 24 } }
+```
+
+Live numbers are visible at <http://127.0.0.1:6510/savings> when `colony viewer`
+is running. Reference rows are shared across CLI, MCP, and viewer through
+`packages/core/src/savings-reference.ts` — update once, three surfaces
+update together.
+
+`mcp_metrics` is a runtime debug aid: per-call `(operation, ts, input_bytes,
+output_bytes, input_tokens, output_tokens, duration_ms, ok)` rows recorded by
+the metrics wrapper in `apps/mcp-server`. When live token usage looks wrong,
+inspect `mcp_metrics` to see which tool is heavy.
+
+---
+
 ## MCP Quick Reference
 
 Installs register the MCP server as `colony`, so tools appear as
@@ -272,6 +319,7 @@ when requested.
 | `task_note_working` | Save compact resumable state. |
 | `task_message` | Send directed or broadcast agent coordination messages. |
 | `task_foraging_report` | Review weak proposals and promoted future work. |
+| `savings_report` | Reference + live mcp_metrics rows; same data as `colony gain`. |
 
 Copy-paste startup:
 
