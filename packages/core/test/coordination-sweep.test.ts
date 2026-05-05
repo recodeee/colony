@@ -313,6 +313,60 @@ describe('buildCoordinationSweep stale claim cleanup', () => {
     expect(store.storage.getClaim(taskId, filePath)?.state).toBe('handoff_pending');
   });
 
+  it('releases aged quota-pending claims via release_aged_quota_pending_minutes', () => {
+    const filePath = 'src/quota-aged.ts';
+    seedStaleClaim('agent/quota-aged', filePath, 'codex@quota-aged', '/repo', 90);
+    const taskId = taskIdByBranch('agent/quota-aged');
+    markQuotaPendingClaim(taskId, filePath, 'codex@quota-aged'); // not yet expired
+
+    const dryRun = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+    expect(dryRun.summary.released_aged_quota_pending_claim_count).toBe(0);
+    expect(store.storage.getClaim(taskId, filePath)?.state).toBe('handoff_pending');
+
+    const applied = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      release_aged_quota_pending_minutes: 60,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(applied.summary.released_aged_quota_pending_claim_count).toBe(1);
+    expect(applied.released_expired_quota_pending_claims).toEqual([
+      expect.objectContaining({
+        task_id: taskId,
+        file_path: filePath,
+        session_id: 'codex@quota-aged',
+        cleanup_action: 'release_aged_quota_pending',
+        reason: 'quota_pending_aged',
+      }),
+    ]);
+    expect(store.storage.getClaim(taskId, filePath)?.state).toBe('weak_expired');
+  });
+
+  it('skips quota-pending claims younger than release_aged_quota_pending_minutes', () => {
+    const filePath = 'src/quota-young.ts';
+    seedStaleClaim('agent/quota-young', filePath, 'codex@quota-young', '/repo', 30);
+    const taskId = taskIdByBranch('agent/quota-young');
+    markQuotaPendingClaim(taskId, filePath, 'codex@quota-young');
+
+    const result = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      release_aged_quota_pending_minutes: 60,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(result.summary.released_aged_quota_pending_claim_count).toBe(0);
+    expect(store.storage.getClaim(taskId, filePath)?.state).toBe('handoff_pending');
+  });
+
   it('releases same-branch duplicate claims to audit-only history', () => {
     seedStaleClaim('agent/codex/duplicate', 'src/shared.ts', 'codex@left', '/repo');
     seedStaleClaim('agent/codex/duplicate', 'src/shared.ts', 'codex@right', '/repo-alias');
