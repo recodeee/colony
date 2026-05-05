@@ -19,7 +19,7 @@ import type { ToolContext } from '../src/tools/context.js';
 
 const REPO = '/r';
 const SESSION = 'session-pilot';
-const AGENT = 'claude-code';
+const AGENT = 'claude';
 
 let directory: string;
 let store: MemoryStore;
@@ -115,11 +115,10 @@ describe('decideNextAction (unit)', () => {
       makeLane({ task: 'No active swarm', activity: 'dead' }),
       makeLane({ task: 'fix the auth flow', activity: 'stalled' }),
     ];
-    const result = autopilot.decideNextAction(
-      makeInbox({ stalled_lanes: stalled }),
-      makeReady(),
-      { session_id: SESSION, agent: AGENT },
-    );
+    const result = autopilot.decideNextAction(makeInbox({ stalled_lanes: stalled }), makeReady(), {
+      session_id: SESSION,
+      agent: AGENT,
+    });
 
     expect(result.signals.stalled_lane_count).toBe(3);
     expect(result.signals.dead_heartbeat_lane_count).toBe(2);

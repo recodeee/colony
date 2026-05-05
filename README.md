@@ -351,7 +351,7 @@ when requested.
 | `task_note_working` | Save compact resumable state. |
 | `task_message` | Send directed or broadcast agent coordination messages. |
 | `task_foraging_report` | Review weak proposals and promoted future work. |
-| `savings_report` | Reference + live mcp_metrics rows; same data as `colony gain`. |
+| `savings_report` | Live mcp_metrics rows + reference model; same data as `colony gain`. |
 
 Copy-paste startup:
 

@@ -1642,7 +1642,7 @@ Returns:
 
 ## `savings_report`
 
-Reports colony token savings: hand-authored reference rows plus live per-operation usage from the `mcp_metrics` table.
+Reports colony token savings: live per-operation usage from the `mcp_metrics` table plus reference rows for common coordination loops.
 
 Args:
 
@@ -1654,16 +1654,16 @@ Response shape:
 
 ```json
 {
-  "reference": {
-    "note": "Hand-authored estimates of token cost per operation, with vs. without colony.",
-    "rows": [{ "operation": "...", "frequency_per_session": 5, "baseline_tokens": 8000, "colony_tokens": 1500, "savings_pct": 81, "rationale": "..." }],
-    "totals": { "baseline_tokens": 215000, "colony_tokens": 39000, "savings_pct": 82 }
-  },
   "live": {
     "note": "Recorded mcp_metrics receipts for the requested window.",
     "window": { "since": 1730000000000, "until": 1730086400000, "hours": 24 },
     "totals": { "operation": "__total__", "calls": 1284, "ok_count": 1280, "error_count": 4, "input_tokens": 153000, "output_tokens": 482000, "total_tokens": 635000, "avg_input_tokens": 119, "avg_output_tokens": 376, "total_duration_ms": 4310, "avg_duration_ms": 3, "last_ts": 1730086391120 },
     "operations": [{ "operation": "search", "calls": 412, "ok_count": 411, "error_count": 1, "...": "..." }]
+  },
+  "reference": {
+    "note": "Estimated per-session token cost for common coordination loops, with vs. without colony.",
+    "rows": [{ "operation": "...", "frequency_per_session": 5, "baseline_tokens": 8000, "colony_tokens": 1500, "savings_pct": 81, "rationale": "..." }],
+    "totals": { "baseline_tokens": 802000, "colony_tokens": 83900, "savings_pct": 90 }
   }
 }
 ```
