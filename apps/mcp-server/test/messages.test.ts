@@ -220,6 +220,7 @@ describe('task threads — direct messages', () => {
       session_id: sessionB,
       agent: 'codex',
       task_ids: [task_id],
+      format: 'full',
     });
 
     expect(recipientInbox.summary.unread_message_count).toBe(1);
@@ -254,6 +255,7 @@ describe('task threads — direct messages', () => {
       session_id: sessionB,
       agent: 'codex',
       task_ids: [task_id],
+      format: 'full',
     });
     expect(afterRead.unread_messages.find((m) => m.id === firstId)).toBeUndefined();
 
@@ -272,6 +274,7 @@ describe('task threads — direct messages', () => {
       session_id: sessionB,
       agent: 'codex',
       task_ids: [task_id],
+      format: 'full',
     });
     const second = inboxForReply.unread_messages.find((m) => m.id === secondId);
     expect(second?.suggested_reply_args.reply_to).toBe(secondId);
@@ -290,6 +293,7 @@ describe('task threads — direct messages', () => {
         session_id: sessionA,
         agent: 'claude',
         task_ids: [task_id],
+        format: 'full',
       },
     );
     expect(senderInbox.unread_messages.find((m) => m.id === replyId)?.from_agent).toBe('codex');

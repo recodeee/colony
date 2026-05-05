@@ -385,7 +385,7 @@ function agentFromIde(ide: string): string {
   return ide === 'claude-code' ? 'claude' : ide;
 }
 
-function attentionObservationIds(
+export function attentionObservationIds(
   inbox: AttentionInbox,
   limit: number,
 ): { ids: number[]; truncated: boolean } {

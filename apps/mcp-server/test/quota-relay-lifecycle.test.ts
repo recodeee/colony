@@ -155,6 +155,7 @@ describe('quota relay lifecycle E2E', () => {
       repo_root: repoRoot,
       task_ids: [thread.task_id],
       recent_claim_limit: 10,
+      format: 'full',
     });
     expect(inbox.summary.recent_other_claim_count).toBe(0);
     expect(inbox.summary.weak_other_claim_count).toBe(0);

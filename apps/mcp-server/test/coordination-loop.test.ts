@@ -508,6 +508,7 @@ describe('coordination loop discovery', () => {
       agent: 'codex',
       repo_root: repoRoot,
       task_ids: [firstTask.task_id],
+      format: 'full',
     });
     expect(inbox.summary.unread_message_count).toBe(1);
     expect(inbox.summary.blocked).toBe(true);
@@ -633,6 +634,7 @@ describe('coordination loop discovery', () => {
       agent: 'codex',
       repo_root: repoRoot,
       task_ids: [firstTask.task_id],
+      format: 'full',
     });
     expect(inbox.summary).toMatchObject({ unread_message_count: 1, blocked: true });
     expect(inbox.unread_messages[0]).toMatchObject({
