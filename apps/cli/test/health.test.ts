@@ -449,7 +449,10 @@ describe('colony health payload', () => {
       { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
     );
 
-    expect(payload.readiness_summary.execution_safety.status).toBe('bad');
+    // Status is 'ok' (not 'bad') when the only red flag is stale 24h
+    // telemetry and the recent window is at-or-above target — the
+    // bridge is fine, the metric just needs to age out.
+    expect(payload.readiness_summary.execution_safety.status).toBe('ok');
     expect(payload.task_claim_file_before_edits).toMatchObject({
       old_telemetry_pollution: true,
       recent_window_hours: 1,

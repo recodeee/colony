@@ -1070,13 +1070,32 @@ function readinessSummaryPayload(
 
   const claimBeforeEdit = payload.task_claim_file_before_edits;
   const liveContention = payload.live_contention_health;
-  const executionStatus: ReadinessStatus =
+  const hasLiveContentionFailure =
     liveContention.live_file_contentions > 0 ||
     liveContention.protected_file_contentions > 0 ||
-    liveContention.dirty_contended_files > 0 ||
-    claimBeforeEdit.codex_rollout_without_bridge ||
-    claimBeforeEdit.root_cause !== null ||
-    claimBeforeEdit.session_binding_missing > 0
+    liveContention.dirty_contended_files > 0;
+  // `old_telemetry_pollution` represents stale 24h data, not an active
+  // failure. When the recent window is healthy and nothing else is on
+  // fire, the readiness status should de-escalate to 'ok' so operators
+  // are not nagged to "fix" a bridge that is already fine. Any other
+  // root cause keeps the 'bad' status — those reflect real, current
+  // bridge problems.
+  const onlyOldTelemetryPollution =
+    !hasLiveContentionFailure &&
+    !claimBeforeEdit.codex_rollout_without_bridge &&
+    claimBeforeEdit.session_binding_missing === 0 &&
+    claimBeforeEdit.root_cause?.kind === 'old_telemetry_pollution' &&
+    claimBeforeEdit.recent_claim_before_edit_rate !== null &&
+    isAtOrAboveTarget(
+      claimBeforeEdit.recent_claim_before_edit_rate,
+      TARGET_CLAIM_BEFORE_EDIT,
+    );
+  const executionStatus: ReadinessStatus = onlyOldTelemetryPollution
+    ? 'ok'
+    : hasLiveContentionFailure ||
+        claimBeforeEdit.codex_rollout_without_bridge ||
+        claimBeforeEdit.root_cause !== null ||
+        claimBeforeEdit.session_binding_missing > 0
       ? 'bad'
       : claimBeforeEdit.claim_before_edit_ratio !== null
         ? isAtOrAboveTarget(claimBeforeEdit.claim_before_edit_ratio, TARGET_CLAIM_BEFORE_EDIT)
