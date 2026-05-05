@@ -1,7 +1,7 @@
 import { loadSettings } from '@colony/config';
 import {
-  type SavingsReferenceRow,
   SAVINGS_REFERENCE_ROWS,
+  type SavingsReferenceRow,
   savingsReferenceTotals,
 } from '@colony/core';
 import type { McpMetricsAggregateRow } from '@colony/storage';
@@ -106,7 +106,7 @@ function writeReferenceSection(
   );
 }
 
-function writeLiveSection(
+export function writeLiveSection(
   rows: ReadonlyArray<McpMetricsAggregateRow>,
   totals: McpMetricsAggregateRow,
   hours: number,
@@ -125,37 +125,63 @@ function writeLiveSection(
   }
   w.write(
     kleur.dim(
-      'input/output measured by @colony/compress#countTokens; ok=successful calls, err=throws.\n\n',
+      'input/output measured by @colony/compress#countTokens; bytes are raw JSON payload sizes; ok=successful calls, err=throws.\n\n',
     ),
   );
   const head = padRow(
-    ['Operation', 'Calls', 'Err', 'Tokens in', 'Tokens out', 'Avg ms'],
-    [28, 6, 5, 11, 11, 7],
+    [
+      'Operation',
+      'Calls',
+      'OK',
+      'Err',
+      'Tok in',
+      'Tok out',
+      'Tok total',
+      'Bytes',
+      'Avg in',
+      'Avg out',
+      'Avg ms',
+      'Last',
+    ],
+    [30, 6, 5, 5, 8, 8, 10, 8, 7, 8, 7, 10],
   );
   w.write(`${kleur.dim(head)}\n`);
   for (const row of rows) {
     const cells = [
       row.operation,
       String(row.calls),
+      String(row.ok_count),
       row.error_count > 0 ? kleur.red(String(row.error_count)) : '0',
       formatTokens(row.input_tokens),
       formatTokens(row.output_tokens),
+      formatTokens(row.total_tokens),
+      formatTokens(row.total_bytes),
+      formatTokens(row.avg_input_tokens),
+      formatTokens(row.avg_output_tokens),
       String(row.avg_duration_ms),
+      formatLastSeen(row.last_ts),
     ];
-    w.write(`${padRow(cells, [28, 6, 5, 11, 11, 7])}\n`);
+    w.write(`${padRow(cells, [30, 6, 5, 5, 8, 8, 10, 8, 7, 8, 7, 10])}\n`);
   }
-  w.write(`${kleur.dim('-'.repeat(72))}\n`);
+  w.write(`${kleur.dim('-'.repeat(126))}\n`);
+  const totalLastTs = totals.last_ts ?? latestMetricTs(rows);
   w.write(
     `${padRow(
       [
         kleur.bold('Total'),
         String(totals.calls),
+        String(totals.ok_count),
         totals.error_count > 0 ? kleur.red(String(totals.error_count)) : '0',
         formatTokens(totals.input_tokens),
         formatTokens(totals.output_tokens),
+        formatTokens(totals.total_tokens),
+        formatTokens(totals.total_bytes),
+        formatTokens(totals.avg_input_tokens),
+        formatTokens(totals.avg_output_tokens),
         String(totals.avg_duration_ms),
+        formatLastSeen(totalLastTs),
       ],
-      [28, 6, 5, 11, 11, 7],
+      [30, 6, 5, 5, 8, 8, 10, 8, 7, 8, 7, 10],
     )}\n`,
   );
 }
@@ -164,6 +190,27 @@ function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function latestMetricTs(rows: ReadonlyArray<McpMetricsAggregateRow>): number | null {
+  let latest: number | null = null;
+  for (const row of rows) {
+    if (row.last_ts === null) continue;
+    latest = latest === null ? row.last_ts : Math.max(latest, row.last_ts);
+  }
+  return latest;
+}
+
+function formatLastSeen(ts: number | null): string {
+  if (ts === null) return '-';
+  const ageMs = Math.max(0, Date.now() - ts);
+  const seconds = Math.round(ageMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 function padRow(cells: string[], widths: number[]): string {
@@ -175,7 +222,7 @@ function padRow(cells: string[], widths: number[]): string {
     .join('  ');
 }
 
-const ANSI = /\[[0-9;]*m/g;
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
 function padVisible(value: string, width: number): string {
   const visibleLen = value.replace(ANSI, '').length;
