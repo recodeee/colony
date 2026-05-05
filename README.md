@@ -968,6 +968,14 @@ becoming a remote control plane.
 
 ---
 
+## Credits
+
+Colony started from work on JuliusBrussee's
+[cavemem](https://github.com/JuliusBrussee/cavemem) repository. Credit to
+JuliusBrussee for the original base.
+
+---
+
 ## License
 
 MIT © Imdeadpool
