@@ -645,3 +645,92 @@ describe('sessionsEndedWithoutHandoff', () => {
     ]);
   });
 });
+
+describe('archiveQueenPlan', () => {
+  it('marks the parent task and every sub-task row archived', () => {
+    const repo = '/repo';
+    const slug = 'orphan-queen-plan';
+    const parent = storage.findOrCreateTask({
+      title: 'orphan',
+      repo_root: repo,
+      branch: `spec/${slug}`,
+      created_by: 'queen',
+    });
+    const subIds: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const sub = storage.findOrCreateTask({
+        title: `sub ${i}`,
+        repo_root: repo,
+        branch: `spec/${slug}/sub-${i}`,
+        created_by: 'queen',
+      });
+      subIds.push(sub.id);
+    }
+
+    const result = storage.archiveQueenPlan({ repo_root: repo, plan_slug: slug });
+
+    expect(result).toEqual({ parent_task_id: parent.id, archived_rows: 4 });
+    expect(storage.getTask(parent.id)?.status).toBe('archived');
+    for (const subId of subIds) {
+      expect(storage.getTask(subId)?.status).toBe('archived');
+    }
+  });
+
+  it('is idempotent and reports zero archived rows on re-run', () => {
+    const repo = '/repo';
+    const slug = 'twice-archived';
+    storage.findOrCreateTask({
+      title: 'parent',
+      repo_root: repo,
+      branch: `spec/${slug}`,
+      created_by: 'queen',
+    });
+    storage.findOrCreateTask({
+      title: 'sub',
+      repo_root: repo,
+      branch: `spec/${slug}/sub-0`,
+      created_by: 'queen',
+    });
+
+    const first = storage.archiveQueenPlan({ repo_root: repo, plan_slug: slug });
+    expect(first.archived_rows).toBe(2);
+
+    const second = storage.archiveQueenPlan({ repo_root: repo, plan_slug: slug });
+    expect(second.archived_rows).toBe(0);
+    expect(second.parent_task_id).toBe(first.parent_task_id);
+  });
+
+  it('returns parent_task_id null when the plan does not exist', () => {
+    expect(
+      storage.archiveQueenPlan({ repo_root: '/repo', plan_slug: 'never-published' }),
+    ).toEqual({ parent_task_id: null, archived_rows: 0 });
+  });
+
+  it('does not touch tasks belonging to other plans or other repos', () => {
+    const slug = 'isolated';
+    const target = storage.findOrCreateTask({
+      title: 'target',
+      repo_root: '/repo',
+      branch: `spec/${slug}`,
+      created_by: 'queen',
+    });
+    const sibling = storage.findOrCreateTask({
+      title: 'sibling',
+      repo_root: '/repo',
+      branch: 'spec/another-plan',
+      created_by: 'queen',
+    });
+    const otherRepo = storage.findOrCreateTask({
+      title: 'other repo same slug',
+      repo_root: '/other-repo',
+      branch: `spec/${slug}`,
+      created_by: 'queen',
+    });
+
+    storage.archiveQueenPlan({ repo_root: '/repo', plan_slug: slug });
+
+    expect(storage.getTask(target.id)?.status).toBe('archived');
+    expect(storage.getTask(sibling.id)?.status).toBe('open');
+    expect(storage.getTask(otherRepo.id)?.status).toBe('open');
+  });
+});

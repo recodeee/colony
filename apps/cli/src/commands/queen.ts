@@ -220,6 +220,56 @@ export function registerQueenCommand(program: Command): void {
     });
 
   group
+    .command('archive')
+    .description('Archive an orphan queen plan whose openspec change was never published')
+    .argument('<slug>', 'Plan slug')
+    .option('--repo-root <path>', 'Repo root (defaults to process.cwd())')
+    .option('--force', 'Archive even when sub-tasks are still claimed')
+    .option('--json', 'emit archive result as JSON')
+    .action(async (slug: string, opts: { repoRoot?: string; force?: boolean; json?: boolean }) => {
+      const repoRoot = resolve(opts.repoRoot ?? process.cwd());
+      const settings = loadSettings();
+      await withStore(settings, (store) => {
+        store.startSession({ id: QUEEN_SESSION_ID, ide: QUEEN_AGENT, cwd: repoRoot });
+        const plan = queenPlans(store, repoRoot).find((candidate) => candidate.plan_slug === slug);
+        if (!plan) throw new Error(`queen plan not found: ${slug}`);
+        const claimed = plan.subtasks.filter((subtask) => subtask.status === 'claimed');
+        if (claimed.length > 0 && opts.force !== true) {
+          throw new Error(
+            `queen plan ${slug} has ${claimed.length} claimed sub-task(s); pass --force to archive anyway`,
+          );
+        }
+        const result = store.storage.archiveQueenPlan({ repo_root: repoRoot, plan_slug: slug });
+        if (result.parent_task_id !== null && result.archived_rows > 0) {
+          store.addObservation({
+            session_id: QUEEN_SESSION_ID,
+            task_id: result.parent_task_id,
+            kind: 'plan-archived',
+            content: `queen plan ${slug} archived via colony queen archive (${result.archived_rows} task row(s))`,
+            metadata: {
+              plan_slug: slug,
+              archived_rows: result.archived_rows,
+              forced: opts.force === true,
+              source: 'queen',
+              source_tool: 'queen archive',
+            },
+          });
+        }
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify({ plan_slug: slug, ...result }, null, 2)}\n`);
+          return;
+        }
+        if (result.parent_task_id === null) {
+          process.stdout.write(`${kleur.dim('queen plan not in DB; nothing to archive')}\n`);
+          return;
+        }
+        process.stdout.write(
+          `${kleur.green('✓')} archived queen plan ${slug} (${result.archived_rows} task row(s))\n`,
+        );
+      });
+    });
+
+  group
     .command('sweep')
     .description(
       'List queen plans needing attention: stalled, unclaimed, ready to archive, orphaned, or inactive',

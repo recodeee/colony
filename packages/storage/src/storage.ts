@@ -1163,6 +1163,38 @@ export class Storage {
     this.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, id);
   }
 
+  /**
+   * Mark a queen-plan parent task and every `spec/<slug>/sub-N` row as
+   * `status='archived'` in a single transaction. Used by `colony queen
+   * archive` and the unblock path for orphan plans whose openspec change
+   * directory was never published, so `colony plan close` and
+   * `mcp__colony__spec_archive` cannot reach them. Idempotent: archiving
+   * an already-archived plan is a no-op (no rows updated, returns 0).
+   */
+  archiveQueenPlan(args: {
+    repo_root: string;
+    plan_slug: string;
+  }): { parent_task_id: number | null; archived_rows: number } {
+    const parentBranch = `spec/${args.plan_slug}`;
+    const parent = this.findTaskByBranch(args.repo_root, parentBranch);
+    if (!parent) return { parent_task_id: null, archived_rows: 0 };
+    const subBranchPrefix = `${parentBranch}/sub-`;
+    const ts = Date.now();
+    const archived = this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `UPDATE tasks
+              SET status = 'archived', updated_at = ?
+            WHERE repo_root = ?
+              AND status != 'archived'
+              AND (id = ? OR branch LIKE ? || '%')`,
+        )
+        .run(ts, args.repo_root, parent.id, subBranchPrefix);
+      return result.changes ?? 0;
+    })();
+    return { parent_task_id: parent.id, archived_rows: archived };
+  }
+
   addTaskParticipant(p: { task_id: number; session_id: string; agent: string }): void {
     // INSERT OR IGNORE: a session re-entering the same task (resume/clear)
     // must not double-join and must not clobber the original joined_at.
