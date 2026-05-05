@@ -176,7 +176,7 @@ describe('queen wave health', () => {
         .map((subtask) => subtask.subtask_index),
     ).toEqual([3, 4, 5, 6]);
 
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('Queen wave plans');
     expect(text).toContain('active plans:                       1');
     expect(text).toContain('ready subtasks:                     3');

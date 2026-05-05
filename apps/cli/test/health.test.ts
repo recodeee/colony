@@ -347,62 +347,72 @@ describe('colony health payload', () => {
 
     const text = formatColonyHealthOutput(payload);
     expect(text).toContain('colony health');
-    expect(text).toContain('At a glance');
-    expect(text.indexOf('At a glance')).toBeLessThan(text.indexOf('Health focus'));
+    expect(text).toContain('Queue');
+    expect(text.indexOf('Queue')).toBeLessThan(text.indexOf('Readiness summary'));
+    expect(text).toContain('status:');
     expect(text).toContain('needs work:');
-    expect(text).toContain('fix first:');
+    expect(text).toContain('fix:');
     expect(text).toContain('why:');
     expect(text).toContain('next:');
-    expect(text).toContain('command:');
+    expect(text).toContain('run:');
     expect(text).toContain('areas:');
     expect(text).toContain('Coordination loop (coordination_readiness)');
     expect(text).toContain('Edit safety (execution_safety)');
     expect(text).toContain('evidence: MCP share');
     expect(text).toContain('Readiness summary');
     expect(text.indexOf('Readiness summary')).toBeLessThan(text.indexOf('Next fixes'));
-    expect(text.indexOf('Next fixes')).toBeLessThan(text.indexOf('Detailed diagnostics'));
-    expect(text.indexOf('Detailed diagnostics')).toBeLessThan(text.indexOf('Colony MCP share'));
     expect(text).toContain('coordination_readiness');
     expect(text).toContain('execution_safety');
     expect(text).toContain('queen_plan_readiness');
     expect(text).toContain('working_state_migration');
     expect(text).toContain('signal_evaporation');
-    expect(text).toContain('Colony MCP share');
-    expect(text).toContain('MCP capability map');
-    expect(text).toContain('colony: claims, plans');
-    expect(text).toContain('github: issues, PRs, repo');
-    expect(text).toContain('hivemind_context -> attention_inbox: 1 / 2 (50%) sessions');
-    expect(text).toContain('attention_inbox -> task_ready_for_agent: 1 / 1 (100%) sessions');
-    expect(text).toContain('task_list vs task_ready_for_agent');
-    expect(text).toContain('task_post vs task_message');
-    expect(text).toContain('task_post vs OMX notepad');
-    expect(text).toContain('Search calls per session');
-    expect(text).toContain('1 / 2 edits had a claim before edit (50%)');
-    expect(text).toContain(
-      'claim_match_sources: exact_session=0, repo_branch=1, worktree=0, agent_lane=0, window_ms=300000 (health-only fallback)',
-    );
-    expect(text).toContain('why claims did not match edits:');
-    expect(text).toContain('no_claim_for_file: 1');
-    expect(text).toContain('nearest claim examples:');
-    expect(text).toContain(
-      'no_claim_for_file: edit#9 src/missing.ts by codex-alpha-session; no nearby claim',
-    );
-    expect(text).toContain('Signal health');
-    expect(text).toContain('Proposal decay/promotions');
-    expect(text).toContain('Ready-to-claim vs claimed');
-    expect(text).toContain('Queen wave plans');
-    expect(text).toContain('active plans:                       1');
-    expect(text).toContain('current wave:                       Wave 1');
-    expect(text).toContain('stale claims blocking downstream:   0');
+    expect(text).not.toContain('Detailed diagnostics');
+    expect(text).not.toContain('Colony MCP share');
+    expect(text).not.toContain('MCP capability map');
     expect(text).toContain('Next fixes');
     expect(text).toContain('now:');
     expect(text).toContain('target:');
     expect(text).toContain('next:');
-    expect(text).toContain('Adoption thresholds');
-    expect(text).toContain('task_list > task_ready_for_agent');
-    expect(text).toContain('task_list-first sessions: 2');
     expect(text).not.toContain('\n  Good\n');
     expect(text).not.toContain('\n  Bad\n');
+
+    const verboseText = formatColonyHealthOutput(payload, { verbose: true });
+    expect(verboseText.indexOf('Next fixes')).toBeLessThan(
+      verboseText.indexOf('Detailed diagnostics'),
+    );
+    expect(verboseText.indexOf('Detailed diagnostics')).toBeLessThan(
+      verboseText.indexOf('Colony MCP share'),
+    );
+    expect(verboseText).toContain('Colony MCP share');
+    expect(verboseText).toContain('MCP capability map');
+    expect(verboseText).toContain('colony: claims, plans');
+    expect(verboseText).toContain('github: issues, PRs, repo');
+    expect(verboseText).toContain('hivemind_context -> attention_inbox: 1 / 2 (50%) sessions');
+    expect(verboseText).toContain('attention_inbox -> task_ready_for_agent: 1 / 1 (100%) sessions');
+    expect(verboseText).toContain('task_list vs task_ready_for_agent');
+    expect(verboseText).toContain('task_post vs task_message');
+    expect(verboseText).toContain('task_post vs OMX notepad');
+    expect(verboseText).toContain('Search calls per session');
+    expect(verboseText).toContain('1 / 2 edits had a claim before edit (50%)');
+    expect(verboseText).toContain(
+      'claim_match_sources: exact_session=0, repo_branch=1, worktree=0, agent_lane=0, window_ms=300000 (health-only fallback)',
+    );
+    expect(verboseText).toContain('why claims did not match edits:');
+    expect(verboseText).toContain('no_claim_for_file: 1');
+    expect(verboseText).toContain('nearest claim examples:');
+    expect(verboseText).toContain(
+      'no_claim_for_file: edit#9 src/missing.ts by codex-alpha-session; no nearby claim',
+    );
+    expect(verboseText).toContain('Signal health');
+    expect(verboseText).toContain('Proposal decay/promotions');
+    expect(verboseText).toContain('Ready-to-claim vs claimed');
+    expect(verboseText).toContain('Queen wave plans');
+    expect(verboseText).toContain('active plans:                       1');
+    expect(verboseText).toContain('current wave:                       Wave 1');
+    expect(verboseText).toContain('stale claims blocking downstream:   0');
+    expect(verboseText).toContain('Adoption thresholds');
+    expect(verboseText).toContain('task_list > task_ready_for_agent');
+    expect(verboseText).toContain('task_list-first sessions: 2');
   });
 
   it('renders claim miss reason diagnostics in text and JSON payloads', () => {
@@ -438,7 +448,7 @@ describe('colony health payload', () => {
       pseudo_path_skipped: 6,
       pre_tool_use_missing: 7,
     });
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('why claims did not match edits:');
     expect(text).toContain('claim_after_edit: 1');
     expect(text).toContain('session_id_mismatch: 2');
@@ -605,7 +615,7 @@ describe('colony health payload', () => {
     expect(payload.readiness_summary.execution_safety.root_cause?.summary).toBe(
       '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.',
     );
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('recent 1h: hook_capable_edits=0');
     expect(text).toContain('claim-before-edit=n/a');
     expect(text).not.toContain('Lifecycle bridge missing');
@@ -627,7 +637,9 @@ describe('colony health payload', () => {
     );
 
     expect(payload.task_claim_file_before_edits.recent_claim_before_edit_rate).toBeNull();
-    expect(formatColonyHealthOutput(payload)).toContain('claim-before-edit=insufficient sample');
+    expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
+      'claim-before-edit=insufficient sample',
+    );
   });
 
   it('prioritizes dirty contended files over old claim-before-edit telemetry', () => {
@@ -762,7 +774,7 @@ describe('colony health payload', () => {
         '24h claim-before-edit includes older edit telemetry; no fresh pre_tool_use_missing edits detected in the recent window.',
     });
     expect(payload.task_claim_file_before_edits.old_telemetry_pollution).toBe(true);
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('1. live file contentions');
     expect(text).toContain('2. stale claims');
     expect(text).toContain('3. old claim-before-edit telemetry');
@@ -1201,14 +1213,17 @@ describe('colony health payload', () => {
     ]);
 
     const text = formatColonyHealthOutput(payload);
-    expect(text).toContain('quota pending:    2');
-    expect(text).toContain('quota expired:    1');
-    expect(text).toContain('quota top action: release expired task 1 relay #8');
+    expect(text).not.toContain('quota pending:    2');
+    expect(text).not.toContain('quota expired:    1');
+    expect(text).not.toContain('quota top action: release expired task 1 relay #8');
     expect(text).toContain(
       'Top action: release expired task 1 relay #8 (1 file: src/quota-expired.ts). Release expired quota-pending claims with task_claim_quota_release_expired; this keeps audit history and removes active blockers.',
     );
 
     const verboseText = formatColonyHealthOutput(payload, { verbose: true });
+    expect(verboseText).toContain('quota pending:    2');
+    expect(verboseText).toContain('quota expired:    1');
+    expect(verboseText).toContain('quota top action: release expired task 1 relay #8');
     expect(verboseText).toContain('quota relay examples:');
     expect(verboseText).toContain(
       'task_id=1 old_owner=codex/quota-old age=20m files=1 file: src/quota-expired.ts state=expired recommended_action=release expired',
@@ -1254,7 +1269,7 @@ describe('colony health payload', () => {
     expect(payload.signal_health.quota_pending_claims).toBe(0);
     expect(payload.signal_health.quota_relay_examples).toEqual([]);
     expect(payload.signal_health.quota_relay_actions.top_action).toBe('none');
-    expect(formatColonyHealthOutput(payload)).toContain('quota top action: none');
+    expect(formatColonyHealthOutput(payload)).not.toContain('quota top action: none');
     expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
       'quota relay examples: none',
     );
@@ -1321,7 +1336,7 @@ describe('colony health payload', () => {
     expect(payload.action_hints.map((hint) => hint.metric)).not.toContain(
       'quota relay accept/release',
     );
-    expect(formatColonyHealthOutput(payload)).toContain('quota top action: none');
+    expect(formatColonyHealthOutput(payload)).not.toContain('quota top action: none');
     expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
       'task_id=1 old_owner=codex/quota-done age=5m files=1 file: src/accepted.ts state=accepted recommended_action=none',
     );
@@ -1406,15 +1421,14 @@ describe('colony health payload', () => {
     expect(payload.signal_health.quota_relay_actions.top_action).toBe('release expired');
 
     const text = formatColonyHealthOutput(payload);
-    const focus = outputSection(text, 'Health focus');
-    expect(focus).toContain(
-      'top blocker: live file contentions: 1 conflict(s), 0 dirty; first README.md',
+    const queue = outputSection(text, 'Queue');
+    expect(queue).toContain('fix: live file contentions');
+    expect(queue).toContain('why: 1 conflict(s), 0 dirty; first README.md');
+    expect(queue).toContain(
+      'next: Resolve README.md first: require explicit takeover for owner unknown 003bdaee-18... (owner identity is unknown).',
     );
-    expect(focus).toContain(
-      'next action: Resolve README.md first: require explicit takeover for owner unknown 003bdaee-18... (owner identity is unknown).',
-    );
-    expect(focus).toContain(
-      "cmd:  colony lane takeover 003bdaee-1891-44e1-b867-b67aabc883e5 --file README.md --reason 'owner identity is unknown'",
+    expect(queue).toContain(
+      "run: cmd: colony lane takeover 003bdaee-1891-44e1-b867-b67aabc883e5 --file README.md --reason 'owner identity is unknown'",
     );
 
     const nextFixes = outputSection(text, 'Next fixes');
@@ -1427,13 +1441,19 @@ describe('colony health payload', () => {
     expect(nextFixes).toContain(
       'tool: task_claim_file(task_id=1, session_id="<requester_session_id>", file_path="README.md", note="after explicit takeover")',
     );
+    expect(text).not.toContain('quota top action: release expired task 3 handoff #21615');
     expect(text).toContain(
-      'quota top action: release expired task 3 handoff #21615 (4 files: .omx/agent-worktrees/recodee__codex__add-fff-mcp-search-guidance/AGENTS.md, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js, +2 more)',
+      'Top action: release expired task 3 handoff #21615 (4 files: .omx/agent-worktrees/recodee__c...-mcp-search-guidance/AGENTS.md, gitguardex/.omx/agent-worktrees..._codex__doctor/src/cli/main.js, +2 more). Release expired quota-pending claims with task_claim_quota_release_expired',
     );
-    expect(text).toContain(
-      'Top action: release expired task 3 handoff #21615 (4 files: .omx/agent-worktrees/recodee__codex__add-fff-mcp-search-guidance/AGENTS.md, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js, +2 more). Release expired quota-pending claims with task_claim_quota_release_expired',
+    expect(text).not.toContain(
+      'gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js',
     );
     expect(text).not.toContain('test/doctor.test.js, gitguardex');
+
+    const verboseText = formatColonyHealthOutput(payload, { verbose: true });
+    expect(verboseText).toContain(
+      'quota top action: release expired task 3 handoff #21615 (4 files: .omx/agent-worktrees/recodee__codex__add-fff-mcp-search-guidance/AGENTS.md, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/src/cli/main.js, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/test/doctor.test.js, gitguardex/.omx/agent-worktrees/gitguardex__codex__doctor/test/setup.test.js)',
+    );
   });
 
   it('emits parseable JSON with the same top-level sections', () => {
@@ -1665,7 +1685,7 @@ describe('colony health payload', () => {
       ]),
     );
 
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('Live contention health');
     expect(text).toContain('live_file_contentions:      1');
     expect(text).toContain('protected_file_contentions: 1');
@@ -2075,7 +2095,7 @@ describe('colony health payload', () => {
       }),
     );
 
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('why claims did not match edits:');
     expect(text).toContain('session_id_mismatch: 1');
     expect(text).toContain('worktree_path_mismatch: 1');
@@ -2242,7 +2262,7 @@ describe('colony health payload', () => {
       }),
     );
 
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('stale claims blocking downstream:   1');
     expect(text).toContain('quota handoffs blocking downstream: 1');
     expect(text).toContain(
@@ -2273,7 +2293,7 @@ describe('colony health payload', () => {
 
     kleur.enabled = true;
     try {
-      const text = formatColonyHealthOutput(payload);
+      const text = formatColonyHealthOutput(payload, { verbose: true });
       expect(text).toContain(kleur.green('good'.padEnd(15)));
       expect(text).toContain(kleur.yellow('ok'.padEnd(15)));
       expect(text).toContain(kleur.red('bad'.padEnd(15)));
@@ -2540,7 +2560,7 @@ describe('colony health payload', () => {
       { tool: 'Read', calls: 1 },
     ]);
 
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('no mcp__ tool calls in window');
     expect(text).toContain('top recorded tools: Bash (3), Edit (1), Read (1)');
   });
@@ -2580,7 +2600,7 @@ describe('colony health payload', () => {
     });
     expect(claimHint?.action).not.toContain('hook is not firing');
 
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('session binding missing: 1');
     expect(text).not.toContain('PreToolUse auto-claim hook is not firing');
   });
@@ -2599,7 +2619,7 @@ describe('colony health payload', () => {
     );
 
     expect(payload.colony_mcp_share.top_tools).toEqual([]);
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).not.toContain('no mcp__ tool calls in window');
   });
 
@@ -2627,7 +2647,7 @@ describe('colony health payload', () => {
       edits_with_file_path: 0,
       claim_before_edit_ratio: null,
     });
-    expect(formatColonyHealthOutput(payload)).toContain('not available');
+    expect(formatColonyHealthOutput(payload, { verbose: true })).toContain('not available');
     expect(payload.task_post_vs_omx_notepad.status).toBe('unavailable');
   });
 
@@ -2683,7 +2703,7 @@ describe('colony health payload', () => {
       });
       expect(payload.task_post_vs_task_message.task_post_calls).toBe(1);
 
-      const text = formatColonyHealthOutput(payload);
+      const text = formatColonyHealthOutput(payload, { verbose: true });
       expect(text).toContain('all tools: 3 / 6');
       expect(text).toContain('MCP tools: 3 / 4');
       expect(text).toContain('sources:   colony obs 2, codex rollouts 4');
@@ -2751,7 +2771,7 @@ describe('colony health payload', () => {
       });
       expect(hint?.action).not.toContain('Run colony install --ide <ide>');
 
-      const text = formatColonyHealthOutput(payload);
+      const text = formatColonyHealthOutput(payload, { verbose: true });
       expect(text).toContain(
         'edit source breakdown: colony_post_tool_edits=0, codex_rollout_edits=2, hook_capable_edits=0, pre_tool_use_signals=0',
       );
@@ -2789,7 +2809,7 @@ describe('colony health payload', () => {
       latest_summary_age_ms: 5 * 60_000,
       warning_count: 3,
     });
-    const text = formatColonyHealthOutput(payload);
+    const text = formatColonyHealthOutput(payload, { verbose: true });
     expect(text).toContain('OMX runtime bridge');
     expect(text).toContain('summaries ingested:  2');
     expect(text).toContain('latest summary age:  5m');
@@ -2877,7 +2897,7 @@ describe('colony health payload', () => {
         active_sessions: 1,
         recent_edit_paths: ['apps/cli/src/commands/health.ts'],
       });
-      const text = formatColonyHealthOutput(payload);
+      const text = formatColonyHealthOutput(payload, { verbose: true });
       expect(text).toContain('status:              available');
       expect(text).toContain('active sessions:     1');
       expect(text).toContain('recent edit paths:   apps/cli/src/commands/health.ts');
@@ -3074,7 +3094,9 @@ describe('colony health payload', () => {
       expect(payload.action_hints).not.toContainEqual(
         expect.objectContaining({ metric: 'OMX runtime bridge' }),
       );
-      expect(formatColonyHealthOutput(payload)).toContain('status:              available');
+      expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
+        'status:              available',
+      );
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -3119,15 +3141,16 @@ describe('colony health payload', () => {
         summaries_ingested: 1,
         latest_summary_age_ms: 30 * 60_000,
       });
-      const text = formatColonyHealthOutput(payload);
-      const focus = outputSection(text, 'Health focus');
+      const text = formatColonyHealthOutput(payload, { verbose: true });
+      const queue = outputSection(text, 'Queue');
       expect(text).toContain('status:              stale');
-      expect(focus).toContain('top blocker: OMX runtime bridge: stale');
-      expect(focus).toContain(
-        'next action: Metric unreliable: refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits before judging claim failures.',
+      expect(queue).toContain('fix: OMX runtime bridge');
+      expect(queue).toContain('why: stale');
+      expect(queue).toContain(
+        'next: Metric unreliable: refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits before judging claim failures.',
       );
-      expect(focus).toContain(
-        'cmd:  colony bridge runtime-summary --json --repo-root <repo_root> < .omx/state/colony-runtime-summary.json',
+      expect(queue).toContain(
+        'run: cmd: colony bridge runtime-summary --json --repo-root <repo_root> < .omx/state/colony-runtime-summary.json',
       );
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
@@ -3161,7 +3184,7 @@ describe('colony health payload', () => {
           modified_time: expect.any(String),
           modified_time_ms: expect.any(Number),
         });
-        const text = formatColonyHealthOutput(payload);
+        const text = formatColonyHealthOutput(payload, { verbose: true });
         expect(text).toContain('malformed summaries: 1');
         expect(text).toContain(`${summaryPath} (modified`);
         expect(text).toContain('schema: wrong-schema');
@@ -3189,7 +3212,9 @@ describe('colony health payload', () => {
         modified_time: expect.any(String),
         modified_time_ms: expect.any(Number),
       });
-      expect(formatColonyHealthOutput(payload)).toContain(`${summaryPath}: invalid JSON:`);
+      expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
+        `${summaryPath}: invalid JSON:`,
+      );
     });
   });
 
@@ -3213,7 +3238,9 @@ describe('colony health payload', () => {
         expect(payload.omx_runtime_bridge.malformed_summary_errors).toEqual([
           `${summaryPath}: missing required fields: schema`,
         ]);
-        expect(formatColonyHealthOutput(payload)).toContain('missing required fields: schema');
+        expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
+          'missing required fields: schema',
+        );
       },
     );
   });
@@ -3278,7 +3305,7 @@ describe('colony health payload', () => {
             },
           ],
         });
-        expect(formatColonyHealthOutput(payload)).toContain(
+        expect(formatColonyHealthOutput(payload, { verbose: true })).toContain(
           'invalid field types: last_seen_at expected valid ISO timestamp string or epoch milliseconds got string',
         );
       },
