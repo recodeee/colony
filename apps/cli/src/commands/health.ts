@@ -28,6 +28,7 @@ import {
   type QueenReplacementRecommendation,
   sweepQueenPlans,
 } from '@colony/queen';
+import { isProtectedBranch as isProtectedBaseBranch } from '@colony/storage';
 import type {
   ClaimBeforeEditStats,
   ClaimMatchSources,
@@ -2885,6 +2886,32 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
         inspect: 'git status in each paused worktree, task_note_working, task_hand_off',
         acceptance:
           'dirty paused lanes are finished, handed off, or intentionally cleaned before broad verification',
+      }),
+    });
+  }
+
+  const protectedBranchOwners = liveContention.top_conflicts.flatMap((conflict) =>
+    conflict.owners.filter((owner) => isProtectedBaseBranch(owner.branch)),
+  );
+  if (protectedBranchOwners.length > 0) {
+    const branches = [...new Set(protectedBranchOwners.map((owner) => owner.branch))].sort();
+    hints.push({
+      metric: 'claims on protected branches',
+      status: 'bad',
+      current: `${protectedBranchOwners.length} claim(s) held on ${branches.join(', ')}`,
+      target: '0 (claims should live on agent/* branches inside .omc/agent-worktrees/)',
+      action:
+        'Move work to a worktree before claiming files. Run `gx branch start "<task>" "<agent>"` to start an agent/* lane, or hand the claim off to a session that already owns one.',
+      readiness_scope: 'execution_safety',
+      priority: 3,
+      command: 'gx branch start "<task>" "<agent>"',
+      prompt: codexPrompt({
+        goal: 'move active claims off protected base branches onto agent/* worktrees',
+        current: `${protectedBranchOwners.length} claim(s) on protected branches: ${branches.join(', ')}`,
+        inspect:
+          'colony health --json (top_conflicts owner branch field), git worktree list, gx branch start',
+        acceptance:
+          'no LiveContentionOwner claim_strength=strong rows reference branches in main/master/dev/develop/production/release',
       }),
     });
   }
