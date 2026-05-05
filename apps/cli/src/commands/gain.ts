@@ -28,6 +28,14 @@ interface GainOptions {
   reference?: boolean;
 }
 
+interface TopErrorReason {
+  operation: string;
+  error_code: string | null;
+  error_message: string | null;
+  count: number;
+  last_ts: number | null;
+}
+
 export function registerGainCommand(program: Command): void {
   program
     .command('gain')
@@ -450,6 +458,43 @@ function writeLiveErrorReasons(
       )}\n`,
     );
   }
+}
+
+function findTopErrorReason(rows: ReadonlyArray<McpMetricsAggregateRow>): TopErrorReason | null {
+  let top: TopErrorReason | null = null;
+
+  for (const row of rows) {
+    if (row.error_count <= 0) continue;
+    const reasons =
+      row.error_reasons.length > 0
+        ? row.error_reasons
+        : [
+            {
+              error_code: null,
+              error_message: null,
+              count: row.error_count,
+              last_ts: row.last_ts,
+            },
+          ];
+    for (const reason of reasons) {
+      const candidate = {
+        operation: row.operation,
+        error_code: reason.error_code,
+        error_message: reason.error_message,
+        count: reason.count,
+        last_ts: reason.last_ts,
+      };
+      if (
+        top === null ||
+        candidate.count > top.count ||
+        (candidate.count === top.count && (candidate.last_ts ?? 0) > (top.last_ts ?? 0))
+      ) {
+        top = candidate;
+      }
+    }
+  }
+
+  return top;
 }
 
 function writeUnmatchedComparisonSummary(comparison: SavingsLiveComparison): void {
