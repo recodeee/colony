@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="docs/assets/colony-logo.png" alt="Colony — a stone-carved queen ant colony with the COORDINATE, CLAIM, HEALTH, and MEMORY pillars" width="320" />
-</p>
-
-<h1 align="center">Colony</h1>
+<h1 align="center">
+  <img src="docs/assets/colony-logo.png" alt="Colony logo" width="88" />
+  Colony
+</h1>
 
 <p align="center">
   <strong>Local-first coordination for fleets of coding agents.</strong><br/>
