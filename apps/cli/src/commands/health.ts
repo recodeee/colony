@@ -3805,7 +3805,9 @@ function queenPlanStateSummaries(
   subtasks: PlanSubtaskHealth[],
 ): QueenPlanStateSummary[] {
   const rootTasks = new Map<string, TaskRow>();
+  const tasksById = new Map<number, TaskRow>();
   for (const task of tasks) {
+    tasksById.set(task.id, task);
     const rootMatch = task.branch.match(PLAN_ROOT_BRANCH_RE);
     if (rootMatch?.[1]) rootTasks.set(planKey(task.repo_root, rootMatch[1]), task);
   }
@@ -3817,7 +3819,18 @@ function queenPlanStateSummaries(
     const completedSubtaskCount = siblings.filter(
       (subtask) => subtask.status === 'completed',
     ).length;
-    const remainingSubtaskCount = siblings.length - completedSubtaskCount;
+    // Archived sub-tasks are intentionally closed out (`colony queen archive`
+    // or auto-archive on plan cancellation) and don't represent unfinished
+    // work. The lifecycle status read from `plan-subtask-claim` observations
+    // never carries an `archived` value, so detect archive state via the
+    // `tasks` row that `archiveQueenPlan` flips. Without this, a fully
+    // archived plan keeps tripping `archived_plans_with_remaining_subtasks`
+    // even after every row is closed.
+    const archivedSubtaskCount = siblings.filter(
+      (subtask) => tasksById.get(subtask.task_id)?.status === 'archived',
+    ).length;
+    const remainingSubtaskCount =
+      siblings.length - completedSubtaskCount - archivedSubtaskCount;
     const readySubtaskCount = siblings.filter((subtask) =>
       isReadyPlanSubtask(subtask, siblings),
     ).length;

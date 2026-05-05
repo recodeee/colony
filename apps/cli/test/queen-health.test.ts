@@ -408,6 +408,47 @@ describe('queen wave health', () => {
       },
     });
   });
+
+  it('does not flag archived plans whose sub-tasks are also archived', () => {
+    publishOrderedPlan({
+      store,
+      plan: staleBlockedPlanInput,
+      repo_root: repoRoot,
+      session_id: 'queen-session',
+      agent: 'queen',
+      auto_archive: false,
+    });
+    const plan = listPlans(store, { repo_root: repoRoot }).find(
+      (candidate) => candidate.plan_slug === staleBlockedPlanInput.slug,
+    );
+    expect(plan).toBeDefined();
+    setTaskStatus(plan?.spec_task_id ?? -1, 'archived');
+    const subtaskCount = staleBlockedPlanInput.waves.flatMap((wave) => wave.subtasks).length;
+    for (let index = 0; index < subtaskCount; index++) {
+      setTaskStatus(taskIdForSubtask(staleBlockedPlanInput.slug, index), 'archived');
+    }
+
+    const payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      archived_plans: 1,
+      archived_plans_with_remaining_subtasks: 0,
+    });
+    // A fully-archived plan reaches the `none` recommendation action, so it
+    // is intentionally pruned from `plan_state_recommendations` — the
+    // operator should see no follow-up nag.
+    expect(
+      payload.queen_wave_health.plan_state_recommendations.find(
+        (entry) => entry.plan_slug === staleBlockedPlanInput.slug,
+      ),
+    ).toBeUndefined();
+  });
 });
 
 function taskIdForSubtask(planSlug: string, subtaskIndex: number): number {
