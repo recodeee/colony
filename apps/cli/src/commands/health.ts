@@ -2392,7 +2392,7 @@ function quotaRelayExamplesPayload(
           action === 'accept'
             ? quotaRelayToolCall('decline/reroute', group.task.id, group.handoff_observation_id)
             : null,
-        command: quotaRelayCommand(group.task.repo_root),
+        command: quotaRelayCommand(action, group.task.id, group.handoff_observation_id),
       };
       return example;
     })
@@ -2478,8 +2478,21 @@ function quotaRelayToolCall(
   return null;
 }
 
-function quotaRelayCommand(repoRoot: string): string {
-  return `colony task ready --repo-root ${shellQuote(repoRoot)} --agent <agent> --session <session_id> --json`;
+function quotaRelayCommand(
+  action: QuotaRelayRecommendedAction,
+  taskId: number,
+  handoffObservationId: number,
+): string {
+  if (action === 'accept') {
+    return `colony task quota-accept --task-id ${taskId} --handoff-observation-id ${handoffObservationId} --session <session_id> --agent <agent>`;
+  }
+  if (action === 'release expired') {
+    return `colony task quota-release-expired --task-id ${taskId} --handoff-observation-id ${handoffObservationId} --session <session_id>`;
+  }
+  if (action === 'decline/reroute') {
+    return `colony task quota-decline --task-id ${taskId} --handoff-observation-id ${handoffObservationId} --session <session_id> --reason <reason>`;
+  }
+  return 'colony task ready --repo-root <repo_root> --agent <agent> --session <session_id> --json';
 }
 
 function quotaRelayOldOwner(oldOwnerSessionId: string, metadata: Record<string, unknown>): string {
