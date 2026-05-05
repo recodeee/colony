@@ -302,6 +302,14 @@ export interface McpMetricsAggregateRow {
   ok_count: number;
   error_count: number;
   error_reasons: McpMetricsErrorReason[];
+  success_tokens: number;
+  error_tokens: number;
+  avg_success_tokens: number;
+  avg_error_tokens: number;
+  max_input_tokens: number;
+  max_output_tokens: number;
+  max_total_tokens: number;
+  max_duration_ms: number;
   input_bytes: number;
   output_bytes: number;
   total_bytes: number;
@@ -380,6 +388,15 @@ export interface McpMetricsRawRow {
   out_tokens: number;
   total_ms: number;
   last_ts: number;
+}
+
+export interface McpMetricsOperationRawRow extends McpMetricsRawRow {
+  success_tokens: number;
+  error_tokens: number;
+  max_in_tokens: number;
+  max_out_tokens: number;
+  max_total_tokens: number;
+  max_ms: number;
 }
 
 export interface McpMetricsSessionRawRow extends Omit<McpMetricsRawRow, 'operation'> {
