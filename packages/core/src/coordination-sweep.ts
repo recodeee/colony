@@ -46,6 +46,18 @@ export interface CoordinationSweepOptions {
    * their TTL expires (often hours).
    */
   release_aged_quota_pending_minutes?: number;
+  /**
+   * When set, archive queen plans whose every sub-task has its latest
+   * `plan-subtask-claim` observation in `metadata.status='completed'`.
+   * The MCP plan-tool sweep only fires for plans with `auto_archive=true`
+   * in plan-config, so opt-out plans linger as "completed but unarchived"
+   * on the queen_plan_readiness health signal forever. This sweep
+   * resolves them via `findCompletedQueenPlans` + `archiveQueenPlan`
+   * without requiring per-plan opt-in. Pure storage operation; emits no
+   * observation (callers can re-read the plan-config if they want to
+   * surface the archive event in timelines).
+   */
+  archive_completed_plans?: boolean;
   hivemind?: HivemindSnapshot;
   worktree_contention?: WorktreeContentionReport;
 }
@@ -79,6 +91,7 @@ export interface CoordinationSweepResult {
     released_expired_quota_pending_claim_count: number;
     released_stale_claim_count: number;
     downgraded_stale_claim_count: number;
+    archived_completed_plan_count: number;
     /** Normalized safe-cleanup counters for CLI/health reporting. */
     stale_claims: number;
     expired_or_weak_claims: number;
@@ -117,8 +130,17 @@ export interface CoordinationSweepResult {
   released_stale_claims: ReleasedStaleClaim[];
   downgraded_stale_claims: DowngradedStaleClaim[];
   skipped_dirty_claims: SkippedDirtyClaim[];
+  archived_completed_plans: ArchivedCompletedPlan[];
   safe_cleanup: CoordinationSweepSafeCleanupReport;
   recommended_actions: string[];
+}
+
+export interface ArchivedCompletedPlan {
+  plan_slug: string;
+  parent_task_id: number;
+  repo_root: string;
+  subtask_count: number;
+  archived_rows: number;
 }
 
 export interface CoordinationSweepSafeCleanupReport {
@@ -447,6 +469,8 @@ export function buildCoordinationSweep(
     typeof opts.release_aged_quota_pending_minutes === 'number'
       ? releaseAgedQuotaPendingClaims(store, agedQuotaPendingClaims, now)
       : [];
+  const archived_completed_plans =
+    opts.archive_completed_plans === true ? archiveCompletedPlans(store, opts) : [];
   const remainingStaleClaims = filterRemainingStaleClaims(staleClaims, staleClaimCleanup);
   const remainingExpiredWeakClaims = filterRemainingStaleClaims(
     expiredWeakClaims,
@@ -507,6 +531,7 @@ export function buildCoordinationSweep(
       released_aged_quota_pending_claim_count: released_aged_quota_pending_claims.length,
       released_stale_claim_count: staleClaimCleanup.released_stale_claims.length,
       downgraded_stale_claim_count: staleClaimCleanup.downgraded_stale_claims.length,
+      archived_completed_plan_count: archived_completed_plans.length,
       stale_claims: safe_cleanup.stale_claims,
       expired_or_weak_claims: safe_cleanup.expired_or_weak_claims,
       quota_pending_claims: safe_cleanup.quota_pending_claims,
@@ -542,8 +567,32 @@ export function buildCoordinationSweep(
     released_stale_claims: staleClaimCleanup.released_stale_claims,
     downgraded_stale_claims: staleClaimCleanup.downgraded_stale_claims,
     skipped_dirty_claims: staleClaimCleanup.skipped_dirty_claims,
+    archived_completed_plans,
     safe_cleanup,
   };
+}
+
+function archiveCompletedPlans(
+  store: MemoryStore,
+  opts: CoordinationSweepOptions,
+): ArchivedCompletedPlan[] {
+  const candidates = store.storage.findCompletedQueenPlans(opts.repo_root);
+  const archived: ArchivedCompletedPlan[] = [];
+  for (const candidate of candidates) {
+    const result = store.storage.archiveQueenPlan({
+      repo_root: candidate.repo_root,
+      plan_slug: candidate.plan_slug,
+    });
+    if (result.archived_rows === 0) continue;
+    archived.push({
+      plan_slug: candidate.plan_slug,
+      parent_task_id: candidate.parent_task_id,
+      repo_root: candidate.repo_root,
+      subtask_count: candidate.subtask_count,
+      archived_rows: result.archived_rows,
+    });
+  }
+  return archived;
 }
 
 function normalizedRepoRoots(opts: CoordinationSweepOptions): Set<string> | null {

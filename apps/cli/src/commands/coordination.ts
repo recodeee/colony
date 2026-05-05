@@ -15,6 +15,7 @@ interface SweepOpts {
   releaseSafeStaleClaims?: boolean;
   releaseExpiredQuota?: boolean;
   releaseAgedQuotaMinutes?: string;
+  archiveCompletedPlans?: boolean;
   json?: boolean;
 }
 
@@ -48,6 +49,10 @@ export function registerCoordinationCommand(program: Command): void {
       '--release-aged-quota-minutes <minutes>',
       'release every quota-pending claim aged at-or-above this many minutes regardless of TTL; audit history retained',
     )
+    .option(
+      '--archive-completed-plans',
+      'archive queen plans whose every sub-task completed; ignores per-plan auto_archive opt-in',
+    )
     .option('--json', 'emit sweep result as JSON')
     .action(async (opts: SweepOpts) => {
       const repoRoot = resolve(opts.repoRoot ?? process.cwd());
@@ -69,6 +74,7 @@ export function registerCoordinationCommand(program: Command): void {
       }
       const releaseAgedQuotaPendingMinutes =
         releaseAgedQuotaMinutes !== null && opts.dryRun !== true ? releaseAgedQuotaMinutes : null;
+      const archiveCompletedPlans = opts.archiveCompletedPlans === true && opts.dryRun !== true;
       const settings = loadSettings();
       await withStore(settings, (store) => {
         const result = buildCoordinationSweep(store, {
@@ -78,6 +84,7 @@ export function registerCoordinationCommand(program: Command): void {
           release_same_branch_duplicates: releaseSameBranchDuplicates,
           release_safe_stale_claims: releaseSafeStaleClaims,
           release_expired_quota_claims: releaseExpiredQuotaClaims,
+          archive_completed_plans: archiveCompletedPlans,
           ...(releaseAgedQuotaPendingMinutes !== null
             ? { release_aged_quota_pending_minutes: releaseAgedQuotaPendingMinutes }
             : {}),
@@ -96,6 +103,7 @@ export function registerCoordinationCommand(program: Command): void {
               releaseSafeStaleClaims,
               releaseExpiredQuotaClaims,
               releaseAgedQuotaPendingMinutes,
+              archiveCompletedPlans,
             }),
           })}\n`,
         );
@@ -299,6 +307,7 @@ function appliedSweepModes(opts: {
   releaseSafeStaleClaims: boolean;
   releaseExpiredQuotaClaims: boolean;
   releaseAgedQuotaPendingMinutes: number | null;
+  archiveCompletedPlans: boolean;
 }): string[] {
   const modes: string[] = [];
   if (opts.releaseStaleBlockers) modes.push('release-stale-blockers');
@@ -308,6 +317,7 @@ function appliedSweepModes(opts: {
   if (opts.releaseAgedQuotaPendingMinutes !== null) {
     modes.push(`release-aged-quota>=${opts.releaseAgedQuotaPendingMinutes}m`);
   }
+  if (opts.archiveCompletedPlans) modes.push('archive-completed-plans');
   return modes;
 }
 

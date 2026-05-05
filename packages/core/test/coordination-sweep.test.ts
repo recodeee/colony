@@ -412,6 +412,104 @@ describe('buildCoordinationSweep stale claim cleanup', () => {
   });
 });
 
+describe('buildCoordinationSweep archive_completed_plans', () => {
+  it('archives plans whose sub-tasks all reached completed via plan-subtask-claim observations', () => {
+    seedCompletedPlan('done-plan', ['completed', 'completed']);
+    const baseline = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+    expect(baseline.archived_completed_plans).toEqual([]);
+    expect(baseline.summary.archived_completed_plan_count).toBe(0);
+
+    const result = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      archive_completed_plans: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+
+    expect(result.summary.archived_completed_plan_count).toBe(1);
+    expect(result.archived_completed_plans).toHaveLength(1);
+    expect(result.archived_completed_plans[0]).toMatchObject({
+      plan_slug: 'done-plan',
+      subtask_count: 2,
+    });
+    const parent = store.storage.findTaskByBranch('/repo', 'spec/done-plan');
+    expect(parent?.status).toBe('archived');
+  });
+
+  it('skips plans with at least one non-completed sub-task', () => {
+    seedCompletedPlan('partial-plan', ['completed', 'claimed']);
+    const result = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      archive_completed_plans: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+    expect(result.archived_completed_plans).toEqual([]);
+    const parent = store.storage.findTaskByBranch('/repo', 'spec/partial-plan');
+    expect(parent?.status).not.toBe('archived');
+  });
+
+  it('is idempotent — already-archived plans are not re-counted', () => {
+    seedCompletedPlan('idempotent-plan', ['completed']);
+    const first = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      archive_completed_plans: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+    expect(first.archived_completed_plans).toHaveLength(1);
+    const second = buildCoordinationSweep(store, {
+      repo_root: '/repo',
+      now: NOW,
+      archive_completed_plans: true,
+      worktree_contention: emptyWorktreeContention(),
+      hivemind: emptyHivemind(),
+    });
+    expect(second.archived_completed_plans).toEqual([]);
+    expect(second.summary.archived_completed_plan_count).toBe(0);
+  });
+});
+
+function seedCompletedPlan(
+  slug: string,
+  subStatuses: Array<'available' | 'claimed' | 'completed'>,
+): void {
+  store.startSession({ id: 'planner', ide: 'claude-code', cwd: '/repo' });
+  store.storage.findOrCreateTask({
+    title: `parent-${slug}`,
+    repo_root: '/repo',
+    branch: `spec/${slug}`,
+    created_by: 'planner',
+  });
+  subStatuses.forEach((status, idx) => {
+    const sub = store.storage.findOrCreateTask({
+      title: `${slug}-sub-${idx}`,
+      repo_root: '/repo',
+      branch: `spec/${slug}/sub-${idx}`,
+      created_by: 'planner',
+    });
+    store.storage.insertObservation({
+      session_id: 'planner',
+      kind: 'plan-subtask-claim',
+      content: `${slug} sub-${idx} ${status}`,
+      compressed: false,
+      intensity: null,
+      ts: NOW + idx,
+      task_id: sub.id,
+      reply_to: null,
+      metadata: { kind: 'plan-subtask-claim', status },
+    });
+  });
+}
+
 function seedStaleClaim(
   branch: string,
   filePath: string,
