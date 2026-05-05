@@ -1,0 +1,420 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" role="img" aria-label="Roadmap from v0 (shipped) through v1 (propose and apply) to v2 (continuous healing) and v3 (federated colonies). Time-to-healthy trends from hours to seconds.">
+  <defs>
+    <linearGradient id="roadBg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a1830"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </linearGradient>
+
+    <linearGradient id="trackGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.9"/>
+      <stop offset="22%" stop-color="#10b981" stop-opacity="0.7"/>
+      <stop offset="35%" stop-color="#22d3ee" stop-opacity="0.8"/>
+      <stop offset="60%" stop-color="#a78bfa" stop-opacity="0.6"/>
+      <stop offset="85%" stop-color="#10b981" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0.15"/>
+    </linearGradient>
+
+    <linearGradient id="progressBarGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+
+    <linearGradient id="cardShipped" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#022c22" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="cardCurrent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#082f49" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="cardNext" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b0764" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="cardFuture" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+
+    <filter id="glowR" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="dotGlowR" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Checkmark icon -->
+    <symbol id="checkIcon" overflow="visible">
+      <circle r="13" fill="#022c22" stroke="#10b981" stroke-width="1.5"/>
+      <path d="M -5 0 L -1 4 L 6 -4" stroke="#10b981" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- Active/in-progress icon -->
+    <symbol id="activeIcon" overflow="visible">
+      <circle r="13" fill="#082f49" stroke="#22d3ee" stroke-width="1.5"/>
+      <circle r="5" fill="#22d3ee">
+        <animate attributeName="opacity" values="1;0.4;1" dur="1.4s" repeatCount="indefinite"/>
+      </circle>
+    </symbol>
+
+    <!-- Planned icon -->
+    <symbol id="plannedIcon" overflow="visible">
+      <circle r="13" fill="#3b0764" stroke="#a78bfa" stroke-width="1.5"/>
+      <circle r="3" fill="#a78bfa"/>
+    </symbol>
+
+    <!-- Future icon -->
+    <symbol id="futureIcon" overflow="visible">
+      <circle r="13" fill="#0f172a" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 2"/>
+      <text y="4" text-anchor="middle" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">·</text>
+    </symbol>
+  </defs>
+
+  <rect width="960" height="720" fill="url(#roadBg2)"/>
+
+  <!-- Background grid -->
+  <g stroke="#0c1a2e" stroke-width="1" opacity="0.5">
+    <path d="M 0 100 H 960 M 0 200 H 960 M 0 300 H 960 M 0 400 H 960 M 0 500 H 960 M 0 600 H 960"/>
+    <path d="M 240 0 V 720 M 480 0 V 720 M 720 0 V 720"/>
+  </g>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+    <text x="480" y="38" text-anchor="middle" fill="#f1f5f9" font-size="22" font-weight="600">Roadmap to a self-healing substrate</text>
+    <text x="480" y="60" text-anchor="middle" fill="#64748b" font-size="13">
+      <tspan fill="#10b981">v0 ships honesty.</tspan>
+      <tspan fill="#22d3ee" dx="8">v1 ships repair.</tspan>
+      <tspan fill="#a78bfa" dx="8">v2 ships autonomy.</tspan>
+      <tspan fill="#67e8f9" dx="8">v3+ ships federation.</tspan>
+    </text>
+  </g>
+
+  <!-- ============================ VERTICAL TRACK ============================ -->
+
+  <!-- Track shadow/background -->
+  <line x1="160" y1="110" x2="160" y2="640" stroke="#0c1a2e" stroke-width="6" stroke-linecap="round"/>
+  <!-- Track gradient (shows progression) -->
+  <line x1="160" y1="110" x2="160" y2="640" stroke="url(#trackGrad)" stroke-width="4" stroke-linecap="round"/>
+  <!-- Animated dot traveling along track -->
+  <circle cx="160" r="4" fill="#22d3ee" filter="url(#dotGlowR)">
+    <animate attributeName="cy" values="110;640" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.05;0.5;0.95;1" dur="8s" repeatCount="indefinite"/>
+    <animate attributeName="fill" values="#10b981;#10b981;#22d3ee;#a78bfa;#67e8f9" keyTimes="0;0.25;0.5;0.75;1" dur="8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- ============================ V0 - SHIPPED ============================ -->
+
+  <g transform="translate(160 130)">
+    <use href="#checkIcon"/>
+    <text x="-30" y="5" text-anchor="end" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v0</text>
+    <text x="-30" y="20" text-anchor="end" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">SHIPPED</text>
+  </g>
+
+  <g transform="translate(200 100)">
+    <rect width="720" height="100" rx="12" fill="url(#cardShipped)" stroke="#10b981" stroke-width="1"/>
+
+    <!-- Header -->
+    <g transform="translate(20 24)">
+      <text fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700">Observe &amp; Report</text>
+      <text x="142" y="0" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">— the substrate exists and tells you the truth</text>
+    </g>
+
+    <!-- Progress bar showing 100% -->
+    <g transform="translate(20 40)">
+      <rect width="220" height="6" rx="3" fill="#0f172a"/>
+      <rect width="220" height="6" rx="3" fill="url(#progressBarGrad)" filter="url(#glowR)"/>
+      <text x="230" y="6" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">100%</text>
+    </g>
+
+    <!-- Capability chips with checkmarks -->
+    <g transform="translate(20 64)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">
+      <g>
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">colony health</text>
+      </g>
+      <g transform="translate(110 0)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">claim before edit</text>
+      </g>
+      <g transform="translate(225 0)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">attention_inbox</text>
+      </g>
+      <g transform="translate(345 0)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">task_ready_for_agent</text>
+      </g>
+      <g transform="translate(490 0)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">colony gain receipts</text>
+      </g>
+
+      <g transform="translate(0 18)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">Queen wave plans</text>
+      </g>
+      <g transform="translate(120 18)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">stigmergic decay</text>
+      </g>
+      <g transform="translate(240 18)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">@colony/compress</text>
+      </g>
+      <g transform="translate(355 18)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">colony viewer</text>
+      </g>
+      <g transform="translate(450 18)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">5 runtime installers</text>
+      </g>
+    </g>
+
+    <!-- TTH metric chip -->
+    <g transform="translate(560 24)">
+      <rect x="0" y="-12" width="140" height="22" rx="11" fill="#022c22" stroke="#10b981" stroke-width="0.8"/>
+      <text x="70" y="2" text-anchor="middle" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">time-to-healthy: hours</text>
+    </g>
+  </g>
+
+  <!-- ============================ V0.x — IN PROGRESS ============================ -->
+
+  <g transform="translate(160 270)">
+    <use href="#activeIcon"/>
+    <text x="-30" y="5" text-anchor="end" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v0.x</text>
+    <text x="-30" y="20" text-anchor="end" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">YOU ARE HERE</text>
+  </g>
+
+  <g transform="translate(200 240)">
+    <rect width="720" height="100" rx="12" fill="url(#cardCurrent)" stroke="#22d3ee" stroke-width="1.2">
+      <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite"/>
+    </rect>
+
+    <g transform="translate(20 24)">
+      <text fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700">Hardening &amp; Adoption</text>
+      <text x="184" y="0" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">— close the gaps between &#8220;capable&#8221; and &#8220;reliable&#8221;</text>
+    </g>
+
+    <!-- Progress bar at ~60% -->
+    <g transform="translate(20 40)">
+      <rect width="220" height="6" rx="3" fill="#0f172a"/>
+      <rect width="132" height="6" rx="3" fill="#22d3ee" filter="url(#glowR)"/>
+      <text x="230" y="6" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">~60%</text>
+    </g>
+
+    <!-- Capability chips with mixed states -->
+    <g transform="translate(20 64)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">
+      <!-- done -->
+      <g>
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">root_cause in --json</text>
+      </g>
+      <g transform="translate(130 0)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">--fix-plan output</text>
+      </g>
+      <g transform="translate(245 0)">
+        <path d="M 0 -2 L 3 1 L 8 -4" stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+        <text x="13" y="2" fill="#94a3b8">savings_report</text>
+      </g>
+      <!-- in progress -->
+      <g transform="translate(355 0)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+        <circle cx="4" cy="-1" r="1.4" fill="#22d3ee"/>
+        <text x="13" y="2" fill="#94a3b8">lifecycle_bridge tuning</text>
+      </g>
+      <g transform="translate(495 0)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+        <circle cx="4" cy="-1" r="1.4" fill="#22d3ee"/>
+        <text x="13" y="2" fill="#94a3b8">contention triage</text>
+      </g>
+
+      <g transform="translate(0 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+        <circle cx="4" cy="-1" r="1.4" fill="#22d3ee"/>
+        <text x="13" y="2" fill="#94a3b8">claim adoption nudges</text>
+      </g>
+      <g transform="translate(150 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+        <circle cx="4" cy="-1" r="1.4" fill="#22d3ee"/>
+        <text x="13" y="2" fill="#94a3b8">stale-claim sweep CLI</text>
+      </g>
+      <g transform="translate(295 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+        <circle cx="4" cy="-1" r="1.4" fill="#22d3ee"/>
+        <text x="13" y="2" fill="#94a3b8">USD cost in viewer</text>
+      </g>
+      <g transform="translate(425 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#22d3ee" stroke-width="1.2"/>
+        <circle cx="4" cy="-1" r="1.4" fill="#22d3ee"/>
+        <text x="13" y="2" fill="#94a3b8">multi-runtime smoke tests</text>
+      </g>
+    </g>
+
+    <g transform="translate(560 24)">
+      <rect x="0" y="-12" width="140" height="22" rx="11" fill="#082f49" stroke="#22d3ee" stroke-width="0.8"/>
+      <text x="70" y="2" text-anchor="middle" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">time-to-healthy: hours</text>
+    </g>
+  </g>
+
+  <!-- ============================ V1 - PLANNED ============================ -->
+
+  <g transform="translate(160 410)">
+    <use href="#plannedIcon"/>
+    <text x="-30" y="5" text-anchor="end" fill="#c4b5fd" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v1</text>
+    <text x="-30" y="20" text-anchor="end" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">PLANNED</text>
+  </g>
+
+  <g transform="translate(200 380)">
+    <rect width="720" height="100" rx="12" fill="url(#cardNext)" stroke="#a78bfa" stroke-width="1"/>
+
+    <g transform="translate(20 24)">
+      <text fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700">Propose &amp; Apply</text>
+      <text x="142" y="0" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">— Colony stops printing commands and starts running them</text>
+    </g>
+
+    <g transform="translate(20 40)">
+      <rect width="220" height="6" rx="3" fill="#0f172a"/>
+      <rect width="22" height="6" rx="3" fill="#a78bfa" opacity="0.7"/>
+      <text x="230" y="6" fill="#c4b5fd" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">~10% (design)</text>
+    </g>
+
+    <g transform="translate(20 64)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">
+      <g>
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">colony heal --apply</text>
+      </g>
+      <g transform="translate(125 0)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">contention auto-resolver</text>
+      </g>
+      <g transform="translate(280 0)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">branch policy guard</text>
+      </g>
+      <g transform="translate(410 0)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">quota auto-release</text>
+      </g>
+      <g transform="translate(540 0)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">lifecycle reclaim</text>
+      </g>
+
+      <g transform="translate(0 18)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">plan-claim auto-nudge</text>
+      </g>
+      <g transform="translate(140 18)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">repair-as-observation audit</text>
+      </g>
+      <g transform="translate(305 18)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">--policy=auto presets</text>
+      </g>
+      <g transform="translate(450 18)">
+        <circle cx="4" cy="-1" r="3" fill="#3b0764" stroke="#a78bfa" stroke-width="1"/>
+        <text x="13" y="2" fill="#94a3b8">install-time policy.yaml</text>
+      </g>
+    </g>
+
+    <g transform="translate(560 24)">
+      <rect x="0" y="-12" width="140" height="22" rx="11" fill="#3b0764" stroke="#a78bfa" stroke-width="0.8"/>
+      <text x="70" y="2" text-anchor="middle" fill="#c4b5fd" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">time-to-healthy: minutes</text>
+    </g>
+  </g>
+
+  <!-- ============================ V2 - FUTURE ============================ -->
+
+  <g transform="translate(160 550)">
+    <use href="#futureIcon"/>
+    <text x="-30" y="5" text-anchor="end" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v2</text>
+    <text x="-30" y="20" text-anchor="end" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">EXPLORATION</text>
+  </g>
+
+  <g transform="translate(200 520)">
+    <rect width="720" height="100" rx="12" fill="url(#cardFuture)" stroke="#475569" stroke-width="1" stroke-dasharray="4 3"/>
+
+    <g transform="translate(20 24)">
+      <text fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700">Continuous Healing</text>
+      <text x="166" y="0" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">— move the loop off the terminal entirely</text>
+    </g>
+
+    <g transform="translate(20 40)">
+      <rect width="220" height="6" rx="3" fill="#0f172a"/>
+      <rect width="0" height="6" rx="3" fill="#475569"/>
+      <text x="230" y="6" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">design phase</text>
+    </g>
+
+    <g transform="translate(20 64)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">
+      <g>
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">colony worker --heal daemon</text>
+      </g>
+      <g transform="translate(165 0)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">adaptive TTL tuning</text>
+      </g>
+      <g transform="translate(295 0)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">predictive routing</text>
+      </g>
+      <g transform="translate(415 0)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">specialist agent routing</text>
+      </g>
+      <g transform="translate(560 0)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">auto-promote proposals</text>
+      </g>
+
+      <g transform="translate(0 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">failure-pattern memory</text>
+      </g>
+      <g transform="translate(140 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">policy DSL (.colony.policy.yaml)</text>
+      </g>
+      <g transform="translate(330 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">replay/rewind engine</text>
+      </g>
+      <g transform="translate(465 18)">
+        <circle cx="4" cy="-1" r="3" fill="none" stroke="#475569" stroke-width="1" stroke-dasharray="2 1.5"/>
+        <text x="13" y="2" fill="#64748b">healing-action receipts</text>
+      </g>
+    </g>
+
+    <g transform="translate(560 24)">
+      <rect x="0" y="-12" width="140" height="22" rx="11" fill="#0f172a" stroke="#475569" stroke-width="0.8"/>
+      <text x="70" y="2" text-anchor="middle" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="600">time-to-healthy: seconds</text>
+    </g>
+  </g>
+
+  <!-- ============================ V3+ - HORIZON ============================ -->
+
+  <g transform="translate(160 670)">
+    <use href="#futureIcon"/>
+    <text x="-30" y="5" text-anchor="end" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">v3+</text>
+    <text x="-30" y="20" text-anchor="end" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">HORIZON</text>
+  </g>
+
+  <g transform="translate(200 656)">
+    <rect width="720" height="48" rx="10" fill="#0a0f1a" stroke="#334155" stroke-width="1" stroke-dasharray="4 3"/>
+
+    <text x="20" y="20" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">Federated Colonies</text>
+    <text x="158" y="20" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">— cross-repo memory sync, team substrates, opt-in pheromone exchange</text>
+
+    <text x="20" y="36" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-style="italic">local-first remains the default; bodies stay on disk unless explicitly synced</text>
+  </g>
+
+  <!-- TTH legend in top-right corner -->
+  <g transform="translate(740 90)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <rect x="0" y="0" width="180" height="14" rx="2" fill="none"/>
+  </g>
+</svg>
