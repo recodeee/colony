@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe('guardedClaimFile protected_branch warning', () => {
-  it('attaches a protected_branch warning when the task lives on main', () => {
+  it('rejects the claim by default when the task lives on a protected branch', () => {
     const task = store.storage.findOrCreateTask({
       title: 'main lane',
       repo_root: '/repo',
@@ -39,17 +39,53 @@ describe('guardedClaimFile protected_branch warning', () => {
       session_id: 'sess-a',
       agent: 'claude',
     });
-    expect(result.status).toBe('claimed');
+    expect(result.status).toBe('protected_branch_rejected');
     expect(result.protected_branch).toEqual({
       branch: 'main',
       warning: expect.stringContaining("protected base branch 'main'"),
     });
-    expect(result.protected_branch?.warning).toContain('gx branch start');
+    expect(result.recommendation).toContain('gx branch start');
+    // Crucial: the claim must NOT have been recorded — that's the lever
+    // that stops the dashboard's "claims on protected branches" metric
+    // from drifting back to non-zero after a coordination sweep.
+    const stored = store.storage.getClaim(task.id, 'src/foo.ts');
+    expect(stored).toBeUndefined();
   });
 
-  it('still records the claim despite the protected-branch warning', () => {
-    const task = store.storage.findOrCreateTask({
+  it('still records the claim under the legacy soft-warn setting', () => {
+    const softWarnStore = new MemoryStore({
+      dbPath: join(dir, 'soft-warn.db'),
+      settings: { ...defaultSettings, rejectProtectedBranchClaims: false },
+    });
+    softWarnStore.startSession({ id: 'sess-a', ide: 'claude-code', cwd: '/repo' });
+    const task = softWarnStore.storage.findOrCreateTask({
       title: 'main lane 2',
+      repo_root: '/repo',
+      branch: 'main',
+      created_by: 'sess-a',
+    });
+    softWarnStore.storage.addTaskParticipant({
+      task_id: task.id,
+      session_id: 'sess-a',
+      agent: 'claude',
+    });
+    const result = guardedClaimFile(softWarnStore, {
+      task_id: task.id,
+      file_path: 'src/foo.ts',
+      session_id: 'sess-a',
+      agent: 'claude',
+    });
+    expect(result.status).toBe('claimed');
+    expect(result.protected_branch?.branch).toBe('main');
+    const stored = softWarnStore.storage.getClaim(task.id, 'src/foo.ts');
+    expect(stored?.session_id).toBe('sess-a');
+    expect(stored?.state).toBe('active');
+    softWarnStore.close();
+  });
+
+  it('honors the COLONY_ALLOW_PROTECTED_CLAIM=1 env override', () => {
+    const task = store.storage.findOrCreateTask({
+      title: 'main lane override',
       repo_root: '/repo',
       branch: 'main',
       created_by: 'sess-a',
@@ -59,15 +95,22 @@ describe('guardedClaimFile protected_branch warning', () => {
       session_id: 'sess-a',
       agent: 'claude',
     });
-    guardedClaimFile(store, {
-      task_id: task.id,
-      file_path: 'src/foo.ts',
-      session_id: 'sess-a',
-      agent: 'claude',
-    });
-    const stored = store.storage.getClaim(task.id, 'src/foo.ts');
-    expect(stored?.session_id).toBe('sess-a');
-    expect(stored?.state).toBe('active');
+    const previous = process.env.COLONY_ALLOW_PROTECTED_CLAIM;
+    process.env.COLONY_ALLOW_PROTECTED_CLAIM = '1';
+    try {
+      const result = guardedClaimFile(store, {
+        task_id: task.id,
+        file_path: 'src/foo.ts',
+        session_id: 'sess-a',
+        agent: 'claude',
+      });
+      expect(result.status).toBe('claimed');
+      const stored = store.storage.getClaim(task.id, 'src/foo.ts');
+      expect(stored?.session_id).toBe('sess-a');
+    } finally {
+      if (previous === undefined) delete process.env.COLONY_ALLOW_PROTECTED_CLAIM;
+      else process.env.COLONY_ALLOW_PROTECTED_CLAIM = previous;
+    }
   });
 
   it('omits the warning for canonical agent/* branches', () => {

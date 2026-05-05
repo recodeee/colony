@@ -267,11 +267,14 @@ describe('autoClaimFileBeforeEdit', () => {
   });
 
   it('resolves a Codex/OMX session by repo_root and branch when it is not joined yet', () => {
+    // Use an agent/* branch so the protected-branch guard doesn't reject
+    // the claim — this test is about resolution, not branch policy.
+    const branch = 'agent/codex/auto-claim-resolution';
     store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo' });
     store.startSession({ id: 'codex@019dd6c0', ide: 'codex', cwd: '/repo' });
     const thread = TaskThread.open(store, {
       repo_root: '/repo',
-      branch: 'main',
+      branch,
       session_id: 'owner',
     });
     thread.join('owner', 'claude');
@@ -279,7 +282,7 @@ describe('autoClaimFileBeforeEdit', () => {
     const result = autoClaimFileBeforeEdit(store, {
       session_id: 'codex@019dd6c0',
       repo_root: '/repo',
-      branch: 'main',
+      branch,
       file_path: 'src/viewer.tsx',
     });
 

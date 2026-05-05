@@ -18,6 +18,10 @@ import { isMainEntry, notify, removePidFile, writePidFile } from '@colony/proces
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { type CaffeinateHandle, startCaffeinate } from './caffeinate.js';
+import {
+  type CoordinationSweepLoopHandle,
+  startCoordinationSweepLoop,
+} from './coordination-sweep-loop.js';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
 import { type RescueLoopHandle, startRescueLoop } from './rescue-loop.js';
 import {
@@ -577,13 +581,17 @@ export async function start(): Promise<void> {
 
   let loop: EmbedLoopHandle | undefined;
   let caffeinate: CaffeinateHandle | undefined;
-  const handles: { rescueLoop?: RescueLoopHandle } = {};
+  const handles: {
+    rescueLoop?: RescueLoopHandle;
+    coordinationSweepLoop?: CoordinationSweepLoopHandle;
+  } = {};
   const servers: Array<ReturnType<typeof serve>> = [];
 
   const shutdown = async () => {
     removePidFile(pidFilePath(settings));
     caffeinate?.stop();
     if (handles.rescueLoop) await handles.rescueLoop.stop();
+    if (handles.coordinationSweepLoop) await handles.coordinationSweepLoop.stop();
     if (loop) await loop.stop();
     for (const s of servers) s.close();
     store.close();
@@ -660,6 +668,12 @@ export async function start(): Promise<void> {
   }
 
   handles.rescueLoop = startRescueLoop({
+    store,
+    settings,
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+
+  handles.coordinationSweepLoop = startCoordinationSweepLoop({
     store,
     settings,
     log: (line) => process.stderr.write(`${line}\n`),
