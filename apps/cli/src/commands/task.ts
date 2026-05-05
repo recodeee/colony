@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadSettings } from '@colony/config';
-import { inferIdeFromSessionId } from '@colony/core';
+import { TaskThread, inferIdeFromSessionId } from '@colony/core';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import {
@@ -18,6 +18,16 @@ interface TaskReadyOptions {
   agent?: string;
   repoRoot?: string;
   limit?: string;
+  json?: boolean;
+}
+
+interface QuotaClaimOptions {
+  taskId?: string;
+  session?: string;
+  agent?: string;
+  file?: string;
+  handoffObservationId?: string;
+  reason?: string;
   json?: boolean;
 }
 
@@ -83,6 +93,53 @@ export function registerTaskCommand(program: Command): void {
         );
       });
     });
+
+  group
+    .command('quota-accept')
+    .description('Accept quota-pending claim ownership from a handoff or relay')
+    .requiredOption('--task-id <id>', 'task id that owns the quota-pending claim')
+    .option(
+      '--session <id>',
+      'your session_id (defaults to CODEX_SESSION_ID/CLAUDECODE_SESSION_ID)',
+    )
+    .option('--agent <name>', 'your agent name (e.g. claude, codex)')
+    .option('--file <path>', 'specific quota-pending file to accept')
+    .option('--handoff-observation-id <id>', 'linked handoff/relay observation id')
+    .option('--json', 'emit the result as JSON')
+    .action(async (opts: QuotaClaimOptions) => {
+      await resolveQuotaClaim(opts, 'accept');
+    });
+
+  group
+    .command('quota-decline')
+    .description('Decline quota-pending claim ownership without hiding it from other agents')
+    .requiredOption('--task-id <id>', 'task id that owns the quota-pending claim')
+    .option(
+      '--session <id>',
+      'your session_id (defaults to CODEX_SESSION_ID/CLAUDECODE_SESSION_ID)',
+    )
+    .option('--file <path>', 'specific quota-pending file to decline')
+    .option('--handoff-observation-id <id>', 'linked handoff/relay observation id')
+    .option('--reason <text>', 'why this session is not taking the relay')
+    .option('--json', 'emit the result as JSON')
+    .action(async (opts: QuotaClaimOptions) => {
+      await resolveQuotaClaim(opts, 'decline');
+    });
+
+  group
+    .command('quota-release-expired')
+    .description('Release expired quota-pending claims into weak audit-only ownership')
+    .requiredOption('--task-id <id>', 'task id that owns the quota-pending claim')
+    .option(
+      '--session <id>',
+      'your session_id (defaults to CODEX_SESSION_ID/CLAUDECODE_SESSION_ID)',
+    )
+    .option('--file <path>', 'specific expired quota-pending file to release')
+    .option('--handoff-observation-id <id>', 'linked handoff/relay observation id')
+    .option('--json', 'emit the result as JSON')
+    .action(async (opts: QuotaClaimOptions) => {
+      await resolveQuotaClaim(opts, 'release-expired');
+    });
 }
 
 export function formatTaskReadyOutput(result: ReadyForAgentResult): string {
@@ -114,6 +171,9 @@ export function formatTaskReadyOutput(result: ReadyForAgentResult): string {
       lines.push(
         `  claim: ${extra.codex_mcp_call ?? result.codex_mcp_call ?? 'task_claim_quota_accept(...)'}`,
       );
+      lines.push(
+        `  cmd: ${quotaAcceptCommand(item.task_id, item.quota_observation_id, '<session_id>', '<agent>')}`,
+      );
       continue;
     }
 
@@ -134,6 +194,92 @@ export function formatTaskReadyOutput(result: ReadyForAgentResult): string {
   }
 
   return lines.join('\n');
+}
+
+async function resolveQuotaClaim(
+  opts: QuotaClaimOptions,
+  action: 'accept' | 'decline' | 'release-expired',
+): Promise<void> {
+  const taskId = parsePositiveInt(opts.taskId, '--task-id');
+  const handoffObservationId =
+    opts.handoffObservationId === undefined
+      ? undefined
+      : parsePositiveInt(opts.handoffObservationId, '--handoff-observation-id');
+  const session = opts.session?.trim() || sessionFromEnv();
+  if (!session) {
+    process.stderr.write(
+      `${kleur.red('missing session')} - pass --session or set CODEX_SESSION_ID/CLAUDECODE_SESSION_ID\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const agent = opts.agent?.trim() || agentFromSession(session);
+  if (action === 'accept' && !agent) {
+    process.stderr.write(
+      `${kleur.red('missing agent')} - pass --agent or use a session id prefixed with codex@/claude@\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const settings = loadSettings();
+  await withStore(settings, async (store) => {
+    if (!store.storage.getTask(taskId)) {
+      throw new Error(`task ${taskId} not found`);
+    }
+    const thread = new TaskThread(store, taskId);
+    if (action === 'accept') thread.join(session, agent ?? 'codex');
+    const args = {
+      task_id: taskId,
+      session_id: session,
+      agent,
+      file_path: opts.file,
+      handoff_observation_id: handoffObservationId,
+      reason: opts.reason,
+    };
+    const result =
+      action === 'accept'
+        ? thread.acceptQuotaClaim(args)
+        : action === 'decline'
+          ? thread.declineQuotaClaim(args)
+          : thread.releaseExpiredQuotaClaims(args);
+    process.stdout.write(
+      `${opts.json === true ? JSON.stringify(result, null, 2) : formatQuotaClaimResult(result)}\n`,
+    );
+  });
+}
+
+function formatQuotaClaimResult(result: unknown): string {
+  if (!isRecord(result)) return String(result);
+  const status = String(result.status ?? 'ok');
+  const taskId = result.task_id === undefined ? '' : ` task=${result.task_id}`;
+  const handoff =
+    result.handoff_observation_id === undefined ? '' : ` handoff=${result.handoff_observation_id}`;
+  const accepted = Array.isArray(result.accepted_files)
+    ? ` files=${result.accepted_files.join(', ')}`
+    : '';
+  const declined = Array.isArray(result.declined_files)
+    ? ` files=${result.declined_files.join(', ')}`
+    : '';
+  const released = Array.isArray(result.released_claims)
+    ? ` files=${result.released_claims
+        .map((claim) => (isRecord(claim) ? String(claim.file_path) : String(claim)))
+        .join(', ')}`
+    : '';
+  return `quota ${status}${taskId}${handoff}${accepted}${declined}${released}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function quotaAcceptCommand(
+  taskId: number,
+  handoffObservationId: number,
+  session: string,
+  agent: string,
+): string {
+  return `colony task quota-accept --task-id ${taskId} --handoff-observation-id ${handoffObservationId} --session ${session} --agent ${agent}`;
 }
 
 function isQuotaReady(item: ReadyItem): item is QuotaReadyItem {

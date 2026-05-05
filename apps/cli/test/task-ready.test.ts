@@ -64,6 +64,78 @@ describe('colony task ready', () => {
     expect(output).toContain('priority=1');
   });
 
+  it('prints CLI quota-accept command for quota relay work', async () => {
+    const settings = loadSettings();
+    let taskId = 0;
+    let relayId = 0;
+    await withStore(settings, (store) => {
+      const seeded = seedQuotaRelay(store);
+      taskId = seeded.taskId;
+      relayId = seeded.relayId;
+    });
+
+    await createProgram().parseAsync(
+      [
+        'node',
+        'test',
+        'task',
+        'ready',
+        '--session',
+        'agent-session',
+        '--agent',
+        'codex',
+        '--repo-root',
+        repoRoot,
+      ],
+      { from: 'node' },
+    );
+
+    expect(output).toContain(`quota relay task ${taskId}`);
+    expect(output).toContain('next_tool: task_claim_quota_accept');
+    expect(output).toContain('mcp__colony__task_claim_quota_accept');
+    expect(output).toContain(
+      `cmd: colony task quota-accept --task-id ${taskId} --handoff-observation-id ${relayId} --session <session_id> --agent <agent>`,
+    );
+  });
+
+  it('accepts quota-pending claims from the CLI', async () => {
+    const settings = loadSettings();
+    let taskId = 0;
+    let relayId = 0;
+    await withStore(settings, (store) => {
+      const seeded = seedQuotaRelay(store);
+      taskId = seeded.taskId;
+      relayId = seeded.relayId;
+    });
+
+    await createProgram().parseAsync(
+      [
+        'node',
+        'test',
+        'task',
+        'quota-accept',
+        '--task-id',
+        String(taskId),
+        '--handoff-observation-id',
+        String(relayId),
+        '--session',
+        'agent-session',
+        '--agent',
+        'codex',
+      ],
+      { from: 'node' },
+    );
+
+    expect(output).toContain(`quota accepted task=${taskId} handoff=${relayId}`);
+    expect(output).toContain('files=apps/cli/src/commands/task.ts');
+    await withStore(settings, (store) => {
+      expect(store.storage.getClaim(taskId, 'apps/cli/src/commands/task.ts')).toMatchObject({
+        session_id: 'agent-session',
+        state: 'active',
+      });
+    });
+  });
+
   it('prints empty state with proposal and Queen recovery path', async () => {
     await createProgram().parseAsync(
       [
@@ -128,4 +200,30 @@ function seedReadyPlan(store: MemoryStore, slug: string): void {
       status: 'available',
     },
   });
+}
+
+function seedQuotaRelay(store: MemoryStore): { taskId: number; relayId: number } {
+  store.startSession({ id: 'quota-session', ide: 'codex', cwd: repoRoot });
+  store.startSession({ id: 'agent-session', ide: 'codex', cwd: repoRoot });
+  const thread = TaskThread.open(store, {
+    repo_root: repoRoot,
+    branch: 'dev',
+    session_id: 'quota-session',
+    title: 'Quota stopped task',
+  });
+  thread.join('quota-session', 'codex');
+  store.storage.claimFile({
+    task_id: thread.task_id,
+    file_path: 'apps/cli/src/commands/task.ts',
+    session_id: 'quota-session',
+  });
+  const relayId = thread.relay({
+    from_session_id: 'quota-session',
+    from_agent: 'codex',
+    reason: 'quota',
+    one_line: 'finish task CLI quota relay command',
+    base_branch: 'dev',
+    expires_in_ms: 60 * 60_000,
+  });
+  return { taskId: thread.task_id, relayId };
 }

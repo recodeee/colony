@@ -1201,10 +1201,16 @@ describe('colony health payload', () => {
       'tool: mcp__colony__task_claim_quota_release_expired({ task_id: 1, session_id: "<session_id>", handoff_observation_id: 8 })',
     );
     expect(verboseText).toContain(
+      'cmd:  colony task quota-release-expired --task-id 1 --handoff-observation-id 8 --session <session_id>',
+    );
+    expect(verboseText).toContain(
       'task_id=1 old_owner=codex/quota age=10m files=src/quota.ts state=active recommended_action=accept',
     );
     expect(verboseText).toContain(
       'decline/reroute: mcp__colony__task_claim_quota_decline({ task_id: 1, session_id: "<session_id>", handoff_observation_id: 7, reason: "<reason>" })',
+    );
+    expect(verboseText).toContain(
+      'cmd:  colony task quota-accept --task-id 1 --handoff-observation-id 7 --session <session_id> --agent <agent>',
     );
   });
 
