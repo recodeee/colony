@@ -1,8 +1,8 @@
-# Colony
-
 <p align="center">
-  <img src="docs/assets/colony-hero.svg" alt="Colony — local-first coordination for coding agents" width="100%" />
+  <img src="docs/assets/colony-logo.png" alt="Colony — a stone-carved queen ant colony with the COORDINATE, CLAIM, HEALTH, and MEMORY pillars" width="320" />
 </p>
+
+<h1 align="center">Colony</h1>
 
 <p align="center">
   <strong>Local-first coordination for fleets of coding agents.</strong><br/>
@@ -14,6 +14,10 @@
   <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb.svg" />
   <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-16a34a.svg" />
   <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed.svg" />
+</p>
+
+<p align="center">
+  <img src="docs/assets/colony-hero.svg" alt="Colony — runtime ants from Claude Code, Codex, Cursor, Gemini CLI, and OpenCode follow trails into a central colony substrate" width="100%" />
 </p>
 
 ```bash

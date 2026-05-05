@@ -1,249 +1,325 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" role="img" aria-label="Colony: local-first coordination for coding agents. Coordinates Claude Code, Codex, Cursor, Gemini CLI, OpenCode.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" role="img" aria-label="Colony — local-first coordination for coding agents. Worker ants from Claude Code, Codex, Cursor, Gemini CLI, and OpenCode follow trails into a central colony substrate.">
   <defs>
-    <radialGradient id="heroBg" cx="50%" cy="50%" r="80%">
-      <stop offset="0%" stop-color="#0c1a2e"/>
-      <stop offset="100%" stop-color="#020610"/>
+    <radialGradient id="heroBg2" cx="50%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#0a1f17"/>
+      <stop offset="40%" stop-color="#04120c"/>
+      <stop offset="100%" stop-color="#020806"/>
     </radialGradient>
-    <radialGradient id="heroCore" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.7"/>
-      <stop offset="50%" stop-color="#06b6d4" stop-opacity="0.25"/>
-      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+
+    <radialGradient id="centerHalo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.65"/>
+      <stop offset="50%" stop-color="#10b981" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#f8fafc"/>
-      <stop offset="100%" stop-color="#a5f3fc"/>
+
+    <linearGradient id="titleEmerald" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f1f5f9"/>
+      <stop offset="60%" stop-color="#a7f3d0"/>
+      <stop offset="100%" stop-color="#34d399"/>
     </linearGradient>
-    <linearGradient id="subPill" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#020617"/>
+
+    <linearGradient id="pillBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a1f17"/>
+      <stop offset="100%" stop-color="#020806"/>
     </linearGradient>
-    <linearGradient id="termHeader" x1="0" y1="0" x2="0" y2="1">
+
+    <linearGradient id="termHeader2" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#1e293b"/>
       <stop offset="100%" stop-color="#0f172a"/>
     </linearGradient>
-    <filter id="heroGlow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="4" result="b"/>
+
+    <linearGradient id="hexGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#022c22"/>
+      <stop offset="100%" stop-color="#020806"/>
+    </linearGradient>
+
+    <filter id="heroGlow2" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
-    <filter id="softGlow2" x="-50%" y="-50%" width="200%" height="200%">
+    <filter id="softGlow3" x="-100%" y="-100%" width="300%" height="300%">
       <feGaussianBlur stdDeviation="2" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
 
-    <!-- Orbit paths for connection lines -->
-    <symbol id="runtimeNode" overflow="visible">
-      <circle r="34" fill="#0f172a" stroke="currentColor" stroke-width="1.5"/>
-      <circle r="34" fill="none" stroke="currentColor" stroke-width="0.6" opacity="0.4">
-        <animate attributeName="r" values="34;42;34" dur="3s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values="0.5;0;0.5" dur="3s" repeatCount="indefinite"/>
-      </circle>
+    <pattern id="hexCells" x="0" y="0" width="40" height="34.64" patternUnits="userSpaceOnUse">
+      <polygon points="20,0 40,11.5 40,23 20,34.64 0,23 0,11.5"
+               fill="none" stroke="#0a3d2c" stroke-width="0.4" opacity="0.4"/>
+    </pattern>
+
+    <!-- Curved trail paths: from runtime cards on the left of the right-half (~x=720) into colony center (~x=960 240) -->
+    <!-- Trail starts: 720,80 / 720,160 / 720,240 / 720,320 / 720,400 -->
+    <path id="trail1" d="M 720 80  Q 820 110 880 180 Q 920 220 940 240" fill="none"/>
+    <path id="trail2" d="M 720 160 Q 820 180 880 220 Q 910 232 940 240" fill="none"/>
+    <path id="trail3" d="M 720 240 Q 820 240 940 240" fill="none"/>
+    <path id="trail4" d="M 720 320 Q 820 300 880 260 Q 910 248 940 240" fill="none"/>
+    <path id="trail5" d="M 720 400 Q 820 370 880 300 Q 920 260 940 240" fill="none"/>
+
+    <!-- Worker ant icon - simplified silhouette -->
+    <symbol id="ant" overflow="visible">
+      <ellipse cx="-5" cy="0" rx="2.2" ry="1.8" fill="currentColor"/>
+      <ellipse cx="-1" cy="0" rx="2.6" ry="2" fill="currentColor"/>
+      <ellipse cx="3.5" cy="0" rx="3.2" ry="2.4" fill="currentColor"/>
+      <line x1="5" y1="-1.5" x2="8" y2="-3.5" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="5" y1="1.5" x2="8" y2="3.5" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="-1" y1="-2" x2="-3" y2="-4" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="-1" y1="2" x2="-3" y2="4" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="0" y1="-2" x2="0" y2="-4" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="0" y1="2" x2="0" y2="4" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="1" y1="-2" x2="3" y2="-4" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
+      <line x1="1" y1="2" x2="3" y2="4" stroke="currentColor" stroke-width="0.7" stroke-linecap="round"/>
     </symbol>
   </defs>
 
-  <rect width="1200" height="480" fill="url(#heroBg)"/>
+  <rect width="1200" height="500" fill="url(#heroBg2)"/>
+  <rect width="1200" height="500" fill="url(#hexCells)"/>
 
-  <!-- Subtle grid backdrop -->
-  <g stroke="#0f172a" stroke-width="1" opacity="0.5">
-    <path d="M 0 80 H 1200 M 0 160 H 1200 M 0 240 H 1200 M 0 320 H 1200 M 0 400 H 1200"/>
-    <path d="M 200 0 V 480 M 400 0 V 480 M 600 0 V 480 M 800 0 V 480 M 1000 0 V 480"/>
+  <!-- Concentric scan rings around the center -->
+  <g transform="translate(940 240)" fill="none" stroke="#10b981" opacity="0.12">
+    <circle r="120" stroke-width="1"/>
+    <circle r="180" stroke-width="0.8"/>
+    <circle r="240" stroke-width="0.6"/>
+  </g>
+  <!-- Animated scan sweep line -->
+  <g transform="translate(940 240)">
+    <line x1="0" y1="0" x2="240" y2="0" stroke="#10b981" stroke-width="1" opacity="0.25">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="14s" repeatCount="indefinite"/>
+    </line>
+    <line x1="0" y1="0" x2="240" y2="0" stroke="#34d399" stroke-width="0.5" opacity="0.5">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="14s" repeatCount="indefinite"/>
+    </line>
   </g>
 
-  <!-- ============================ LEFT SIDE: brand + intro ============================ -->
+  <!-- ============================ LEFT: brand block ============================ -->
 
-  <!-- Hex logo -->
+  <!-- Hex emblem anchor -->
   <g transform="translate(80 80)">
-    <polygon points="0,-26 22.5,-13 22.5,13 0,26 -22.5,13 -22.5,-13" fill="#020617" stroke="#22d3ee" stroke-width="1.5"/>
-    <circle r="8" fill="#22d3ee" filter="url(#heroGlow)">
-      <animate attributeName="r" values="7;10;7" dur="2.4s" repeatCount="indefinite"/>
-    </circle>
+    <polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15" fill="url(#hexGrad)" stroke="#10b981" stroke-width="1.5"/>
+    <polygon points="0,-30 26,-15 26,15 0,30 -26,15 -26,-15" fill="none" stroke="#34d399" stroke-width="0.8" opacity="0.5">
+      <animate attributeName="opacity" values="0.3;0.7;0.3" dur="3s" repeatCount="indefinite"/>
+    </polygon>
+    <g color="#10b981" filter="url(#softGlow3)">
+      <use href="#ant" transform="rotate(-20) scale(1.6)"/>
+    </g>
   </g>
 
   <!-- Wordmark -->
-  <text x="130" y="100" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="64" font-weight="700" fill="url(#titleGrad)" letter-spacing="-1">Colony</text>
+  <text x="130" y="100" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="68" font-weight="800" fill="url(#titleEmerald)" letter-spacing="-1.5">Colony</text>
 
-  <!-- Tagline -->
-  <text x="80" y="150" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" fill="#22d3ee" font-weight="500">Local-first coordination for coding agents</text>
+  <text x="80" y="148" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="500" fill="#34d399">Local-first coordination for coding agents</text>
 
-  <!-- Description -->
   <g font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" fill="#94a3b8">
-    <text x="80" y="186">Claims, handoffs, plans, health, and memory for Claude Code,</text>
-    <text x="80" y="206">Codex, Cursor, Gemini CLI, OpenCode, and other agent runtimes.</text>
+    <text x="80" y="186">Claims, handoffs, plans, health, and memory for</text>
+    <text x="80" y="206">Claude Code, Codex, Cursor, Gemini CLI, OpenCode.</text>
   </g>
 
-  <!-- Badge pills -->
-  <g transform="translate(80 232)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">
+  <!-- Pillar capability badges (mirroring the logo's 4 pillars) -->
+  <g transform="translate(80 232)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" font-weight="600">
     <g transform="translate(0 0)">
-      <rect width="80" height="28" rx="6" fill="url(#subPill)" stroke="#1e293b"/>
-      <circle cx="14" cy="14" r="5" fill="#0f172a" stroke="#94a3b8" stroke-width="1"/>
-      <text x="13" y="17" text-anchor="middle" fill="#94a3b8" font-size="9">&#9878;</text>
-      <text x="28" y="18" fill="#cbd5e1">MIT</text>
+      <rect width="118" height="26" rx="5" fill="url(#pillBg)" stroke="#10b981" stroke-width="0.8"/>
+      <g transform="translate(13 13)" stroke="#10b981" stroke-width="1.2" fill="none">
+        <circle r="5"/>
+        <circle cx="-7" cy="-3" r="2"/>
+        <circle cx="7" cy="-3" r="2"/>
+        <line x1="-5.5" y1="-3" x2="-2" y2="-1"/>
+        <line x1="5.5" y1="-3" x2="2" y2="-1"/>
+      </g>
+      <text x="28" y="17" fill="#6ee7b7" letter-spacing="0.5">COORDINATE</text>
     </g>
-    <g transform="translate(96 0)">
-      <rect width="100" height="28" rx="6" fill="url(#subPill)" stroke="#1e293b"/>
-      <circle cx="14" cy="14" r="5" fill="#0f172a" stroke="#3b82f6"/>
-      <text x="28" y="18" fill="#cbd5e1">Node 20+</text>
+    <g transform="translate(126 0)">
+      <rect width="98" height="26" rx="5" fill="url(#pillBg)" stroke="#10b981" stroke-width="0.8"/>
+      <g transform="translate(13 13)" stroke="#10b981" stroke-width="1.2" fill="none">
+        <path d="M -6 -3 L 0 -7 L 6 -3 V 4 a 6 6 0 0 1 -12 0 Z"/>
+      </g>
+      <text x="26" y="17" fill="#6ee7b7" letter-spacing="0.5">CLAIM SAFE</text>
     </g>
-    <g transform="translate(212 0)">
-      <rect width="120" height="28" rx="6" fill="url(#subPill)" stroke="#1e293b"/>
-      <text x="14" y="18" fill="#10b981" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">&gt;_</text>
-      <text x="34" y="18" fill="#cbd5e1">CLI: <tspan fill="#10b981" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">colony</tspan></text>
+    <g transform="translate(232 0)">
+      <rect width="78" height="26" rx="5" fill="url(#pillBg)" stroke="#10b981" stroke-width="0.8"/>
+      <g transform="translate(13 13)" stroke="#10b981" stroke-width="1.4" fill="none">
+        <path d="M -7 0 L -4 0 L -2 -4 L 2 4 L 4 0 L 7 0" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+      <text x="24" y="17" fill="#6ee7b7" letter-spacing="0.5">HEALTH</text>
     </g>
-    <g transform="translate(348 0)">
-      <rect width="180" height="28" rx="6" fill="url(#subPill)" stroke="#1e293b"/>
-      <text x="14" y="18" fill="#a78bfa">&#10070;</text>
-      <text x="34" y="18" fill="#cbd5e1">MCP namespace: <tspan fill="#a78bfa" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">colony</tspan></text>
+    <g transform="translate(318 0)">
+      <rect width="86" height="26" rx="5" fill="url(#pillBg)" stroke="#10b981" stroke-width="0.8"/>
+      <g transform="translate(13 13)" stroke="#10b981" stroke-width="1.2" fill="none">
+        <ellipse cx="0" cy="-3" rx="6" ry="2"/>
+        <path d="M -6 -3 V 3 a 6 2 0 0 0 12 0 V -3"/>
+        <path d="M -6 0 a 6 2 0 0 0 12 0"/>
+      </g>
+      <text x="24" y="17" fill="#6ee7b7" letter-spacing="0.5">MEMORY</text>
     </g>
   </g>
 
-  <!-- Terminal -->
-  <g transform="translate(80 290)">
-    <rect width="500" height="130" rx="10" fill="#020617" stroke="#1e293b" stroke-width="1"/>
-    <rect width="500" height="28" rx="10" fill="url(#termHeader)"/>
-    <rect y="14" width="500" height="14" fill="url(#termHeader)"/>
-    <circle cx="16" cy="14" r="5" fill="#ef4444"/>
-    <circle cx="34" cy="14" r="5" fill="#f59e0b"/>
-    <circle cx="52" cy="14" r="5" fill="#10b981"/>
-    <text x="464" y="18" text-anchor="end" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">$ colony</text>
+  <!-- Terminal block -->
+  <g transform="translate(80 282)">
+    <rect width="540" height="142" rx="10" fill="#020806" stroke="#0a3d2c" stroke-width="1"/>
+    <rect width="540" height="30" rx="10" fill="url(#termHeader2)"/>
+    <rect y="14" width="540" height="16" fill="url(#termHeader2)"/>
+    <line x1="0" y1="30" x2="540" y2="30" stroke="#0a3d2c" stroke-width="0.5"/>
+    <circle cx="16" cy="15" r="5" fill="#ef4444"/>
+    <circle cx="34" cy="15" r="5" fill="#f59e0b"/>
+    <circle cx="52" cy="15" r="5" fill="#10b981"/>
+    <text x="500" y="19" text-anchor="end" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">~/.colony</text>
 
-    <!-- Terminal lines (typed effect via animation) -->
     <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
-      <text x="20" y="58" fill="#10b981">&gt;</text>
-      <text x="36" y="58" fill="#cbd5e1">npm install -g <tspan fill="#a78bfa">@imdeadpool/colony-cli</tspan></text>
+      <text x="20" y="60" fill="#34d399">$</text>
+      <text x="36" y="60" fill="#cbd5e1">npm install -g <tspan fill="#a7f3d0">@imdeadpool/colony-cli</tspan></text>
 
-      <text x="20" y="82" fill="#10b981">&gt;</text>
-      <text x="36" y="82" fill="#cbd5e1">colony install <tspan fill="#22d3ee">--ide</tspan> codex</text>
+      <text x="20" y="86" fill="#34d399">$</text>
+      <text x="36" y="86" fill="#cbd5e1">colony install <tspan fill="#10b981">--ide</tspan> codex</text>
 
-      <text x="20" y="106" fill="#10b981">&gt;</text>
-      <text x="36" y="106" fill="#cbd5e1">colony health</text>
+      <text x="20" y="112" fill="#34d399">$</text>
+      <text x="36" y="112" fill="#cbd5e1">colony health</text>
 
-      <!-- blinking cursor -->
-      <rect x="180" y="96" width="8" height="14" fill="#22d3ee">
+      <rect x="180" y="102" width="8" height="14" fill="#10b981">
         <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/>
       </rect>
     </g>
   </g>
 
-  <!-- Tagline -->
-  <g transform="translate(80 442)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
-    <text fill="#64748b">Runtimes run agents.</text>
-    <text x="148" fill="#22d3ee" font-weight="600">Colony coordinates agents.</text>
+  <g transform="translate(80 450)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
+    <text fill="#475569">Runtimes run agents.</text>
+    <text x="148" fill="#10b981" font-weight="600">Colony coordinates agents.</text>
   </g>
 
-  <!-- ============================ RIGHT SIDE: orbit diagram ============================ -->
+  <!-- ============================ RIGHT: ant-trail constellation ============================ -->
 
-  <!-- Connection lines from runtimes to core (drawn first so they sit behind) -->
-  <g stroke="#0e7490" stroke-width="1" fill="none" opacity="0.6">
-    <line x1="935" y1="240" x2="1085" y2="120"/>
-    <line x1="935" y1="240" x2="1140" y2="240"/>
-    <line x1="935" y1="240" x2="1085" y2="360"/>
-    <line x1="935" y1="240" x2="785" y2="360"/>
-    <line x1="935" y1="240" x2="785" y2="120"/>
-  </g>
-  <!-- Animated cyan dashes flowing inward on each line -->
-  <g stroke="#22d3ee" stroke-width="1" fill="none" stroke-dasharray="4 8" opacity="0.85">
-    <line x1="935" y1="240" x2="1085" y2="120">
-      <animate attributeName="stroke-dashoffset" values="0;-24" dur="1.5s" repeatCount="indefinite"/>
-    </line>
-    <line x1="935" y1="240" x2="1140" y2="240">
-      <animate attributeName="stroke-dashoffset" values="0;-24" dur="1.5s" begin="0.2s" repeatCount="indefinite"/>
-    </line>
-    <line x1="935" y1="240" x2="1085" y2="360">
-      <animate attributeName="stroke-dashoffset" values="0;-24" dur="1.5s" begin="0.4s" repeatCount="indefinite"/>
-    </line>
-    <line x1="935" y1="240" x2="785" y2="360">
-      <animate attributeName="stroke-dashoffset" values="0;-24" dur="1.5s" begin="0.6s" repeatCount="indefinite"/>
-    </line>
-    <line x1="935" y1="240" x2="785" y2="120">
-      <animate attributeName="stroke-dashoffset" values="0;-24" dur="1.5s" begin="0.8s" repeatCount="indefinite"/>
-    </line>
+  <!-- Section divider line -->
+  <line x1="660" y1="40" x2="660" y2="460" stroke="#0a3d2c" stroke-width="1" stroke-dasharray="2 6" opacity="0.5"/>
+
+  <!-- "RUNTIMES" tier label -->
+  <g transform="translate(700 30)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text fill="#475569" font-size="9.5" font-weight="600" letter-spacing="2">RUNTIMES</text>
   </g>
 
-  <!-- Orbit ring -->
-  <circle cx="935" cy="240" r="180" fill="none" stroke="#0e7490" stroke-width="0.8" stroke-dasharray="2 6" opacity="0.6"/>
+  <!-- Runtime origin pills (at trail starts: x=720, y=80/160/240/320/400) -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="600">
+    <!-- Codex (top, y=80) -->
+    <g transform="translate(720 80)">
+      <rect x="-50" y="-13" width="100" height="26" rx="13" fill="url(#pillBg)" stroke="#475569" stroke-width="1"/>
+      <text x="-32" y="4" text-anchor="middle" fill="#cbd5e1">&gt;_</text>
+      <text x="-15" y="4" fill="#e2e8f0">Codex</text>
+    </g>
 
-  <!-- Core: Colony -->
-  <g transform="translate(935 240)">
-    <circle r="180" fill="url(#heroCore)" opacity="0.4"/>
-    <circle r="80" fill="#020617" stroke="#22d3ee" stroke-width="2" filter="url(#heroGlow)"/>
-    <circle r="80" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.5">
-      <animate attributeName="r" values="78;90;78" dur="3s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="0.6;0;0.6" dur="3s" repeatCount="indefinite"/>
+    <!-- Claude (y=160) -->
+    <g transform="translate(720 160)">
+      <rect x="-50" y="-13" width="100" height="26" rx="13" fill="url(#pillBg)" stroke="#7c2d12" stroke-width="1"/>
+      <g transform="translate(-32 0)" fill="#d97706">
+        <path d="M -5 7 L -1 -7 L 1 -7 L 5 7 L 3 7 L 1 1 L -1 1 L -3 7 Z"/>
+      </g>
+      <text x="-19" y="4" fill="#fcd34d">Claude</text>
+    </g>
+
+    <!-- Cursor (y=240, middle) -->
+    <g transform="translate(720 240)">
+      <rect x="-50" y="-13" width="100" height="26" rx="13" fill="url(#pillBg)" stroke="#475569" stroke-width="1"/>
+      <path d="M -38 -5 L -28 1 L -33 2 L -34 7 Z" fill="#cbd5e1"/>
+      <text x="-15" y="4" fill="#e2e8f0">Cursor</text>
+    </g>
+
+    <!-- Gemini (y=320) -->
+    <g transform="translate(720 320)">
+      <rect x="-50" y="-13" width="100" height="26" rx="13" fill="url(#pillBg)" stroke="#1e3a8a" stroke-width="1"/>
+      <g transform="translate(-34 0)" fill="#60a5fa">
+        <path d="M 0 -6 L 1.5 -1.5 L 6 0 L 1.5 1.5 L 0 6 L -1.5 1.5 L -6 0 L -1.5 -1.5 Z"/>
+      </g>
+      <text x="-15" y="4" fill="#93c5fd">Gemini</text>
+    </g>
+
+    <!-- OpenCode (y=400) -->
+    <g transform="translate(720 400)">
+      <rect x="-50" y="-13" width="100" height="26" rx="13" fill="url(#pillBg)" stroke="#7c2d12" stroke-width="1"/>
+      <text x="-34" y="4" text-anchor="middle" fill="#fb923c" font-size="10">&lt;/&gt;</text>
+      <text x="-12" y="4" fill="#fdba74">OpenCode</text>
+    </g>
+  </g>
+
+  <!-- Trails: faint base + animated emerald glow -->
+  <g stroke="#0a3d2c" stroke-width="1" fill="none" opacity="0.6">
+    <use href="#trail1"/>
+    <use href="#trail2"/>
+    <use href="#trail3"/>
+    <use href="#trail4"/>
+    <use href="#trail5"/>
+  </g>
+  <g stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round">
+    <use href="#trail1" stroke-dasharray="6 60">
+      <animate attributeName="stroke-dashoffset" values="66;0" dur="2.4s" repeatCount="indefinite"/>
+    </use>
+    <use href="#trail2" stroke-dasharray="6 60">
+      <animate attributeName="stroke-dashoffset" values="66;0" dur="2.4s" begin="0.5s" repeatCount="indefinite"/>
+    </use>
+    <use href="#trail3" stroke-dasharray="6 60">
+      <animate attributeName="stroke-dashoffset" values="66;0" dur="2.4s" begin="1s" repeatCount="indefinite"/>
+    </use>
+    <use href="#trail4" stroke-dasharray="6 60">
+      <animate attributeName="stroke-dashoffset" values="66;0" dur="2.4s" begin="1.5s" repeatCount="indefinite"/>
+    </use>
+    <use href="#trail5" stroke-dasharray="6 60">
+      <animate attributeName="stroke-dashoffset" values="66;0" dur="2.4s" begin="2s" repeatCount="indefinite"/>
+    </use>
+  </g>
+
+  <!-- Worker ants traveling along trails toward the queen -->
+  <g color="#10b981" filter="url(#softGlow3)">
+    <g><animateMotion dur="5s" repeatCount="indefinite" rotate="auto"><mpath href="#trail1"/></animateMotion><use href="#ant" transform="scale(1.4)"/></g>
+    <g><animateMotion dur="5s" begin="-1.7s" repeatCount="indefinite" rotate="auto"><mpath href="#trail1"/></animateMotion><use href="#ant" transform="scale(1.2)"/></g>
+    <g><animateMotion dur="4.5s" repeatCount="indefinite" rotate="auto"><mpath href="#trail2"/></animateMotion><use href="#ant" transform="scale(1.3)"/></g>
+    <g><animateMotion dur="4s" repeatCount="indefinite" rotate="auto"><mpath href="#trail3"/></animateMotion><use href="#ant" transform="scale(1.4)"/></g>
+    <g><animateMotion dur="4s" begin="-1.5s" repeatCount="indefinite" rotate="auto"><mpath href="#trail3"/></animateMotion><use href="#ant" transform="scale(1.2)"/></g>
+    <g><animateMotion dur="5s" repeatCount="indefinite" rotate="auto"><mpath href="#trail4"/></animateMotion><use href="#ant" transform="scale(1.3)"/></g>
+    <g><animateMotion dur="5.5s" repeatCount="indefinite" rotate="auto"><mpath href="#trail5"/></animateMotion><use href="#ant" transform="scale(1.3)"/></g>
+  </g>
+
+  <!-- ============================ THE COLONY (queen / center) ============================ -->
+
+  <g transform="translate(940 240)">
+    <circle r="100" fill="url(#centerHalo)"/>
+
+    <circle r="92" fill="none" stroke="#10b981" stroke-width="1" opacity="0.4">
+      <animate attributeName="r" values="88;102;88" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.5;0;0.5" dur="3s" repeatCount="indefinite"/>
     </circle>
-    <text y="-6" text-anchor="middle" fill="#e2e8f0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="600">Colony</text>
-    <text y="14" text-anchor="middle" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" letter-spacing="1.5">COORDINATION</text>
-    <text y="28" text-anchor="middle" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10" letter-spacing="1.5">SUBSTRATE</text>
+
+    <!-- Hex core -->
+    <polygon points="0,-78 67.5,-39 67.5,39 0,78 -67.5,39 -67.5,-39"
+             fill="#020806" stroke="#10b981" stroke-width="2" filter="url(#heroGlow2)"/>
+    <polygon points="0,-66 57,-33 57,33 0,66 -57,33 -57,-33"
+             fill="none" stroke="#0a3d2c" stroke-width="1"/>
+
+    <!-- Queen ant emblem -->
+    <g color="#10b981" filter="url(#softGlow3)">
+      <use href="#ant" transform="scale(2.6) rotate(-20)"/>
+    </g>
+
+    <!-- Crown jewels -->
+    <g fill="#10b981">
+      <polygon points="-12,-78 -8,-86 -4,-78"/>
+      <polygon points="-2,-78 2,-90 6,-78">
+        <animate attributeName="opacity" values="1;0.5;1" dur="2s" repeatCount="indefinite"/>
+      </polygon>
+      <polygon points="4,-78 8,-86 12,-78"/>
+    </g>
+
+    <text y="100" text-anchor="middle" fill="#a7f3d0" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">Colony</text>
+    <text y="118" text-anchor="middle" fill="#10b981" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" letter-spacing="2">COORDINATION SUBSTRATE</text>
   </g>
 
-  <!-- Runtime nodes (5 around the orbit) -->
-  <!-- top right: Codex -->
-  <g transform="translate(1085 120)" color="#94a3b8">
-    <use href="#runtimeNode"/>
-    <text y="-2" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700">&gt;_</text>
-    <text y="50" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Codex</text>
-  </g>
-  <!-- right: Cursor -->
-  <g transform="translate(1140 240)" color="#cbd5e1">
-    <use href="#runtimeNode"/>
-    <path d="M -8 -10 L 8 -2 L -2 0 L -4 10 Z" fill="#cbd5e1"/>
-    <text y="50" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Cursor</text>
-  </g>
-  <!-- bottom right: OpenCode -->
-  <g transform="translate(1085 360)" color="#fb923c">
-    <use href="#runtimeNode"/>
-    <text y="3" text-anchor="middle" fill="#fb923c" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">&lt;/&gt;</text>
-    <text y="50" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">OpenCode</text>
-  </g>
-  <!-- bottom left: Gemini CLI -->
-  <g transform="translate(785 360)" color="#60a5fa">
-    <use href="#runtimeNode"/>
-    <path d="M 0 -12 L 3 -3 L 12 0 L 3 3 L 0 12 L -3 3 L -12 0 L -3 -3 Z" fill="#60a5fa" opacity="0.9"/>
-    <text y="50" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Gemini CLI</text>
-  </g>
-  <!-- top left: Claude -->
-  <g transform="translate(785 120)" color="#d97706">
-    <use href="#runtimeNode"/>
-    <path d="M -10 8 L -3 -10 L 3 -10 L 10 8 L 7 8 L 3 -2 L -3 -2 L -7 8 Z" fill="#d97706"/>
-    <text y="50" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Claude</text>
+  <!-- "COLONY" tier label aligned with the colony block -->
+  <g transform="translate(880 30)" font-family="ui-sans-serif, system-ui, sans-serif">
+    <text fill="#475569" font-size="9.5" font-weight="600" letter-spacing="2">SUBSTRATE</text>
   </g>
 
-  <!-- Inbound packets: small dots flying from each runtime to core -->
-  <g filter="url(#softGlow2)">
-    <circle r="3" fill="#22d3ee">
-      <animate attributeName="cx" values="1085;935" dur="1.5s" repeatCount="indefinite"/>
-      <animate attributeName="cy" values="120;240" dur="1.5s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="1;1;0" dur="1.5s" repeatCount="indefinite"/>
-    </circle>
-    <circle r="3" fill="#34d399">
-      <animate attributeName="cx" values="1140;935" dur="1.5s" begin="0.3s" repeatCount="indefinite"/>
-      <animate attributeName="cy" values="240;240" dur="1.5s" begin="0.3s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="1;1;0" dur="1.5s" begin="0.3s" repeatCount="indefinite"/>
-    </circle>
-    <circle r="3" fill="#a78bfa">
-      <animate attributeName="cx" values="1085;935" dur="1.5s" begin="0.6s" repeatCount="indefinite"/>
-      <animate attributeName="cy" values="360;240" dur="1.5s" begin="0.6s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="1;1;0" dur="1.5s" begin="0.6s" repeatCount="indefinite"/>
-    </circle>
-    <circle r="3" fill="#60a5fa">
-      <animate attributeName="cx" values="785;935" dur="1.5s" begin="0.9s" repeatCount="indefinite"/>
-      <animate attributeName="cy" values="360;240" dur="1.5s" begin="0.9s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="1;1;0" dur="1.5s" begin="0.9s" repeatCount="indefinite"/>
-    </circle>
-    <circle r="3" fill="#fbbf24">
-      <animate attributeName="cx" values="785;935" dur="1.5s" begin="1.2s" repeatCount="indefinite"/>
-      <animate attributeName="cy" values="120;240" dur="1.5s" begin="1.2s" repeatCount="indefinite"/>
-      <animate attributeName="opacity" values="1;1;0" dur="1.5s" begin="1.2s" repeatCount="indefinite"/>
-    </circle>
-  </g>
-
-  <!-- Bottom hint pill: the Colony loop -->
-  <g transform="translate(660 438)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
-    <rect width="500" height="30" rx="15" fill="#020617" stroke="#1e293b" stroke-width="1"/>
-    <text x="18" y="20" fill="#22d3ee">hivemind_context</text>
-    <text x="142" y="20" fill="#475569">&#8594;</text>
-    <text x="154" y="20" fill="#60a5fa">attention_inbox</text>
-    <text x="262" y="20" fill="#475569">&#8594;</text>
-    <text x="274" y="20" fill="#a78bfa">task_ready_for_agent</text>
-    <text x="420" y="20" fill="#475569">&#8594;</text>
-    <text x="432" y="20" fill="#34d399">claim &amp; edit</text>
+  <!-- Bottom hint pill: the Colony loop (centered under the right half) -->
+  <g transform="translate(660 460)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+    <rect width="500" height="30" rx="15" fill="#020806" stroke="#0a3d2c" stroke-width="1"/>
+    <text x="18" y="20" fill="#34d399">hivemind_context</text>
+    <text x="142" y="20" fill="#475569">→</text>
+    <text x="154" y="20" fill="#6ee7b7">attention_inbox</text>
+    <text x="262" y="20" fill="#475569">→</text>
+    <text x="274" y="20" fill="#a7f3d0">task_ready_for_agent</text>
+    <text x="420" y="20" fill="#475569">→</text>
+    <text x="432" y="20" fill="#10b981">claim &amp; edit</text>
   </g>
 </svg>
