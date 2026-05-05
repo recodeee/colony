@@ -35,6 +35,39 @@ function aggregate(): McpMetricsAggregate {
     },
     totals: row,
     operations: [row],
+    session_summary: {
+      session_count: 1,
+      sessions_truncated: false,
+      avg_calls: 2,
+      avg_input_tokens: 40,
+      avg_output_tokens: 80,
+      avg_total_tokens: 120,
+      avg_total_cost_usd: 0.0002,
+      last_ts: row.last_ts,
+    },
+    sessions: [
+      {
+        session_id: '019df99a-5f9c-7d72-a08a-3974dc51f880',
+        calls: 2,
+        ok_count: 2,
+        error_count: 0,
+        input_bytes: 100,
+        output_bytes: 200,
+        total_bytes: 300,
+        input_tokens: 40,
+        output_tokens: 80,
+        total_tokens: 120,
+        input_cost_usd: 0.00004,
+        output_cost_usd: 0.00016,
+        total_cost_usd: 0.0002,
+        avg_cost_usd: 0.0001,
+        avg_input_tokens: 20,
+        avg_output_tokens: 40,
+        total_duration_ms: 20,
+        avg_duration_ms: 10,
+        last_ts: row.last_ts,
+      },
+    ],
   };
 }
 
@@ -46,6 +79,9 @@ describe('savings viewer', () => {
       page.indexOf('Reference model: standard vs. colony (static)'),
     );
     expect(page).not.toContain('search -> get_observations IDs vs re-reading PR threads');
+    expect(page).toContain('Live sessions');
+    expect(page).toContain('avg/session 2 calls');
+    expect(page).toContain('019df99a-');
     expect(page).toContain('Unread message triage');
     expect(page).toContain('Static total / session');
     expect(page).toContain('$0.000200');

@@ -30,6 +30,7 @@ function record(
     ok: boolean;
     error_code: string | null;
     error_message: string | null;
+    session_id: string | null;
   }> = {},
 ): void {
   storage.recordMcpMetric({
@@ -41,6 +42,7 @@ function record(
     output_tokens: partial.output_tokens ?? 50,
     duration_ms: partial.duration_ms ?? 5,
     ok: partial.ok ?? true,
+    ...(partial.session_id !== undefined ? { session_id: partial.session_id } : {}),
     ...(partial.error_code !== undefined ? { error_code: partial.error_code } : {}),
     ...(partial.error_message !== undefined ? { error_message: partial.error_message } : {}),
   });
@@ -94,7 +96,55 @@ describe('mcp_metrics storage', () => {
       error_code: 'TASK_NOT_FOUND',
       count: 1,
     });
+    expect(agg.session_summary.session_count).toBe(1);
+    expect(agg.session_summary.avg_total_tokens).toBe(agg.totals.total_tokens);
+    expect(agg.sessions[0]).toMatchObject({
+      session_id: '<unknown>',
+      calls: 4,
+      total_tokens: agg.totals.total_tokens,
+    });
     expect(agg.operations).toHaveLength(2);
+  });
+
+  it('aggregates live receipts by session with a truncation flag', () => {
+    record(storage, {
+      session_id: 's1',
+      operation: 'search',
+      input_tokens: 10,
+      output_tokens: 100,
+    });
+    record(storage, {
+      session_id: 's1',
+      operation: 'timeline',
+      input_tokens: 20,
+      output_tokens: 200,
+    });
+    record(storage, {
+      session_id: 's2',
+      operation: 'search',
+      input_tokens: 5,
+      output_tokens: 50,
+    });
+
+    const agg = storage.aggregateMcpMetrics({
+      since: 0,
+      sessionLimit: 1,
+      cost: { input_usd_per_1m_tokens: 1, output_usd_per_1m_tokens: 2 },
+    });
+
+    expect(agg.session_summary.session_count).toBe(2);
+    expect(agg.session_summary.sessions_truncated).toBe(true);
+    expect(agg.session_summary.avg_calls).toBe(2);
+    expect(agg.session_summary.avg_total_tokens).toBe(Math.round((110 + 220 + 55) / 2));
+    expect(agg.sessions).toHaveLength(1);
+    expect(agg.sessions[0]).toMatchObject({
+      session_id: 's1',
+      calls: 2,
+      input_tokens: 30,
+      output_tokens: 300,
+      total_tokens: 330,
+    });
+    expect(agg.sessions[0]?.total_cost_usd).toBeCloseTo(0.00063, 12);
   });
 
   it('respects the since/until window', () => {

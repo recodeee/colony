@@ -101,6 +101,7 @@ export function buildApp(
       c.req.query('since'),
       c.req.query('input_usd_per_1m'),
       c.req.query('output_usd_per_1m'),
+      c.req.query('session_limit'),
     );
     return c.json({
       live,
@@ -331,6 +332,7 @@ export function buildApp(
       c.req.query('since'),
       c.req.query('input_usd_per_1m'),
       c.req.query('output_usd_per_1m'),
+      c.req.query('session_limit'),
     );
     return c.html(renderSavingsPage({ live, windowHours: hours }));
   });
@@ -347,6 +349,7 @@ function readSavingsPayload(
   sinceQuery: string | undefined,
   inputCostQuery: string | undefined,
   outputCostQuery: string | undefined,
+  sessionLimitQuery: string | undefined,
 ): { live: ReturnType<MemoryStore['storage']['aggregateMcpMetrics']>; hours: number } {
   const parsedHours = hoursQuery !== undefined ? Number(hoursQuery) : Number.NaN;
   const hours =
@@ -355,15 +358,23 @@ function readSavingsPayload(
   const sinceFromQuery = parseSinceQuery(sinceQuery, now - hours * SAVINGS_HOUR_MS);
   const inputRate = parseCostRate(inputCostQuery, process.env.COLONY_MCP_INPUT_USD_PER_1M);
   const outputRate = parseCostRate(outputCostQuery, process.env.COLONY_MCP_OUTPUT_USD_PER_1M);
+  const sessionLimit = parseSessionLimit(sessionLimitQuery);
   const live = store.storage.aggregateMcpMetrics({
     since: sinceFromQuery,
     until: now,
+    ...(sessionLimit !== undefined ? { sessionLimit } : {}),
     cost: {
       ...(inputRate !== undefined ? { input_usd_per_1m_tokens: inputRate } : {}),
       ...(outputRate !== undefined ? { output_usd_per_1m_tokens: outputRate } : {}),
     },
   });
   return { live, hours };
+}
+
+function parseSessionLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
 }
 
 function parseSinceQuery(raw: string | undefined, fallback: number): number {
