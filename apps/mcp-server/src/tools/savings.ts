@@ -40,6 +40,13 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .min(1)
         .optional()
         .describe('filter live rows by exact operation name (e.g. "search")'),
+      session_limit: z
+        .number()
+        .int()
+        .min(0)
+        .max(100)
+        .optional()
+        .describe('number of live sessions to return; default 12, 0 returns all sessions'),
       input_usd_per_1m: z
         .number()
         .nonnegative()
@@ -57,7 +64,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
     },
     wrapHandler(
       'savings_report',
-      async ({ since_ms, hours, operation, input_usd_per_1m, output_usd_per_1m }) => {
+      async ({
+        since_ms,
+        hours,
+        operation,
+        session_limit,
+        input_usd_per_1m,
+        output_usd_per_1m,
+      }) => {
         const now = Date.now();
         const windowHours = hours ?? DEFAULT_WINDOW_HOURS;
         const since = since_ms ?? now - windowHours * HOUR_MS;
@@ -70,6 +84,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           since,
           until: now,
           ...(operation !== undefined ? { operation } : {}),
+          ...(session_limit !== undefined ? { sessionLimit: session_limit } : {}),
           cost: {
             ...(inputRate !== undefined ? { input_usd_per_1m_tokens: inputRate } : {}),
             ...(outputRate !== undefined ? { output_usd_per_1m_tokens: outputRate } : {}),
@@ -88,6 +103,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
                   cost_basis: live.cost_basis,
                   totals: live.totals,
                   operations: live.operations,
+                  session_summary: live.session_summary,
+                  sessions: live.sessions,
                 },
                 reference: {
                   kind: 'static_per_session_model',

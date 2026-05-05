@@ -290,15 +290,16 @@ decay or be swept.
 
 Colony saves tokens by making coordination compact, searchable, and
 progressively hydrated. `colony gain` shows live `mcp_metrics` receipts first,
-then a shared reference model for common agent loops. Live numbers are recorded
-by the MCP server on every wrapped tool call into the `mcp_metrics` SQLite
-table. The reference model is static by design; its total is not derived from
-the live window.
+including measured per-session totals, then a shared reference model for common
+agent loops. Live numbers are recorded by the MCP server on every wrapped tool
+call into the `mcp_metrics` SQLite table. The reference model remains static by
+design; live session averages are derived from the moving window.
 
 ```bash
 colony gain                       # CLI: live + reference, last 7 days
 colony gain --hours 24 --json     # last 24 hours as JSON
 colony gain --operation search    # filter live rows to one tool name
+colony gain --session-limit 0     # print every live session in the window
 colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
 ```
 
@@ -349,11 +350,12 @@ The MCP `savings_report` tool returns the same data:
 ```
 
 Live numbers are visible at <http://127.0.0.1:6510/savings> when `colony viewer`
-is running. Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>` or set
-`COLONY_MCP_INPUT_USD_PER_1M` / `COLONY_MCP_OUTPUT_USD_PER_1M` to show estimated
-USD cost per operation. Reference rows are shared across CLI, MCP, and viewer through
-`packages/core/src/savings-reference.ts` — update once, three surfaces
-update together.
+is running. Add `?input_usd_per_1m=<usd>&output_usd_per_1m=<usd>`,
+`?session_limit=0`, or set `COLONY_MCP_INPUT_USD_PER_1M` /
+`COLONY_MCP_OUTPUT_USD_PER_1M` to show estimated USD cost per operation.
+Reference rows are shared across CLI, MCP, and viewer through
+`packages/core/src/savings-reference.ts` — update once, three surfaces update
+together.
 
 `mcp_metrics` is a runtime debug aid: per-call `(operation, ts, input_bytes,
 output_bytes, input_tokens, output_tokens, duration_ms, ok, session_id,

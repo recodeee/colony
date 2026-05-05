@@ -23,7 +23,7 @@ export function renderSavingsPage(payload: SavingsPagePayload): string {
       reference model for common coordination loops. Token counts use
       <code>@colony/compress#countTokens</code>, the same primitive as observation receipts.
       Monetary cost uses the configured USD per 1M token rates when present.
-      The reference table is static; the live table is the moving window.
+      The reference table is static; live operation and session tables move with the window.
     </p>
     ${raw(live)}
     ${raw(reference)}
@@ -92,6 +92,7 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
       </div>`;
   }
   const rows = agg.operations.map((row) => renderLiveRow(row, agg.cost_basis)).join('');
+  const sessions = renderLiveSessions(agg);
   return html`
     <div class="card">
       <h2>Live: mcp_metrics (last ${windowHours}h)</h2>
@@ -127,7 +128,38 @@ function renderLiveTable(agg: McpMetricsAggregate, windowHours: number): string 
           </tr>
         </tfoot>
       </table>
+      ${raw(sessions)}
     </div>`;
+}
+
+function renderLiveSessions(agg: McpMetricsAggregate): string {
+  if (agg.session_summary.session_count === 0) return '';
+  const rows = agg.sessions.map((row) => renderLiveSessionRow(row, agg.cost_basis)).join('');
+  const truncation = agg.session_summary.sessions_truncated
+    ? ` showing ${agg.sessions.length}`
+    : '';
+  return html`
+    <h3>Live sessions</h3>
+    <p class="meta">
+      ${agg.session_summary.session_count} sessions with receipts${truncation};
+      avg/session ${agg.session_summary.avg_calls} calls,
+      ${formatTokens(agg.session_summary.avg_total_tokens)} tokens,
+      ${formatUsd(agg.session_summary.avg_total_cost_usd, agg.cost_basis.configured)}.
+    </p>
+    <table class="savings-table">
+      <thead>
+        <tr>
+          <th>Session</th>
+          <th class="num">Calls</th>
+          <th class="num">Err</th>
+          <th class="num">Tokens in</th>
+          <th class="num">Tokens out</th>
+          <th class="num">Total</th>
+          <th class="num">Cost</th>
+        </tr>
+      </thead>
+      <tbody>${raw(rows)}</tbody>
+    </table>`;
 }
 
 function renderLiveRow(
@@ -144,6 +176,22 @@ function renderLiveRow(
       <td class="num">${formatUsd(row.total_cost_usd, costBasis.configured)}</td>
       <td class="num">${formatUsd(row.avg_cost_usd, costBasis.configured)}</td>
       <td class="num">${row.avg_duration_ms}</td>
+    </tr>`;
+}
+
+function renderLiveSessionRow(
+  row: McpMetricsAggregate['sessions'][number],
+  costBasis: McpMetricsAggregate['cost_basis'],
+): string {
+  return html`
+    <tr>
+      <td><code>${formatSessionId(row.session_id)}</code></td>
+      <td class="num">${row.calls}</td>
+      <td class="num">${raw(formatErr(row.error_count))}</td>
+      <td class="num">${formatTokens(row.input_tokens)}</td>
+      <td class="num">${formatTokens(row.output_tokens)}</td>
+      <td class="num">${formatTokens(row.total_tokens)}</td>
+      <td class="num">${formatUsd(row.total_cost_usd, costBasis.configured)}</td>
     </tr>`;
 }
 
@@ -165,6 +213,11 @@ function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function formatSessionId(value: string): string {
+  if (value.length <= 22) return value;
+  return `${value.slice(0, 10)}...${value.slice(-9)}`;
 }
 
 function formatRate(value: number): string {

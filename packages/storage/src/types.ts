@@ -281,6 +281,7 @@ export interface AggregateMcpMetricsOptions {
   since?: number;
   until?: number;
   operation?: string;
+  sessionLimit?: number;
   cost?: McpMetricsCostOptions;
 }
 
@@ -318,6 +319,39 @@ export interface McpMetricsAggregateRow {
   last_ts: number | null;
 }
 
+export interface McpMetricsSessionAggregateRow {
+  session_id: string;
+  calls: number;
+  ok_count: number;
+  error_count: number;
+  input_bytes: number;
+  output_bytes: number;
+  total_bytes: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  input_cost_usd: number;
+  output_cost_usd: number;
+  total_cost_usd: number;
+  avg_cost_usd: number;
+  avg_input_tokens: number;
+  avg_output_tokens: number;
+  total_duration_ms: number;
+  avg_duration_ms: number;
+  last_ts: number | null;
+}
+
+export interface McpMetricsSessionSummary {
+  session_count: number;
+  sessions_truncated: boolean;
+  avg_calls: number;
+  avg_input_tokens: number;
+  avg_output_tokens: number;
+  avg_total_tokens: number;
+  avg_total_cost_usd: number;
+  last_ts: number | null;
+}
+
 export interface McpMetricsErrorReason {
   error_code: string | null;
   error_message: string | null;
@@ -332,6 +366,8 @@ export interface McpMetricsAggregate {
   cost_basis: McpMetricsCostBasis;
   totals: McpMetricsAggregateRow;
   operations: McpMetricsAggregateRow[];
+  session_summary: McpMetricsSessionSummary;
+  sessions: McpMetricsSessionAggregateRow[];
 }
 
 export interface McpMetricsRawRow {
@@ -344,6 +380,10 @@ export interface McpMetricsRawRow {
   out_tokens: number;
   total_ms: number;
   last_ts: number;
+}
+
+export interface McpMetricsSessionRawRow extends Omit<McpMetricsRawRow, 'operation'> {
+  session_id: string | null;
 }
 
 export interface McpMetricsErrorReasonRawRow {

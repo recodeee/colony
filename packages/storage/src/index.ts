@@ -69,4 +69,6 @@ export type {
   McpMetricsErrorReason,
   McpMetricsAggregate,
   McpMetricsAggregateRow,
+  McpMetricsSessionAggregateRow,
+  McpMetricsSessionSummary,
 } from './types.js';

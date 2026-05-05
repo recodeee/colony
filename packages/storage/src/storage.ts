@@ -22,6 +22,9 @@ import type {
   McpMetricsErrorReason,
   McpMetricsErrorReasonRawRow,
   McpMetricsRawRow,
+  McpMetricsSessionAggregateRow,
+  McpMetricsSessionRawRow,
+  McpMetricsSessionSummary,
   NewAgentProfile,
   NewExample,
   NewMcpMetric,
@@ -1085,6 +1088,7 @@ export class Storage {
     const since = opts.since ?? 0;
     const until = opts.until ?? Date.now();
     const costBasis = normalizeMcpCostBasis(opts.cost);
+    const sessionLimit = normalizeMcpSessionLimit(opts.sessionLimit);
     const filters: string[] = ['ts >= ?', 'ts <= ?'];
     const args: Array<number | string> = [since, until];
     if (opts.operation !== undefined) {
@@ -1119,36 +1123,82 @@ export class Storage {
                 SUM(output_bytes) AS out_bytes,
                 SUM(input_tokens) AS in_tokens,
                 SUM(output_tokens) AS out_tokens,
-                SUM(duration_ms) AS total_ms
+                SUM(duration_ms) AS total_ms,
+                MAX(ts) AS last_ts
            FROM mcp_metrics
            ${where}`,
       )
-      .get(...args) as Omit<McpMetricsRawRow, 'operation' | 'last_ts'> | undefined;
+      .get(...args) as Omit<McpMetricsRawRow, 'operation'> | undefined;
     const operations: McpMetricsAggregateRow[] = rows.map((row) =>
       buildAggregateRow(row, costBasis, errorReasonsByOperation.get(row.operation) ?? []),
     );
+    const totals = buildAggregateRow(
+      {
+        operation: '__total__',
+        calls: totalsRow?.calls ?? 0,
+        ok_count: totalsRow?.ok_count ?? 0,
+        in_bytes: totalsRow?.in_bytes ?? 0,
+        out_bytes: totalsRow?.out_bytes ?? 0,
+        in_tokens: totalsRow?.in_tokens ?? 0,
+        out_tokens: totalsRow?.out_tokens ?? 0,
+        total_ms: totalsRow?.total_ms ?? 0,
+        last_ts: totalsRow?.last_ts ?? 0,
+      },
+      costBasis,
+      totalErrorReasons,
+    );
+    const sessionCount = this.mcpMetricSessionCount(where, args);
+    const sessions = this.mcpMetricSessions(where, args, costBasis, sessionLimit);
     return {
       since,
       until,
       ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
       cost_basis: costBasis,
-      totals: buildAggregateRow(
-        {
-          operation: '__total__',
-          calls: totalsRow?.calls ?? 0,
-          ok_count: totalsRow?.ok_count ?? 0,
-          in_bytes: totalsRow?.in_bytes ?? 0,
-          out_bytes: totalsRow?.out_bytes ?? 0,
-          in_tokens: totalsRow?.in_tokens ?? 0,
-          out_tokens: totalsRow?.out_tokens ?? 0,
-          total_ms: totalsRow?.total_ms ?? 0,
-          last_ts: 0,
-        },
-        costBasis,
-        totalErrorReasons,
-      ),
+      totals,
       operations,
+      session_summary: buildSessionSummary(totals, sessionCount, sessions.length < sessionCount),
+      sessions,
     };
+  }
+
+  private mcpMetricSessionCount(where: string, args: ReadonlyArray<number | string>): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(DISTINCT COALESCE(NULLIF(session_id, ''), '<unknown>')) AS n
+           FROM mcp_metrics
+           ${where}`,
+      )
+      .get(...args) as { n: number } | undefined;
+    return row?.n ?? 0;
+  }
+
+  private mcpMetricSessions(
+    where: string,
+    args: ReadonlyArray<number | string>,
+    costBasis: McpMetricsCostBasis,
+    sessionLimit: number,
+  ): McpMetricsSessionAggregateRow[] {
+    const limitSql = sessionLimit > 0 ? 'LIMIT ?' : '';
+    const queryArgs = sessionLimit > 0 ? [...args, sessionLimit] : args;
+    const rows = this.db
+      .prepare(
+        `SELECT COALESCE(NULLIF(session_id, ''), '<unknown>') AS session_id,
+                COUNT(*) AS calls,
+                SUM(ok) AS ok_count,
+                SUM(input_bytes) AS in_bytes,
+                SUM(output_bytes) AS out_bytes,
+                SUM(input_tokens) AS in_tokens,
+                SUM(output_tokens) AS out_tokens,
+                SUM(duration_ms) AS total_ms,
+                MAX(ts) AS last_ts
+           FROM mcp_metrics
+           ${where}
+          GROUP BY COALESCE(NULLIF(session_id, ''), '<unknown>')
+          ORDER BY out_tokens DESC, calls DESC
+          ${limitSql}`,
+      )
+      .all(...queryArgs) as McpMetricsSessionRawRow[];
+    return rows.map((row) => buildSessionAggregateRow(row, costBasis));
   }
 
   private mcpMetricErrorReasonsByOperation(
@@ -3404,6 +3454,67 @@ function buildAggregateRow(
     avg_duration_ms: calls === 0 ? 0 : Math.round(totalMs / calls),
     last_ts: row.last_ts ? row.last_ts : null,
   };
+}
+
+function buildSessionAggregateRow(
+  row: McpMetricsSessionRawRow,
+  costBasis: McpMetricsCostBasis,
+): McpMetricsSessionAggregateRow {
+  const calls = row.calls ?? 0;
+  const okCount = row.ok_count ?? 0;
+  const inBytes = row.in_bytes ?? 0;
+  const outBytes = row.out_bytes ?? 0;
+  const inTokens = row.in_tokens ?? 0;
+  const outTokens = row.out_tokens ?? 0;
+  const totalMs = row.total_ms ?? 0;
+  const inputCost = metricCostUsd(inTokens, costBasis.input_usd_per_1m_tokens);
+  const outputCost = metricCostUsd(outTokens, costBasis.output_usd_per_1m_tokens);
+  const totalCost = roundMetricCost(inputCost + outputCost);
+  return {
+    session_id: row.session_id ?? '<unknown>',
+    calls,
+    ok_count: okCount,
+    error_count: Math.max(0, calls - okCount),
+    input_bytes: inBytes,
+    output_bytes: outBytes,
+    total_bytes: inBytes + outBytes,
+    input_tokens: inTokens,
+    output_tokens: outTokens,
+    total_tokens: inTokens + outTokens,
+    input_cost_usd: inputCost,
+    output_cost_usd: outputCost,
+    total_cost_usd: totalCost,
+    avg_cost_usd: calls === 0 ? 0 : roundMetricCost(totalCost / calls),
+    avg_input_tokens: calls === 0 ? 0 : Math.round(inTokens / calls),
+    avg_output_tokens: calls === 0 ? 0 : Math.round(outTokens / calls),
+    total_duration_ms: totalMs,
+    avg_duration_ms: calls === 0 ? 0 : Math.round(totalMs / calls),
+    last_ts: row.last_ts ? row.last_ts : null,
+  };
+}
+
+function buildSessionSummary(
+  totals: McpMetricsAggregateRow,
+  sessionCount: number,
+  sessionsTruncated: boolean,
+): McpMetricsSessionSummary {
+  return {
+    session_count: sessionCount,
+    sessions_truncated: sessionsTruncated,
+    avg_calls: sessionCount === 0 ? 0 : Math.round(totals.calls / sessionCount),
+    avg_input_tokens: sessionCount === 0 ? 0 : Math.round(totals.input_tokens / sessionCount),
+    avg_output_tokens: sessionCount === 0 ? 0 : Math.round(totals.output_tokens / sessionCount),
+    avg_total_tokens: sessionCount === 0 ? 0 : Math.round(totals.total_tokens / sessionCount),
+    avg_total_cost_usd:
+      sessionCount === 0 ? 0 : roundMetricCost(totals.total_cost_usd / sessionCount),
+    last_ts: totals.last_ts,
+  };
+}
+
+function normalizeMcpSessionLimit(value: number | undefined): number {
+  if (value === undefined) return 12;
+  if (!Number.isFinite(value) || value < 0) return 12;
+  return Math.floor(value);
 }
 
 function normalizeMcpErrorReason(row: McpMetricsErrorReasonRawRow): McpMetricsErrorReason {

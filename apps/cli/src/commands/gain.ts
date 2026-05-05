@@ -5,7 +5,12 @@ import {
   type SavingsReferenceTotals,
   savingsReferenceTotals,
 } from '@colony/core';
-import type { McpMetricsAggregateRow, McpMetricsCostBasis } from '@colony/storage';
+import type {
+  McpMetricsAggregateRow,
+  McpMetricsCostBasis,
+  McpMetricsSessionAggregateRow,
+  McpMetricsSessionSummary,
+} from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import { withStorage } from '../util/store.js';
@@ -15,6 +20,7 @@ interface GainOptions {
   hours?: string;
   since?: string;
   operation?: string;
+  sessionLimit?: string;
   inputCostPer1m?: string;
   outputCostPer1m?: string;
 }
@@ -27,6 +33,7 @@ export function registerGainCommand(program: Command): void {
     .option('--hours <n>', 'live window in hours (default 168 = 7 days)')
     .option('--since <ms>', 'absolute epoch-ms cutoff; overrides --hours')
     .option('--operation <name>', 'filter live rows to one operation')
+    .option('--session-limit <n>', 'number of live sessions to print (default 12; 0 = all)')
     .option(
       '--input-cost-per-1m <usd>',
       'USD rate per 1M input tokens; env COLONY_MCP_INPUT_USD_PER_1M',
@@ -49,13 +56,16 @@ export function registerGainCommand(program: Command): void {
 
       const live = await withStorage(
         settings,
-        (storage) =>
-          storage.aggregateMcpMetrics({
+        (storage) => {
+          const sessionLimit = parseSessionLimit(opts.sessionLimit);
+          return storage.aggregateMcpMetrics({
             since,
             until: now,
             ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
+            ...(sessionLimit !== undefined ? { sessionLimit } : {}),
             cost: costOptionsFromCli(opts),
-          }),
+          });
+        },
         { readonly: true },
       );
 
@@ -73,6 +83,8 @@ export function registerGainCommand(program: Command): void {
           cost_basis: live.cost_basis,
           totals: live.totals,
           operations: live.operations,
+          session_summary: live.session_summary,
+          sessions: live.sessions,
         },
       };
 
@@ -86,6 +98,8 @@ export function registerGainCommand(program: Command): void {
         referenceTotals,
         live.operations,
         live.totals,
+        live.session_summary,
+        live.sessions,
         live.cost_basis,
         windowHours,
         opts.operation,
@@ -98,11 +112,21 @@ export function writeGainReport(
   referenceTotals: SavingsReferenceTotals,
   liveRows: ReadonlyArray<McpMetricsAggregateRow>,
   liveTotals: McpMetricsAggregateRow,
+  sessionSummary: McpMetricsSessionSummary,
+  sessions: ReadonlyArray<McpMetricsSessionAggregateRow>,
   costBasis: McpMetricsCostBasis,
   hours: number,
   operationFilter: string | undefined,
 ): void {
-  writeLiveSection(liveRows, liveTotals, costBasis, hours, operationFilter);
+  writeLiveSection(
+    liveRows,
+    liveTotals,
+    sessionSummary,
+    sessions,
+    costBasis,
+    hours,
+    operationFilter,
+  );
   process.stdout.write('\n');
   writeReferenceSection(referenceRows, referenceTotals);
 }
@@ -149,6 +173,8 @@ export function writeReferenceSection(
 export function writeLiveSection(
   rows: ReadonlyArray<McpMetricsAggregateRow>,
   totals: McpMetricsAggregateRow,
+  sessionSummary: McpMetricsSessionSummary,
+  sessions: ReadonlyArray<McpMetricsSessionAggregateRow>,
   costBasis: McpMetricsCostBasis,
   hours: number,
   operationFilter: string | undefined,
@@ -234,6 +260,49 @@ export function writeLiveSection(
     )}\n`,
   );
   writeLiveErrorReasons(rows, totals);
+  writeLiveSessionSection(sessionSummary, sessions, costBasis);
+}
+
+function writeLiveSessionSection(
+  summary: McpMetricsSessionSummary,
+  sessions: ReadonlyArray<McpMetricsSessionAggregateRow>,
+  costBasis: McpMetricsCostBasis,
+): void {
+  if (summary.session_count === 0) return;
+  const w = process.stdout;
+  w.write('\n');
+  w.write(`${kleur.bold('Live sessions')}\n`);
+  const truncation = summary.sessions_truncated ? `; showing ${sessions.length}` : '';
+  w.write(
+    kleur.dim(
+      `Sessions with receipts: ${summary.session_count}${truncation}; avg/session: ${summary.avg_calls} calls, ${formatTokens(
+        summary.avg_total_tokens,
+      )} tokens, ${formatUsd(summary.avg_total_cost_usd, costBasis)}.\n`,
+    ),
+  );
+  const head = padRow(
+    ['Session', 'Calls', 'OK', 'Err', 'Tok in', 'Tok out', 'Tok total', 'Cost', 'Last'],
+    [22, 6, 5, 5, 8, 8, 10, 11, 10],
+  );
+  w.write(`${kleur.dim(head)}\n`);
+  for (const row of sessions) {
+    w.write(
+      `${padRow(
+        [
+          formatSessionId(row.session_id),
+          String(row.calls),
+          String(row.ok_count),
+          row.error_count > 0 ? kleur.red(String(row.error_count)) : '0',
+          formatTokens(row.input_tokens),
+          formatTokens(row.output_tokens),
+          formatTokens(row.total_tokens),
+          formatUsd(row.total_cost_usd, costBasis),
+          formatLastSeen(row.last_ts),
+        ],
+        [22, 6, 5, 5, 8, 8, 10, 11, 10],
+      )}\n`,
+    );
+  }
 }
 
 function writeLiveErrorReasons(
@@ -285,6 +354,12 @@ function parseCostRate(raw: string | undefined, fallback: string | undefined): n
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
+function parseSessionLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+}
+
 function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
@@ -324,6 +399,11 @@ function formatErrorMessage(value: string | null): string {
 function truncate(value: string, limit: number): string {
   if (value.length <= limit) return value;
   return `${value.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function formatSessionId(value: string): string {
+  if (value.length <= 22) return value;
+  return `${value.slice(0, 10)}...${value.slice(-9)}`;
 }
 
 function latestMetricTs(rows: ReadonlyArray<McpMetricsAggregateRow>): number | null {
