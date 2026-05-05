@@ -38,5 +38,13 @@
 
 ## 4. Completion
 
-- [ ] Commit, push, PR, merge.
-- [ ] Record final `MERGED` evidence and sandbox cleanup.
+- [x] Commit, push, PR, merge.
+      Evidence: PR https://github.com/recodeee/colony/pull/461 reported
+      `state=MERGED` with merge commit
+      `4be69f12d2f5382988081f4f0cb6cf7e869c164b`.
+- [x] Record final `MERGED` evidence and sandbox cleanup.
+      Evidence: `git worktree list` no longer listed
+      `.omx/agent-worktrees/colony__codex__add-operation-level-mcp-metrics-2026-05-06-01-43`;
+      `git branch --list agent/codex/add-operation-level-mcp-metrics-2026-05-06-01-43`
+      returned no local branch; `main` and `origin/main` pointed at
+      `4be69f12d2f5382988081f4f0cb6cf7e869c164b`.
