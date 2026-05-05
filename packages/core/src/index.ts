@@ -103,7 +103,9 @@ export {
 export {
   liveFileContentionsForClaim,
   liveFileContentionsForSessionClaims,
+  listLiveFileContentions,
   normalizeClaimFilePath,
+  type LiveFileContentionGroup,
   type LiveFileContentionOptions,
   type LiveFileContentionWarning,
 } from './live-file-contention.js';

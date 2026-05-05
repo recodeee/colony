@@ -73,6 +73,87 @@ export function liveFileContentionsForClaim(
   return warnings.sort(compareWarnings);
 }
 
+export interface LiveFileContentionGroup {
+  task_id: number;
+  branch: string | null;
+  repo_root: string;
+  file_path: string;
+  claimers: Array<{
+    session_id: string;
+    agent: string;
+    branch: string;
+    last_seen: string;
+    claimed_at: number;
+  }>;
+}
+
+/**
+ * Surface every file with two or more concurrent strong claims, regardless of
+ * which session is requesting. Used by `colony lane contentions` so operators
+ * can see — and act on — competing claims without first knowing one of the
+ * session ids. Claims whose owner is not in the live OMX session table are
+ * skipped (they would not show up as a live contention to any agent either).
+ */
+export function listLiveFileContentions(
+  store: MemoryStore,
+  options: LiveFileContentionOptions = {},
+): LiveFileContentionGroup[] {
+  const tasks = scopedTasks(store, options);
+  if (tasks.length === 0) return [];
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const repoRoots = repoRootsForTasks(tasks, options);
+  const liveSessions = liveSessionMap(repoRoots, options.now);
+  const claimWindowMinutes = options.claim_stale_minutes ?? store.settings.claimStaleMinutes;
+  const now = options.now ?? Date.now();
+
+  const grouped = new Map<string, LiveFileContentionGroup>();
+  for (const task of tasks) {
+    for (const claim of store.storage.listClaims(task.id)) {
+      const normalizedPath = normalizeClaimFilePath(claim.file_path);
+      if (!normalizedPath) continue;
+      const age = classifyClaimAge(claim, { now, claim_stale_minutes: claimWindowMinutes });
+      if (age.ownership_strength !== 'strong') continue;
+      const ownerSession = liveSessions.get(claim.session_id);
+      if (!ownerSession) continue;
+      const key = `${task.id}|${normalizedPath}`;
+      let group = grouped.get(key);
+      if (!group) {
+        group = {
+          task_id: task.id,
+          branch: task.branch,
+          repo_root: task.repo_root,
+          file_path: normalizedPath,
+          claimers: [],
+        };
+        grouped.set(key, group);
+      }
+      const ownerAgent =
+        concreteAgent(ownerSession.agent) ??
+        store.storage.getParticipantAgent(task.id, claim.session_id) ??
+        inferIdeFromSessionId(claim.session_id) ??
+        'agent';
+      group.claimers.push({
+        session_id: claim.session_id,
+        agent: ownerAgent,
+        branch: ownerSession.branch || tasksById.get(claim.task_id)?.branch || '',
+        last_seen: ownerSession.last_heartbeat_at || ownerSession.updated_at,
+        claimed_at: claim.claimed_at,
+      });
+    }
+  }
+
+  const out: LiveFileContentionGroup[] = [];
+  for (const group of grouped.values()) {
+    if (group.claimers.length < 2) continue;
+    group.claimers.sort((a, b) => b.claimed_at - a.claimed_at);
+    out.push(group);
+  }
+  out.sort(
+    (a, b) => a.task_id - b.task_id || a.file_path.localeCompare(b.file_path),
+  );
+  return out;
+}
+
 export function liveFileContentionsForSessionClaims(
   store: MemoryStore,
   args: {
