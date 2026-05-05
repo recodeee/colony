@@ -734,3 +734,30 @@ describe('archiveQueenPlan', () => {
     expect(storage.getTask(otherRepo.id)?.status).toBe('open');
   });
 });
+
+describe('countClaimedQueenPlanSubtasks', () => {
+  it('returns 0 when the plan has no claimed sub-tasks (default open status)', () => {
+    const slug = 'unclaimed';
+    storage.findOrCreateTask({
+      title: 'parent',
+      repo_root: '/repo',
+      branch: `spec/${slug}`,
+      created_by: 'queen',
+    });
+    storage.findOrCreateTask({
+      title: 'sub-0',
+      repo_root: '/repo',
+      branch: `spec/${slug}/sub-0`,
+      created_by: 'queen',
+    });
+    expect(
+      storage.countClaimedQueenPlanSubtasks({ repo_root: '/repo', plan_slug: slug }),
+    ).toBe(0);
+  });
+
+  it('returns 0 when the plan does not exist', () => {
+    expect(
+      storage.countClaimedQueenPlanSubtasks({ repo_root: '/repo', plan_slug: 'no-such-plan' }),
+    ).toBe(0);
+  });
+});
