@@ -51,6 +51,7 @@ const DEFAULT_RECENT_WINDOW_HOURS = 1;
 const HEALTH_TOOL_LIMIT = 5;
 const QUOTA_RELAY_EXAMPLE_LIMIT = 5;
 const QUOTA_RELAY_FILE_PREVIEW_LIMIT = 2;
+const DEFAULT_HEALTH_TEXT_LIMIT = 64;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
 const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
@@ -801,11 +802,8 @@ export function formatColonyHealthOutput(
     kleur.bold('colony health'),
     kleur.dim(`window: last ${payload.window_hours}h`),
     '',
-    kleur.bold('At a glance'),
-    ...formatHealthAtAGlance(payload, visibleHints),
-    '',
-    kleur.bold('Health focus'),
-    ...formatHealthFocus(payload, visibleHints, { verbose: Boolean(options.verbose) }),
+    kleur.bold('Queue'),
+    ...formatHealthQueue(payload, visibleHints),
     '',
     kleur.bold('Readiness summary'),
     ...formatReadinessSummary(payload.readiness_summary),
@@ -817,6 +815,8 @@ export function formatColonyHealthOutput(
   if (options.prompts) {
     lines.push('', kleur.bold('Codex prompt snippets'), ...formatPromptSnippets(visibleHints));
   }
+
+  if (!options.verbose) return lines.join('\n');
 
   lines.push(
     '',
@@ -955,7 +955,9 @@ export function formatColonyHealthOutput(
     `  expired/weak:     ${payload.signal_health.expired_claims}`,
     `  quota pending:    ${payload.signal_health.quota_pending_claims}`,
     `  quota expired:    ${payload.signal_health.expired_quota_pending_claims}`,
-    `  quota top action: ${formatQuotaRelayTopAction(payload.signal_health.quota_relay_actions)}`,
+    `  quota top action: ${formatQuotaRelayTopAction(payload.signal_health.quota_relay_actions, {
+      verbose: true,
+    })}`,
     ...(options.verbose
       ? formatQuotaRelayExamples(payload.signal_health.quota_relay_examples)
       : []),
@@ -1213,26 +1215,32 @@ function formatPromptSnippets(visibleHints: ActionHint[]): string[] {
   return visibleHints.map((hint, index) => `  ${index + 1}. ${hint.prompt}`);
 }
 
-function formatHealthAtAGlance(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
+function formatHealthQueue(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
   const entries = readinessEntries(payload.readiness_summary);
   const bad = entries.filter(([, item]) => item.status === 'bad');
   const ok = entries.filter(([, item]) => item.status === 'ok');
   const topHint = visibleHints[0];
   const nextStep = topHint ? preferredAction(topHint) : null;
+  const needsWork =
+    bad.length > 0 ? bad.map(([scope]) => READINESS_LABELS[scope]).join(', ') : 'none';
   const lines = [
-    `  overall: ${formatOverallReadiness(bad.length, ok.length)}`,
-    `  needs work: ${bad.length > 0 ? bad.map(([scope]) => READINESS_LABELS[scope]).join(', ') : 'none'}`,
+    `  status: ${formatOverallReadiness(bad.length, ok.length)}; needs work: ${needsWork}`,
   ];
 
   if (topHint) {
     lines.push(
-      `  fix first: ${topHint.metric}`,
+      `  fix: ${topHint.metric}`,
       `  why: ${topHint.current}`,
       `  next: ${topHint.action}`,
     );
-    if (nextStep) lines.push(`  command: ${nextStep}`);
+    lines.push(`  run: ${nextStep ?? 'none'}`);
   } else {
-    lines.push('  fix first: none', '  next: keep current loop');
+    lines.push(
+      '  fix: none',
+      '  why: tracked thresholds meet targets',
+      '  next: keep current loop',
+      '  run: none',
+    );
   }
 
   lines.push('  areas:');
@@ -1302,76 +1310,12 @@ function formatReadinessStatus(status: ReadinessStatus): string {
   return kleur.yellow(label);
 }
 
-function formatHealthFocus(
-  payload: ColonyHealthPayload,
-  visibleHints: ActionHint[],
-  options: { verbose: boolean },
-): string[] {
-  const badReadiness = Object.entries(payload.readiness_summary)
-    .filter(([, item]) => item.status === 'bad')
-    .map(([scope]) => scope);
-  const lines = [
-    `  status: ${badReadiness.length === 0 ? 'clear' : `${badReadiness.length} bad readiness area(s)`}`,
-  ];
-
-  if (badReadiness.length > 0) lines.push(`  bad areas: ${badReadiness.join(', ')}`);
-  if (options.verbose) {
-    const hiddenFollowups = Math.max(0, payload.action_hints.length - visibleHints.length);
-    if (hiddenFollowups > 0) {
-      lines.push(`  hidden follow-ups: ${hiddenFollowups}`);
-    }
-  }
-
-  const topHint = visibleHints[0];
-  if (!topHint) {
-    lines.push('  next action: none');
-    return lines;
-  }
-
-  lines.push(
-    `  top blocker: ${topHint.metric}: ${topHint.current}`,
-    `  next action: ${topHint.action}`,
-  );
-  if (topHint.tool_call) lines.push(kleur.dim(`  tool: ${topHint.tool_call}`));
-  if (topHint.command) lines.push(kleur.dim(`  cmd:  ${topHint.command}`));
-  lines.push(...formatBadAreaCommands(payload, visibleHints, { verbose: options.verbose }));
-  return lines;
-}
-
-function formatBadAreaCommands(
-  payload: ColonyHealthPayload,
-  visibleHints: ActionHint[],
-  options: { verbose: boolean },
-): string[] {
-  const badScopes = new Set(
-    Object.entries(payload.readiness_summary)
-      .filter(([, item]) => item.status === 'bad')
-      .map(([scope]) => scope as ReadinessScope),
-  );
-  const commands = visibleHints
-    .filter((hint) => badScopes.has(hint.readiness_scope))
-    .filter((hint) => hint.command || hint.tool_call)
-    .reduce<Array<{ scope: ReadinessScope; hint: ActionHint }>>((acc, hint) => {
-      if (!options.verbose && acc.some((entry) => entry.scope === hint.readiness_scope)) {
-        return acc;
-      }
-      acc.push({ scope: hint.readiness_scope, hint });
-      return acc;
-    }, []);
-
-  if (commands.length === 0) return [];
-  return [
-    '  next commands:',
-    ...commands.map(({ scope, hint }) => {
-      const next = hint.command ? `cmd: ${hint.command}` : `tool: ${hint.tool_call}`;
-      return `    ${scope}: ${next}`;
-    }),
-  ];
-}
-
-function formatQuotaRelayTopAction(actions: QuotaRelayActionsPayload): string {
+function formatQuotaRelayTopAction(
+  actions: QuotaRelayActionsPayload,
+  options: { verbose?: boolean } = {},
+): string {
   if (!actions.top_example || actions.top_action === 'none') return 'none';
-  return `${actions.top_action} task ${actions.top_example.task_id} ${actions.top_example.baton_kind} #${actions.top_example.handoff_observation_id} (${formatQuotaRelayFiles(actions.top_example.files)})`;
+  return `${actions.top_action} task ${actions.top_example.task_id} ${actions.top_example.baton_kind} #${actions.top_example.handoff_observation_id} (${formatQuotaRelayFiles(actions.top_example.files, options)})`;
 }
 
 function formatQuotaRelayExamples(examples: QuotaRelayExample[]): string[] {
@@ -1381,7 +1325,7 @@ function formatQuotaRelayExamples(examples: QuotaRelayExample[]): string[] {
     lines.push(
       `    - task_id=${example.task_id} old_owner=${example.old_owner} age=${formatDuration(
         example.age_ms,
-      )} files=${formatQuotaRelayFiles(example.files)} state=${example.state} recommended_action=${example.recommended_action}`,
+      )} files=${formatQuotaRelayFiles(example.files, { verbose: true })} state=${example.state} recommended_action=${example.recommended_action}`,
     );
     if (example.tool_call) lines.push(kleur.dim(`      tool: ${example.tool_call}`));
     if (example.decline_tool_call) {
@@ -1392,13 +1336,24 @@ function formatQuotaRelayExamples(examples: QuotaRelayExample[]): string[] {
   return lines;
 }
 
-function formatQuotaRelayFiles(files: string[]): string {
+function formatQuotaRelayFiles(files: string[], options: { verbose?: boolean } = {}): string {
   if (files.length === 0) return '-';
-  const preview = files.slice(0, QUOTA_RELAY_FILE_PREVIEW_LIMIT);
+  const previewLimit = options.verbose ? files.length : QUOTA_RELAY_FILE_PREVIEW_LIMIT;
+  const preview = files.slice(0, previewLimit);
   const remaining = files.length - preview.length;
   const suffix = remaining > 0 ? `, +${remaining} more` : '';
   const label = files.length === 1 ? 'file' : 'files';
-  return `${files.length} ${label}: ${preview.join(', ')}${suffix}`;
+  const formattedPreview = options.verbose ? preview : preview.map(formatDefaultHealthText);
+  return `${files.length} ${label}: ${formattedPreview.join(', ')}${suffix}`;
+}
+
+function formatDefaultHealthText(value: string): string {
+  if (value.length <= DEFAULT_HEALTH_TEXT_LIMIT) return value;
+  const ellipsis = '...';
+  const available = DEFAULT_HEALTH_TEXT_LIMIT - ellipsis.length;
+  const head = Math.ceil(available / 2);
+  const tail = Math.floor(available / 2);
+  return `${value.slice(0, head)}${ellipsis}${value.slice(value.length - tail)}`;
 }
 
 function formatMalformedSummaryExamples(
@@ -1446,7 +1401,7 @@ export function registerHealthCommand(program: Command): void {
     )
     .option('--json', 'emit structured JSON')
     .option('--prompts', 'emit compact Codex prompt snippets for next fixes')
-    .option('--verbose', 'show lower-priority health follow-ups in next fixes')
+    .option('--verbose', 'show detailed diagnostics and lower-priority health follow-ups')
     .option(
       '--fix-plan',
       'print an execution-safety recovery plan instead of the full health report',
@@ -2964,7 +2919,9 @@ function quotaRelayActionHint(payload: SignalHealthPayload): {
 
 function liveContentionCurrent(payload: LiveContentionPayload): string {
   const firstConflict = payload.top_conflicts[0];
-  const firstFile = firstConflict ? `; first ${firstConflict.file_path}` : '';
+  const firstFile = firstConflict
+    ? `; first ${formatDefaultHealthText(firstConflict.file_path)}`
+    : '';
   return `${payload.live_file_contentions} conflict(s), ${payload.dirty_contended_files} dirty${firstFile}`;
 }
 
@@ -2977,7 +2934,7 @@ function liveContentionResolutionHint(payload: LiveContentionPayload): {
   if (!firstAction) return null;
   const owner = `${firstAction.owner} ${shortSession(firstAction.session_id)}`.trim();
   return {
-    action: `Resolve ${firstAction.file_path} first: ${firstAction.action} for owner ${owner} (${firstAction.reason}).`,
+    action: `Resolve ${formatDefaultHealthText(firstAction.file_path)} first: ${firstAction.action} for owner ${owner} (${firstAction.reason}).`,
     ...(firstAction.mcp_tool_hint ? { tool_call: firstAction.mcp_tool_hint } : {}),
     ...(firstAction.command ? { command: firstAction.command } : {}),
   };
