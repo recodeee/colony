@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { TaskClaimRow, TaskRow } from '@colony/storage';
+import { isProtectedBranch, type TaskClaimRow, type TaskRow } from '@colony/storage';
 import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
 import { normalizeClaimFilePath } from './live-file-contention.js';
 import type { MemoryStore } from './memory-store.js';
@@ -28,6 +28,19 @@ export interface GuardedClaimResult {
   owner_active?: boolean;
   owner_dirty?: boolean;
   recommendation?: string;
+  /**
+   * Set when the task's branch is one of the repo-wide protected base
+   * branches (`main`, `master`, `dev`, etc.). Editing on a protected
+   * branch violates the worktree-discipline contract: every task should
+   * run on a dedicated `agent/*` branch in a managed worktree. Callers
+   * decide how to surface this — a hard refusal would regress sessions
+   * that lawfully resume work on existing `main`-bound tasks, so this
+   * is a soft warning by default and the claim is still recorded.
+   */
+  protected_branch?: {
+    branch: string;
+    warning: string;
+  };
 }
 
 export function guardedClaimFile(
@@ -49,16 +62,26 @@ export function guardedClaimFile(
   if (filePath === null) {
     return { status: 'invalid_path', task_id: args.task_id, file_path: args.file_path };
   }
+  const protectedBranchWarning: GuardedClaimResult['protected_branch'] = isProtectedBranch(
+    task.branch,
+  )
+    ? {
+        branch: task.branch,
+        warning: `Task is on protected base branch '${task.branch}'. Per worktree-discipline contract, claims should land on an agent/* branch inside .omc/agent-worktrees/. Start a worktree with 'gx branch start "<task>" "<agent>"' before claiming.`,
+      }
+    : undefined;
+  const withWarning = <T extends GuardedClaimResult>(result: T): T =>
+    protectedBranchWarning ? { ...result, protected_branch: protectedBranchWarning } : result;
 
   const scopedClaims = findScopedClaims(store, task, filePath);
   if (scopedClaims.length === 0) {
     claimFileUnlessDryRun(store, { ...args, file_path: filePath });
-    return {
+    return withWarning({
       status: 'claimed',
       task_id: args.task_id,
       file_path: filePath,
       claim_task_id: args.task_id,
-    };
+    });
   }
 
   const requesterAgent = normalizeAgent(
@@ -82,7 +105,7 @@ export function guardedClaimFile(
     });
   });
   if (blockingActive) {
-    return {
+    return withWarning({
       status: 'blocked_active_owner',
       task_id: args.task_id,
       file_path: filePath,
@@ -92,14 +115,14 @@ export function guardedClaimFile(
       owner_active: true,
       owner_dirty: blockingActive.owner.dirty,
       recommendation: `request handoff or explicit takeover from active owner ${blockingActive.claim.session_id} before claiming ${filePath}`,
-    };
+    });
   }
 
   const dirtyOwner = claims.find(
     (entry) => entry.claim.session_id !== args.session_id && entry.owner.dirty,
   );
   if (dirtyOwner) {
-    return {
+    return withWarning({
       status: 'takeover_recommended',
       task_id: args.task_id,
       file_path: filePath,
@@ -109,7 +132,7 @@ export function guardedClaimFile(
       owner_active: dirtyOwner.owner.active,
       owner_dirty: true,
       recommendation: `dirty worktree still has ${filePath}; require handoff or rescue from ${dirtyOwner.claim.session_id} before claiming`,
-    };
+    });
   }
 
   const sameSessionClaim = claims.find((entry) => entry.claim.session_id === args.session_id);
@@ -119,7 +142,7 @@ export function guardedClaimFile(
       task_id: sameSessionClaim.claim.task_id,
       file_path: sameSessionClaim.claim.file_path,
     });
-    return {
+    return withWarning({
       status: 'refreshed_same_session',
       task_id: args.task_id,
       file_path: filePath,
@@ -128,7 +151,7 @@ export function guardedClaimFile(
       owner_agent: sameSessionClaim.owner.agent,
       owner_active: sameSessionClaim.owner.active,
       owner_dirty: sameSessionClaim.owner.dirty,
-    };
+    });
   }
 
   const sameLaneClaim = claims.find((entry) =>
@@ -144,7 +167,7 @@ export function guardedClaimFile(
       task_id: sameLaneClaim.claim.task_id,
       file_path: sameLaneClaim.claim.file_path,
     });
-    return {
+    return withWarning({
       status: 'refreshed_same_lane',
       task_id: args.task_id,
       file_path: filePath,
@@ -153,7 +176,7 @@ export function guardedClaimFile(
       owner_agent: sameLaneClaim.owner.agent,
       owner_active: sameLaneClaim.owner.active,
       owner_dirty: sameLaneClaim.owner.dirty,
-    };
+    });
   }
 
   const takeoverClaim = claims[0];
@@ -163,7 +186,7 @@ export function guardedClaimFile(
       task_id: takeoverClaim.claim.task_id,
       file_path: takeoverClaim.claim.file_path,
     });
-    return {
+    return withWarning({
       status: 'superseded_inactive_owner',
       task_id: args.task_id,
       file_path: filePath,
@@ -172,16 +195,16 @@ export function guardedClaimFile(
       owner_agent: takeoverClaim.owner.agent,
       owner_active: false,
       owner_dirty: false,
-    };
+    });
   }
 
   claimFileUnlessDryRun(store, { ...args, file_path: filePath });
-  return {
+  return withWarning({
     status: 'claimed',
     task_id: args.task_id,
     file_path: filePath,
     claim_task_id: args.task_id,
-  };
+  });
 }
 
 function claimFileUnlessDryRun(
