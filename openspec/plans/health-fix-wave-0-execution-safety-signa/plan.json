@@ -31,10 +31,10 @@
       "depends_on": [],
       "spec_row_id": null,
       "capability_hint": "infra_work",
-      "status": "available",
+      "status": "completed",
       "claimed_by_session_id": null,
       "claimed_by_agent": null,
-      "completed_summary": null
+      "completed_summary": "Wave 1 storage self-heal helpers shipped in PR #420: sweepStaleClaims (bulk active→weak_expired demotion), findCompletedQueenPlans (observation-derived candidate set for non-MCP archival), isProtectedBranch + PROTECTED_BRANCH_NAMES export. 14 new unit tests; storage suite 105/105 green."
     },
     {
       "subtask_index": 1,
@@ -64,5 +64,5 @@
     "auto_archive": true
   },
   "created_at": "2026-05-04T15:12:03.113Z",
-  "updated_at": "2026-05-04T15:12:03.113Z"
+  "updated_at": "2026-05-05T11:54:00.108Z"
 }
