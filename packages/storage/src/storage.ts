@@ -45,6 +45,35 @@ export interface StorageOptions {
   readonly?: boolean;
 }
 
+/**
+ * Branch names treated as protected base branches across the agent
+ * coordination surface. Claims, edits, and lane starts on these branches
+ * are flagged as worktree-discipline violations: the contract is that
+ * every task — even a typo — runs on a dedicated `agent/*` branch in a
+ * worktree. The constant is exported so non-storage callers (hooks,
+ * MCP, CLI) all use the same definition instead of drifting copies.
+ */
+export const PROTECTED_BRANCH_NAMES: ReadonlySet<string> = new Set([
+  'main',
+  'master',
+  'dev',
+  'develop',
+  'production',
+  'release',
+]);
+
+/**
+ * Whether a branch name is one of the protected base branches. Trims
+ * and lowercases the input so callers don't have to normalize before
+ * asking. Empty/null/undefined returns false.
+ */
+export function isProtectedBranch(branch: string | null | undefined): boolean {
+  if (typeof branch !== 'string') return false;
+  const trimmed = branch.trim().toLowerCase();
+  if (trimmed.length === 0) return false;
+  return PROTECTED_BRANCH_NAMES.has(trimmed);
+}
+
 export interface FindStrandedSessionsOptions {
   stranded_after_ms?: number;
 }
@@ -1212,6 +1241,113 @@ export class Storage {
     return row?.count ?? 0;
   }
 
+  /**
+   * Queen plans whose every `spec/<slug>/sub-N` row has its latest
+   * `plan-subtask-claim` observation in `metadata.status='completed'`
+   * and whose parent `spec/<slug>` row isn't already `archived`.
+   *
+   * The MCP plan tool opportunistically archives plans with
+   * `auto_archive=true` via a read-path sweep, but plans that never opted
+   * in linger as "completed but unarchived" forever. This scan exposes
+   * the candidate set so non-MCP callers (CLI, periodic sweep, autopilot)
+   * can archive them via `archiveQueenPlan` without requiring per-plan
+   * opt-in.
+   *
+   * Status is derived from observations because `tasks.status` is only
+   * ever flipped to `'archived'`; sub-task lifecycle (`available` →
+   * `claimed` → `completed`) lives in `plan-subtask-claim` metadata.
+   * Excludes plans with zero sub-tasks (incomplete data), plans whose
+   * parent row is missing, and plans whose parent is already archived.
+   */
+  findCompletedQueenPlans(repo_root?: string): Array<{
+    plan_slug: string;
+    parent_task_id: number;
+    repo_root: string;
+    subtask_count: number;
+  }> {
+    const sql = repo_root
+      ? `SELECT id, repo_root, branch, status FROM tasks
+         WHERE branch LIKE 'spec/%' AND repo_root = ?`
+      : `SELECT id, repo_root, branch, status FROM tasks
+         WHERE branch LIKE 'spec/%'`;
+    const rows = (
+      repo_root ? this.db.prepare(sql).all(repo_root) : this.db.prepare(sql).all()
+    ) as Array<{ id: number; repo_root: string; branch: string; status: string }>;
+    interface PlanGroup {
+      repo_root: string;
+      plan_slug: string;
+      parent_task_id: number | null;
+      parent_status: string | null;
+      subtask_task_ids: number[];
+    }
+    const planMap = new Map<string, PlanGroup>();
+    const subtaskRe = /^spec\/([a-z0-9][a-z0-9-]*)\/sub-(\d+)$/;
+    const parentRe = /^spec\/([a-z0-9][a-z0-9-]*)$/;
+    for (const row of rows) {
+      const subMatch = subtaskRe.exec(row.branch);
+      const parentMatch = parentRe.exec(row.branch);
+      const slug = subMatch?.[1] ?? parentMatch?.[1];
+      if (!slug) continue;
+      const key = `${row.repo_root} ${slug}`;
+      let entry = planMap.get(key);
+      if (!entry) {
+        entry = {
+          repo_root: row.repo_root,
+          plan_slug: slug,
+          parent_task_id: null,
+          parent_status: null,
+          subtask_task_ids: [],
+        };
+        planMap.set(key, entry);
+      }
+      if (parentMatch) {
+        entry.parent_task_id = row.id;
+        entry.parent_status = row.status;
+      } else {
+        entry.subtask_task_ids.push(row.id);
+      }
+    }
+    const result: Array<{
+      plan_slug: string;
+      parent_task_id: number;
+      repo_root: string;
+      subtask_count: number;
+    }> = [];
+    for (const entry of planMap.values()) {
+      if (entry.parent_task_id === null) continue;
+      if (entry.parent_status === 'archived') continue;
+      if (entry.subtask_task_ids.length === 0) continue;
+      let allCompleted = true;
+      for (const subTaskId of entry.subtask_task_ids) {
+        const claims = this.taskObservationsByKind(subTaskId, 'plan-subtask-claim', 50);
+        const latest = claims[0];
+        if (!latest?.metadata) {
+          allCompleted = false;
+          break;
+        }
+        let parsed: { status?: unknown };
+        try {
+          parsed = JSON.parse(latest.metadata) as typeof parsed;
+        } catch {
+          allCompleted = false;
+          break;
+        }
+        if (parsed.status !== 'completed') {
+          allCompleted = false;
+          break;
+        }
+      }
+      if (!allCompleted) continue;
+      result.push({
+        plan_slug: entry.plan_slug,
+        parent_task_id: entry.parent_task_id,
+        repo_root: entry.repo_root,
+        subtask_count: entry.subtask_task_ids.length,
+      });
+    }
+    return result.sort((a, b) => a.plan_slug.localeCompare(b.plan_slug));
+  }
+
   addTaskParticipant(p: { task_id: number; session_id: string; agent: string }): void {
     // INSERT OR IGNORE: a session re-entering the same task (resume/clear)
     // must not double-join and must not clobber the original joined_at.
@@ -1306,6 +1442,51 @@ export class Storage {
     for (const filePath of filePaths) {
       stmt.run(c.task_id, filePath, c.session_id, c.handoff_observation_id);
     }
+  }
+
+  /**
+   * Bulk-demote `state='active'` claims older than `stale_after_ms` to
+   * `state='weak_expired'`. The attention_inbox already surfaces stale
+   * claims as a cleanup signal, but until something actually demotes
+   * them they keep blocking other agents who treat any 'active' row as
+   * live ownership. Pure data update — caller is responsible for
+   * emitting `claim-weakened` observations if it wants the demotion to
+   * surface in timelines/lane health. Returns the demoted rows so the
+   * caller can fan out per-claim observations without a re-read.
+   */
+  sweepStaleClaims(opts: { stale_after_ms: number; now?: number; limit?: number }): {
+    swept: number;
+    demoted: TaskClaimRow[];
+  } {
+    const now = opts.now ?? Date.now();
+    const cutoff = now - Math.max(0, opts.stale_after_ms);
+    const limit = Math.max(1, opts.limit ?? 1000);
+    const candidates = this.db
+      .prepare(
+        `SELECT * FROM task_claims
+         WHERE state = 'active' AND claimed_at < ?
+         ORDER BY claimed_at ASC
+         LIMIT ?`,
+      )
+      .all(cutoff, limit) as Partial<TaskClaimRow>[];
+    if (candidates.length === 0) return { swept: 0, demoted: [] };
+    const stmt = this.db.prepare(
+      `UPDATE task_claims
+       SET state = 'weak_expired'
+       WHERE task_id = ? AND file_path = ? AND session_id = ? AND state = 'active'`,
+    );
+    const demoted: TaskClaimRow[] = [];
+    this.transaction(() => {
+      for (const row of candidates) {
+        const normalized = this.normalizeTaskClaimRow(row);
+        if (!normalized) continue;
+        const result = stmt.run(normalized.task_id, normalized.file_path, normalized.session_id);
+        if ((result.changes ?? 0) > 0) {
+          demoted.push({ ...normalized, state: 'weak_expired' });
+        }
+      }
+    });
+    return { swept: demoted.length, demoted };
   }
 
   releaseClaim(c: { task_id: number; file_path: string; session_id: string }): void {
