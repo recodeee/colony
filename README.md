@@ -52,13 +52,11 @@ until an agent explicitly hydrates the full record. The result is measurable —
 
 ---
 
-## The Problem: One Failing Test, Two Agent Fixes
+## The Problem: Two Agents, One Bug, Two Patches
 
-During a run, multiple agents can hit the same failing runtime-manifest test.
-Without a shared coordination loop, each agent may independently diagnose the
-same Turbopack root-escape bug, patch the same schema file, and race separate
-PRs for one fix. Eventually one agent lands the repair, but the others have
-already spent tokens, touched overlapping files, and created cleanup work.
+A human can ask Codex and Claude to solve the same runtime-manifest bug at the
+same time. Without a shared loop, both agents diagnose the same Turbopack root
+escape, edit the same schema file, and race two PRs for one fix.
 
 <p align="center">
   <img src="docs/assets/colony-vs.svg" alt="Without Colony two agents collide on the same file. With Colony the second agent reads a live claim and stands down." width="100%" />
@@ -77,7 +75,7 @@ shared task thread.
 | Without Colony                         | With Colony                                     |
 | -------------------------------------- | ----------------------------------------------- |
 | Agents collide on the same files.      | Agents claim files before edits.                |
-| Agents chase the same failure alone.   | Agents pull ready subtasks from Colony.         |
+| Humans schedule parallel work by hand. | Agents pull ready subtasks from Colony.         |
 | Progress is trapped in chat windows.   | Working state is saved to task threads.         |
 | Old claims and handoffs stay noisy.    | Signals decay, expire, and can be swept.        |
 | Follow-up ideas disappear.             | Proposals can be reinforced and promoted.       |
@@ -530,9 +528,9 @@ pnpm build
 
 Before merging changes:
 
-````bash
+```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
-
+```
 
 ---
 
@@ -567,112 +565,381 @@ repairs itself — so multi-agent fleets stay healthy without a human running
 sweep commands by hand.
 
 <p align="center">
-  <img src="docs/assets/colony-roadmap.svg" alt="Roadmap: Colony evolves from observe-and-report (now) to propose-and-apply (next) to fully autonomous heal (future). Time-to-healthy trends from hours to seconds." width="100%" />
+  <img src="docs/assets/colony-roadmap.svg" alt="Roadmap from v0 (shipped) through v0.x (hardening) and v1 (propose & apply) to v2 (continuous healing) and v3+ (federation). Time-to-healthy trends from hours to seconds." width="100%" />
 </p>
 
-### Where We Are (`v0.x` — observe & report)
+<p align="center">
+  <img alt="v0 shipped" src="https://img.shields.io/badge/v0-shipped-10b981?style=flat-square&labelColor=022c22" />
+  <img alt="v0.x in progress" src="https://img.shields.io/badge/v0.x-in%20progress-22d3ee?style=flat-square&labelColor=082f49" />
+  <img alt="v1 planned" src="https://img.shields.io/badge/v1-planned-a78bfa?style=flat-square&labelColor=3b0764" />
+  <img alt="v2 exploration" src="https://img.shields.io/badge/v2-exploration-94a3b8?style=flat-square&labelColor=1e293b" />
+  <img alt="v3+ horizon" src="https://img.shields.io/badge/v3+-horizon-64748b?style=flat-square&labelColor=0f172a" />
+</p>
 
-The current substrate is honest: it tells you the truth and gives you the
-exact command to fix it. From a real run on a busy repo right now:
+**Legend**
 
-```text
-At a glance
-  overall: needs attention (2 areas)
-  fix first: live file contentions
-  because: 16 conflict(s), 0 dirty
-  signal_evaporation: 81 stale claim(s); 139 quota-pending claim(s)
-````
+| Symbol | Meaning                                                 |
+| :----: | ------------------------------------------------------- |
+|   ✅   | shipped, on `main`, covered by tests                    |
+|   🟡   | partially shipped — works but needs hardening or polish |
+|   🔵   | in active design or implementation                      |
+|   ⏳   | planned, with a known shape but no PR yet               |
+|   💭   | exploration — direction is right but specifics are open |
 
-Colony already detects same-file multi-owner claims, lifecycle path
-mismatches, claims on protected branches, expired handoffs, and decaying
-proposals. Every problem comes with a `cmd:` and a `tool:` line. **The human
-still presses the button.** That is the gap the roadmap closes.
+---
 
-### Phase 1: Propose & One-Click Apply (`v1`)
+### `v0` — Observe & Report ✅ _shipped_
 
-The first jump is making `--fix-plan` executable instead of just printable.
+The substrate exists. It tells you the truth about what's happening, captures
+the evidence in compact form, and gives you the exact command to fix problems
+yourself. **This is the foundation everything else builds on.**
 
-| Capability                   | Closes which gap                                                                               | Surface          |
-| ---------------------------- | ---------------------------------------------------------------------------------------------- | ---------------- |
-| **`colony heal --apply`**    | Today `colony health --fix-plan` prints commands. `--apply` runs them with a dry-run first.    | CLI              |
-| **Contention auto-resolver** | 16 same-file multi-owner claims sit in protected state. Deterministic policies clear them.     | sweep + MCP tool |
-| **Branch policy guard**      | 11 claims live on `dev` / `main`. Reject these at claim time and prompt `gx branch start`.     | MCP tool, hook   |
-| **Quota relay auto-release** | 139 quota-pending claims expire silently. Auto-release after grace period, audit retained.     | worker           |
-| **Lifecycle reclaim**        | `path_mismatch` is the dominant reason claims drift from edits. Reclaim on path divergence.    | hook             |
-| **Plan-claim nudge**         | `task_ready_for_agent → task_plan_claim_subtask` is at 0% adoption. Surface claim args inline. | startup hook     |
+**Coordination loop primitives**
 
-Concrete next contracts:
+- ✅ `hivemind_context` — start/resume with active lanes, ownership, hot files, memory hits
+- ✅ `attention_inbox` — handoffs, blockers, stale lanes that need attention
+- ✅ `task_ready_for_agent` — pull claimable work matched to the agent
+- ✅ `task_plan_claim_subtask` — claim a Queen subtask and its file scope
+- ✅ `task_claim_file` — make ownership visible before editing
+- ✅ `task_note_working` — save compact resumable state
+- ✅ `task_message` — directed and broadcast agent coordination messages
+- ✅ `task_post` and task threads — durable per-task discussion
+- ✅ `task_hand_off` — release files, summarize, declare next steps
 
-```text
-colony heal --apply --dry-run        # show what would change
-colony heal --apply --safe-only      # only stale-signal sweeps and quota-release
-colony heal --apply --policy=auto    # contention rules + branch guard
-```
+**Storage and compression**
 
-A successful `colony heal --apply` writes its own audit observations so the
-repair itself is searchable later. **Repair is data, not a side-effect.**
+- ✅ Local SQLite + FTS5 substrate at `~/.colony/data.db`
+- ✅ `@colony/compress` — ~70% prose compression, byte-perfect for paths/URLs/code/commands/versions/dates
+- ✅ Lazy local embeddings via `Xenova/all-MiniLM-L6-v2`
+- ✅ Optional Ollama and OpenAI-compatible embedding providers
+- ✅ Privacy stripping pass before persistence
+- ✅ `MemoryStore` facade that enforces compression invariants
 
-### Phase 2: Continuous Background Healing (`v2`)
+**Runtime integration**
 
-Move the loop off the terminal entirely.
+- ✅ Installers for Claude Code, Codex, Cursor, Gemini CLI, OpenCode (5 runtimes)
+- ✅ Lifecycle hooks: `PreToolUse`, `PostToolUse`, prompt events, session heartbeat
+- ✅ stdio-based MCP server registered as `mcp__colony__*`
+- ✅ Quota-safe operating contract injected into agent system prompts
+- ✅ `colony status` — installed runtimes, worker state, memory counts, embedding status
 
-| Capability                      | What it does                                                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **`colony worker --heal`**      | Background daemon (already host for the viewer) runs sweep + safe-fix loop on a configurable cadence.               |
-| **Adaptive half-life tuning**   | Pheromone TTLs adjust per repo from observed reinforcement rates instead of a global default.                       |
-| **Predictive routing**          | `task_ready_for_agent` ranks claimable work using `mcp_metrics` history: who finishes which kind of file fastest.   |
-| **Specialist routing**          | Hot files learn their best-fit agent (e.g. test files → Codex, prose → Claude) from prior outcomes.                 |
-| **Auto-promote weak proposals** | Proposals that get reinforced past a learned threshold are promoted to claimable Queen subtasks automatically.      |
-| **Failure pattern memory**      | Drift / failed-verification events accumulate as searchable patterns; agents see "this kind of edit failed before". |
+**Health and diagnostics**
 
-The trigger for _not_ doing something stays human: any auto-action lands as a
-proposal first, gets a short evaporation window, and only applies if no human
-or agent objects.
+- ✅ `colony health` with five readiness pillars (coordination, execution, queen, working state, signal evaporation)
+- ✅ `colony health --fix-plan` — printable per-area recovery commands
+- ✅ `colony health --json` with `root_cause`, `evidence`, and source-level reasons
+- ✅ Lifecycle bridge status surfacing (`available`, `silent`, `paths_missing`, `claim_mismatch`)
+- ✅ Live file contention reporter with class tags (unknown owner, dup branch, active known)
+- ✅ Stale signal detector (claims, handoffs, messages, proposals)
+- ✅ Loop adoption metrics across sessions
+- ✅ MCP share calculator vs total tool traffic
+- ✅ task_list vs task_ready_for_agent comparison
+- ✅ task_post vs OMX notepad share calculator
+- ✅ Adoption thresholds with `good`/`ok` classification
 
-### Phase 3: Federated Colonies (`v3+`)
+**Token-savings receipts**
+
+- ✅ `mcp_metrics` SQLite table — per-call rows with input/output bytes & tokens, duration, ok flag
+- ✅ `colony gain` CLI showing live receipts plus reference model
+- ✅ `savings_report` MCP tool returning the same data
+- ✅ `/savings` viewer route at `http://127.0.0.1:6510/savings`
+- ✅ USD cost calculation via flags or `COLONY_MCP_INPUT_USD_PER_1M` env
+- ✅ Filter by operation, hours window, session limit
+- ✅ Shared reference model in `packages/core/src/savings-reference.ts`
+
+**Queen wave plans**
+
+- ✅ Deterministic plan decomposition into waves
+- ✅ `task_plan_*` MCP tool family
+- ✅ Wave gating — wave N+1 unlocks when wave N's claimable subtasks are claimed
+- ✅ `colony queen sweep` — find stalled or unclaimed plans
+- ✅ Archived plan tracking with remaining-subtask audit
+- ✅ Foraging report (`task_foraging_report`) for weak proposals and promotions
+
+**Signal lifecycle**
+
+- ✅ Claim TTL with weak-state expiry
+- ✅ Coordination sweep CLI (`colony coordination sweep`)
+- ✅ Safe stale-claim release behind explicit `--release-safe-stale-claims` flag
+- ✅ Proposal decay with reinforcement counter
+- ✅ Handoff expiry detection and reporting
+
+**Inspection surfaces**
+
+- ✅ `colony viewer` — read-only local web graph at `:6510`
+- ✅ `colony search` — FTS5-backed search across observations
+- ✅ `colony timeline <session-id>` — per-session chronological view
+- ✅ `colony observe` — live task-thread and coordination feed
+- ✅ Smoke tests: `pnpm smoke:codex-omx-pretool`, `pnpm smoke:health-repair-loop`
+
+**Shipping discipline**
+
+- ✅ Local-first architecture (no hosted control plane)
+- ✅ MIT license, Node 20+
+- ✅ npm publishable wrapper (`pnpm publish:cli` / `--dry-run`)
+- ✅ Repository layout split: cli, mcp-server, worker, core, storage, hooks, installers, queen, spec
+- ✅ End-to-end publish smoke (`scripts/e2e-publish.sh`)
+
+> **`time-to-healthy`: hours.** A human notices the issue, reads `colony health --fix-plan`, decides which commands are safe, and runs them.
+
+---
+
+### `v0.x` — Hardening & Adoption 🟡 _you are here_
+
+Everything in v0 _works_, but there are seams between "the feature exists"
+and "the feature is reliable enough to lean on." v0.x closes those seams.
+Most of these are mechanically simple but require real multi-agent runs to
+validate.
+
+**Lifecycle bridge polish**
+
+- ✅ `runtime_bridge_status` exposed in `--json`
+- ✅ `path_mismatch` detection as dominant claim-miss reason
+- 🟡 OMX/Codex bridge handles all PreToolUse edit shapes (some shapes still drop through)
+- 🔵 Path normalization across worktrees so claims survive worktree-relative paths
+- 🔵 Reclaim suggestion when path divergence is detected mid-edit
+- ⏳ Bridge replay tool for offline debugging from a saved `.pre.json`
+
+**Contention triage**
+
+- ✅ Live contention list with owner-class tagging
+- 🟡 Recommended-actions section produces command lines (still copy-paste)
+- 🔵 Owner-identity resolution when `owner=unknown` (cross-reference session metadata)
+- 🔵 Same-branch duplicate detection promoted to a top-level signal
+- ⏳ Lane-takeover audit trail surfaced in `colony observe`
+
+**Adoption nudges**
+
+- ✅ `task_list` vs `task_ready_for_agent` ratio reporting
+- ✅ MCP share rising/falling adoption thresholds
+- 🟡 Plan-claim adoption is `0/107 sessions` in current data — needs an explicit nudge
+- 🔵 Inline suggestion in `task_ready_for_agent` empty-state when plan work exists but isn't claimed
+- 🔵 Startup banner from hook contracts when last session left a stalled lane
+- ⏳ Adoption coach mode in `colony health` that walks a new repo through first-week setup
+
+**Stale signal sweep ergonomics**
+
+- ✅ Dry-run sweep behind default flag
+- ✅ `--release-safe-stale-claims` for explicit cleanup
+- 🟡 Quota-pending releases require manual command per task/handoff
+- 🔵 Batch quota release UX (e.g. `colony task quota-release-expired --all-safe`)
+- 🔵 Sweep-result diff so the human can review what would change
+- ⏳ Per-repo TTL override file checked into the repo
+
+**Receipts and observability**
+
+- ✅ `mcp_metrics` schema and population
+- ✅ `colony gain --operation`, `--hours`, `--session-limit`, `--json`
+- 🟡 USD cost is computed at report time but only via flags/env
+- 🔵 USD cost displayed by default in `colony gain` if rates are configured
+- 🔵 Per-error-code breakdown in `mcp_metrics` aggregation
+- ⏳ Long-run regression detector that flags when a tool's median tokens-per-call drifts up
+
+**Multi-runtime confidence**
+
+- ✅ Smoke tests for Codex/OMX lifecycle
+- ✅ Smoke tests for health repair loop composition
+- 🟡 Cursor and Gemini CLI installers exist but have less smoke coverage
+- 🔵 Per-runtime smoke for claim-before-edit emission
+- 🔵 Cross-runtime handoff smoke (Codex hands off to Claude, both run)
+- ⏳ Reproducible test fixture set under `tests/scenarios/`
+
+> **`time-to-healthy`: still hours**, but the time the human spends _deciding what to run_ drops sharply because every signal carries its `cmd:` and `tool:` already.
+
+---
+
+### `v1` — Propose & Apply ⏳ _planned_
+
+The defining v1 jump: **Colony stops printing fix commands and starts
+running them.** Every fix is reversible, audited, and behind an explicit
+opt-in policy. The CLI surface is tight; the safety properties are loud.
+
+**Apply primitives**
+
+- ⏳ `colony heal --apply --dry-run` — show what _would_ change
+- ⏳ `colony heal --apply --safe-only` — only stale-signal sweeps and quota-release
+- ⏳ `colony heal --apply --policy=auto` — contention rules + branch guard
+- ⏳ Per-action confirmation prompt unless `--yes`
+- ⏳ Policy file resolution: `--policy=<file>` or `.colony/policy.yaml` in repo root
+
+**Contention auto-resolver**
+
+- ⏳ Same-branch duplicate rule: weaker session yields, audit trail kept
+- ⏳ Unknown-owner rule: explicit takeover required, with reason captured
+- ⏳ Cross-branch dup: prefer agent-worktree branch over protected branch
+- ⏳ Stale-claim-blocking-active: weak claim auto-released after configurable grace
+- ⏳ Configurable per-rule thresholds in policy file
+
+**Branch policy guard**
+
+- ⏳ Reject `task_claim_file` on `main`/`dev` (configurable list)
+- ⏳ Suggest `gx branch start "<task>" "<agent>"` when claim is rejected
+- ⏳ Auto-redirect claim to existing agent worktree if the session has one
+- ⏳ Honor `branch_policy.allowed_prefixes` config (default: `agent/*`)
+
+**Quota relay**
+
+- ⏳ Auto-release expired quota-pending claims after grace period
+- ⏳ `task_claim_quota_release_expired` accepts batch input
+- ⏳ Audit observation written for each released claim
+- ⏳ Optional notification to original owner via `task_message`
+
+**Lifecycle reclaim**
+
+- ⏳ When `path_mismatch` is detected, attempt automatic reclaim in same session
+- ⏳ Surface reclaim attempts in `colony health --hours 1`
+- ⏳ Dead-claim eviction when bridge says "edit happened, claim never matched"
+
+**Plan-claim auto-nudge**
+
+- ⏳ When `task_ready_for_agent` returns plan work, hook injects exact `claim_args`
+- ⏳ Empty-result tip points at the right `task_plan_*` tool
+- ⏳ First-claim-of-session telemetry to validate adoption lift
+
+**Repair-as-observation**
+
+- ⏳ Every applied fix writes a `repair` observation with action, target, reason
+- ⏳ `colony search "repair"` surfaces history
+- ⏳ `colony observe --repairs` filtered live feed
+- ⏳ Repair receipts roll up into `colony gain` so healing has a measured cost
+
+**Policy as code**
+
+- ⏳ `.colony/policy.yaml` schema with allowed_actions, ttl_overrides, branch_rules, takeover_thresholds
+- ⏳ `colony policy lint` validates the file
+- ⏳ `colony policy show` prints effective merged policy
+- ⏳ Repo policy overrides user-level policy overrides defaults
+
+> **`time-to-healthy`: minutes.** First agent's startup hook runs `colony heal --apply --safe-only`, regressions clear before the human notices.
+
+---
+
+### `v2` — Continuous Healing 💭 _exploration_
+
+Move the loop off the terminal. The worker process — which already hosts the
+viewer and runs background embedding backfills — gains a heal loop. Adoption
+of v2 features assumes v1's repair primitives are stable enough that the
+human's role becomes _setting policy_, not _running commands_.
+
+**Healing daemon**
+
+- 💭 `colony worker --heal` runs sweep + safe-fix loop on configurable cadence (default: every 5 min)
+- 💭 Per-repo enable/disable in policy file
+- 💭 Pause-on-error: any non-idempotent failure halts the loop and surfaces in `colony health`
+- 💭 Healing-action receipts go through the same `mcp_metrics` pipeline so cost is measurable
+
+**Adaptive tuning**
+
+- 💭 Pheromone TTLs per-repo from observed reinforcement rates
+- 💭 Proposal-promotion threshold learned from historical promotion outcomes
+- 💭 Per-claim-type half-life (e.g. test files decay faster than schema files)
+- 💭 Auto-tuning is bounded by per-rule min/max in policy, never silent
+
+**Predictive routing**
+
+- 💭 `task_ready_for_agent` ranks claimable work using `mcp_metrics` history
+- 💭 Per-session p50/p90 completion time per file class
+- 💭 Routing weight: `fit × estimated_speed × claim_likelihood`
+- 💭 Cold-start fallback to lexicographic ordering
+
+**Specialist routing**
+
+- 💭 Hot files learn their best-fit agent identity from prior outcomes
+- 💭 Test files → Codex / Claude / Gemini split based on actual pass rates
+- 💭 Prose files (markdown, docs) routing
+- 💭 Schema/types files routing
+- 💭 Override via `.colony/specialists.yaml`
+
+**Proposal auto-promotion**
+
+- 💭 Proposals reinforced past learned threshold are promoted to claimable Queen subtasks
+- 💭 Demotion path: promoted-but-untouched subtasks decay back to proposals
+- 💭 Cross-session reinforcement signal aggregation
+- 💭 Promotion audit observation
+
+**Failure-pattern memory**
+
+- 💭 Drift / failed-verification events accumulate as searchable patterns
+- 💭 `task_ready_for_agent` annotates ready work with "this kind of edit failed N times before"
+- 💭 Pattern decay so an old transient failure doesn't permanently scar a file
+- 💭 Pattern correction when the same edit later succeeds
+
+**Replay & rewind**
+
+- 💭 SQLite log treated as event-sourced enough to reconstruct any past coordination state
+- 💭 `colony replay --until <ts>` to show the substrate at a past moment
+- 💭 Used internally for testing healing policies against historical data
+- 💭 Useful for incident review
+
+> **`time-to-healthy`: seconds.** The worker loop catches regressions as they happen; the human's job becomes policy review, not operations.
+
+---
+
+### `v3+` — Federated Colonies 💭 _horizon_
 
 Once a single repo's substrate is healing itself, the next surface is across
-repos:
+repos. Federation is **strictly opt-in** and observation bodies stay
+local-first by default. This isn't "Colony in the cloud" — it's "Colony
+substrates can talk to each other when their owners say so."
 
-- **Cross-repo memory sync.** Opt-in pheromone exchange so a fix discovered in
-  one repo propagates as a _suggestion_ to similar code in another, while
-  observation bodies stay local-first.
-- **Team substrates.** A team-wide read-only view that aggregates anonymized
-  health and adoption metrics across personal repos, useful for tooling teams
-  to spot integration gaps without collecting source.
-- **Replay & rewind.** Treat the SQLite log as event-sourced enough to
-  reconstruct any past coordination state. Useful for incident review and for
-  testing healing policies against historical data.
-- **Policy as code.** `colony.policy.yaml` declaring allowed auto-actions, TTL
-  ranges, branch rules, takeover thresholds — version-controlled with the
-  repo, audited like any other config.
+- 💭 **Cross-repo memory sync.** Opt-in pheromone exchange so a fix discovered in one repo can propagate as a _suggestion_ (never an auto-apply) to similar code in another. Bodies stay local; only digests cross.
+- 💭 **Team substrates.** A team-wide read-only view that aggregates anonymized health and adoption metrics across personal repos. Useful for tooling teams to spot integration gaps without collecting source.
+- 💭 **Anonymized public substrates.** Opt-in shared decay/reinforcement curves for common file patterns (e.g. "config files in TS monorepos") to bootstrap new repos with sane defaults.
+- 💭 **Cryptographic claim provenance.** Signed claims so a federated suggestion can be verified to come from a known repo without trusting the transport.
+- 💭 **Replay-driven policy testing.** Run a proposed policy change against last week's coordination history to see how many false positives it would have triggered.
+- 💭 **Federated MCP catalog.** Discover other repos' Colony MCP namespaces (with explicit grants) to coordinate cross-project agent work.
+
+> **`time-to-healthy`: still seconds**, but problems that would have been _unique to one repo_ are now caught early because the substrate has seen them happen elsewhere.
+
+---
 
 ### North-Star Metric: Time-to-Healthy
 
 Every roadmap item is judged against one number: **how long does it take
 Colony to detect and repair a regression without human intervention?**
 
-| Phase | Time-to-Healthy     | Trigger                                                                |
-| ----- | ------------------- | ---------------------------------------------------------------------- |
-| v0.x  | hours (human-paced) | someone notices, runs `colony health --fix-plan`, copy-pastes commands |
-| v1    | minutes             | `colony heal --apply` runs on the first agent's startup or on demand   |
-| v2+   | seconds             | continuous worker loop catches regressions before they propagate       |
+| Phase  | Time-to-Healthy      | Trigger                                                                  |
+| ------ | -------------------- | ------------------------------------------------------------------------ |
+| `v0`   | hours (human-paced)  | someone notices, runs `colony health --fix-plan`, copy-pastes commands   |
+| `v0.x` | hours                | same, but _finding_ the right command is faster (better evidence)        |
+| `v1`   | minutes              | `colony heal --apply` runs on first agent's startup or on demand         |
+| `v2`   | seconds              | continuous worker loop catches regressions before they propagate         |
+| `v3+`  | seconds (cross-repo) | federated substrates flag known-bad patterns before the regression lands |
 
 If a contention sits unresolved for two hours today and for two seconds in v2,
 that's the win. Everything else — federated memory, predictive routing, policy
 files — is a means to that end.
 
+---
+
 ### What Stays the Same
 
-These are non-goals, even at v3+:
+These are non-goals, even at v3+. If any of them break, the system stops being
+Colony and starts being a different product.
 
 - **Local-first by default.** Colony never becomes a hosted control plane. Federation is opt-in and observation bodies stay on the local disk unless the user explicitly syncs them.
-- **Colony does not run agents.** Healing means changing coordination state (claims, handoffs, proposals, sweeps), not launching shells or commanding agents to do work.
+- **Colony does not run agents.** Healing means changing coordination state (claims, handoffs, proposals, sweeps), not launching shells or commanding agents to do work. Runtimes still execute.
 - **Stigmergy over orchestration.** Auto-fixes leave traces (claims, proposals, handoffs) the same way a human or agent would, so the substrate stays inspectable and reversible.
 - **Receipts are the truth.** Every healing action writes to `mcp_metrics` and observations. If you can't `colony search` it later, it didn't happen.
+- **Refusal beats wrong action.** When in doubt, `colony heal --apply` refuses and surfaces the decision to a human. False-positive auto-fixes are worse than missed ones.
+- **Compact first.** Even when Colony heals itself, the read path stays progressive: compact IDs and snippets first, full bodies only when explicitly hydrated. Healing must not bloat the substrate.
 
-If any of these constraints break, the system stops being Colony and starts
-being a different product.
+---
+
+### How to Influence the Roadmap
+
+The shortest path from "I wish Colony did X" to "Colony does X" is using
+Colony on real work, then opening an issue with the **specific signal you
+wished was healed automatically**. Concretely:
+
+- ✅ Run a real multi-agent session
+- ✅ Capture the `colony health --json` output when something felt wrong
+- ✅ Open an issue with the JSON, your manual fix, and the rule you'd want auto-applied
+- ✅ Reference which roadmap line item it maps to (or propose a new one)
+
+The roadmap above is opinionated but not closed. The order of items in any
+phase is negotiable based on which signals are causing the most pain in
+real use.
 
 ---
 
