@@ -1,0 +1,373 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-label="Token savings: Without Colony, an agent handoff burns 30000 tokens re-reading the entire repo. With Colony, the same handoff costs 400 tokens through a compact observation.">
+  <defs>
+    <linearGradient id="leftBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a0a0a"/>
+      <stop offset="100%" stop-color="#0a0204"/>
+    </linearGradient>
+    <linearGradient id="rightBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#04141a"/>
+      <stop offset="100%" stop-color="#020a10"/>
+    </linearGradient>
+    <linearGradient id="meterRed" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7f1d1d"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+    <linearGradient id="meterGreen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#065f46"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="fileDocFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1424"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <radialGradient id="colonyHalo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="redFloor" cx="50%" cy="100%" r="60%">
+      <stop offset="0%" stop-color="#ef4444" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#ef4444" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="glow2" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="dotGlow2" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Single file -->
+    <symbol id="fileDoc" overflow="visible">
+      <rect x="-12" y="-15" width="24" height="30" rx="2" fill="url(#fileDocFill)" stroke="#475569" stroke-width="1"/>
+      <line x1="-8" y1="-9" x2="8" y2="-9" stroke="#475569" stroke-width="0.8"/>
+      <line x1="-8" y1="-4" x2="8" y2="-4" stroke="#475569" stroke-width="0.8"/>
+      <line x1="-8" y1="1" x2="8" y2="1" stroke="#475569" stroke-width="0.8"/>
+      <line x1="-8" y1="6" x2="5" y2="6" stroke="#475569" stroke-width="0.8"/>
+      <line x1="-8" y1="11" x2="7" y2="11" stroke="#475569" stroke-width="0.8"/>
+    </symbol>
+
+    <!-- Compact observation card -->
+    <symbol id="obsCard" overflow="visible">
+      <rect x="-44" y="-32" width="88" height="64" rx="6" fill="#020617" stroke="#10b981" stroke-width="1"/>
+      <line x1="-36" y1="-20" x2="36" y2="-20" stroke="#10b981" stroke-width="0.8" opacity="0.6"/>
+      <line x1="-36" y1="-12" x2="22" y2="-12" stroke="#10b981" stroke-width="0.8" opacity="0.5"/>
+      <line x1="-36" y1="-4" x2="30" y2="-4" stroke="#10b981" stroke-width="0.8" opacity="0.5"/>
+      <line x1="-36" y1="4" x2="18" y2="4" stroke="#10b981" stroke-width="0.8" opacity="0.5"/>
+      <line x1="-36" y1="12" x2="26" y2="12" stroke="#10b981" stroke-width="0.8" opacity="0.5"/>
+      <line x1="-36" y1="20" x2="14" y2="20" stroke="#10b981" stroke-width="0.8" opacity="0.5"/>
+    </symbol>
+
+    <!-- Agent ring -->
+    <symbol id="agentRing2" overflow="visible">
+      <circle r="22" fill="#0f172a" stroke="currentColor" stroke-width="1.5"/>
+    </symbol>
+  </defs>
+
+  <!-- Backgrounds -->
+  <rect x="0" y="0" width="480" height="540" fill="url(#leftBg)"/>
+  <rect x="480" y="0" width="480" height="540" fill="url(#rightBg)"/>
+  <line x1="480" y1="20" x2="480" y2="520" stroke="#1e293b" stroke-width="1" stroke-dasharray="3 5"/>
+
+  <!-- subtle red floor on the left side to convey "burning" -->
+  <rect x="0" y="240" width="480" height="120" fill="url(#redFloor)" opacity="0.5"/>
+
+  <!-- Title -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="480" y="36" text-anchor="middle" fill="#f1f5f9" font-size="20" font-weight="600">A handoff between two agents</text>
+    <text x="480" y="56" text-anchor="middle" fill="#64748b" font-size="12">Same outcome. Two very different token bills.</text>
+  </g>
+
+  <!-- =========== HEADERS =========== -->
+  <g font-family="ui-sans-serif, system-ui, sans-serif">
+    <text x="240" y="92" text-anchor="middle" fill="#fca5a5" font-size="16" font-weight="600">Without Colony</text>
+    <text x="240" y="110" text-anchor="middle" fill="#7f1d1d" font-size="11">replay the world to catch up</text>
+
+    <text x="720" y="92" text-anchor="middle" fill="#6ee7b7" font-size="16" font-weight="600">With Colony</text>
+    <text x="720" y="110" text-anchor="middle" fill="#065f46" font-size="11">read one compact observation</text>
+  </g>
+
+  <!-- ============ LEFT PANEL ============ -->
+
+  <!-- Sending agent: Codex -->
+  <g transform="translate(80 180)" color="#ef4444">
+    <use href="#agentRing2"/>
+    <!-- Codex glyph: >_ -->
+    <text y="5" text-anchor="middle" fill="#fca5a5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700">&gt;_</text>
+    <text y="44" text-anchor="middle" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Codex</text>
+    <text y="58" text-anchor="middle" fill="#7f1d1d" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">runs out of quota</text>
+  </g>
+
+  <!-- File stack (context being dumped) - centered between agents -->
+  <g transform="translate(240 180)">
+    <!-- shake wrapper: small group inside that shakes; outer transform is fixed -->
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0; 1.2 -0.8; -1.2 0.8; 0.8 -1.2; 0 0" dur="0.18s" repeatCount="indefinite"/>
+      <!-- file stack -->
+      <use href="#fileDoc" transform="translate(-22 4) rotate(-8)"/>
+      <use href="#fileDoc" transform="translate(0 0)"/>
+      <use href="#fileDoc" transform="translate(22 4) rotate(7)"/>
+      <!-- "context dump" markers floating up -->
+      <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" fill="#7f1d1d" opacity="0.7">
+        <text x="-30" y="-22">.ts</text>
+        <text x="0" y="-28" text-anchor="middle">git log</text>
+        <text x="28" y="-22">chat</text>
+      </g>
+    </g>
+    <text y="48" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">repo + git log + chat</text>
+  </g>
+
+  <!-- Receiving agent: Claude -->
+  <g transform="translate(400 180)" color="#f59e0b">
+    <use href="#agentRing2"/>
+    <!-- Claude glyph: stylized A -->
+    <g fill="#fcd34d">
+      <path d="M -7 9 L -2 -8 L 2 -8 L 7 9 L 4.5 9 L 1.5 1 L -1.5 1 L -4.5 9 Z"/>
+    </g>
+    <text y="44" text-anchor="middle" fill="#fcd34d" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Claude</text>
+    <text y="58" text-anchor="middle" fill="#92400e" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">re-reads everything</text>
+  </g>
+
+  <!-- Firehose: Codex (102, 180) -> file stack (240, 180) -->
+  <g>
+    <line x1="102" y1="180" x2="218" y2="180" stroke="#7f1d1d" stroke-width="1" opacity="0.35"/>
+    <g filter="url(#glow2)">
+      <circle r="2.5" fill="#ef4444">
+        <animate attributeName="cx" values="102;218" dur="0.7s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="180;180" dur="0.7s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2" fill="#dc2626">
+        <animate attributeName="cx" values="102;218" dur="0.7s" begin="0.18s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="177;177" dur="0.7s" begin="0.18s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2" fill="#f87171">
+        <animate attributeName="cx" values="102;218" dur="0.7s" begin="0.36s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="183;183" dur="0.7s" begin="0.36s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2.5" fill="#ef4444">
+        <animate attributeName="cx" values="102;218" dur="0.7s" begin="0.54s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="178;178" dur="0.7s" begin="0.54s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+  </g>
+
+  <!-- Firehose: file stack (262, 180) -> Claude (378, 180) -->
+  <g>
+    <line x1="262" y1="180" x2="378" y2="180" stroke="#7f1d1d" stroke-width="1" opacity="0.35"/>
+    <g filter="url(#glow2)">
+      <circle r="2.5" fill="#ef4444">
+        <animate attributeName="cx" values="262;378" dur="0.7s" begin="0.35s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="180;180" dur="0.7s" begin="0.35s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2" fill="#dc2626">
+        <animate attributeName="cx" values="262;378" dur="0.7s" begin="0.53s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="177;177" dur="0.7s" begin="0.53s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2" fill="#f87171">
+        <animate attributeName="cx" values="262;378" dur="0.7s" begin="0.71s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="183;183" dur="0.7s" begin="0.71s" repeatCount="indefinite"/>
+      </circle>
+      <circle r="2.5" fill="#ef4444">
+        <animate attributeName="cx" values="262;378" dur="0.7s" begin="0.89s" repeatCount="indefinite"/>
+        <animate attributeName="cy" values="178;178" dur="0.7s" begin="0.89s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+  </g>
+
+  <!-- Token meter (left) - filling up to 30k -->
+  <g transform="translate(60 280)">
+    <text x="0" y="0" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Tokens used</text>
+
+    <rect x="0" y="14" width="360" height="22" rx="11" fill="#1a0a0a" stroke="#7f1d1d" stroke-width="1"/>
+
+    <!-- Meter fill: scales from 0 to 1 over 3.5s, briefly holds full, then resets -->
+    <g transform="translate(0 14)">
+      <rect x="0" y="0" width="360" height="22" rx="11" fill="url(#meterRed)" filter="url(#glow2)" opacity="0.95">
+        <animateTransform attributeName="transform" type="scale" values="0 1; 1 1; 1 1; 0 1" keyTimes="0; 0.7; 0.95; 1" dur="3.5s" repeatCount="indefinite" additive="sum"/>
+      </rect>
+    </g>
+
+    <!-- Tick marks -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9" fill="#475569">
+      <line x1="120" y1="38" x2="120" y2="42" stroke="#475569"/>
+      <text x="120" y="54" text-anchor="middle">10k</text>
+      <line x1="240" y1="38" x2="240" y2="42" stroke="#475569"/>
+      <text x="240" y="54" text-anchor="middle">20k</text>
+      <line x1="360" y1="38" x2="360" y2="42" stroke="#475569"/>
+      <text x="360" y="54" text-anchor="middle">30k</text>
+    </g>
+
+    <!-- Big counter -->
+    <g transform="translate(0 90)">
+      <text x="0" y="0" fill="#fca5a5" font-family="ui-sans-serif, system-ui, sans-serif" font-size="44" font-weight="700">30,000</text>
+      <text x="0" y="20" fill="#7f1d1d" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">tokens per handoff</text>
+      <!-- vector flame indicator (pulsing) -->
+      <g transform="translate(186 -20)" filter="url(#glow2)">
+        <path d="M 0 -10 C 4 -6, 6 -2, 4 4 C 8 0, 10 6, 6 12 C 4 16, -2 17, -5 14 C -9 10, -8 4, -4 0 C -2 -2, -3 -6, 0 -10 Z" fill="#ef4444">
+          <animate attributeName="opacity" values="0.7;1;0.7" dur="1s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 0 -2 C 2 0, 3 3, 1 6 C 3 4, 4 7, 2 10 C 0 12, -2 11, -3 9 C -4 6, -3 3, -1 1 Z" fill="#fbbf24">
+          <animate attributeName="opacity" values="0.6;1;0.6" dur="0.7s" repeatCount="indefinite"/>
+        </path>
+      </g>
+    </g>
+  </g>
+
+  <!-- Cost breakdown chips (left) -->
+  <g transform="translate(60 410)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">
+    <text x="0" y="0" fill="#94a3b8" font-size="11" font-weight="600">What it pays for</text>
+
+    <g transform="translate(0 14)">
+      <rect width="120" height="22" rx="4" fill="#0a0204" stroke="#7f1d1d"/>
+      <text x="8" y="15" fill="#fca5a5">repo re-scan</text>
+    </g>
+    <g transform="translate(128 14)">
+      <rect width="100" height="22" rx="4" fill="#0a0204" stroke="#7f1d1d"/>
+      <text x="8" y="15" fill="#fca5a5">git log replay</text>
+    </g>
+    <g transform="translate(236 14)">
+      <rect width="124" height="22" rx="4" fill="#0a0204" stroke="#7f1d1d"/>
+      <text x="8" y="15" fill="#fca5a5">chat scrollback</text>
+    </g>
+    <g transform="translate(0 42)">
+      <rect width="160" height="22" rx="4" fill="#0a0204" stroke="#7f1d1d"/>
+      <text x="8" y="15" fill="#fca5a5">re-derive prior decisions</text>
+    </g>
+    <g transform="translate(168 42)">
+      <rect width="160" height="22" rx="4" fill="#0a0204" stroke="#7f1d1d"/>
+      <text x="8" y="15" fill="#fca5a5">guess what was claimed</text>
+    </g>
+  </g>
+
+  <!-- ============ RIGHT PANEL ============ -->
+
+  <!-- Sending agent: Codex (right side) -->
+  <g transform="translate(560 180)" color="#10b981">
+    <use href="#agentRing2"/>
+    <text y="5" text-anchor="middle" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700">&gt;_</text>
+    <text y="44" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Codex</text>
+    <text y="58" text-anchor="middle" fill="#065f46" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">writes one obs</text>
+  </g>
+
+  <!-- Colony substrate (compact storage) -->
+  <g transform="translate(720 180)">
+    <circle r="46" fill="url(#colonyHalo)" opacity="0.6">
+      <animate attributeName="r" values="42;52;42" dur="3s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="32" fill="#020617" stroke="#22d3ee" stroke-width="1.5"/>
+    <circle r="32" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.5">
+      <animate attributeName="r" values="30;40;30" dur="2.5s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.6;0;0.6" dur="2.5s" repeatCount="indefinite"/>
+    </circle>
+    <use href="#obsCard" transform="scale(0.55)"/>
+    <text y="58" text-anchor="middle" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">obs_a8f2c1</text>
+  </g>
+
+  <!-- Receiving agent: Claude (right side) -->
+  <g transform="translate(880 180)" color="#22d3ee">
+    <use href="#agentRing2"/>
+    <g fill="#67e8f9">
+      <path d="M -7 9 L -2 -8 L 2 -8 L 7 9 L 4.5 9 L 1.5 1 L -1.5 1 L -4.5 9 Z"/>
+    </g>
+    <text y="44" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Claude</text>
+    <text y="58" text-anchor="middle" fill="#155e75" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">resumes instantly</text>
+  </g>
+
+  <!-- Single tiny green packet: Codex (582, 180) -> Colony (688, 180) -->
+  <g>
+    <line x1="582" y1="180" x2="688" y2="180" stroke="#065f46" stroke-width="1" opacity="0.4"/>
+    <circle r="3.5" fill="#10b981" filter="url(#dotGlow2)">
+      <animate attributeName="cx" values="582;688" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="180;180" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Single tiny cyan packet: Colony (752, 180) -> Claude (858, 180) -->
+  <g>
+    <line x1="752" y1="180" x2="858" y2="180" stroke="#0e7490" stroke-width="1" opacity="0.4"/>
+    <circle r="3.5" fill="#22d3ee" filter="url(#dotGlow2)">
+      <animate attributeName="cx" values="752;858" dur="2s" begin="1s" repeatCount="indefinite"/>
+      <animate attributeName="cy" values="180;180" dur="2s" begin="1s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0;1;1;0" dur="2s" begin="1s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Token meter (right) - tiny green sliver -->
+  <g transform="translate(540 280)">
+    <text x="0" y="0" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">Tokens used</text>
+
+    <rect x="0" y="14" width="360" height="22" rx="11" fill="#04141a" stroke="#065f46" stroke-width="1"/>
+
+    <!-- Tiny green fill - 400/30000 = 1.3% so width = ~5px. Synced to handoff cycle. -->
+    <rect x="0" y="14" width="5" height="22" rx="2" fill="url(#meterGreen)" filter="url(#glow2)">
+      <animate attributeName="opacity" values="0.3;1;1;0.3" keyTimes="0; 0.3; 0.7; 1" dur="3.5s" repeatCount="indefinite"/>
+    </rect>
+
+    <!-- Tick marks (same scale as left) -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9" fill="#475569">
+      <line x1="120" y1="38" x2="120" y2="42" stroke="#475569"/>
+      <text x="120" y="54" text-anchor="middle">10k</text>
+      <line x1="240" y1="38" x2="240" y2="42" stroke="#475569"/>
+      <text x="240" y="54" text-anchor="middle">20k</text>
+      <line x1="360" y1="38" x2="360" y2="42" stroke="#475569"/>
+      <text x="360" y="54" text-anchor="middle">30k</text>
+    </g>
+
+    <!-- "400" label below the sliver -->
+    <g transform="translate(5 36)">
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#10b981" stroke-width="1"/>
+      <text x="0" y="18" text-anchor="middle" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">400</text>
+    </g>
+
+    <!-- Big counter -->
+    <g transform="translate(0 90)">
+      <text x="0" y="0" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="44" font-weight="700">400</text>
+      <text x="0" y="20" fill="#065f46" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">tokens per handoff</text>
+    </g>
+
+    <!-- Savings badge -->
+    <g transform="translate(220 75)" filter="url(#glow2)">
+      <rect x="0" y="-22" width="120" height="44" rx="22" fill="#022c22" stroke="#10b981" stroke-width="1.5">
+        <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="2s" repeatCount="indefinite"/>
+      </rect>
+      <text x="60" y="-3" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700">99% saved</text>
+      <text x="60" y="14" text-anchor="middle" fill="#10b981" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9">~29,600 tokens</text>
+    </g>
+  </g>
+
+  <!-- Cost breakdown chips (right) -->
+  <g transform="translate(540 410)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">
+    <text x="0" y="0" fill="#94a3b8" font-size="11" font-weight="600">What it pays for</text>
+
+    <g transform="translate(0 14)">
+      <rect width="100" height="22" rx="4" fill="#04141a" stroke="#065f46"/>
+      <text x="8" y="15" fill="#6ee7b7">obs_id + branch</text>
+    </g>
+    <g transform="translate(108 14)">
+      <rect width="100" height="22" rx="4" fill="#04141a" stroke="#065f46"/>
+      <text x="8" y="15" fill="#6ee7b7">task + blocker</text>
+    </g>
+    <g transform="translate(216 14)">
+      <rect width="120" height="22" rx="4" fill="#04141a" stroke="#065f46"/>
+      <text x="8" y="15" fill="#6ee7b7">next + evidence</text>
+    </g>
+    <g transform="translate(0 42)">
+      <rect width="200" height="22" rx="4" fill="#04141a" stroke="#065f46"/>
+      <text x="8" y="15" fill="#6ee7b7">already-claimed file scope</text>
+    </g>
+  </g>
+
+  <!-- VS pill -->
+  <g transform="translate(480 180)">
+    <circle r="22" fill="#020617" stroke="#1e293b" stroke-width="1.5"/>
+    <text y="6" text-anchor="middle" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="600">vs</text>
+  </g>
+
+  <!-- Bottom annotations -->
+  <g transform="translate(0 510)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-style="italic">
+    <text x="240" y="0" text-anchor="middle" fill="#7f1d1d">replay everything to recover state</text>
+    <text x="720" y="0" text-anchor="middle" fill="#065f46">progressive hydration: read what you need</text>
+  </g>
+</svg>
