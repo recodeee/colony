@@ -44,10 +44,16 @@ import { registerWorktreeCommand } from './commands/worktree.js';
 export function createProgram(): Command {
   const program = new Command();
 
+  // Commander's .version() flag spec only accepts one short + one long flag.
+  // The original `-v, -V, --version` triple silently dropped the trailing
+  // entries, so plain `colony --version` was rejected as an unknown option
+  // (caught by scripts/e2e-publish.sh check #6). Register the canonical
+  // `-V, --version` pair here; the lowercase `-v` alias is canonicalized
+  // to `-V` in argv before parse.
   program
     .name('colony')
     .description('Cross-agent persistent memory with compressed storage.')
-    .version(__COLONY_VERSION__, '-v, -V, --version');
+    .version(__COLONY_VERSION__, '-V, --version');
 
   registerAgentsCommand(program);
   registerCockpitCommand(program);
@@ -99,6 +105,12 @@ if (isMainEntry()) {
     if (err.code === 'EPIPE') process.exit(0);
     throw err;
   });
+  // Canonicalize the lowercase `-v` shorthand to `-V` so commander's two-flag
+  // `.version()` registration handles it. Pre-empts argv only at the bin
+  // entrypoint, never inside imported helpers.
+  for (let i = 2; i < process.argv.length; i++) {
+    if (process.argv[i] === '-v') process.argv[i] = '-V';
+  }
   createProgram()
     .parseAsync(process.argv)
     .catch((err) => {
