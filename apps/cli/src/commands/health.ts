@@ -1134,9 +1134,18 @@ function readinessSummaryPayload(
     },
     execution_safety: {
       status: executionStatus,
-      evidence: `claim-before-edit ${formatPercent(
-        claimBeforeEdit.claim_before_edit_ratio,
-      )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+); live contentions ${liveContention.live_file_contentions}, dirty ${liveContention.dirty_contended_files}`,
+      // When the all-time ratio cannot be computed (status !== 'available'
+      // because some edits lacked file_path metadata) but the recent
+      // window has enough samples to score, surface the recent rate so
+      // operators see real signal instead of a bare `n/a`. The headline
+      // still leads with `n/a` so the gating reason stays visible.
+      evidence:
+        claimBeforeEdit.claim_before_edit_ratio === null &&
+        claimBeforeEdit.recent_claim_before_edit_rate !== null
+          ? `claim-before-edit n/a (recent ${claimBeforeEdit.recent_window_hours}h: ${formatPercent(claimBeforeEdit.recent_claim_before_edit_rate)}; target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+); live contentions ${liveContention.live_file_contentions}, dirty ${liveContention.dirty_contended_files}`
+          : `claim-before-edit ${formatPercent(
+              claimBeforeEdit.claim_before_edit_ratio,
+            )} (target ${formatPercent(TARGET_CLAIM_BEFORE_EDIT)}+); live contentions ${liveContention.live_file_contentions}, dirty ${liveContention.dirty_contended_files}`,
       ...(claimBeforeEdit.root_cause ? { root_cause: claimBeforeEdit.root_cause } : {}),
     },
     queen_plan_readiness: {
@@ -2069,6 +2078,26 @@ function lifecycleBridgeRootCause(input: {
     input.edits_without_claim_before > 0 &&
     claimMismatchCount > 0
   ) {
+    // The 24h window can keep dragging mismatch buckets long after the
+    // bridge has been re-wired. If the recent window has zero fresh
+    // pre_tool_use_missing edits, the mismatches are leftover stale
+    // telemetry — surface as `old_telemetry_pollution` so the headline
+    // and Next-fixes guidance match the existing
+    // `narrow --hours when checking current bridge state` recovery
+    // path instead of demanding another lifecycle bridge install.
+    if (
+      noFreshBadEdits &&
+      input.recent_hook_capable_edits >= LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS
+    ) {
+      return {
+        kind: 'old_telemetry_pollution',
+        summary: OLD_TELEMETRY_POLLUTION_ROOT_CAUSE,
+        evidence,
+        evidence_counters: counters,
+        action:
+          'Wait for older telemetry to age out of the selected health window, or narrow --hours when checking current bridge state.',
+      };
+    }
     return {
       kind: 'lifecycle_claim_mismatch',
       summary: LIFECYCLE_CLAIM_MISMATCH_ROOT_CAUSE,

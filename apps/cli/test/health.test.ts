@@ -496,6 +496,68 @@ describe('colony health payload', () => {
     expect(formatColonyHealthOutput(payload)).toContain('root cause: Lifecycle bridge unavailable');
   });
 
+  it('treats stale claim_mismatch buckets as old telemetry when the recent window is clean', () => {
+    const recentSince = NOW - 3_600_000;
+    // edit_tool_calls > edits_with_file_path so status='not_available' and
+    // the all-time claim_before_edit_ratio is null — exactly the user
+    // scenario that produces the bare `n/a` headline.
+    const stalePathMismatchStats: ClaimBeforeEditStats = {
+      edit_tool_calls: 35,
+      edits_with_file_path: 30,
+      edits_claimed_before: 25,
+      claim_miss_reasons: {
+        pre_tool_use_missing: 0,
+        no_claim_for_file: 0,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 0,
+        path_mismatch: 5,
+        worktree_path_mismatch: 0,
+      },
+      pre_tool_use_signals: 30,
+    };
+    const cleanRecentStats: ClaimBeforeEditStats = {
+      edit_tool_calls: 12,
+      edits_with_file_path: 12,
+      edits_claimed_before: 12,
+      claim_miss_reasons: {
+        pre_tool_use_missing: 0,
+        no_claim_for_file: 0,
+      },
+      pre_tool_use_signals: 12,
+    };
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: Array.from({ length: 12 }, (_, index) =>
+          call(
+            index + 1,
+            'codex-fresh-session',
+            'mcp__colony__task_claim_file',
+            NOW - 60_000 + index,
+          ),
+        ),
+        claimBeforeEdit: stalePathMismatchStats,
+        claimBeforeEditStatsBySince: (since) =>
+          since >= recentSince ? cleanRecentStats : stalePathMismatchStats,
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.task_claim_file_before_edits).toMatchObject({
+      old_telemetry_pollution: true,
+      recent_pre_tool_use_missing: 0,
+      recent_claim_before_edit_rate: 1,
+    });
+    expect(payload.readiness_summary.execution_safety.root_cause).toMatchObject({
+      kind: 'old_telemetry_pollution',
+      summary: expect.stringContaining('older edit telemetry'),
+    });
+    expect(payload.readiness_summary.execution_safety.evidence).toBe(
+      'claim-before-edit n/a (recent 1h: 100%; target 50%+); live contentions 0, dirty 0',
+    );
+  });
+
   it('marks the recent claim-before-edit rate n/a when there are no recent edits', () => {
     const recentSince = NOW - 3_600_000;
     const payload = buildColonyHealthPayload(
