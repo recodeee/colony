@@ -265,13 +265,13 @@ decay or be swept.
 ## Token Savings
 
 Colony saves tokens by making coordination compact, searchable, and
-progressively hydrated. The table below is a hand-authored reference model for
-common agent loops. Live numbers are recorded by the MCP server on every wrapped
-tool call into the `mcp_metrics` SQLite table, so teams can compare the
-reference story with their own usage.
+progressively hydrated. `colony gain` shows live `mcp_metrics` receipts first,
+then a shared reference model for common agent loops. Live numbers are recorded
+by the MCP server on every wrapped tool call into the `mcp_metrics` SQLite
+table.
 
 ```bash
-colony gain                       # CLI: reference + live, last 7 days
+colony gain                       # CLI: live + reference, last 7 days
 colony gain --hours 24 --json     # last 24 hours as JSON
 colony gain --operation search    # filter live rows to one tool name
 ```
@@ -289,6 +289,15 @@ colony gain --operation search    # filter live rows to one tool name
 | Review task timeline | 4x | 12,000 | 900 | 93% |
 | Search result shape | 8x | 5,000 | 150 | 97% |
 | Ready-work selection | 3x | 9,000 | 700 | 92% |
+| Unread message triage | 4x | 10,000 | 600 | 94% |
+| Claim-before-edit check | 8x | 4,000 | 450 | 89% |
+| Plan subtask claim | 2x | 12,000 | 1,100 | 91% |
+| Spec context recall | 2x | 14,000 | 1,600 | 89% |
+| Health/adoption diagnosis | 1x | 16,000 | 1,800 | 89% |
+| Examples pattern lookup | 2x | 11,000 | 1,000 | 91% |
+| Blocker recurrence | 2x | 10,000 | 900 | 91% |
+| Drift / failed-verification recovery | 2x | 13,000 | 1,400 | 89% |
+| Quota-exhausted handoff | 1x | 22,000 | 500 | 98% |
 | Storage at rest (per observation) | 1x | 1,000 | 300 | 70% |
 
 These rows are estimates, not a benchmark claim. Their purpose is to show where
