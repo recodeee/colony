@@ -460,7 +460,7 @@ describe('colony health next fixes', () => {
           claim_miss_reasons: {
             no_claim_for_file: 0,
             branch_mismatch: 12,
-            pre_tool_use_missing: 0,
+            pre_tool_use_missing: 1,
           },
         },
       }),
@@ -476,6 +476,10 @@ describe('colony health next fixes', () => {
       kind: 'lifecycle_claim_mismatch',
       summary:
         'Lifecycle claim mismatch: file paths are present, but lifecycle claims do not match edit scope.',
+      action:
+        'Reclaim the edited files in the same repo, branch, worktree, and session; then rerun lifecycle health.',
+      command:
+        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
       evidence_counters: {
         runtime_bridge_status: 'available',
         hook_capable_edits: 12,
@@ -486,6 +490,16 @@ describe('colony health next fixes', () => {
     });
     const json = JSON.parse(formatColonyHealthOutput(payload, { json: true }));
     expect(json.task_claim_file_before_edits.root_cause.kind).toBe('lifecycle_claim_mismatch');
+    expect(json.readiness_summary.execution_safety.root_cause).toMatchObject({
+      action:
+        'Reclaim the edited files in the same repo, branch, worktree, and session; then rerun lifecycle health.',
+      command:
+        'colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+    });
+    const nextFixes = outputSection(formatColonyHealthOutput(payload), 'Next fixes');
+    expect(nextFixes).toContain(
+      'tool: mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim in same repo/branch/worktree" })',
+    );
   });
 
   it('reports no hook-capable edits when recent claims exist but no edit event exists yet', () => {
@@ -733,10 +747,10 @@ describe('colony health next fixes', () => {
     expect(nextFixes).toContain('2. quota relay accept/release');
     expect(nextFixes).toContain('3. Queen activation/claim');
     expect(nextFixes).toContain(
-      'Wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
+      'Metric unreliable: wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
     );
     expect(nextFixes).toContain(
-      'Accept the quota relay, decline/reroute it, or release expired quota-pending claims',
+      'Resolve quota-pending ownership first: accept if taking over, decline/reroute if not, or release expired quota claims with audit.',
     );
     expect(nextFixes).toContain(
       'Reactivate Queen planning or claim/requeue the existing plan subtask',
@@ -752,10 +766,19 @@ describe('colony health next fixes', () => {
     );
     expect(focus).toContain('top blocker: OMX runtime bridge: unavailable');
     expect(focus).toContain(
-      'next action: Wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
+      'next action: Metric unreliable: wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
     );
     expect(focus).toContain(
       'cmd:  colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+    );
+    expect(focus).not.toContain('hidden follow-ups:');
+    expect(focus).toContain('next commands:');
+    expect(focus).toContain(
+      'execution_safety: cmd: colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json',
+    );
+    expect(focus).toContain('signal_evaporation: cmd: colony inbox --json');
+    expect(focus).toContain(
+      'queen_plan_readiness: tool: mcp__colony__task_ready_for_agent({ agent: "<agent>", session_id: "<session_id>", repo_root: "<repo_root>" }) -> mcp__colony__task_plan_claim_subtask(...) or mcp__colony__queen_plan_goal(...)',
     );
     expect(text).toContain('measurement: measurable_edits=1, unmeasurable_edits=0');
     expect(text).toContain('reason: insufficient runtime metadata or bridge unavailable');
@@ -842,7 +865,8 @@ describe('colony health next fixes', () => {
     const text = formatColonyHealthOutput(payload);
     const focus = outputSection(text, 'Health focus');
     expect(focus).toContain('top blocker: OMX runtime bridge: unavailable');
-    expect(focus).toContain('hidden follow-ups:');
+    expect(focus).not.toContain('hidden follow-ups:');
+    expect(focus).toContain('next commands:');
     const nextFixes = outputSection(text, 'Next fixes');
     expect(nextFixes).toContain('1. OMX runtime bridge');
     expect(nextFixes).toContain('2. quota relay accept/release');

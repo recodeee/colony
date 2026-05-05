@@ -188,6 +188,10 @@ quota/session stop.
 `colony health` shows whether agents are only reading Colony or actually
 coordinating through it.
 
+The first screen is action-first: bad readiness areas are grouped into the
+next exact command or MCP call, and lower-priority follow-ups stay hidden until
+`--verbose`.
+
 <p align="center">
   <img src="docs/assets/colony-health.svg" alt="Colony health readiness summary" width="900" />
 </p>
@@ -230,6 +234,10 @@ telemetry cannot be trusted:
 | `lifecycle_paths_missing` | PreToolUse exists, but edit events lack `file_path` | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
 | `lifecycle_claim_mismatch` | paths exist, but claim metadata does not match edit scope | `colony bridge lifecycle --json --ide <ide> --cwd <repo_root> < colony-omx-lifecycle-v1.pre.json` |
 | `no_hook_capable_edits` | the selected window has no file edit events to diagnose | `colony health --hours 1 --json` |
+
+When `task_claim_file before edits` says `metric unreliable`, fix runtime
+bridge or metadata first. Do not treat a bad claim ratio as agent discipline
+until `omx_runtime_bridge.status` is fresh and edit events carry paths.
 
 Safe stale-claim cleanup is opt-in because releasing a claim changes who may edit
 a file:

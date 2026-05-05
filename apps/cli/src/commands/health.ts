@@ -88,8 +88,13 @@ const LIFECYCLE_BRIDGE_COMMAND =
 const LIFECYCLE_INSTALL_VERIFY_COMMAND =
   'colony install --ide <ide>  # then restart; pnpm smoke:codex-omx-pretool; colony health --hours 1 --json';
 const LIFECYCLE_HEALTH_VERIFY_COMMAND = 'colony health --hours 1 --json';
+const OMX_RUNTIME_SUMMARY_COMMAND =
+  'colony bridge runtime-summary --json --repo-root <repo_root> < .omx/state/colony-runtime-summary.json';
 const INSUFFICIENT_RUNTIME_METADATA_REASON = 'insufficient runtime metadata or bridge unavailable';
 const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
+const CLAIM_MISMATCH_TOOL_CALL =
+  'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim in same repo/branch/worktree" })';
+const STALE_CLAIM_SWEEP_COMMAND = 'colony coordination sweep --json';
 
 const CONVERSIONS = [
   ['hivemind_context', 'attention_inbox'],
@@ -787,7 +792,7 @@ export function formatColonyHealthOutput(
     kleur.dim(`window: last ${payload.window_hours}h`),
     '',
     kleur.bold('Health focus'),
-    ...formatHealthFocus(payload, visibleHints),
+    ...formatHealthFocus(payload, visibleHints, { verbose: Boolean(options.verbose) }),
     '',
     kleur.bold('Readiness summary'),
     ...formatReadinessSummary(payload.readiness_summary),
@@ -1087,10 +1092,7 @@ function readinessSummaryPayload(
     claimBeforeEdit.session_binding_missing === 0 &&
     claimBeforeEdit.root_cause?.kind === 'old_telemetry_pollution' &&
     claimBeforeEdit.recent_claim_before_edit_rate !== null &&
-    isAtOrAboveTarget(
-      claimBeforeEdit.recent_claim_before_edit_rate,
-      TARGET_CLAIM_BEFORE_EDIT,
-    );
+    isAtOrAboveTarget(claimBeforeEdit.recent_claim_before_edit_rate, TARGET_CLAIM_BEFORE_EDIT);
   const executionStatus: ReadinessStatus = onlyOldTelemetryPollution
     ? 'ok'
     : hasLiveContentionFailure ||
@@ -1217,18 +1219,24 @@ function formatReadinessStatus(status: ReadinessStatus): string {
   return kleur.yellow(label);
 }
 
-function formatHealthFocus(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
+function formatHealthFocus(
+  payload: ColonyHealthPayload,
+  visibleHints: ActionHint[],
+  options: { verbose: boolean },
+): string[] {
   const badReadiness = Object.entries(payload.readiness_summary)
     .filter(([, item]) => item.status === 'bad')
     .map(([scope]) => scope);
-  const hiddenFollowups = Math.max(0, payload.action_hints.length - visibleHints.length);
   const lines = [
     `  status: ${badReadiness.length === 0 ? 'clear' : `${badReadiness.length} bad readiness area(s)`}`,
   ];
 
   if (badReadiness.length > 0) lines.push(`  bad areas: ${badReadiness.join(', ')}`);
-  if (hiddenFollowups > 0) {
-    lines.push(`  hidden follow-ups: ${hiddenFollowups} (run with --verbose)`);
+  if (options.verbose) {
+    const hiddenFollowups = Math.max(0, payload.action_hints.length - visibleHints.length);
+    if (hiddenFollowups > 0) {
+      lines.push(`  hidden follow-ups: ${hiddenFollowups}`);
+    }
   }
 
   const topHint = visibleHints[0];
@@ -1243,7 +1251,39 @@ function formatHealthFocus(payload: ColonyHealthPayload, visibleHints: ActionHin
   );
   if (topHint.tool_call) lines.push(kleur.dim(`  tool: ${topHint.tool_call}`));
   if (topHint.command) lines.push(kleur.dim(`  cmd:  ${topHint.command}`));
+  lines.push(...formatBadAreaCommands(payload, visibleHints, { verbose: options.verbose }));
   return lines;
+}
+
+function formatBadAreaCommands(
+  payload: ColonyHealthPayload,
+  visibleHints: ActionHint[],
+  options: { verbose: boolean },
+): string[] {
+  const badScopes = new Set(
+    Object.entries(payload.readiness_summary)
+      .filter(([, item]) => item.status === 'bad')
+      .map(([scope]) => scope as ReadinessScope),
+  );
+  const commands = visibleHints
+    .filter((hint) => badScopes.has(hint.readiness_scope))
+    .filter((hint) => hint.command || hint.tool_call)
+    .reduce<Array<{ scope: ReadinessScope; hint: ActionHint }>>((acc, hint) => {
+      if (!options.verbose && acc.some((entry) => entry.scope === hint.readiness_scope)) {
+        return acc;
+      }
+      acc.push({ scope: hint.readiness_scope, hint });
+      return acc;
+    }, []);
+
+  if (commands.length === 0) return [];
+  return [
+    '  next commands:',
+    ...commands.map(({ scope, hint }) => {
+      const next = hint.command ? `cmd: ${hint.command}` : `tool: ${hint.tool_call}`;
+      return `    ${scope}: ${next}`;
+    }),
+  ];
 }
 
 function formatQuotaRelayTopAction(actions: QuotaRelayActionsPayload): string {
@@ -2037,7 +2077,7 @@ function lifecycleBridgeRootCause(input: {
       evidence,
       evidence_counters: counters,
       action:
-        'Install or refresh the lifecycle bridge so health can see runtime summaries and PreToolUse telemetry.',
+        'Metric unreliable until the runtime summary and lifecycle bridge are current; refresh/install the bridge, restart the editor, then rerun health.',
       command: LIFECYCLE_INSTALL_VERIFY_COMMAND,
     };
   }
@@ -2126,7 +2166,7 @@ function lifecycleBridgeRootCause(input: {
       evidence,
       evidence_counters: counters,
       action:
-        'Fix lifecycle claim metadata so file, repo, branch, worktree, and session match the edit event.',
+        'Reclaim the edited files in the same repo, branch, worktree, and session; then rerun lifecycle health.',
       command: LIFECYCLE_BRIDGE_COMMAND,
     };
   }
@@ -2798,7 +2838,7 @@ function quotaRelayActionHint(payload: SignalHealthPayload): {
     return {
       current: String(payload.quota_pending_claims),
       action:
-        'Accept the quota relay, decline/reroute it, or release expired quota-pending claims before treating the lane as ordinary weak ownership.',
+        'Resolve quota-pending ownership first: accept if taking over, decline/reroute if not, or release expired quota claims with audit.',
       tool_call:
         'mcp__colony__attention_inbox({ agent: <agent>, session_id: <session_id>, repo_root: <repo_root> })',
       command: 'colony inbox --json',
@@ -2809,6 +2849,7 @@ function quotaRelayActionHint(payload: SignalHealthPayload): {
 
   const action = formatQuotaRelayTopAction(payload.quota_relay_actions);
   const details = `${payload.quota_pending_claims} quota-pending claim(s); top action: ${action}`;
+  const recommendedAction = payload.quota_relay_actions.top_action;
   const toolCall =
     top.tool_call ??
     quotaRelayToolCall('decline/reroute', top.task_id, top.handoff_observation_id) ??
@@ -2816,13 +2857,34 @@ function quotaRelayActionHint(payload: SignalHealthPayload): {
   const declineHint = top.decline_tool_call
     ? ` If you will not take it, decline/reroute with ${top.decline_tool_call}.`
     : '';
+  const actionText =
+    recommendedAction === 'release expired'
+      ? 'Release expired quota-pending claims with task_claim_quota_release_expired; this keeps audit history and removes active blockers.'
+      : recommendedAction === 'accept'
+        ? `Accept the quota relay with task_claim_quota_accept only if you will continue the lane; otherwise decline/reroute it before treating ownership as free.${declineHint}`
+        : recommendedAction === 'decline/reroute'
+          ? 'Decline/reroute the quota relay before treating the claim as available.'
+          : 'Inspect quota-pending ownership and resolve it before treating the lane as ordinary weak ownership.';
   return {
     current: details,
-    action: `Top action: ${action}. Accept the quota relay, decline/reroute it, or release expired quota-pending claims before treating the lane as ordinary weak ownership.${declineHint}`,
+    action: `Top action: ${action}. ${actionText}`,
     tool_call: toolCall,
     command: top.command,
     inspect: `${top.command}, ${toolCall}`,
   };
+}
+
+function runtimeBridgeAction(payload: ColonyHealthPayloadWithoutHints): string {
+  if (payload.omx_runtime_bridge.status === 'stale') {
+    return 'Metric unreliable: refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits before judging claim failures.';
+  }
+  return 'Metric unreliable: wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.';
+}
+
+function runtimeBridgeCommand(payload: ColonyHealthPayloadWithoutHints): string {
+  return payload.omx_runtime_bridge.status === 'stale'
+    ? OMX_RUNTIME_SUMMARY_COMMAND
+    : LIFECYCLE_BRIDGE_COMMAND;
 }
 
 function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint[] {
@@ -2925,18 +2987,15 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       status: 'bad',
       current: payload.omx_runtime_bridge.status,
       target: 'runtime summary/lifecycle bridge available',
-      action:
-        payload.omx_runtime_bridge.status === 'stale'
-          ? 'Refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits.'
-          : 'Wire the OMX runtime summary/lifecycle bridge so health can measure live edits, quota exits, and pre_tool_use before recommending claim discipline.',
+      action: runtimeBridgeAction(payload),
       readiness_scope: 'execution_safety',
       priority: 4,
-      command: LIFECYCLE_BRIDGE_COMMAND,
+      command: runtimeBridgeCommand(payload),
       prompt: codexPrompt({
         goal: 'wire the OMX runtime summary and lifecycle bridge',
         current: `OMX runtime bridge ${payload.omx_runtime_bridge.status} in colony health`,
         inspect:
-          'colony health --json, colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/hooks/src/lifecycle-envelope.ts',
+          'colony health --json, colony bridge runtime-summary --json --repo-root <repo_root>, colony bridge lifecycle --json --ide <ide> --cwd <repo_root>, packages/hooks/src/lifecycle-envelope.ts',
         acceptance:
           'omx_runtime_bridge.status is available and lifecycle pre_tool_use appears before file mutation',
       }),
@@ -3116,6 +3175,9 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       action: claimBeforeEdit.root_cause.action,
       readiness_scope: 'execution_safety',
       priority: 5,
+      ...(claimBeforeEdit.root_cause.kind === 'lifecycle_claim_mismatch'
+        ? { tool_call: CLAIM_MISMATCH_TOOL_CALL }
+        : {}),
       command: claimBeforeEdit.root_cause.command ?? LIFECYCLE_BRIDGE_COMMAND,
       prompt: codexPrompt({
         goal: 'wire the runtime lifecycle bridge before file mutation',
@@ -3385,16 +3447,16 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       current: String(payload.signal_health.stale_claims),
       target: '0',
       action:
-        'Run colony coordination sweep/rescue, then release, hand off, or reclaim stale ownership.',
+        'Run a dry stale-claim sweep; release only safe inactive/non-dirty claims with --release-safe-stale-claims, and hand off or reclaim the rest.',
       readiness_scope: 'signal_evaporation',
       priority: 11,
       tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
-      command: 'colony coordination sweep --json',
+      command: STALE_CLAIM_SWEEP_COMMAND,
       prompt: codexPrompt({
         goal: 'clear stale ownership before agents trust current file claims',
         current: `${payload.signal_health.stale_claims} stale claims`,
         inspect:
-          'colony coordination sweep --json, mcp__colony__rescue_stranded_scan, mcp__colony__hivemind_context',
+          'colony coordination sweep --json, colony coordination sweep --release-safe-stale-claims --json, mcp__colony__rescue_stranded_scan, mcp__colony__hivemind_context',
         acceptance: 'stale claims are released, handed off, or reclaimed with audit evidence',
       }),
     });
@@ -3519,8 +3581,7 @@ function visibleActionHints(
   payload: ColonyHealthPayload,
   options: { verbose: boolean },
 ): ActionHint[] {
-  const byPriority = (hints: ActionHint[]) =>
-    [...hints].sort((a, b) => a.priority - b.priority || a.metric.localeCompare(b.metric));
+  const byPriority = (hints: ActionHint[]) => [...hints].sort(compareActionHints);
   const directBlockerHints = (hints: ActionHint[]) =>
     hints.filter(
       (hint) =>
@@ -3560,6 +3621,28 @@ function visibleActionHints(
   return byPriority(
     payload.action_hints.filter((hint) => hint.readiness_scope === 'adoption_followup'),
   );
+}
+
+function compareActionHints(left: ActionHint, right: ActionHint): number {
+  return (
+    actionHintScopeRank(left) - actionHintScopeRank(right) ||
+    left.priority - right.priority ||
+    left.metric.localeCompare(right.metric)
+  );
+}
+
+function actionHintScopeRank(hint: ActionHint): number {
+  if (hint.metric === 'old claim-before-edit telemetry') return 1.5;
+  return readinessScopeRank(hint.readiness_scope);
+}
+
+function readinessScopeRank(scope: ReadinessScope): number {
+  if (scope === 'execution_safety') return 0;
+  if (scope === 'signal_evaporation') return 1;
+  if (scope === 'queen_plan_readiness') return 2;
+  if (scope === 'working_state_migration') return 3;
+  if (scope === 'coordination_readiness') return 4;
+  return 5;
 }
 
 function adoptionThresholds(
@@ -3933,8 +4016,7 @@ function queenPlanStateSummaries(
     const archivedSubtaskCount = siblings.filter(
       (subtask) => tasksById.get(subtask.task_id)?.status === 'archived',
     ).length;
-    const remainingSubtaskCount =
-      siblings.length - completedSubtaskCount - archivedSubtaskCount;
+    const remainingSubtaskCount = siblings.length - completedSubtaskCount - archivedSubtaskCount;
     const readySubtaskCount = siblings.filter((subtask) =>
       isReadyPlanSubtask(subtask, siblings),
     ).length;
