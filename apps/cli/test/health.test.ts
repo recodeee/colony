@@ -2235,14 +2235,12 @@ describe('colony health payload', () => {
         tool_call: expect.stringContaining('mcp__colony__task_ready_for_agent'),
         prompt: expect.stringContaining('task_ready_for_agent'),
       }),
-      expect.objectContaining({
-        metric: 'task_ready_for_agent -> claim',
-        current: '0%',
-        target: '30%+',
-        action: expect.stringContaining('task_plan_claim_subtask'),
-        tool_call: expect.stringContaining('mcp__colony__task_plan_claim_subtask'),
-        prompt: expect.stringContaining('task_plan_claim_subtask'),
-      }),
+      // task_ready_for_agent -> claim hint is suppressed here: the fixture
+      // has a task_ready_for_agent call with no follow-up
+      // task_plan_claim_subtask call, but a `plan-subtask-claim` observation
+      // with status='claimed' on sub-2 — the auto_claim signature. The new
+      // gate in healthActionHints prevents the false-positive hint when the
+      // server's auto_claim is doing the claiming silently.
       expect.objectContaining({
         metric: 'claim-before-edit',
         current: '0%',
