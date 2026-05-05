@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 function readToolDescription(relativePath: string, toolName: string): string {
@@ -7,6 +7,20 @@ function readToolDescription(relativePath: string, toolName: string): string {
   const description = match?.[1];
   if (description === undefined) throw new Error(`description not found for ${toolName}`);
   return description;
+}
+
+function registeredToolNames(): string[] {
+  const toolsDir = new URL('../src/tools/', import.meta.url);
+  const names = new Set<string>();
+  for (const file of readdirSync(toolsDir)) {
+    if (!file.endsWith('.ts')) continue;
+    const source = readFileSync(new URL(file, toolsDir), 'utf8');
+    for (const match of source.matchAll(/server\.tool\(\s*['"]([^'"]+)/g)) {
+      const name = match[1];
+      if (name !== undefined) names.add(name);
+    }
+  }
+  return [...names].sort();
 }
 
 describe('ToolSearch descriptions', () => {
@@ -54,5 +68,13 @@ describe('ToolSearch descriptions', () => {
     expect(leading).toContain('log what i am doing');
     expect(leading).toContain('notepad replacement');
     expect(description).toContain('repo_root/branch');
+  });
+
+  it('documents every registered Colony MCP tool in docs/mcp.md', () => {
+    const docs = readFileSync(new URL('../../../docs/mcp.md', import.meta.url), 'utf8');
+    const documentedTools = new Set([...docs.matchAll(/^## `([^`]+)`/gm)].map((match) => match[1]));
+    const missing = registeredToolNames().filter((name) => !documentedTools.has(name));
+
+    expect(missing).toEqual([]);
   });
 });
