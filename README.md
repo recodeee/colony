@@ -161,6 +161,10 @@ or next agent doesn't need the original chat window.**
 
 #### GitGuardEx (`gx`) — keeps work in worktrees, not on `main`
 
+<p>
+  <a href="https://github.com/recodeee/gitguardex/stargazers"><img alt="GitGuardEx GitHub stars" src="https://img.shields.io/github/stars/recodeee/gitguardex?style=flat-square&label=GitGuardEx%20stars&color=38bdf8&labelColor=0b1220" /></a>
+</p>
+
 [GitGuardEx](https://github.com/recodeee/gitguardex) gives every agent its
 own worktree on an `agent/*` branch. Claims happen in the worktree, edits
 happen in the worktree, the PR opens from the worktree, and after merge the
@@ -181,6 +185,10 @@ That's `gx` reporting back through Colony.
 
 #### OpenSpec — the spec change is the task
 
+<p>
+  <a href="https://github.com/recodeee/openspec/stargazers"><img alt="OpenSpec GitHub stars" src="https://img.shields.io/github/stars/recodeee/openspec?style=flat-square&label=OpenSpec%20stars&color=22c55e&labelColor=0b1220" /></a>
+</p>
+
 [OpenSpec](https://github.com/recodeee/openspec) holds the proposal-and-delta
 representation of every change. Before code is written, the change exists as
 `openspec/changes/<change-id>/proposal.md` plus a `tasks.md` and spec deltas.
@@ -198,19 +206,31 @@ openspec/changes/show-live-savings/
 After PR lands, the change is archived under `openspec/changes/archive/`,
 keeping the historical record even after the working files move on.
 
+#### oh-my-codex-colony — the bridge between runtime and receipt
+
+<p>
+  <a href="https://github.com/recodeee/oh-my-codex-colony/stargazers"><img alt="oh-my-codex-colony GitHub stars" src="https://img.shields.io/github/stars/recodeee/oh-my-codex-colony?style=flat-square&label=oh--my--codex--colony%20stars&color=8b5cf6&labelColor=0b1220" /></a>
+</p>
+
+[oh-my-codex-colony](https://github.com/recodeee/oh-my-codex-colony) is the
+runtime bridge: oh-my-codex runs the agent loop, Colony stores the claim,
+handoff, health, and memory receipts, and the bridge keeps both sides speaking
+the same compact coordination language.
+
 ### Why this triplet matters
 
-| Without this triplet                                                    | With Colony + `gx` + OpenSpec                                                |
+| Without this chain                                                      | With Colony + `gx` + OpenSpec + the bridge                                   |
 | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | Agents finish work and the context dies in the chat window.             | The receipt persists as an observation, searchable forever.                  |
 | Agents edit on `main`, collisions are common, rollbacks are scary.      | Every agent works in an `agent/*` worktree; merge or discard is one command. |
 | "Why was this changed?" requires `git log` archeology and chat history. | The OpenSpec change ID points at the proposal, tasks, and deltas.            |
+| Runtime state lives apart from coordination state.                      | The oh-my-codex-colony bridge makes runtime state and Colony receipts align. |
 | Every handoff replays repo + git log + chat (~30k tokens).              | Every handoff is the structured receipt (~400 tokens).                       |
 
 The structured response isn't a Colony feature — it's a contract that Colony,
-`gx`, and OpenSpec all happen to agree on. Anything else that wants to
-participate (a new runtime, a CI bot, a code-review agent) just needs to
-emit the same five sections.
+`gx`, OpenSpec, and the oh-my-codex-colony bridge all happen to agree on.
+Anything else that wants to participate (a new runtime, a CI bot, a code-review
+agent) just needs to emit the same five sections.
 
 ---
 
