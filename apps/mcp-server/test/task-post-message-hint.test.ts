@@ -52,6 +52,9 @@ describe('task_post directed message hints', () => {
 
     const result = await call<{
       id: number;
+      route_to_task_message?: boolean;
+      misrouted_directed_coordination?: boolean;
+      replacement_tool?: string;
       suggested_tool?: string;
       suggested_call?: string;
       suggested_args?: {
@@ -69,6 +72,9 @@ describe('task_post directed message hints', () => {
       content: 'Claude please confirm whether the merge blocker needs a handoff.',
     });
 
+    expect(result.route_to_task_message).toBe(true);
+    expect(result.misrouted_directed_coordination).toBe(true);
+    expect(result.replacement_tool).toBe('task_message');
     expect(result.suggested_tool).toBe('mcp__colony__task_message');
     expect(result.suggested_args).toEqual({
       task_id,
@@ -76,12 +82,13 @@ describe('task_post directed message hints', () => {
       agent: 'codex',
       to_agent: 'claude',
       urgency: 'needs_reply',
-      content: '<short directed request>',
+      content: 'Claude please confirm whether the merge blocker needs a handoff.',
     });
     expect(result.suggested_call).toContain('mcp__colony__task_message');
     expect(result.suggested_call).toContain('agent: "codex"');
     expect(result.suggested_call).toContain('to_agent: "claude"');
     expect(result.suggested_call).toContain('urgency: "needs_reply"');
+    expect(result.suggested_call).toContain('merge blocker needs a handoff');
     expect(store.storage.taskObservationsByKind(task_id, 'message', 10)).toHaveLength(0);
     expect(store.storage.getObservation(result.id)).toMatchObject({
       kind: 'blocker',

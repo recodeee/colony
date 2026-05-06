@@ -72,13 +72,19 @@ export {
   RUFLO_BRIDGE_EVENT_FAMILIES,
   RUFLO_BRIDGE_EVENT_FAMILY_BY_NAME,
   RUFLO_BRIDGE_EVENT_NAMES,
+  deriveRufloLearningObservations,
   mapRufloEventToColonyObservation,
+  mapRufloEventToColonyObservations,
   type RufloBridgeEvent,
   type RufloBridgeEventFamily,
   type RufloBridgeEventFamilyForName,
   type RufloBridgeEventName,
+  type RufloBridgeMappedObservation,
   type RufloBridgeObservation,
   type RufloBridgeObservationMetadata,
+  type RufloDerivedObservation,
+  type RufloDerivedObservationKind,
+  type RufloDerivedObservationMetadata,
 } from './ruflo-bridge.js';
 export { hybridRank } from './ranker.js';
 export {

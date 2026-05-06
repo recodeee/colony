@@ -220,7 +220,24 @@ Example stalled-lane payload. Stalled lanes stay compact: owner, branch, task, a
       "owner": "agent/unknown",
       "activity": "dead",
       "activity_summary": "Heartbeat stale for 7m 28s.",
-      "worktree_path": "/abs/repo/.omx/agent-worktrees/repo__codex__docs-budget-contract"
+      "worktree_path": "/abs/repo/.omx/agent-worktrees/repo__codex__docs-budget-contract",
+      "next_action": "Inspect lane evidence, then take over or ignore if already cleaned up.",
+      "suggested_actions": [
+        {
+          "action": "inspect",
+          "reason": "Read branch/worktree/task evidence before taking ownership.",
+          "command": "git -C /abs/repo/.omx/agent-worktrees/repo__codex__docs-budget-contract status --short --branch"
+        },
+        {
+          "action": "takeover",
+          "reason": "Owner appears stalled or dead; explicit takeover is safer than waiting.",
+          "command": "colony lane takeover agent/unknown --reason 'stalled lane takeover'"
+        },
+        {
+          "action": "ignore",
+          "reason": "Use only after branch/PR/task evidence shows the lane is already closed."
+        }
+      ]
     }
   ],
   "budget": {
@@ -914,7 +931,7 @@ When a `note` or `decision` looks like future work, `task_post` returns a `recom
 }
 ```
 
-`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id, hint }`, plus `recommendation` for future-work notes/decisions. The hint points unknown-`task_id` working-state writes to `task_note_working`, and also says `For directed agent coordination, use task_message.` when a post names an agent and asks for action or reply.
+`kind` ∈ `question | answer | decision | blocker | note | failed_approach | blocked_path | conflict_warning | reverted_solution`. Returns `{ id, hint }`, plus `recommendation` for future-work notes/decisions. The hint points unknown-`task_id` working-state writes to `task_note_working`, and also says `For directed agent coordination, use task_message.` when a post names an agent and asks for action or reply. Directed posts also return `route_to_task_message: true`, `misrouted_directed_coordination: true`, `replacement_tool: "task_message"`, and a `suggested_args.content` value copied from the compacted post text so callers can reroute without inventing placeholder content.
 
 ## `task_note_working`
 
@@ -1799,7 +1816,7 @@ List published plans with a sub-task rollup.
 }
 ```
 
-Returns `[{ plan_slug, repo_root, spec_task_id, title, created_at, subtask_counts: { available, claimed, completed, blocked }, subtasks: [...], next_available: [...] }]`. `next_available` is the list of sub-tasks whose status is `available` **and** whose `depends_on` chain is fully `completed`. `capability_match` filters plans where at least one sub-task in `next_available` has the matching `capability_hint`.
+Returns `[{ plan_slug, repo_root, spec_task_id, registry_status, title, created_at, subtask_counts: { available, claimed, completed, blocked }, subtasks: [...], next_available: [...] }]`. `registry_status` is `registered` when the plan root task exists and `subtask-only` when the rollup was recovered from live sub-task rows after the root registry row went missing. `next_available` is the list of sub-tasks whose status is `available` **and** whose `depends_on` chain is fully `completed`. `capability_match` filters plans where at least one sub-task in `next_available` has the matching `capability_hint`.
 
 ## `task_ready_for_agent`
 

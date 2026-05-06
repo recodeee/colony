@@ -549,6 +549,9 @@ function taskMessageSuggestionForPost(
   post: { task_id: number; session_id: string; kind: string; content: string },
 ):
   | {
+      route_to_task_message: true;
+      misrouted_directed_coordination: true;
+      replacement_tool: 'task_message';
       suggested_tool: 'mcp__colony__task_message';
       suggested_call: string;
       suggested_args: {
@@ -571,9 +574,12 @@ function taskMessageSuggestionForPost(
     agent: postingAgentForSession(store, post.task_id, post.session_id),
     to_agent: toAgent,
     urgency: 'needs_reply' as const,
-    content: '<short directed request>',
+    content: suggestedTaskMessageContent(post.content),
   };
   return {
+    route_to_task_message: true,
+    misrouted_directed_coordination: true,
+    replacement_tool: 'task_message',
     suggested_tool: 'mcp__colony__task_message',
     suggested_call: `mcp__colony__task_message({ agent: ${JSON.stringify(
       args.agent,
@@ -584,6 +590,10 @@ function taskMessageSuggestionForPost(
     )} })`,
     suggested_args: args,
   };
+}
+
+function suggestedTaskMessageContent(content: string): string {
+  return truncateForRecommendation(normalizePostContent(content), 180);
 }
 
 function directedPostTargetAgent(

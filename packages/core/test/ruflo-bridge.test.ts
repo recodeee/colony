@@ -4,7 +4,9 @@ import {
   RUFLO_BRIDGE_EVENT_FAMILY_BY_NAME,
   RUFLO_BRIDGE_EVENT_NAMES,
   type RufloBridgeEvent,
+  deriveRufloLearningObservations,
   mapRufloEventToColonyObservation,
+  mapRufloEventToColonyObservations,
 } from '../src/index.js';
 
 describe('Ruflo bridge schema', () => {
@@ -121,5 +123,60 @@ describe('Ruflo bridge schema', () => {
       ruflo_event_name: 'tools/result',
       ruflo_run_id: 'run-tool',
     });
+  });
+
+  it('derives task outcome observations from completed Ruflo work', () => {
+    const event: RufloBridgeEvent<'swarm/task-completed'> = {
+      name: 'swarm/task-completed',
+      run_id: 'run-456',
+      agent_id: 'agent-9',
+      task_id: 7,
+      success: true,
+      duration_ms: 2400,
+      summary: 'finished verification lane',
+    };
+
+    expect(mapRufloEventToColonyObservations(event)).toEqual([
+      expect.objectContaining({ kind: 'ruflo-bridge', task_id: 7 }),
+      expect.objectContaining({
+        kind: 'task-outcome',
+        task_id: 7,
+        content: expect.stringContaining('success=true'),
+        metadata: expect.objectContaining({
+          source: 'ruflo',
+          ruflo_observation_kind: 'task-outcome',
+          ruflo_event_name: 'swarm/task-completed',
+          task_id: 7,
+        }),
+      }),
+    ]);
+  });
+
+  it('derives learned patterns from Ruflo memory writes', () => {
+    const observations = deriveRufloLearningObservations({
+      name: 'memory/write',
+      run_id: 'run-memory',
+      task_id: 8,
+      pattern: 'handoff before broad verification reduces contention',
+      confidence: 0.82,
+      domain: 'coordination',
+      quality: 0.9,
+      summary: 'should not be preferred over explicit pattern',
+    });
+
+    expect(observations).toEqual([
+      expect.objectContaining({
+        kind: 'learned-pattern',
+        task_id: 8,
+        content: expect.stringContaining('handoff before broad verification'),
+        metadata: expect.objectContaining({
+          source: 'ruflo',
+          ruflo_observation_kind: 'learned-pattern',
+          confidence: 0.82,
+          domain: 'coordination',
+          quality: 0.9,
+        }),
+      }),
+    ]);
   });
 });

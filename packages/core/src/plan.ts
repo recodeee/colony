@@ -1,4 +1,4 @@
-import type { ObservationRow } from '@colony/storage';
+import type { ObservationRow, TaskRow } from '@colony/storage';
 import type { MemoryStore } from './memory-store.js';
 import { TaskThread } from './task-thread.js';
 
@@ -36,6 +36,7 @@ export interface PlanInfo {
   plan_slug: string;
   repo_root: string;
   spec_task_id: number;
+  registry_status: 'registered' | 'subtask-only';
   title: string;
   created_at: number;
   subtask_counts: Record<SubtaskStatus, number>;
@@ -182,21 +183,32 @@ export function listPlans(store: MemoryStore, opts: ListPlansOptions = {}): Plan
   // for a generous bound. A schema-level branch-prefix index is the proper
   // long-term fix once the lane proves out.
   const allTasks = store.storage.listTasks(2000);
-  const planRoots = allTasks
-    .filter((t) => PLAN_ROOT_BRANCH_RE.test(t.branch))
-    .filter((t) => !opts.repo_root || t.repo_root === opts.repo_root);
+  const scopedTasks = allTasks.filter((t) => !opts.repo_root || t.repo_root === opts.repo_root);
+  const planRoots = scopedTasks.filter((t) => PLAN_ROOT_BRANCH_RE.test(t.branch));
+  const planRootsByKey = new Map<string, TaskRow>();
+  for (const root of planRoots) {
+    const slug = root.branch.match(PLAN_ROOT_BRANCH_RE)?.[1];
+    if (slug) planRootsByKey.set(planKey(root.repo_root, slug), root);
+  }
 
-  const plans = planRoots
-    .map((root): PlanInfo | null => {
-      const slugMatch = root.branch.match(PLAN_ROOT_BRANCH_RE);
-      if (!slugMatch) return null;
-      const slug = slugMatch[1];
+  const subtaskTasksByKey = new Map<string, TaskRow[]>();
+  for (const task of scopedTasks) {
+    const match = task.branch.match(SUBTASK_BRANCH_RE);
+    const slug = match?.[1];
+    if (!slug) continue;
+    const key = planKey(task.repo_root, slug);
+    const bucket = subtaskTasksByKey.get(key) ?? [];
+    bucket.push(task);
+    subtaskTasksByKey.set(key, bucket);
+  }
+
+  const plans = [...new Set([...planRootsByKey.keys(), ...subtaskTasksByKey.keys()])]
+    .map((key): PlanInfo | null => {
+      const [repoRoot, slug] = splitPlanKey(key);
       if (!slug) return null;
+      const root = planRootsByKey.get(key) ?? null;
 
-      const subtaskTasks = allTasks.filter((t) => {
-        const m = t.branch.match(SUBTASK_BRANCH_RE);
-        return Boolean(m && m[1] === slug);
-      });
+      const subtaskTasks = subtaskTasksByKey.get(key) ?? [];
 
       const subtasks = annotateWaveMetadata(
         subtaskTasks
@@ -223,10 +235,11 @@ export function listPlans(store: MemoryStore, opts: ListPlansOptions = {}): Plan
 
       return {
         plan_slug: slug,
-        repo_root: root.repo_root,
-        spec_task_id: root.id,
+        repo_root: root?.repo_root ?? repoRoot,
+        spec_task_id: root?.id ?? subtaskTasks[0]?.id ?? 0,
+        registry_status: root ? 'registered' : 'subtask-only',
         title: subtasks[0]?.parent_plan_title ?? slug,
-        created_at: root.created_at,
+        created_at: root?.created_at ?? Math.min(...subtaskTasks.map((task) => task.created_at)),
         subtask_counts: counts,
         subtasks,
         next_available: nextAvailable,
@@ -242,6 +255,15 @@ export function listPlans(store: MemoryStore, opts: ListPlansOptions = {}): Plan
         p.next_available.some((s) => s.capability_hint === opts.capability_match),
     )
     .slice(0, limit);
+}
+
+function planKey(repoRoot: string, slug: string): string {
+  return `${repoRoot}\0${slug}`;
+}
+
+function splitPlanKey(key: string): [string, string] {
+  const [repoRoot, slug] = key.split('\0');
+  return [repoRoot ?? '', slug ?? ''];
 }
 
 function annotateWaveMetadata(subtasks: SubtaskInfo[]): SubtaskInfo[] {

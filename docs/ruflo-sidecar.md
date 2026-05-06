@@ -41,6 +41,8 @@ Ruflo tools/events
 The bridge should translate Ruflo output into Colony-owned records:
 
 - observations for compact event history and searchable debriefs
+- derived task-outcome observations for completed or failed Ruflo task/agent events
+- derived learned-pattern observations for Ruflo memory writes with pattern or summary text
 - task threads for user-visible work items and decisions
 - handoffs for resumable ownership transfer
 - claims for file or lane ownership

@@ -9,6 +9,7 @@ export type OpenSpecSyncIssueCode =
   | 'missing-pr-evidence'
   | 'missing-verification-evidence'
   | 'merged-pr-cleanup-unchecked'
+  | 'unlinked-openspec-plan'
   | 'stale-openspec-checkbox';
 
 export type OpenSpecSyncSeverity = 'warning' | 'error';
@@ -97,7 +98,7 @@ export function openspecSyncStatus(input: OpenSpecSyncStatusInput): OpenSpecSync
 
   for (const task of tasks) {
     const changeExists = task.metadata.openspec_change_path
-      ? existsSync(resolveOpenSpecPath(repoRoot, task.metadata.openspec_change_path))
+      ? openspecChangeExists(repoRoot, task.metadata.openspec_change_path)
       : false;
 
     if (task.requires_full_openspec && !changeExists) issues.push(missingOpenSpecChangeIssue(task));
@@ -124,6 +125,9 @@ export function openspecSyncStatus(input: OpenSpecSyncStatusInput): OpenSpecSync
 
   for (const checkbox of checkboxes.filter((entry) => !entry.checked)) {
     const task = findTaskForCheckbox(tasks, checkbox, repoRoot);
+    if (!task && checkbox.source === 'plan') {
+      issues.push(unlinkedOpenSpecPlanIssue(repoRoot, checkbox));
+    }
     if (task?.colony_complete) continue;
     if (isCleanupCheckbox(checkbox) && task?.metadata.merge_state?.toUpperCase() === 'MERGED') {
       continue;
@@ -175,7 +179,7 @@ function readTaskState(store: MemoryStore, task: TaskRow, repoRoot: string): Ope
     branch: task.branch,
     status: task.status,
     metadata,
-    colony_complete: isColonyComplete(task, timeline),
+    colony_complete: isColonyComplete(task, timeline, metadata),
     requires_full_openspec: requiresFullOpenSpec(task, timeline, metadata),
     last_activity_ts: lastActivity,
   };
@@ -257,8 +261,13 @@ function inferOpenSpecLinkFromBranch(
   };
 }
 
-function isColonyComplete(task: TaskRow, timeline: ObservationRow[]): boolean {
+function isColonyComplete(
+  task: TaskRow,
+  timeline: ObservationRow[],
+  metadata: OpenSpecTaskSyncMetadata,
+): boolean {
   if (['completed', 'archived', 'auto-archived'].includes(task.status.toLowerCase())) return true;
+  if (metadata.merge_state?.toUpperCase() === 'MERGED' && metadata.pr_url) return true;
   return timeline.some((row) => {
     if (row.kind === 'plan-subtask-claim') {
       return parseMetadata(row.metadata).status === 'completed';
@@ -316,9 +325,10 @@ function parsePlanCheckboxes(repoRoot: string): ParsedCheckbox[] {
   if (!existsSync(root)) return [];
   return readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .flatMap((entry) =>
-      parseCheckboxFile(entry.name, 'plan', join(root, entry.name, 'checkpoints.md')),
-    );
+    .flatMap((entry) => [
+      ...parseCheckboxFile(entry.name, 'plan', join(root, entry.name, 'checkpoints.md')),
+      ...parseCheckboxFile(entry.name, 'plan', join(root, entry.name, 'tasks.md')),
+    ]);
 }
 
 function parseCheckboxFile(
@@ -532,6 +542,22 @@ function staleCheckboxIssue(
   };
 }
 
+function unlinkedOpenSpecPlanIssue(repoRoot: string, checkbox: ParsedCheckbox): OpenSpecSyncIssue {
+  return {
+    code: 'unlinked-openspec-plan',
+    severity: 'warning',
+    openspec_plan_slug: checkbox.slug,
+    file_path: relativePath(repoRoot, checkbox.path),
+    line: checkbox.line,
+    checkbox_text: checkbox.text,
+    reason: 'OpenSpec plan row is open, but no linked Colony task or plan registry row was found.',
+    repair_actions: [
+      `Publish or repair Colony plan slug ${checkbox.slug} with task_plan_publish/task_plan_claim_subtask, or post evidence with openspec_plan_slug=${checkbox.slug}.`,
+      `If work is already closed, update ${relativePath(repoRoot, checkbox.path)}:${checkbox.line} and record PR/verification evidence before archive.`,
+    ],
+  };
+}
+
 function isCleanupCheckbox(checkbox: ParsedCheckbox): boolean {
   return /\b(PR|merge|MERGED|cleanup|sandbox|worktree|archive)\b/i.test(checkbox.text);
 }
@@ -562,6 +588,27 @@ function verificationEvidence(value: unknown): string[] {
 
 function resolveOpenSpecPath(repoRoot: string, path: string): string {
   return path.startsWith('/') ? path : join(repoRoot, path);
+}
+
+function openspecChangeExists(repoRoot: string, path: string): boolean {
+  const resolved = resolveOpenSpecPath(repoRoot, path);
+  if (existsSync(resolved)) return true;
+  const relativeResolved = relativePath(repoRoot, resolved).replaceAll('\\', '/');
+  const slug = relativeResolved.match(/^openspec\/changes\/([^/]+)\/CHANGE\.md$/)?.[1];
+  if (!slug) return false;
+  return archivedOpenSpecChangeExists(join(repoRoot, 'openspec', 'changes', 'archive'), slug);
+}
+
+function archivedOpenSpecChangeExists(root: string, slug: string): boolean {
+  if (!existsSync(root)) return false;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === slug && existsSync(join(path, 'CHANGE.md'))) return true;
+      if (archivedOpenSpecChangeExists(path, slug)) return true;
+    }
+  }
+  return false;
 }
 
 function relativePath(repoRoot: string, path: string): string {
