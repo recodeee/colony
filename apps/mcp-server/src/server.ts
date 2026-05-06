@@ -62,7 +62,7 @@ export function buildServer(
   // The stdio MCP server is spawned per client session, so env + cwd
   // identify the caller; upsertActiveSession merges with whatever a hook
   // writer may have produced and preserves richer task previews.
-  installActiveSessionHeartbeat(server, store);
+  installActiveSessionHeartbeat(server, store, settings);
 
   // tri-state: undefined = not yet attempted; null = unavailable (provider=none or load failed)
   let embedder: Embedder | null | undefined = undefined;
@@ -79,7 +79,7 @@ export function buildServer(
     return embedder;
   };
 
-  const heartbeat = createHeartbeatWrapper(store);
+  const heartbeat = createHeartbeatWrapper(store, settings);
   const metrics = createMetricsWrapper(store);
   const ctx: ToolContext = {
     store,

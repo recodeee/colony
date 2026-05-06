@@ -1,4 +1,7 @@
-import { quotaSafeOperatingContract } from '@colony/config';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { type Settings, quotaSafeOperatingContract, resolveDataDir } from '@colony/config';
 import {
   type AttentionBudgetOutput,
   type AttentionItem,
@@ -140,11 +143,65 @@ function kickForagingScan(store: MemoryStore, input: HookInput): void {
   if (!cwd) return;
   const cli = process.argv[1];
   if (!cli) return;
+  if (!claimForagingSessionStartScan(settings, cwd)) return;
   try {
     spawnNodeScript(cli, ['foraging', 'scan', '--cwd', cwd]);
   } catch {
+    releaseForagingSessionStartScan(settings, cwd);
     // Best-effort. Foraging is not load-bearing for the hook's primary job.
   }
+}
+
+export function claimForagingSessionStartScan(
+  settings: Settings,
+  cwd: string,
+  now = Date.now(),
+): boolean {
+  const minIntervalMs = settings.foraging.sessionStartScanMinIntervalMs;
+  if (minIntervalMs <= 0) return true;
+
+  const markerPath = foragingSessionStartMarkerPath(settings, cwd);
+  try {
+    const lastStartedAt = readForagingSessionStartMarker(markerPath);
+    if (lastStartedAt !== null && now - lastStartedAt < minIntervalMs) return false;
+    if (existsSync(markerPath)) unlinkSync(markerPath);
+    mkdirSync(dirname(markerPath), { recursive: true });
+    writeFileSync(markerPath, `${JSON.stringify({ cwd, last_started_at: now })}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+    return true;
+  } catch (err) {
+    return errorCode(err) !== 'EEXIST';
+  }
+}
+
+function releaseForagingSessionStartScan(settings: Settings, cwd: string): void {
+  const markerPath = foragingSessionStartMarkerPath(settings, cwd);
+  try {
+    if (existsSync(markerPath)) unlinkSync(markerPath);
+  } catch {}
+}
+
+function foragingSessionStartMarkerPath(settings: Settings, cwd: string): string {
+  const key = createHash('sha256').update(cwd).digest('hex').slice(0, 24);
+  return join(resolveDataDir(settings.dataDir), 'foraging-session-start', `${key}.json`);
+}
+
+function readForagingSessionStartMarker(markerPath: string): number | null {
+  try {
+    const parsed = JSON.parse(readFileSync(markerPath, 'utf8')) as Record<string, unknown>;
+    const value = parsed.last_started_at;
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function errorCode(err: unknown): string {
+  return typeof err === 'object' && err !== null && 'code' in err
+    ? String((err as { code?: unknown }).code)
+    : '';
 }
 
 export function buildForagingPreface(store: MemoryStore, input: Pick<HookInput, 'cwd'>): string {

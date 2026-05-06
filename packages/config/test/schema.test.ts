@@ -20,6 +20,8 @@ describe('SettingsSchema', () => {
     expect(parsed.foraging.proposalHalfLifeMinutes).toBe(60);
     expect(parsed.foraging.proposalNoiseFloor).toBe(0.3);
     expect(parsed.foraging.promotionThreshold).toBe(2.5);
+    expect(parsed.foraging.sessionStartScanMinIntervalMs).toBe(300_000);
+    expect(parsed.runtime.activeSessionReconcileMinIntervalMs).toBe(5_000);
     expect(parsed.fileHeatHalfLifeMinutes).toBe(30);
     expect(parsed.claimStaleMinutes).toBe(240);
     expect(parsed.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);
@@ -52,6 +54,8 @@ describe('SettingsSchema', () => {
     expect(defaultSettings.foraging.proposalHalfLifeMinutes).toBe(60);
     expect(defaultSettings.foraging.proposalNoiseFloor).toBe(0.3);
     expect(defaultSettings.foraging.promotionThreshold).toBe(2.5);
+    expect(defaultSettings.foraging.sessionStartScanMinIntervalMs).toBe(300_000);
+    expect(defaultSettings.runtime.activeSessionReconcileMinIntervalMs).toBe(5_000);
     expect(defaultSettings.fileHeatHalfLifeMinutes).toBe(30);
     expect(defaultSettings.claimStaleMinutes).toBe(240);
     expect(defaultSettings.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);

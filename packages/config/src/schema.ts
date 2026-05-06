@@ -60,6 +60,19 @@ export const SettingsSchema = z
       .describe(
         'Minutes between automatic coordination-sweep passes in the worker. Each pass downgrades stale claims and releases expired quota-pending claims so health metrics self-heal without manual intervention. Set to 0 to disable.',
       ),
+    runtime: z
+      .object({
+        activeSessionReconcileMinIntervalMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(5_000)
+          .describe(
+            'Minimum milliseconds between active-session reconciliation scans inside one MCP server process. Set to 0 to reconcile on every tool call.',
+          ),
+      })
+      .default({ activeSessionReconcileMinIntervalMs: 5_000 })
+      .describe('Runtime load-shedding controls for multi-agent coordination surfaces.'),
     rejectProtectedBranchClaims: z
       .boolean()
       .default(true)
@@ -218,6 +231,14 @@ export const SettingsSchema = z
           .boolean()
           .default(true)
           .describe('Fire-and-forget the scanner when SessionStart fires.'),
+        sessionStartScanMinIntervalMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(300_000)
+          .describe(
+            'Minimum milliseconds between automatic SessionStart foraging scans for the same cwd. Set to 0 to scan on every SessionStart.',
+          ),
         proposalHalfLifeMinutes: z
           .number()
           .positive()
@@ -246,6 +267,7 @@ export const SettingsSchema = z
         maxFileBytes: 200_000,
         maxFilesPerSource: 50,
         scanOnSessionStart: true,
+        sessionStartScanMinIntervalMs: 300_000,
         proposalHalfLifeMinutes: 60,
         proposalNoiseFloor: 0.3,
         promotionThreshold: 2.5,
