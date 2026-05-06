@@ -8,19 +8,19 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/recodeee/colony/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/recodeee/colony/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
-  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm version" src="https://img.shields.io/npm/v/%40imdeadpool%2Fcolony-cli?style=flat-square&label=npm" /></a>
-  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40imdeadpool%2Fcolony-cli?style=flat-square&label=downloads" /></a>
-  <a href="https://scorecard.dev/viewer/?uri=github.com/recodeee/colony"><img alt="OpenSSF Scorecard" src="https://api.securityscorecards.dev/projects/github.com/recodeee/colony/badge" /></a>
+  <a href="https://github.com/recodeee/colony/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/recodeee/colony/ci.yml?branch=main&style=flat-square&label=ci&labelColor=0b1220" /></a>
+  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm package status" src="https://img.shields.io/badge/npm-unpublished-f59e0b?style=flat-square&labelColor=0b1220" /></a>
+  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm downloads status" src="https://img.shields.io/badge/downloads-after%20publish-64748b?style=flat-square&labelColor=0b1220" /></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/recodeee/colony"><img alt="OpenSSF Scorecard status" src="https://img.shields.io/badge/openssf-pending-64748b?style=flat-square&labelColor=0b1220" /></a>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/recodeee/colony?style=flat-square" /></a>
-  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb?style=flat-square" />
-  <a href="https://github.com/recodeee/colony/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/recodeee/colony?style=flat-square" /></a>
-  <a href="https://github.com/recodeee/colony/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/recodeee/colony/main?style=flat-square" /></a>
-  <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-16a34a?style=flat-square" />
-  <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed?style=flat-square" />
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/recodeee/colony?style=flat-square&color=10b981&labelColor=0b1220" /></a>
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb?style=flat-square&labelColor=0b1220" />
+  <a href="https://github.com/recodeee/colony/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/recodeee/colony?style=flat-square&color=38bdf8&labelColor=0b1220" /></a>
+  <a href="https://github.com/recodeee/colony/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/recodeee/colony/main?style=flat-square&color=22c55e&labelColor=0b1220" /></a>
+  <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-14b8a6?style=flat-square&labelColor=0b1220" />
+  <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-8b5cf6?style=flat-square&labelColor=0b1220" />
 </p>
 
 <p align="center">
