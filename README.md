@@ -2,18 +2,25 @@
   <img src="docs/assets/colony-logo.png" alt="Colony — a stone-carved queen ant colony with the COORDINATE, CLAIM, HEALTH, and MEMORY pillars" width="160" />
 </p>
 
-<h1 align="center">Colony</h1>
-
 <p align="center">
   <strong>Local-first coordination for fleets of coding agents.</strong><br/>
   Claims, handoffs, plans, health, and memory for Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and other agent runtimes.
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-111827.svg" /></a>
-  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb.svg" />
-  <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-16a34a.svg" />
-  <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed.svg" />
+  <a href="https://github.com/recodeee/colony/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/recodeee/colony/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
+  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm version" src="https://img.shields.io/npm/v/%40imdeadpool%2Fcolony-cli?style=flat-square&label=npm" /></a>
+  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40imdeadpool%2Fcolony-cli?style=flat-square&label=downloads" /></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/recodeee/colony"><img alt="OpenSSF Scorecard" src="https://api.securityscorecards.dev/projects/github.com/recodeee/colony/badge" /></a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/recodeee/colony?style=flat-square" /></a>
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb?style=flat-square" />
+  <a href="https://github.com/recodeee/colony/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/recodeee/colony?style=flat-square" /></a>
+  <a href="https://github.com/recodeee/colony/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/recodeee/colony/main?style=flat-square" /></a>
+  <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-16a34a?style=flat-square" />
+  <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed?style=flat-square" />
 </p>
 
 <p align="center">
@@ -25,6 +32,23 @@ npm install -g @imdeadpool/colony-cli
 colony install --ide codex
 colony health
 ```
+
+## Release Notes
+
+### `v0.x` - Current Patch Line
+
+Colony is in the v0 hardening line. Upcoming patches focus on making the
+shipped coordination loop easier to trust in real multi-agent runs.
+
+- Patch adoption visibility: keep `colony health`, the local viewer, and
+  `mcp_metrics` receipts aligned so gaps are visible without digging through
+  SQLite.
+- Patch workflow hygiene: make claims, task posts, handoffs, quota cleanup, and
+  stale-session pruning clearer in status surfaces before they create duplicate
+  work.
+- Patch release confidence: keep README badges, publish smoke checks, and
+  `@imdeadpool/colony-cli` package metadata current so users can see CI, npm
+  version, downloads, license, and supply-chain posture before installing.
 
 Colony is **not a hosted control plane** and it does not run your agents. Codex,
 Claude Code, Cursor, OMX, dmux, and other runtimes still execute work. Colony
