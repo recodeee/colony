@@ -659,7 +659,7 @@ pnpm build
 
 Before merging changes:
 
-````bash
+```bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
 ```
 
@@ -1114,4 +1114,7 @@ MIT © Imdeadpool
 ```
 
 ```
-````
+
+```
+
+```
