@@ -107,6 +107,7 @@ describe('gain command output', () => {
     expect(output).toContain('Errors: 1 (50%)');
     expect(output).toContain('Cost total: $0.000125');
     expect(output).toContain('Needs attention: 1x search TASK_NOT_FOUND - task 6 not found');
+    expect(output).toContain('Top spend: search 75 tokens across 2 calls');
     expect(output).toContain('Operations');
     expect(output).toContain('OK');
     expect(output).toContain('Tok total');
@@ -312,6 +313,10 @@ describe('gain command output', () => {
       output.indexOf('colony gain — live comparison model'),
     );
     expect(output).toContain('Search result shape');
+    expect(output).toContain('Gain focus');
+    expect(output).toContain('Coverage: 1 / 1 live calls (100%)');
+    expect(output).toContain('Saved: 4.9k saved');
+    expect(output).toContain('Top saving: Search result shape 4.9k saved across 1 call');
     expect(output).toContain('Live matched total');
     expect(output).not.toContain('Static total / session');
   });
