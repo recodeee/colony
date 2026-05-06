@@ -378,7 +378,11 @@ function activeTaskMatchesForSession(
   const sessionMatches = matchesForTasks(store, tasks, agent, 'session_id', (participants) =>
     participants.find((row) => row.session_id === opts.session_id && row.left_at === null),
   );
-  if (sessionMatches.length > 0) return sortCandidates(sessionMatches);
+  const hasScopedBranch = scopedRepoRoot !== undefined || scopedBranch !== undefined;
+  const scopedSessionMatches = hasScopedBranch
+    ? sessionMatches.filter((task) => taskMatchesScope(task, scopedRepoRoot, scopedBranch))
+    : sessionMatches;
+  if (scopedSessionMatches.length > 0) return sortCandidates(scopedSessionMatches);
 
   if (scopedRepoRoot !== undefined && scopedBranch !== undefined) {
     const branchMatches = matchesForTasks(
@@ -393,7 +397,11 @@ function activeTaskMatchesForSession(
   if (worktreeScopes.length > 0) {
     const worktreeMatches = matchesForTasks(
       store,
-      tasks.filter((task) => taskMatchesWorktreeScope(task, worktreeScopes)),
+      tasks.filter(
+        (task) =>
+          (scopedBranch === undefined || task.branch === scopedBranch) &&
+          taskMatchesWorktreeScope(task, worktreeScopes),
+      ),
       agent,
       'worktree',
     );
@@ -402,15 +410,18 @@ function activeTaskMatchesForSession(
 
   const agentMatches = matchesForTasks(
     store,
-    scopedRepoRoot === undefined
-      ? tasks
-      : tasks.filter((task) => resolve(task.repo_root) === resolve(scopedRepoRoot)),
+    tasks.filter(
+      (task) =>
+        (scopedRepoRoot === undefined || resolve(task.repo_root) === resolve(scopedRepoRoot)) &&
+        (scopedBranch === undefined || task.branch === scopedBranch),
+    ),
     agent,
     'agent',
     (participants) =>
       participants.find((row) => row.left_at === null && normalizeAgent(row.agent) === agent),
   );
-  return sortCandidates(agentMatches);
+  if (agentMatches.length > 0) return sortCandidates(agentMatches);
+  return hasScopedBranch ? [] : sortCandidates(sessionMatches);
 }
 
 function matchesForTasks(
