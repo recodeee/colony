@@ -116,4 +116,77 @@ describe('embed loop', () => {
     // exhaust the "does the file path look right?" check regardless of state.
     expect(existsSync(dir)).toBe(true);
   });
+
+  it('avoids full missing-embedding scans while the observation high-water is unchanged', async () => {
+    let fullScans = 0;
+    let incrementalScans = 0;
+    const fullScan = store.storage.observationsMissingEmbeddings.bind(store.storage);
+    const incrementalScan = store.storage.observationsMissingEmbeddingsAfter.bind(store.storage);
+    store.storage.observationsMissingEmbeddings = (...args) => {
+      fullScans += 1;
+      return fullScan(...args);
+    };
+    store.storage.observationsMissingEmbeddingsAfter = (...args) => {
+      incrementalScans += 1;
+      return incrementalScan(...args);
+    };
+
+    const handle = startEmbedLoop({
+      store,
+      embedder: mockEmbedder('mock-model', 4),
+      settings: buildSettings(),
+      idleTickMs: 20,
+      fullScanIntervalMs: 10_000,
+    });
+
+    const deadline = Date.now() + 500;
+    while (Date.now() < deadline && fullScans === 0) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await new Promise((r) => setTimeout(r, 80));
+    await handle.stop();
+
+    expect(fullScans).toBe(1);
+    expect(incrementalScans).toBe(0);
+  });
+
+  it('uses incremental scans for observations inserted after a clean full scan', async () => {
+    let fullScans = 0;
+    let incrementalScans = 0;
+    const fullScan = store.storage.observationsMissingEmbeddings.bind(store.storage);
+    const incrementalScan = store.storage.observationsMissingEmbeddingsAfter.bind(store.storage);
+    store.storage.observationsMissingEmbeddings = (...args) => {
+      fullScans += 1;
+      return fullScan(...args);
+    };
+    store.storage.observationsMissingEmbeddingsAfter = (...args) => {
+      incrementalScans += 1;
+      return incrementalScan(...args);
+    };
+
+    store.startSession({ id: 'sess', ide: 'test', cwd: '/tmp' });
+    const handle = startEmbedLoop({
+      store,
+      embedder: mockEmbedder('mock-model', 4),
+      settings: buildSettings(),
+      idleTickMs: 20,
+      fullScanIntervalMs: 10_000,
+    });
+
+    const scanDeadline = Date.now() + 500;
+    while (Date.now() < scanDeadline && fullScans === 0) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    store.addObservation({ session_id: 'sess', kind: 'note', content: 'new observation' });
+
+    const embedDeadline = Date.now() + 1000;
+    while (Date.now() < embedDeadline && store.storage.countEmbeddings() < 1) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await handle.stop();
+
+    expect(store.storage.countEmbeddings()).toBe(1);
+    expect(fullScans).toBe(1);
+    expect(incrementalScans).toBeGreaterThan(0);
+  });
 });

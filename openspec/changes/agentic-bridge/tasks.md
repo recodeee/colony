@@ -2,7 +2,7 @@
 
 ## Phase 1: Reflexion Wave
 
-- [ ] Define reflexion capture contracts for self-critique, decision review,
+- [x] Define reflexion capture contracts for self-critique, decision review,
   and follow-up materialization.
 - [ ] Add validation coverage for reflexion spec deltas before behavior work.
 

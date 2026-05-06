@@ -128,6 +128,37 @@ afterEach(() => {
 });
 
 describe('SessionStart predictive suggestion preface', () => {
+  it('coalesces automatic foraging scans across bursty SessionStart hooks', () => {
+    const settings = {
+      ...defaultSettings,
+      dataDir: join(dir, 'colony-home'),
+      foraging: {
+        ...defaultSettings.foraging,
+        enabled: true,
+        sessionStartScanMinIntervalMs: 60_000,
+      },
+    };
+
+    expect(claimForagingSessionStartScan(settings, repo, 1_000)).toBe(true);
+    expect(claimForagingSessionStartScan(settings, repo, 2_000)).toBe(false);
+    expect(claimForagingSessionStartScan(settings, repo, 61_001)).toBe(true);
+  });
+
+  it('allows every automatic foraging scan when the cooldown is disabled', () => {
+    const settings = {
+      ...defaultSettings,
+      dataDir: join(dir, 'colony-home-disabled'),
+      foraging: {
+        ...defaultSettings.foraging,
+        enabled: true,
+        sessionStartScanMinIntervalMs: 0,
+      },
+    };
+
+    expect(claimForagingSessionStartScan(settings, repo, 1_000)).toBe(true);
+    expect(claimForagingSessionStartScan(settings, repo, 2_000)).toBe(true);
+  });
+
   it.each(['codex', 'claude-code'])(
     'injects the quota-safe Colony operating contract for %s generated instructions',
     async (ide) => {

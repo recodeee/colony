@@ -264,6 +264,46 @@ describe('Storage', () => {
     expect(hits[0]?.snippet).toContain('[auth]');
   });
 
+  it('FTS search expands short prefixes across path-like terms', () => {
+    storage.createSession({
+      id: 's-prefix',
+      ide: 'claude-code',
+      cwd: null,
+      started_at: Date.now(),
+      metadata: null,
+    });
+    storage.insertObservation({
+      session_id: 's-prefix',
+      kind: 'tool_use',
+      content: 'edited packages/storage/src/storage.ts searchFts implementation',
+      compressed: true,
+      intensity: 'full',
+    });
+
+    const hits = storage.searchFts('stor searchf');
+    expect(hits[0]?.session_id).toBe('s-prefix');
+  });
+
+  it('FTS search falls back to fuzzy matching for transposed query terms', () => {
+    storage.createSession({
+      id: 's-fuzzy',
+      ide: 'claude-code',
+      cwd: null,
+      started_at: Date.now(),
+      metadata: null,
+    });
+    storage.insertObservation({
+      session_id: 's-fuzzy',
+      kind: 'note',
+      content: 'search command indexes observations',
+      compressed: true,
+      intensity: 'full',
+    });
+
+    const hits = storage.searchFts('saerch command');
+    expect(hits[0]?.session_id).toBe('s-fuzzy');
+  });
+
   it('rebuildFts leaves FTS queryable', () => {
     storage.createSession({
       id: 'sfts',
@@ -406,6 +446,34 @@ describe('Storage', () => {
         .map((r) => r.id)
         .sort(),
     ).toEqual([ids[0], ids[1], ids[2]].sort());
+  });
+
+  it('observationsMissingEmbeddingsAfter scans only new observation ids', () => {
+    storage.createSession({
+      id: 's5-after',
+      ide: 'claude-code',
+      cwd: null,
+      started_at: Date.now(),
+      metadata: null,
+    });
+    const ids: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      ids.push(
+        storage.insertObservation({
+          session_id: 's5-after',
+          kind: 'note',
+          content: `n${i}`,
+          compressed: true,
+          intensity: 'full',
+        }),
+      );
+    }
+    storage.putEmbedding(ids[2] as number, 'model-a', new Float32Array([1]));
+
+    expect(storage.lastObservationId()).toBe(ids[3]);
+    expect(
+      storage.observationsMissingEmbeddingsAfter(ids[0] as number, 10, 'model-a').map((r) => r.id),
+    ).toEqual([ids[1], ids[3]]);
   });
 
   it('countObservations + countEmbeddings return correct totals', () => {
@@ -900,6 +968,9 @@ describe('Storage.findCompletedQueenPlans', () => {
     const [subTaskId] = subTaskIds;
     if (subTaskId === undefined) {
       throw new Error('expected progressive-plan to create a sub-task');
+    const taskId = subTaskIds[0];
+    if (taskId === undefined) {
+      throw new Error('expected plan sub-task id');
     }
     storage.insertObservation({
       session_id: 'planner',
@@ -908,7 +979,7 @@ describe('Storage.findCompletedQueenPlans', () => {
       compressed: false,
       intensity: null,
       ts: Date.now() + 1000,
-      task_id: subTaskId,
+      task_id: taskId,
       reply_to: null,
       metadata: { kind: 'plan-subtask-claim', status: 'completed' },
     });

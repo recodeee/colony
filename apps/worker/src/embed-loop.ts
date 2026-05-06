@@ -50,11 +50,14 @@ export function startEmbedLoop(opts: {
   embedder: Embedder;
   settings: Settings;
   onIdleExit?: () => void;
-  /** Poll cadence when the queue is empty. Defaults to 2s. */
+  /** Poll cadence when the queue is empty. Defaults to 10s. */
   idleTickMs?: number;
+  /** Full backlog scan cadence after the first clean scan. Defaults to 60s. */
+  fullScanIntervalMs?: number;
 }): EmbedLoopHandle {
   const { store, embedder, settings } = opts;
-  const idleTickMs = opts.idleTickMs ?? 2000;
+  const idleTickMs = opts.idleTickMs ?? 10_000;
+  const fullScanIntervalMs = opts.fullScanIntervalMs ?? 60_000;
   const batchSize = settings.embedding.batchSize;
   const idleShutdownMs = settings.embedding.idleShutdownMs;
 
@@ -82,6 +85,9 @@ export function startEmbedLoop(opts: {
   const statePath = stateFilePath(settings);
   let stopped = false;
   let current: Promise<void> | null = null;
+  let highWaterObservationId = 0;
+  let needsFullScan = true;
+  let nextFullScanAt = Date.now() + fullScanIntervalMs;
 
   const snapshot = () => {
     try {
@@ -93,9 +99,33 @@ export function startEmbedLoop(opts: {
   snapshot();
 
   const processOnce = async (): Promise<boolean> => {
-    const rows = store.storage.observationsMissingEmbeddings(batchSize, embedder.model);
-    if (rows.length === 0) return false;
+    let latestObservationId = highWaterObservationId;
+    if (!needsFullScan) {
+      latestObservationId = store.storage.lastObservationId();
+      if (latestObservationId <= highWaterObservationId) return false;
+    }
+
+    const rows = needsFullScan
+      ? store.storage.observationsMissingEmbeddings(batchSize, embedder.model)
+      : store.storage.observationsMissingEmbeddingsAfter(
+          highWaterObservationId,
+          batchSize,
+          embedder.model,
+        );
+    if (rows.length === 0) {
+      if (needsFullScan) {
+        state.total = store.storage.countObservations();
+        highWaterObservationId = store.storage.lastObservationId();
+        needsFullScan = false;
+        nextFullScanAt = Date.now() + fullScanIntervalMs;
+        snapshot();
+      } else {
+        highWaterObservationId = Math.max(highWaterObservationId, latestObservationId);
+      }
+      return false;
+    }
     const t0 = Date.now();
+    let processed = 0;
     for (const row of rows) {
       if (stopped) return true;
       try {
@@ -104,14 +134,17 @@ export function startEmbedLoop(opts: {
         const text = expand(row.content);
         const vec = await embedder.embed(text);
         store.storage.putEmbedding(row.id, embedder.model, vec);
+        highWaterObservationId = Math.max(highWaterObservationId, row.id);
+        processed += 1;
       } catch (err) {
         state.lastError = err instanceof Error ? err.message : String(err);
         process.stderr.write(`[colony worker] embed error row=${row.id}: ${state.lastError}\n`);
-        // Don't re-attempt forever — insert a zero vector marker? No, skip this batch
-        // and retry on next iteration. If the error is persistent, user will see it in status.
+        // Do not spin on a persistent embed error. The outer loop will sleep
+        // before retrying, keeping one bad observation from pinning a CPU.
         break;
       }
     }
+    if (processed === 0) return false;
     state.lastBatchAt = Date.now();
     state.lastBatchMs = state.lastBatchAt - t0;
     state.embedded = store.storage.countEmbeddings({ model: embedder.model, dim: embedder.dim });
@@ -123,14 +156,14 @@ export function startEmbedLoop(opts: {
   const run = async () => {
     let idleSince = Date.now();
     while (!stopped) {
+      if (!needsFullScan && Date.now() >= nextFullScanAt) {
+        needsFullScan = true;
+      }
       const didWork = await processOnce();
       if (didWork) {
         idleSince = Date.now();
         continue;
       }
-      // Refresh total in case observations are being written while we're idle.
-      state.total = store.storage.countObservations();
-      snapshot();
       const now = Date.now();
       const noWork = now - idleSince;
       const noTraffic = now - state.lastHttpAt;
