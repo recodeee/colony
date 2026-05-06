@@ -443,13 +443,10 @@ describe('colony health read queries', () => {
     claim('codex@worktree', 'apps/api/foo.ts', 2_000, {
       metadata: { repo_root: repoRoot, branch: 'agent/lane-a' },
     });
-    toolUse(
-      'codex@worktree',
-      'Edit',
-      3_000,
-      '.omx/agent-worktrees/lane-a/apps/api/foo.ts',
-      { repo_root: repoRoot, branch: 'agent/lane-a' },
-    );
+    toolUse('codex@worktree', 'Edit', 3_000, '.omx/agent-worktrees/lane-a/apps/api/foo.ts', {
+      repo_root: repoRoot,
+      branch: 'agent/lane-a',
+    });
 
     claim('codex@worktree', '.omc/agent-worktrees/lane-b/apps/api/bar.ts', 4_000, {
       metadata: { repo_root: repoRoot, branch: 'agent/lane-a' },
@@ -496,13 +493,11 @@ describe('colony health read queries', () => {
     claim('codex@canonical-paths', 'src/primary-vs-worktree.ts', 2_000, {
       task_id: task.id,
     });
-    toolUse(
-      'codex@canonical-paths',
-      'Edit',
-      3_000,
-      `${worktree}/src/primary-vs-worktree.ts`,
-      { repo_root: worktree, branch, worktree_path: worktree },
-    );
+    toolUse('codex@canonical-paths', 'Edit', 3_000, `${worktree}/src/primary-vs-worktree.ts`, {
+      repo_root: worktree,
+      branch,
+      worktree_path: worktree,
+    });
 
     claim('codex@canonical-paths', 'src/absolute-edit.ts', 4_000, { task_id: task.id });
     toolUse('codex@canonical-paths', 'Edit', 5_000, `${repoRoot}/src/absolute-edit.ts`, {
@@ -779,9 +774,10 @@ describe('archiveQueenPlan', () => {
   });
 
   it('returns parent_task_id null when the plan does not exist', () => {
-    expect(
-      storage.archiveQueenPlan({ repo_root: '/repo', plan_slug: 'never-published' }),
-    ).toEqual({ parent_task_id: null, archived_rows: 0 });
+    expect(storage.archiveQueenPlan({ repo_root: '/repo', plan_slug: 'never-published' })).toEqual({
+      parent_task_id: null,
+      archived_rows: 0,
+    });
   });
 
   it('does not touch tasks belonging to other plans or other repos', () => {
@@ -828,9 +824,7 @@ describe('countClaimedQueenPlanSubtasks', () => {
       branch: `spec/${slug}/sub-0`,
       created_by: 'queen',
     });
-    expect(
-      storage.countClaimedQueenPlanSubtasks({ repo_root: '/repo', plan_slug: slug }),
-    ).toBe(0);
+    expect(storage.countClaimedQueenPlanSubtasks({ repo_root: '/repo', plan_slug: slug })).toBe(0);
   });
 
   it('returns 0 when the plan does not exist', () => {

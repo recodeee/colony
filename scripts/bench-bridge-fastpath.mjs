@@ -52,12 +52,16 @@ function mkenvelope(i) {
 
 function runOnce(envelope, env) {
   const start = process.hrtime.bigint();
-  const result = spawnSync('sh', [SHIM, 'bridge', 'lifecycle', '--json', '--ide', 'claude-code', '--cwd', '/tmp/bench'], {
-    input: envelope,
-    env,
-    encoding: 'utf8',
-    timeout: 15_000,
-  });
+  const result = spawnSync(
+    'sh',
+    [SHIM, 'bridge', 'lifecycle', '--json', '--ide', 'claude-code', '--cwd', '/tmp/bench'],
+    {
+      input: envelope,
+      env,
+      encoding: 'utf8',
+      timeout: 15_000,
+    },
+  );
   const ms = Number(process.hrtime.bigint() - start) / 1e6;
   return { ms, status: result.status ?? -1, stderr: result.stderr ?? '' };
 }
@@ -76,7 +80,10 @@ async function bench(label, env) {
       samples.push(r.ms);
       if (r.status !== 0) {
         failures++;
-        if (failures <= 2) process.stderr.write(`  [${label}] failure: status=${r.status} ${r.stderr.slice(0, 200)}\n`);
+        if (failures <= 2)
+          process.stderr.write(
+            `  [${label}] failure: status=${r.status} ${r.stderr.slice(0, 200)}\n`,
+          );
       }
     }
   }
@@ -116,7 +123,9 @@ async function waitForHealth(port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(500) });
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`, {
+        signal: AbortSignal.timeout(500),
+      });
       if (res.ok) return true;
     } catch {
       /* keep polling */
@@ -139,7 +148,9 @@ async function main() {
   );
   const tmpHome = colonyHome;
 
-  console.log(`bench: concurrency=${CONCURRENCY} iterations=${ITERATIONS} total=${TOTAL} port=${PORT}`);
+  console.log(
+    `bench: concurrency=${CONCURRENCY} iterations=${ITERATIONS} total=${TOTAL} port=${PORT}`,
+  );
   console.log(`bench: COLONY_HOME=${tmpHome}`);
 
   const workerEntry = resolve(REPO, 'apps/worker/dist/server.js');
@@ -152,8 +163,12 @@ async function main() {
     if (s) process.stderr.write(`[worker] ${s}\n`);
   });
   process.on('exit', () => {
-    try { worker.kill('SIGTERM'); } catch {}
-    try { rmSync(tmpHome, { recursive: true, force: true }); } catch {}
+    try {
+      worker.kill('SIGTERM');
+    } catch {}
+    try {
+      rmSync(tmpHome, { recursive: true, force: true });
+    } catch {}
   });
 
   const healthy = await waitForHealth(PORT, 5_000);
@@ -183,7 +198,9 @@ async function main() {
   if (slow.meanMs > 0) {
     const speedup = slow.meanMs / fast.meanMs;
     const meanSavedMs = slow.meanMs - fast.meanMs;
-    console.log(`speedup (mean): ${speedup.toFixed(1)}x   saved: ${meanSavedMs.toFixed(1)}ms/event`);
+    console.log(
+      `speedup (mean): ${speedup.toFixed(1)}x   saved: ${meanSavedMs.toFixed(1)}ms/event`,
+    );
     console.log(`speedup (p95):  ${(slow.p95Ms / fast.p95Ms).toFixed(1)}x`);
   }
 

@@ -56,14 +56,39 @@ type ZodTypeName =
   | 'ZodEnum';
 
 type ZodNode = {
-  _def: { typeName: ZodTypeName } & Record<string, unknown>;
+  _def: { type?: string; typeName?: string } & Record<string, unknown>;
   shape?: Record<string, ZodNode>;
 };
 
 function typeName(schema: unknown): ZodTypeName | undefined {
   const def = (schema as ZodNode | undefined)?._def;
-  const n = def?.typeName;
-  return typeof n === 'string' ? (n as ZodTypeName) : undefined;
+  const n = def?.typeName ?? def?.type;
+  if (typeof n !== 'string') return undefined;
+  if (n.startsWith('Zod')) return n as ZodTypeName;
+  switch (n) {
+    case 'default':
+      return 'ZodDefault';
+    case 'optional':
+      return 'ZodOptional';
+    case 'nullable':
+      return 'ZodNullable';
+    case 'object':
+      return 'ZodObject';
+    case 'record':
+      return 'ZodRecord';
+    case 'boolean':
+      return 'ZodBoolean';
+    case 'number':
+      return 'ZodNumber';
+    case 'string':
+      return 'ZodString';
+    case 'array':
+      return 'ZodArray';
+    case 'enum':
+      return 'ZodEnum';
+    default:
+      return undefined;
+  }
 }
 
 function unwrap(schema: ZodNode): ZodNode {

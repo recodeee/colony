@@ -965,6 +965,9 @@ describe('Storage.findCompletedQueenPlans', () => {
 
   it('respects the latest claim observation when status changes over time', () => {
     const { subTaskIds } = makePlan('progressive-plan', ['claimed']);
+    const [subTaskId] = subTaskIds;
+    if (subTaskId === undefined) {
+      throw new Error('expected progressive-plan to create a sub-task');
     const taskId = subTaskIds[0];
     if (taskId === undefined) {
       throw new Error('expected plan sub-task id');

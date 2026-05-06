@@ -11,7 +11,6 @@ import {
   type OmxRuntimeSummaryStats,
   Storage,
 } from '@colony/storage';
-// @ts-expect-error better-sqlite3 has no bundled declarations in the CLI test tsconfig.
 import Database from 'better-sqlite3';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -355,8 +354,10 @@ describe('colony health payload', () => {
     expect(text.indexOf('At a glance')).toBeLessThan(text.indexOf('Health focus'));
     expect(text.indexOf('Health focus')).toBeLessThan(text.indexOf('Readiness summary'));
     expect(text).toContain('overall:');
+    expect(text).toContain('score: 60/100 (2 fix, 0 watch, 3 ready)');
     expect(text).toContain('status:');
     expect(text).toContain('needs work:');
+    expect(text).toContain('watch: none');
     expect(text).toContain('fix first:');
     expect(text).toContain('top blocker:');
     expect(text).toContain('why:');

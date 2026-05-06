@@ -293,12 +293,14 @@ export function sweepQueenPlans(
 
     if (items.length > 0) {
       const waves = summarizeWaves(plan, items, waveModel);
-      const validationSummary = latestValidationSummary(store, plan.spec_task_id);
+      const attentionSpecTaskId = planState?.state === 'orphan-subtasks' ? null : plan.spec_task_id;
+      const validationSummary =
+        attentionSpecTaskId === null ? null : latestValidationSummary(store, attentionSpecTaskId);
       attention.push({
         plan_slug: plan.plan_slug,
         title: plan.title,
         repo_root: plan.repo_root,
-        spec_task_id: plan.spec_task_id,
+        spec_task_id: attentionSpecTaskId,
         ...(planState !== undefined ? { plan_state: planState.state } : {}),
         items,
         ...(waves.length > 0 ? { waves } : {}),

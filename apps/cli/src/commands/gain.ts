@@ -170,6 +170,8 @@ export function writeLiveComparisonSection(
     return;
   }
   w.write(`${kleur.dim(`${comparison.note}\n\n`)}`);
+  writeGainFocus(comparison);
+  w.write('\n');
   const head = padRow(
     ['Operation', 'Calls', 'Standard', 'Colony', 'Saved', 'Matched ops'],
     [32, 7, 9, 9, 7, 32],
@@ -417,6 +419,15 @@ function writeLiveOverview(
         `${formatErrorCode(topError.error_code)} - ${formatErrorMessage(topError.error_message)}\n`,
     );
   }
+  const topSpend = findTopTokenSpend(rows);
+  if (topSpend !== null) {
+    w.write(
+      `${kleur.dim('Top spend:')} ${topSpend.operation} ${formatTokens(
+        topSpend.total_tokens,
+      )} tokens across ${topSpend.calls} call${topSpend.calls === 1 ? '' : 's'} ` +
+        `(avg ${formatTokens(avgTokens(topSpend))}/call)\n`,
+    );
+  }
 }
 
 function writeLiveSessionSection(
@@ -528,6 +539,64 @@ function findTopErrorReason(rows: ReadonlyArray<McpMetricsAggregateRow>): TopErr
   return top;
 }
 
+function writeGainFocus(comparison: SavingsLiveComparison): void {
+  const matchedCalls = comparison.totals.calls;
+  const totalCalls = matchedCalls + comparison.totals.unmatched_calls;
+  const topSaving = findTopSaving(comparison);
+  const savedTokens = comparison.totals.baseline_tokens - comparison.totals.colony_tokens;
+  const next =
+    comparison.totals.unmatched_calls > matchedCalls
+      ? 'add reference aliases for high-volume unmatched operations'
+      : savedTokens < 0
+        ? 'inspect over-budget matched operations'
+        : 'keep high-volume loops on Colony MCP surfaces';
+
+  process.stdout.write(`${kleur.bold('Gain focus')}\n`);
+  process.stdout.write(
+    [
+      `${kleur.dim('Coverage:')} ${matchedCalls} / ${totalCalls} live calls (${formatPercent(
+        matchedCalls,
+        totalCalls,
+      )})`,
+      `${kleur.dim('Saved:')} ${formatTokenDelta(savedTokens)}`,
+      `${kleur.dim('Next:')} ${next}`,
+    ].join('  '),
+  );
+  process.stdout.write('\n');
+  if (topSaving !== null) {
+    process.stdout.write(
+      `${kleur.dim('Top saving:')} ${topSaving.operation} ${formatTokenDelta(
+        topSaving.baseline_tokens - topSaving.colony_tokens,
+      )} across ${topSaving.calls} call${topSaving.calls === 1 ? '' : 's'}\n`,
+    );
+  }
+}
+
+function findTopSaving(
+  comparison: SavingsLiveComparison,
+): SavingsLiveComparison['rows'][number] | null {
+  let top: SavingsLiveComparison['rows'][number] | null = null;
+  for (const row of comparison.rows) {
+    if (
+      top === null ||
+      row.baseline_tokens - row.colony_tokens > top.baseline_tokens - top.colony_tokens
+    ) {
+      top = row;
+    }
+  }
+  return top;
+}
+
+function findTopTokenSpend(
+  rows: ReadonlyArray<McpMetricsAggregateRow>,
+): McpMetricsAggregateRow | null {
+  let top: McpMetricsAggregateRow | null = null;
+  for (const row of rows) {
+    if (top === null || row.total_tokens > top.total_tokens) top = row;
+  }
+  return top;
+}
+
 function writeUnmatchedComparisonSummary(comparison: SavingsLiveComparison): void {
   if (comparison.totals.unmatched_calls === 0) return;
   const operations = comparison.unmatched_operations
@@ -583,6 +652,11 @@ function formatSavingsPct(n: number): string {
   return n < 0 ? kleur.red(value) : kleur.green(value);
 }
 
+function formatTokenDelta(n: number): string {
+  const value = n >= 0 ? `${formatTokens(n)} saved` : `${formatTokens(Math.abs(n))} over`;
+  return n >= 0 ? kleur.green(value) : kleur.red(value);
+}
+
 function formatCostBasis(costBasis: McpMetricsCostBasis): string {
   if (!costBasis.configured) {
     return 'not configured (pass --input-cost-per-1m/--output-cost-per-1m or env)';
@@ -610,6 +684,10 @@ function formatPercent(part: number, whole: number): string {
   const value = (part / whole) * 100;
   if (Number.isInteger(value)) return `${value}%`;
   return `${value.toFixed(1)}%`;
+}
+
+function avgTokens(row: Pick<McpMetricsAggregateRow, 'calls' | 'total_tokens'>): number {
+  return row.calls <= 0 ? 0 : Math.round(row.total_tokens / row.calls);
 }
 
 function formatErrorCode(value: string | null): string {

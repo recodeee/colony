@@ -1099,9 +1099,7 @@ describe('worker HTTP', () => {
       tool_name: 'Edit',
       tool_input: {
         operation: 'replace',
-        paths: [
-          { path: 'apps/worker/src/server.ts', role: 'target', kind: 'file' },
-        ],
+        paths: [{ path: 'apps/worker/src/server.ts', role: 'target', kind: 'file' }],
         input_summary: 'daemon fast-path round-trip test',
         edit_count: 1,
         file_count: 1,

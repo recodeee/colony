@@ -12,22 +12,13 @@
     "task_ready_for_agent without follow-up task_plan_claim_subtask raises a SessionStart or MCP nudge",
     "All four sub-fixes have unit + integration tests; pnpm test green"
   ],
-  "roles": [
-    "planner",
-    "architect",
-    "critic",
-    "executor",
-    "writer",
-    "verifier"
-  ],
+  "roles": ["planner", "architect", "critic", "executor", "writer", "verifier"],
   "tasks": [
     {
       "subtask_index": 0,
       "title": "Prepare storage scope",
       "description": "Update storage files for Health-fix Wave 0: execution_safety + signal_evaporation cleanup.",
-      "file_scope": [
-        "packages/storage/src/storage.ts"
-      ],
+      "file_scope": ["packages/storage/src/storage.ts"],
       "depends_on": [],
       "spec_row_id": null,
       "capability_hint": "infra_work",
@@ -47,9 +38,7 @@
         "apps/cli/src/commands/health.ts",
         "apps/mcp-server/src/tools/ready-queue.ts"
       ],
-      "depends_on": [
-        0
-      ],
+      "depends_on": [0],
       "spec_row_id": null,
       "capability_hint": "infra_work",
       "status": "available",

@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { isProtectedBranch, type TaskClaimRow, type TaskRow } from '@colony/storage';
+import { type TaskClaimRow, type TaskRow, isProtectedBranch } from '@colony/storage';
 import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
 import { normalizeClaimFilePath } from './live-file-contention.js';
 import type { MemoryStore } from './memory-store.js';

@@ -98,7 +98,7 @@ describe('attention_inbox format flag', () => {
     expect(payload).toHaveProperty('observation_ids');
     expect(Array.isArray(payload.observation_ids)).toBe(true);
     expect(payload).toHaveProperty('hint');
-    expect((payload.hint as string)).toContain('get_observations');
+    expect(payload.hint as string).toContain('get_observations');
 
     // Compact payload must drop the bulky body arrays — they live behind
     // get_observations(ids) instead.

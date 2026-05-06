@@ -1,4 +1,11 @@
-import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   type MemoryStore,
@@ -1148,7 +1155,7 @@ function latestSubtaskCompletedAt(
   store: MemoryStore,
   siblingTasks: Array<{ id: number }>,
 ): number | null {
-  let latest = -Infinity;
+  let latest = Number.NEGATIVE_INFINITY;
   for (const task of siblingTasks) {
     const claims = store.storage.taskObservationsByKind(task.id, 'plan-subtask-claim', 100);
     for (const row of claims) {

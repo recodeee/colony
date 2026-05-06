@@ -1273,13 +1273,19 @@ function formatAtAGlance(payload: ColonyHealthPayload, visibleHints: ActionHint[
   const entries = readinessEntries(payload.readiness_summary);
   const bad = entries.filter(([, item]) => item.status === 'bad');
   const ok = entries.filter(([, item]) => item.status === 'ok');
+  const good = entries.filter(([, item]) => item.status === 'good');
+  const score = readinessScore(entries);
   const topHint = visibleHints[0];
   const nextStep = topHint ? preferredAction(topHint) : null;
   const needsWork =
     bad.length > 0 ? bad.map(([scope]) => READINESS_LABELS[scope]).join(', ') : 'none';
+  const watchAreas =
+    ok.length > 0 ? ok.map(([scope]) => READINESS_LABELS[scope]).join(', ') : 'none';
   const lines = [
     `  overall: ${formatOverallReadiness(bad.length, ok.length)}`,
+    `  score: ${formatReadinessScore(score)} (${bad.length} fix, ${ok.length} watch, ${good.length} ready)`,
     `  needs work: ${needsWork}`,
+    `  watch: ${watchAreas}`,
   ];
 
   if (topHint) {
@@ -1360,6 +1366,23 @@ function formatOverallReadiness(badCount: number, okCount: number): string {
     return kleur.red(`needs attention (${badCount} area${badCount === 1 ? '' : 's'})`);
   if (okCount > 0) return kleur.yellow(`watch (${okCount} area${okCount === 1 ? '' : 's'})`);
   return kleur.green('ready');
+}
+
+function readinessScore(entries: Array<[ReadinessSummaryKey, ReadinessSummaryItem]>): number {
+  if (entries.length === 0) return 0;
+  const points = entries.reduce((sum, [, item]) => {
+    if (item.status === 'good') return sum + 1;
+    if (item.status === 'ok') return sum + 0.5;
+    return sum;
+  }, 0);
+  return Math.round((points / entries.length) * 100);
+}
+
+function formatReadinessScore(score: number): string {
+  const value = `${score}/100`;
+  if (score >= 80) return kleur.green(value);
+  if (score >= 50) return kleur.yellow(value);
+  return kleur.red(value);
 }
 
 function preferredAction(hint: ActionHint): string | null {

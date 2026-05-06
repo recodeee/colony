@@ -280,11 +280,7 @@ function fileSkipReason(
   return null;
 }
 
-function isRedundantLockfile(
-  abs: string,
-  name: string,
-  rootFiles: ReadonlySet<string>,
-): boolean {
+function isRedundantLockfile(abs: string, name: string, rootFiles: ReadonlySet<string>): boolean {
   const hit = REDUNDANT_LOCKFILES.find((lockfile) => lockfile.name === name);
   if (!hit) return false;
   if (hit.manifests.some((manifest) => rootFiles.has(manifest))) return true;
