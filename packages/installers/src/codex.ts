@@ -2,6 +2,13 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readJson, shellQuote, writeJson } from './fs-utils.js';
+import {
+  type McpServerConfig,
+  type McpServersConfig,
+  detectSystemOmxMcpServers,
+  detectedOmxLayerMessages,
+  installDetectedOmxLayer,
+} from './omx-layer.js';
 import type {
   InstallContext,
   InstallValidationIssue,
@@ -10,7 +17,7 @@ import type {
 } from './types.js';
 
 interface CodexConfig {
-  mcpServers?: Record<string, { command: string; args?: string[] }>;
+  mcpServers?: McpServersConfig;
 }
 
 interface CodexHooksConfig {
@@ -107,6 +114,7 @@ export const codex: Installer = {
     const mcpServers = { ...(current.mcpServers ?? {}) };
     delete mcpServers.cavemem;
     mcpServers.colony = { command: ctx.nodeBin, args: [ctx.cliPath, 'mcp'] };
+    const installedOmxServers = installDetectedOmxLayer(mcpServers);
     const next: CodexConfig = { ...current, mcpServers };
     writeJson(path, next);
 
@@ -120,7 +128,12 @@ export const codex: Installer = {
     writeJson(hooksPath, { ...hooksCurrent, hooks });
     const validation = validateCodexInstall(ctx);
     if (!validation.ok) throw new Error(formatValidationFailure(validation));
-    return [`wrote ${path}`, `wrote ${hooksPath}`, ...validation.messages];
+    return [
+      `wrote ${path}`,
+      `wrote ${hooksPath}`,
+      ...detectedOmxLayerMessages(installedOmxServers),
+      ...validation.messages,
+    ];
   },
   async verify(ctx: InstallContext): Promise<InstallValidationResult> {
     return validateCodexInstall(ctx);
@@ -158,6 +171,15 @@ export function validateCodexInstall(ctx: InstallContext): InstallValidationResu
       validationIssue({
         file: path,
         missingMcpServers: [REQUIRED_MCP_SERVER],
+      }),
+    );
+  }
+  const missingOmxServers = missingDetectedOmxServers(config.mcpServers ?? {});
+  if (missingOmxServers.length > 0) {
+    issues.push(
+      validationIssue({
+        file: path,
+        missingMcpServers: missingOmxServers,
       }),
     );
   }
@@ -215,8 +237,40 @@ function codexHookStatus(
 }
 
 function sameArgs(actual: string[] | undefined, expected: string[]): boolean {
-  if (!actual || actual.length !== expected.length) return false;
-  return expected.every((value, index) => actual[index] === value);
+  const actualArgs = actual ?? [];
+  if (actualArgs.length !== expected.length) return false;
+  return expected.every((value, index) => actualArgs[index] === value);
+}
+
+function missingDetectedOmxServers(current: McpServersConfig): string[] {
+  const missing: string[] = [];
+  for (const [name, expected] of Object.entries(detectSystemOmxMcpServers())) {
+    const actual = current[name];
+    if (!actual || !sameMcpServer(actual, expected)) missing.push(name);
+  }
+  return missing.sort((a, b) => a.localeCompare(b));
+}
+
+function sameMcpServer(actual: McpServerConfig, expected: McpServerConfig): boolean {
+  if (actual.command !== expected.command || !sameArgs(actual.args, expected.args ?? [])) {
+    return false;
+  }
+  return sameEnv(actual.env, expected.env);
+}
+
+function sameEnv(
+  actual: Record<string, string> | undefined,
+  expected: Record<string, string> | undefined,
+): boolean {
+  const actualEntries = Object.entries(actual ?? {}).sort();
+  const expectedEntries = Object.entries(expected ?? {}).sort();
+  return (
+    actualEntries.length === expectedEntries.length &&
+    expectedEntries.every(
+      ([key, value], index) =>
+        actualEntries[index]?.[0] === key && actualEntries[index]?.[1] === value,
+    )
+  );
 }
 
 function validationIssue(args: {

@@ -2,6 +2,11 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readJson, shellQuote, writeJson } from './fs-utils.js';
+import {
+  type McpServersConfig,
+  detectedOmxLayerMessages,
+  installDetectedOmxLayer,
+} from './omx-layer.js';
 import type { InstallContext, Installer } from './types.js';
 
 interface ClaudeSettings {
@@ -12,7 +17,7 @@ interface ClaudeSettings {
       hooks: Array<{ type: string; command: string; [key: string]: unknown }>;
     }>
   >;
-  mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
+  mcpServers?: McpServersConfig;
 }
 
 const HOOK_NAMES: Array<[string, string]> = [
@@ -104,9 +109,10 @@ export const claudeCode: Installer = {
       command: ctx.nodeBin,
       args: [ctx.cliPath, 'mcp'],
     };
+    const installedOmxServers = installDetectedOmxLayer(mcpServers);
     const next: ClaudeSettings = { ...current, hooks, mcpServers };
     writeJson(path, next);
-    return [`wrote ${path}`];
+    return [`wrote ${path}`, ...detectedOmxLayerMessages(installedOmxServers)];
   },
   async uninstall(_ctx: InstallContext): Promise<string[]> {
     const path = settingsFile();
