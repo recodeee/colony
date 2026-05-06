@@ -520,4 +520,89 @@ describe('MCP namespace installers', () => {
       expect(after.mcpServers.cavemem).toBeUndefined();
     });
   }
+
+  it('copies a detected system OMX MCP layer into target IDE configs', async () => {
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    writeFileSync(
+      join(home, '.codex', 'config.toml'),
+      [
+        '[mcp_servers.omx_state]',
+        'command = "node"',
+        'args = ["/opt/oh-my-codex/dist/mcp/state-server.js"]',
+        '',
+        '[mcp_servers.omx_memory]',
+        'command = "node"',
+        'args = ["/opt/oh-my-codex/dist/mcp/memory-server.js"]',
+        '',
+        '[mcp_servers.omx_memory.env]',
+        'OMX_HOME = "/tmp/omx-home"',
+        '',
+        '[mcp_servers.filesystem]',
+        'command = "mcp-server-filesystem"',
+        'args = ["/repo"]',
+      ].join('\n'),
+    );
+
+    for (const [installerId, pathParts] of cases) {
+      const installer = getInstaller(installerId);
+      const messages = await installer.install(ctx);
+      const installed = JSON.parse(readFileSync(join(home, ...pathParts), 'utf8')) as {
+        mcpServers: Record<
+          string,
+          { command: string; args?: string[]; env?: Record<string, string> }
+        >;
+      };
+
+      expect(messages).toContain('installed detected OMX MCP layer: omx_memory, omx_state');
+      expect(installed.mcpServers.colony).toEqual({
+        command: ctx.nodeBin,
+        args: [ctx.cliPath, 'mcp'],
+      });
+      expect(installed.mcpServers.omx_state).toEqual({
+        command: 'node',
+        args: ['/opt/oh-my-codex/dist/mcp/state-server.js'],
+      });
+      expect(installed.mcpServers.omx_memory).toEqual({
+        command: 'node',
+        args: ['/opt/oh-my-codex/dist/mcp/memory-server.js'],
+        env: { OMX_HOME: '/tmp/omx-home' },
+      });
+      expect(installed.mcpServers.filesystem).toBeUndefined();
+    }
+  });
+
+  it('preserves an existing target OMX MCP override', async () => {
+    mkdirSync(join(home, '.codex'), { recursive: true });
+    mkdirSync(join(home, '.cursor'), { recursive: true });
+    writeFileSync(
+      join(home, '.codex', 'config.toml'),
+      [
+        '[mcp_servers.omx_state]',
+        'command = "node"',
+        'args = ["/opt/oh-my-codex/dist/mcp/state-server.js"]',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(home, '.cursor', 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          omx_state: { command: '/custom/node', args: ['/custom/omx-state.js'] },
+        },
+      }),
+    );
+
+    await cursor.install(ctx);
+    const installed = JSON.parse(readFileSync(join(home, '.cursor', 'mcp.json'), 'utf8')) as {
+      mcpServers: Record<string, { command: string; args?: string[] }>;
+    };
+
+    expect(installed.mcpServers.omx_state).toEqual({
+      command: '/custom/node',
+      args: ['/custom/omx-state.js'],
+    });
+    expect(installed.mcpServers.colony).toEqual({
+      command: ctx.nodeBin,
+      args: [ctx.cliPath, 'mcp'],
+    });
+  });
 });
