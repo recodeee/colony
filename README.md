@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/colony-logo.png" alt="Colony — a stone-carved queen ant colony with the COORDINATE, CLAIM, HEALTH, and MEMORY pillars" width="320" />
+  <img src="docs/assets/colony-logo.png" alt="Colony — a stone-carved queen ant colony with the COORDINATE, CLAIM, HEALTH, and MEMORY pillars" width="160" />
 </p>
 
 <h1 align="center">Colony</h1>
