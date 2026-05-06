@@ -2,10 +2,15 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readJson, writeJson } from './fs-utils.js';
+import {
+  type McpServersConfig,
+  detectedOmxLayerMessages,
+  installDetectedOmxLayer,
+} from './omx-layer.js';
 import type { InstallContext, Installer } from './types.js';
 
 interface CursorConfig {
-  mcpServers?: Record<string, { command: string; args?: string[] }>;
+  mcpServers?: McpServersConfig;
 }
 
 function configFile(): string {
@@ -24,9 +29,10 @@ export const cursor: Installer = {
     const mcpServers = { ...(current.mcpServers ?? {}) };
     delete mcpServers.cavemem;
     mcpServers.colony = { command: ctx.nodeBin, args: [ctx.cliPath, 'mcp'] };
+    const installedOmxServers = installDetectedOmxLayer(mcpServers);
     const next: CursorConfig = { ...current, mcpServers };
     writeJson(path, next);
-    return [`wrote ${path}`];
+    return [`wrote ${path}`, ...detectedOmxLayerMessages(installedOmxServers)];
   },
   async uninstall(_ctx): Promise<string[]> {
     const path = configFile();

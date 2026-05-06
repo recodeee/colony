@@ -1,3 +1,4 @@
+import type { Settings } from '@colony/config';
 import {
   type MemoryStore,
   detectRepoBranch,
@@ -15,6 +16,15 @@ export interface McpClientIdentity {
   confidence: number;
   source: string;
 }
+
+interface HeartbeatOptions {
+  activeSessionReconcileMinIntervalMs?: number;
+  forceReconcile?: boolean;
+  now?: () => number;
+}
+
+const DEFAULT_RECONCILE_MIN_INTERVAL_MS = 5_000;
+const lastReconcileAtByRepoRoot = new Map<string, number>();
 
 export function detectMcpClientIdentity(
   env: NodeJS.ProcessEnv = process.env,
@@ -57,14 +67,25 @@ export function detectMcpClientIdentity(
   return identity(`mcp-${process.ppid}`, '', 0, 'unbound');
 }
 
-export function installActiveSessionHeartbeat(server: McpServer, store?: MemoryStore): void {
+export function installActiveSessionHeartbeat(
+  server: McpServer,
+  store?: MemoryStore,
+  settings?: Settings,
+): void {
   // Register the client the moment the server is built — before any tool
   // call — so the lane is visible on the very first hivemind query.
   void server;
-  touchActiveSession('session-start', { source: 'mcp-connect' }, store);
+  touchActiveSession('session-start', { source: 'mcp-connect' }, store, undefined, {
+    ...heartbeatOptionsFromSettings(settings),
+    forceReconcile: true,
+  });
 }
 
-export function createHeartbeatWrapper(store?: MemoryStore): ToolHandlerWrapper {
+export function createHeartbeatWrapper(
+  store?: MemoryStore,
+  settings?: Settings,
+): ToolHandlerWrapper {
+  const options = heartbeatOptionsFromSettings(settings);
   return (name, handler) => {
     return ((...handlerArgs) => {
       const toolArgs = handlerArgs[0];
@@ -73,6 +94,7 @@ export function createHeartbeatWrapper(store?: MemoryStore): ToolHandlerWrapper 
         { tool_name: `colony.${name}`, tool_input: toolArgs },
         store,
         toolArgs,
+        options,
       );
       return handler(...handlerArgs);
     }) as typeof handler;
@@ -86,9 +108,12 @@ function touchActiveSession(
   extras: Partial<HookInput> = {},
   store?: MemoryStore,
   toolArgs?: unknown,
+  options: HeartbeatOptions = {},
 ): void {
   const client = detectMcpClientIdentity(process.env, toolArgs);
   const cwd = process.cwd();
+  const repoRoot = detectRepoRoot(cwd);
+  const now = options.now?.() ?? Date.now();
   try {
     upsertActiveSession({ session_id: client.sessionId, ide: client.ide, cwd, ...extras }, hook);
   } catch {
@@ -107,10 +132,31 @@ function touchActiveSession(
         source: client.source,
       },
     });
-    reconcileOmxActiveSessions(store, { repoRoot: detectRepoRoot(cwd) });
+    if (shouldReconcile(repoRoot, now, options)) {
+      reconcileOmxActiveSessions(store, { repoRoot });
+    }
   } catch {
     // Reconciliation is best-effort; memory tools must keep serving if sidecars are unreadable.
   }
+}
+
+function heartbeatOptionsFromSettings(settings?: Settings): HeartbeatOptions {
+  const minIntervalMs = settings?.runtime.activeSessionReconcileMinIntervalMs;
+  return minIntervalMs === undefined ? {} : { activeSessionReconcileMinIntervalMs: minIntervalMs };
+}
+
+function shouldReconcile(repoRoot: string, now: number, options: HeartbeatOptions): boolean {
+  const minIntervalMs =
+    options.activeSessionReconcileMinIntervalMs ?? DEFAULT_RECONCILE_MIN_INTERVAL_MS;
+  if (options.forceReconcile) {
+    lastReconcileAtByRepoRoot.set(repoRoot, now);
+    return true;
+  }
+  if (minIntervalMs <= 0) return true;
+  const last = lastReconcileAtByRepoRoot.get(repoRoot);
+  if (last !== undefined && now - last < minIntervalMs) return false;
+  lastReconcileAtByRepoRoot.set(repoRoot, now);
+  return true;
 }
 
 function detectRepoRoot(cwd: string): string {

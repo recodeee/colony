@@ -924,9 +924,34 @@ export class Storage {
     limit = 10,
     filter?: { kind?: string; metadata?: Record<string, string> },
   ): SearchHit[] {
-    if (!query.trim()) return [];
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+    const cap = Math.max(1, limit);
+    const candidates: SearchHit[] = [];
+    candidates.push(...this.searchFtsMatch(sanitizeMatch(trimmed), cap * 3, filter, 2));
+
+    const terms = searchTerms(trimmed);
+    const prefixMatch = prefixMatchQuery(terms);
+    if (prefixMatch && prefixMatch !== sanitizeMatch(trimmed)) {
+      candidates.push(...this.searchFtsMatch(prefixMatch, cap * 3, filter, 1));
+    }
+
+    if (mergeSearchHits(candidates, cap).length < cap) {
+      candidates.push(...this.searchFuzzyTerms(terms, cap, filter));
+    }
+
+    return mergeSearchHits(candidates, cap);
+  }
+
+  private searchFtsMatch(
+    match: string,
+    limit: number,
+    filter: { kind?: string; metadata?: Record<string, string> } | undefined,
+    scoreBoost: number,
+  ): SearchHit[] {
+    if (!match) return [];
     const conditions: string[] = ['observations_fts MATCH ?'];
-    const params: Array<string | number> = [sanitizeMatch(query)];
+    const params: Array<string | number> = [match];
     if (filter?.kind) {
       conditions.push('o.kind = ?');
       params.push(filter.kind);
@@ -966,10 +991,66 @@ export class Storage {
       kind: r.kind,
       snippet: r.snippet,
       // FTS5 bm25 is "lower is better". Flip sign so higher = better downstream.
-      score: -r.score,
+      score: -r.score + scoreBoost,
       ts: r.ts,
       task_id: r.task_id,
     }));
+  }
+
+  private searchFuzzyTerms(
+    terms: string[],
+    limit: number,
+    filter?: { kind?: string; metadata?: Record<string, string> },
+  ): SearchHit[] {
+    if (terms.length === 0) return [];
+    const conditions: string[] = [];
+    const params: Array<string | number> = [];
+    if (filter?.kind) {
+      conditions.push('kind = ?');
+      params.push(filter.kind);
+    }
+    if (filter?.metadata) {
+      for (const [key, value] of Object.entries(filter.metadata)) {
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) continue;
+        conditions.push(`json_extract(metadata, '$.${key}') = ?`);
+        params.push(value);
+      }
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const scanLimit = Math.max(500, limit * 100);
+    const rows = this.db
+      .prepare(
+        `SELECT id, session_id, kind, content, ts, task_id
+         FROM observations
+         ${where}
+         ORDER BY ts DESC, id DESC
+         LIMIT ?`,
+      )
+      .all(...params, scanLimit) as Array<{
+      id: number;
+      session_id: string;
+      kind: string;
+      content: string;
+      ts: number;
+      task_id: number | null;
+    }>;
+    return rows
+      .map((row) => ({
+        row,
+        score: fuzzyContentScore(terms, row.content),
+      }))
+      .filter((hit) => hit.score > 0)
+      .sort((a, b) => b.score - a.score || b.row.ts - a.row.ts || b.row.id - a.row.id)
+      .slice(0, limit)
+      .map(({ row, score }) => ({
+        id: row.id,
+        session_id: row.session_id,
+        kind: row.kind,
+        snippet: row.content.slice(0, 160),
+        score,
+        ts: row.ts,
+        task_id: row.task_id,
+      }));
   }
 
   rebuildFts(): void {
@@ -1047,6 +1128,42 @@ export class Storage {
          LIMIT ?`,
       )
       .all(limit) as ObservationRow[];
+  }
+
+  observationsMissingEmbeddingsAfter(
+    minObservationId: number,
+    limit = 100,
+    model?: string,
+  ): ObservationRow[] {
+    if (model) {
+      return this.db
+        .prepare(
+          `SELECT o.* FROM observations o
+           LEFT JOIN embeddings e ON e.observation_id = o.id AND e.model = ?
+           WHERE o.id > ?
+             AND e.observation_id IS NULL
+           ORDER BY o.id ASC
+           LIMIT ?`,
+        )
+        .all(model, minObservationId, limit) as ObservationRow[];
+    }
+    return this.db
+      .prepare(
+        `SELECT o.* FROM observations o
+         LEFT JOIN embeddings e ON e.observation_id = o.id
+         WHERE o.id > ?
+           AND e.observation_id IS NULL
+         ORDER BY o.id ASC
+         LIMIT ?`,
+      )
+      .all(minObservationId, limit) as ObservationRow[];
+  }
+
+  lastObservationId(): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM observations').get() as {
+      id: number;
+    };
+    return row.id;
   }
 
   /**
@@ -3706,4 +3823,95 @@ function sanitizeMatch(q: string): string {
     .filter(Boolean)
     .map((t) => `"${t.replace(/"/g, '""')}"`)
     .join(' ');
+}
+
+function searchTerms(q: string): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const match of q.toLowerCase().matchAll(/[a-z0-9_]+/g)) {
+    const term = match[0];
+    if (term.length < 2 || seen.has(term)) continue;
+    seen.add(term);
+    terms.push(term);
+  }
+  return terms;
+}
+
+function prefixMatchQuery(terms: string[]): string {
+  const reserved = new Set(['and', 'or', 'not', 'near']);
+  return terms
+    .map((term) => (term.length >= 3 && !reserved.has(term) ? `${term}*` : `"${term}"`))
+    .join(' ');
+}
+
+function mergeSearchHits(hits: SearchHit[], limit: number): SearchHit[] {
+  const byId = new Map<number, SearchHit>();
+  for (const hit of hits) {
+    const current = byId.get(hit.id);
+    if (!current || hit.score > current.score) {
+      byId.set(hit.id, hit);
+    }
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => b.score - a.score || b.ts - a.ts || b.id - a.id)
+    .slice(0, limit);
+}
+
+function fuzzyContentScore(queryTerms: string[], content: string): number {
+  const contentTerms = searchTerms(content);
+  if (contentTerms.length === 0) return 0;
+  let total = 0;
+  let matched = 0;
+  for (const queryTerm of queryTerms) {
+    let best = 0;
+    for (const contentTerm of contentTerms) {
+      best = Math.max(best, fuzzyTermScore(queryTerm, contentTerm));
+      if (best === 1) break;
+    }
+    if (best >= 0.55) {
+      matched += 1;
+      total += best;
+    }
+  }
+  if (matched === 0) return 0;
+  const coverage = matched / queryTerms.length;
+  return (total / queryTerms.length) * coverage;
+}
+
+function fuzzyTermScore(queryTerm: string, contentTerm: string): number {
+  if (queryTerm === contentTerm) return 1;
+  if (queryTerm.length >= 3 && contentTerm.startsWith(queryTerm)) return 0.9;
+  if (contentTerm.length >= 3 && queryTerm.startsWith(contentTerm)) return 0.75;
+  if (Math.min(queryTerm.length, contentTerm.length) < 4) return 0;
+  const distance = damerauLevenshtein(queryTerm, contentTerm, 2);
+  if (distance === 1) return 0.72;
+  if (distance === 2) return 0.58;
+  return 0;
+}
+
+function damerauLevenshtein(a: string, b: string, maxDistance: number): number {
+  if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+  const previousPrevious = new Array<number>(b.length + 1).fill(0);
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    let rowMin = current[0] ?? i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let value = Math.min(
+        (previous[j] ?? 0) + 1,
+        (current[j - 1] ?? 0) + 1,
+        (previous[j - 1] ?? 0) + cost,
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        value = Math.min(value, (previousPrevious[j - 2] ?? 0) + 1);
+      }
+      current[j] = value;
+      rowMin = Math.min(rowMin, value);
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+    previousPrevious.splice(0, previousPrevious.length, ...previous);
+    previous = current;
+  }
+  return previous[b.length] ?? maxDistance + 1;
 }

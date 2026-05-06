@@ -1327,4 +1327,81 @@ describe('MCP server', () => {
       rmSync(repoRoot, { recursive: true, force: true });
     }
   });
+
+  it('throttles active-session reconciliation between MCP tool calls', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'colony-mcp-hb-throttle-'));
+    mkdirSync(join(repoRoot, '.git'), { recursive: true });
+    writeFileSync(join(repoRoot, '.git', 'HEAD'), 'ref: refs/heads/hb-throttle\n', 'utf8');
+
+    const prevCwd = process.cwd();
+    const prevCodexId = process.env.CODEX_SESSION_ID;
+    const nowSpy = vi.spyOn(Date, 'now');
+    let now = 1_000;
+    nowSpy.mockImplementation(() => now);
+    process.chdir(repoRoot);
+    process.env.CODEX_SESSION_ID = 'hb-throttle-current';
+
+    const settings = {
+      ...defaultSettings,
+      runtime: { ...defaultSettings.runtime, activeSessionReconcileMinIntervalMs: 10_000 },
+    };
+    const isolatedStore = new MemoryStore({
+      dbPath: join(repoRoot, 'data.db'),
+      settings,
+    });
+    const isolatedServer = buildServer(isolatedStore, settings);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const isolatedClient = new Client({ name: 'hb-throttle-test', version: '0.0.0' });
+    const activeSessionDir = join(repoRoot, '.omx', 'state', 'active-sessions');
+    mkdirSync(activeSessionDir, { recursive: true });
+
+    try {
+      await Promise.all([
+        isolatedServer.connect(serverTransport),
+        isolatedClient.connect(clientTransport),
+      ]);
+
+      writeFileSync(
+        join(activeSessionDir, 'other-session.json'),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            repoRoot,
+            branch: 'agent/codex/other',
+            taskName: 'Other MCP client',
+            latestTaskPreview: 'other session should wait for reconcile cooldown',
+            agentName: 'codex',
+            worktreePath: repoRoot,
+            cliName: 'codex',
+            startedAt: new Date().toISOString(),
+            lastHeartbeatAt: new Date().toISOString(),
+            state: 'working',
+            sessionKey: 'other-session',
+          },
+          null,
+          2,
+        )}\n`,
+        'utf8',
+      );
+
+      await isolatedClient.callTool({ name: 'list_sessions', arguments: { limit: 10 } });
+      expect(isolatedStore.storage.getSession('other-session')).toBeUndefined();
+
+      now = 11_001;
+      await isolatedClient.callTool({ name: 'list_sessions', arguments: { limit: 10 } });
+      expect(isolatedStore.storage.getSession('other-session')).toMatchObject({
+        id: 'other-session',
+        ide: 'codex',
+        cwd: repoRoot,
+      });
+    } finally {
+      await isolatedClient.close();
+      isolatedStore.close();
+      process.chdir(prevCwd);
+      if (prevCodexId === undefined) delete process.env.CODEX_SESSION_ID;
+      else process.env.CODEX_SESSION_ID = prevCodexId;
+      nowSpy.mockRestore();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
 });
