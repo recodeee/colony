@@ -5,8 +5,8 @@ import { defaultSettings } from '@colony/config';
 import { type Embedder, MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  buildReadyClaimNudgePreface,
   type SuggestionPrefaceDeps,
+  buildReadyClaimNudgePreface,
   sessionStart,
 } from '../src/handlers/session-start.js';
 

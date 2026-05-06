@@ -42,7 +42,7 @@ export function startCoordinationSweepLoop(
   const intervalMs = opts.intervalMs ?? intervalMinutes * 60_000;
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   let stopped = false;
-  let inFlight: Promise<CoordinationSweepResult | void> | null = null;
+  let inFlight: Promise<CoordinationSweepResult | undefined> | null = null;
   let latest: CoordinationSweepResult | null = null;
 
   const runOnce = (): CoordinationSweepResult => {
@@ -55,7 +55,7 @@ export function startCoordinationSweepLoop(
     return result;
   };
 
-  const tick = async (): Promise<CoordinationSweepResult | void> => {
+  const tick = async (): Promise<CoordinationSweepResult | undefined> => {
     if (stopped) return;
     try {
       return runOnce();

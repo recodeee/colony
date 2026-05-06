@@ -10,14 +10,7 @@
     "All three subtasks have unit + integration tests; pnpm --filter @colony/core test, pnpm --filter @colony/mcp-server test, pnpm --filter @colony/hooks test, and pnpm --filter @imdeadpool/colony-cli test green",
     "No regressions to existing claim-before-edit, hivemind_context, or attention_inbox behavior"
   ],
-  "roles": [
-    "planner",
-    "architect",
-    "critic",
-    "executor",
-    "writer",
-    "verifier"
-  ],
+  "roles": ["planner", "architect", "critic", "executor", "writer", "verifier"],
   "tasks": [
     {
       "subtask_index": 0,
@@ -40,10 +33,7 @@
       "subtask_index": 1,
       "title": "Auto-archive completed Queen plans when remaining_subtasks=0",
       "description": "When a plan has remaining_subtasks=0 and stays so for a grace window (default 60s), call spec_archive automatically and emit a plan-archive observation. Health currently emits a recommendation for this — promote it to action. Block on conflicts; record plan-archive-blocked observation when three_way merge fails.",
-      "file_scope": [
-        "packages/core/src/task-thread.ts",
-        "apps/mcp-server/src/tools/plan.ts"
-      ],
+      "file_scope": ["packages/core/src/task-thread.ts", "apps/mcp-server/src/tools/plan.ts"],
       "depends_on": [],
       "spec_row_id": null,
       "capability_hint": "api_work",

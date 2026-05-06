@@ -148,9 +148,7 @@ export function listLiveFileContentions(
     group.claimers.sort((a, b) => b.claimed_at - a.claimed_at);
     out.push(group);
   }
-  out.sort(
-    (a, b) => a.task_id - b.task_id || a.file_path.localeCompare(b.file_path),
-  );
+  out.sort((a, b) => a.task_id - b.task_id || a.file_path.localeCompare(b.file_path));
   return out;
 }
 

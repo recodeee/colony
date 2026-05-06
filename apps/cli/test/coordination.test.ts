@@ -68,8 +68,8 @@ describe('colony coordination CLI', () => {
         -h, --help       display help for command
 
       Commands:
-        sweep [options]  Report stale claims, expired messages, decayed proposals,
-                         and stale trails
+        sweep [options]  Report stale claims, expired messages, decayed proposals, and
+                         stale trails
         help [command]   display help for command
       "
     `);

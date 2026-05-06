@@ -11,7 +11,6 @@ import {
   type OmxRuntimeSummaryStats,
   Storage,
 } from '@colony/storage';
-// @ts-expect-error better-sqlite3 has no bundled declarations in the CLI test tsconfig.
 import Database from 'better-sqlite3';
 import kleur from 'kleur';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

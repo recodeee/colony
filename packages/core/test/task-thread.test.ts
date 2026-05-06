@@ -290,12 +290,8 @@ describe('TaskThread', () => {
     });
 
     vi.setSystemTime(t0 + 1000);
-    expect(thread.expiredQuotaHandoffsFor('codex', 'codex').map((h) => h.id)).toEqual([
-      handoffId,
-    ]);
-    expect(thread.expiredQuotaHandoffsFor('codex', 'codex').map((h) => h.id)).toEqual([
-      handoffId,
-    ]);
+    expect(thread.expiredQuotaHandoffsFor('codex', 'codex').map((h) => h.id)).toEqual([handoffId]);
+    expect(thread.expiredQuotaHandoffsFor('codex', 'codex').map((h) => h.id)).toEqual([handoffId]);
 
     const reflexions = store.storage.taskObservationsByKind(thread.task_id, 'reflexion', 10);
     expect(reflexions).toHaveLength(1);

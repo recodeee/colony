@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isProtectedBranch, PROTECTED_BRANCH_NAMES, Storage } from '../src/index.js';
+import { PROTECTED_BRANCH_NAMES, Storage, isProtectedBranch } from '../src/index.js';
 
 let dir: string;
 let storage: Storage;
@@ -897,6 +897,10 @@ describe('Storage.findCompletedQueenPlans', () => {
 
   it('respects the latest claim observation when status changes over time', () => {
     const { subTaskIds } = makePlan('progressive-plan', ['claimed']);
+    const [subTaskId] = subTaskIds;
+    if (subTaskId === undefined) {
+      throw new Error('expected progressive-plan to create a sub-task');
+    }
     storage.insertObservation({
       session_id: 'planner',
       kind: 'plan-subtask-claim',
@@ -904,7 +908,7 @@ describe('Storage.findCompletedQueenPlans', () => {
       compressed: false,
       intensity: null,
       ts: Date.now() + 1000,
-      task_id: subTaskIds[0]!,
+      task_id: subTaskId,
       reply_to: null,
       metadata: { kind: 'plan-subtask-claim', status: 'completed' },
     });
@@ -971,9 +975,11 @@ describe('Storage.findCompletedQueenPlans', () => {
     expect(storage.findCompletedQueenPlans('/other').map((r) => r.plan_slug)).toEqual([
       'other-plan',
     ]);
-    expect(storage.findCompletedQueenPlans().map((r) => r.plan_slug).sort()).toEqual([
-      'other-plan',
-      'repo-a-plan',
-    ]);
+    expect(
+      storage
+        .findCompletedQueenPlans()
+        .map((r) => r.plan_slug)
+        .sort(),
+    ).toEqual(['other-plan', 'repo-a-plan']);
   });
 });

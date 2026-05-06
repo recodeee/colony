@@ -105,12 +105,7 @@ describe('claim-before-edit full bridge path', () => {
 
   it('keeps a manual task_claim_file claim matched when the lifecycle edit path is in a managed worktree', async () => {
     const sessionId = 'codex@managed-worktree-manual-claim';
-    const worktreePath = join(
-      repoRoot,
-      '.omx',
-      'agent-worktrees',
-      'colony__codex__manual-claim',
-    );
+    const worktreePath = join(repoRoot, '.omx', 'agent-worktrees', 'colony__codex__manual-claim');
     mkdirSync(join(worktreePath, 'src'), { recursive: true });
 
     await emitLifecycle(10, {

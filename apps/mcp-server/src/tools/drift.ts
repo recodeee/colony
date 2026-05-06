@@ -1,6 +1,6 @@
 import type { MemoryStore } from '@colony/core';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { FILE_EDIT_TOOLS, type ObservationRow, normalizeClaimPath } from '@colony/storage';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 
@@ -91,11 +91,7 @@ export function computeDrift(
   };
 }
 
-function collectClaimedFiles(
-  store: MemoryStore,
-  taskId: number,
-  sessionId: string,
-): Set<string> {
+function collectClaimedFiles(store: MemoryStore, taskId: number, sessionId: string): Set<string> {
   const claims = store.storage.listClaims(taskId);
   const out = new Set<string>();
   for (const claim of claims) {

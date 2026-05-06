@@ -1,3 +1,5 @@
+/// <reference path="./better-sqlite3.d.ts" />
+
 import { mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
 import Database from 'better-sqlite3';
