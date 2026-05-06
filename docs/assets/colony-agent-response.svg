@@ -1,0 +1,353 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-label="When Codex or Claude finishes a task they report back with a structured response: PR link and merge SHA, changed files, verification results, and branch cleanup. Colony captures the receipt; GitGuardEx manages the worktree; OpenSpec hosts the spec change.">
+  <defs>
+    <radialGradient id="agentBg" cx="50%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#0a1830"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </radialGradient>
+
+    <linearGradient id="agentCardGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1c2c"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="receiptGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c1a2e"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </linearGradient>
+    <linearGradient id="termHeader3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <filter id="glowAg" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="dotGlowAg" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <marker id="arrowAg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#475569"/>
+    </marker>
+
+    <!-- Agent ring -->
+    <symbol id="agentRingS" overflow="visible">
+      <circle r="22" fill="#0f172a" stroke="currentColor" stroke-width="1.5"/>
+    </symbol>
+  </defs>
+
+  <rect width="1200" height="760" fill="url(#agentBg)"/>
+
+  <!-- Subtle grid -->
+  <g stroke="#0c1a2e" stroke-width="1" opacity="0.4">
+    <path d="M 0 100 H 1200 M 0 200 H 1200 M 0 300 H 1200 M 0 400 H 1200 M 0 500 H 1200 M 0 600 H 1200 M 0 700 H 1200"/>
+    <path d="M 200 0 V 760 M 400 0 V 760 M 600 0 V 760 M 800 0 V 760 M 1000 0 V 760"/>
+  </g>
+
+  <!-- ============================ HEADER ============================ -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+    <text x="600" y="42" text-anchor="middle" fill="#f1f5f9" font-size="22" font-weight="600">When an agent finishes a prompt</text>
+    <text x="600" y="64" text-anchor="middle" fill="#64748b" font-size="13">Every Codex and Claude session reports back with a structured receipt — and Colony captures it.</text>
+  </g>
+
+  <!-- ============================ STAGE 1: PROMPT (top-left) ============================ -->
+  <g transform="translate(80 100)">
+    <text fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-weight="600" letter-spacing="2">1 · PROMPT</text>
+
+    <g transform="translate(0 18)">
+      <rect width="280" height="120" rx="10" fill="url(#agentCardGrad)" stroke="#1e293b" stroke-width="1"/>
+      <!-- user avatar -->
+      <g transform="translate(20 22)">
+        <circle r="10" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+        <text y="4" text-anchor="middle" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="700">u</text>
+      </g>
+      <text x="36" y="20" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">human</text>
+      <text x="36" y="34" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9.5">15:42</text>
+
+      <!-- Prompt body -->
+      <g transform="translate(16 50)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" fill="#94a3b8">
+        <text y="0">Make `colony gain` show live comparison</text>
+        <text y="14">by default, keep the static catalog</text>
+        <text y="28">behind --reference. Update tests and</text>
+        <text y="42">push it through PR.</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- arrow from prompt to agent -->
+  <g stroke="#475569" stroke-width="1.2" fill="none">
+    <path d="M 360 178 L 408 178" marker-end="url(#arrowAg)"/>
+  </g>
+  <circle r="2.5" fill="#22d3ee" filter="url(#dotGlowAg)">
+    <animate attributeName="cx" values="362;406" dur="1.6s" repeatCount="indefinite"/>
+    <animate attributeName="cy" values="178;178" dur="1.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;1;0" dur="1.6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- ============================ STAGE 2: AGENT WORKING (top-center) ============================ -->
+  <g transform="translate(420 100)">
+    <text fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-weight="600" letter-spacing="2">2 · AGENT WORKS (17m 36s)</text>
+
+    <g transform="translate(0 18)">
+      <rect width="360" height="120" rx="10" fill="url(#agentCardGrad)" stroke="#22d3ee" stroke-width="1"/>
+
+      <!-- Codex pill -->
+      <g transform="translate(20 22)" color="#22d3ee">
+        <use href="#agentRingS" transform="scale(0.6)"/>
+        <text y="4" text-anchor="middle" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">&gt;_</text>
+      </g>
+      <text x="36" y="20" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11" font-weight="600">Codex</text>
+      <text x="84" y="20" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">in agent worktree (gx-managed)</text>
+
+      <!-- Activity indicator -->
+      <g transform="translate(330 22)">
+        <circle r="4" fill="#22d3ee">
+          <animate attributeName="opacity" values="1;0.3;1" dur="1.2s" repeatCount="indefinite"/>
+        </circle>
+      </g>
+
+      <!-- Activity log inside the card -->
+      <g transform="translate(16 50)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">
+        <text y="0" fill="#34d399">✓</text>
+        <text y="0" x="14" fill="#94a3b8">claimed packages/core, apps/cli, apps/worker</text>
+
+        <text y="14" fill="#34d399">✓</text>
+        <text y="14" x="14" fill="#94a3b8">edited savings-reference.ts, gain.ts</text>
+
+        <text y="28" fill="#34d399">✓</text>
+        <text y="28" x="14" fill="#94a3b8">tests updated &amp; passing</text>
+
+        <text y="42" fill="#22d3ee">●</text>
+        <text y="42" x="14" fill="#67e8f9">opening PR via gh...</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- arrow from agent to receipt -->
+  <g stroke="#475569" stroke-width="1.2" fill="none">
+    <path d="M 780 178 L 828 178" marker-end="url(#arrowAg)"/>
+  </g>
+
+  <!-- ============================ STAGE 3: STRUCTURED RECEIPT (top-right) ============================ -->
+  <g transform="translate(840 100)">
+    <text fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-weight="600" letter-spacing="2">3 · STRUCTURED RESPONSE</text>
+
+    <g transform="translate(0 18)">
+      <rect width="280" height="120" rx="10" fill="url(#agentCardGrad)" stroke="#10b981" stroke-width="1.2">
+        <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="3s" repeatCount="indefinite"/>
+      </rect>
+
+      <text x="20" y="22" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12" font-weight="700">Done.</text>
+      <text x="62" y="22" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">PR #447 is merged.</text>
+
+      <!-- the four canonical sections of every response -->
+      <g transform="translate(20 40)" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5">
+        <g>
+          <circle cx="4" cy="-2" r="3" fill="#10b981"/>
+          <text x="14" y="2" fill="#94a3b8">PR link + merge SHA</text>
+        </g>
+        <g transform="translate(0 14)">
+          <circle cx="4" cy="-2" r="3" fill="#10b981"/>
+          <text x="14" y="2" fill="#94a3b8">Changed files (annotated)</text>
+        </g>
+        <g transform="translate(0 28)">
+          <circle cx="4" cy="-2" r="3" fill="#10b981"/>
+          <text x="14" y="2" fill="#94a3b8">Verified: lint, tests, build, typecheck</text>
+        </g>
+        <g transform="translate(0 42)">
+          <circle cx="4" cy="-2" r="3" fill="#10b981"/>
+          <text x="14" y="2" fill="#94a3b8">Cleanup: worktree pruned, branch deleted</text>
+        </g>
+        <g transform="translate(0 56)">
+          <circle cx="4" cy="-2" r="3" fill="#f59e0b"/>
+          <text x="14" y="2" fill="#94a3b8">Remaining risk (if any)</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ============================ MIDDLE: THE FULL RECEIPT (terminal-style) ============================ -->
+  <g transform="translate(80 270)">
+    <text fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-weight="600" letter-spacing="2">RECEIPT — the actual message the agent prints</text>
+
+    <g transform="translate(0 18)">
+      <rect width="1040" height="280" rx="10" fill="url(#receiptGrad)" stroke="#1e293b" stroke-width="1"/>
+      <!-- header strip -->
+      <rect width="1040" height="30" rx="10" fill="url(#termHeader3)"/>
+      <rect y="14" width="1040" height="16" fill="url(#termHeader3)"/>
+      <line x1="0" y1="30" x2="1040" y2="30" stroke="#0a3d2c" stroke-width="0.5"/>
+      <circle cx="16" cy="15" r="5" fill="#ef4444"/>
+      <circle cx="34" cy="15" r="5" fill="#f59e0b"/>
+      <circle cx="52" cy="15" r="5" fill="#10b981"/>
+      <text x="80" y="19" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">codex · worked for 17m 36s · structured response</text>
+      <text x="1020" y="19" text-anchor="end" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">⎘ copy</text>
+
+      <!-- Receipt body -->
+      <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <!-- Done line -->
+        <text x="20" y="56" fill="#34d399" font-weight="700">─</text>
+        <text x="36" y="56" fill="#6ee7b7" font-weight="700">Done.</text>
+        <text x="80" y="56" fill="#cbd5e1">PR #447 is merged:</text>
+        <text x="220" y="56" fill="#67e8f9" text-decoration="underline">https://github.com/recodeee/colony/pull/447</text>
+        <text x="20" y="74" fill="#cbd5e1">  Merge commit: <tspan fill="#a78bfa">6807d4d31180845065a3b9bbe5d7e21cdb95cdfb</tspan></text>
+
+        <!-- Changed -->
+        <text x="20" y="100" fill="#475569">  Changed:</text>
+        <text x="20" y="118" fill="#cbd5e1">    - <tspan fill="#67e8f9">README.md</tspan>: publish-path block removed.</text>
+        <text x="20" y="136" fill="#cbd5e1">    - <tspan fill="#67e8f9">packages/core/src/savings-reference.ts</tspan>: shared live comparison model.</text>
+        <text x="20" y="154" fill="#cbd5e1">    - <tspan fill="#67e8f9">colony gain</tspan>: live comparison default; static catalog behind <tspan fill="#fcd34d">--reference</tspan>.</text>
+        <text x="20" y="172" fill="#cbd5e1">    - <tspan fill="#67e8f9">savings_report</tspan> + <tspan fill="#67e8f9">worker /savings</tspan>: same live comparison payload/rendering.</text>
+        <text x="20" y="190" fill="#cbd5e1">    - Tests updated for CLI, MCP server, worker.</text>
+
+        <!-- Verified -->
+        <text x="20" y="216" fill="#475569">  Verified:</text>
+        <g transform="translate(0 234)">
+          <text x="20" fill="#10b981">    ✓</text>
+          <text x="40" fill="#cbd5e1">biome check --write touched files: pass</text>
+          <text x="320" fill="#10b981">✓</text>
+          <text x="340" fill="#cbd5e1">CLI tests: 18 passed</text>
+          <text x="500" fill="#10b981">✓</text>
+          <text x="520" fill="#cbd5e1">Worker savings test: 1 passed</text>
+          <text x="720" fill="#10b981">✓</text>
+          <text x="740" fill="#cbd5e1">MCP server tests: 21 passed</text>
+        </g>
+        <g transform="translate(0 252)">
+          <text x="20" fill="#10b981">    ✓</text>
+          <text x="40" fill="#cbd5e1">Builds: core, CLI, worker, MCP server pass</text>
+          <text x="380" fill="#10b981">✓</text>
+          <text x="400" fill="#cbd5e1">Typechecks: same — pass</text>
+          <text x="600" fill="#10b981">✓</text>
+          <text x="620" fill="#cbd5e1">Main clean; agent worktree pruned</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ============================ BOTTOM ROW: 3 ECOSYSTEM TOOLS ============================ -->
+
+  <g transform="translate(80 580)">
+    <text fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9.5" font-weight="600" letter-spacing="2">THE TOOLS BEHIND THE RECEIPT</text>
+  </g>
+
+  <!-- Card: Colony (captures the receipt as observation) -->
+  <g transform="translate(80 600)">
+    <rect width="320" height="140" rx="10" fill="url(#agentCardGrad)" stroke="#10b981" stroke-width="1"/>
+
+    <!-- header -->
+    <g transform="translate(20 26)">
+      <polygon points="0,-10 8.66,-5 8.66,5 0,10 -8.66,5 -8.66,-5" fill="#020806" stroke="#10b981" stroke-width="1.2"/>
+      <circle r="2.5" fill="#10b981">
+        <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <text x="38" y="22" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">Colony</text>
+    <text x="98" y="22" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">captures the receipt</text>
+
+    <line x1="14" y1="48" x2="306" y2="48" stroke="#1e293b"/>
+
+    <g transform="translate(14 64)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" fill="#94a3b8">
+      <text y="0">→ task_post: PR + summary</text>
+      <text y="16">→ task_hand_off: claims released</text>
+      <text y="32">→ obs_8af2c1: searchable later</text>
+      <text y="48">→ mcp_metrics: tokens + duration</text>
+    </g>
+
+    <!-- bottom tag -->
+    <g transform="translate(20 122)">
+      <rect x="-2" y="-9" width="120" height="16" rx="3" fill="#022c22"/>
+      <text x="58" y="2" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="600">RECEIPT IS DATA</text>
+    </g>
+  </g>
+
+  <!-- Card: GitGuardEx / gx -->
+  <g transform="translate(440 600)">
+    <rect width="320" height="140" rx="10" fill="url(#agentCardGrad)" stroke="#a78bfa" stroke-width="1"/>
+
+    <g transform="translate(20 26)" stroke="#a78bfa" stroke-width="1.4" fill="none">
+      <rect x="-9" y="-9" width="18" height="14" rx="2"/>
+      <path d="M -3 -2 V -4 a 3 3 0 0 1 6 0 V -2" stroke-width="1.2"/>
+      <line x1="0" y1="-1" x2="0" y2="2" stroke="#a78bfa" stroke-linecap="round"/>
+    </g>
+    <text x="38" y="22" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">GitGuardEx</text>
+    <text x="124" y="22" fill="#a78bfa" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">gx</text>
+    <text x="148" y="22" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">worktree manager</text>
+
+    <line x1="14" y1="48" x2="306" y2="48" stroke="#1e293b"/>
+
+    <g transform="translate(14 64)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" fill="#94a3b8">
+      <text y="0"><tspan fill="#c4b5fd">gx branch start</tspan> "&lt;task&gt;" "&lt;agent&gt;"</text>
+      <text y="16">→ creates agent/* worktree lane</text>
+      <text y="32">→ prevents claims on dev/main</text>
+      <text y="48">→ prunes after merge automatically</text>
+    </g>
+
+    <g transform="translate(20 122)">
+      <rect x="-2" y="-9" width="156" height="16" rx="3" fill="#3b0764"/>
+      <text x="76" y="2" text-anchor="middle" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="600">ISOLATION BY WORKTREE</text>
+    </g>
+  </g>
+
+  <!-- Card: OpenSpec -->
+  <g transform="translate(800 600)">
+    <rect width="320" height="140" rx="10" fill="url(#agentCardGrad)" stroke="#22d3ee" stroke-width="1"/>
+
+    <g transform="translate(20 26)" stroke="#22d3ee" stroke-width="1.4" fill="none">
+      <rect x="-9" y="-10" width="18" height="20" rx="1.5"/>
+      <line x1="-5" y1="-5" x2="5" y2="-5" stroke-width="1"/>
+      <line x1="-5" y1="-1" x2="5" y2="-1" stroke-width="1"/>
+      <line x1="-5" y1="3" x2="3" y2="3" stroke-width="1"/>
+      <line x1="-5" y1="7" x2="4" y2="7" stroke-width="1"/>
+    </g>
+    <text x="38" y="22" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">OpenSpec</text>
+    <text x="120" y="22" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">spec change source</text>
+
+    <line x1="14" y1="48" x2="306" y2="48" stroke="#1e293b"/>
+
+    <g transform="translate(14 64)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10" fill="#94a3b8">
+      <text y="0">openspec/changes/<tspan fill="#67e8f9">show-live-savings</tspan></text>
+      <text y="16">→ proposal.md + tasks.md</text>
+      <text y="32">→ deltas in specs/savings/spec.md</text>
+      <text y="48">→ archived after PR lands</text>
+    </g>
+
+    <g transform="translate(20 122)">
+      <rect x="-2" y="-9" width="138" height="16" rx="3" fill="#082f49"/>
+      <text x="67" y="2" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="600">SPEC IS THE TASK</text>
+    </g>
+  </g>
+
+  <!-- Connecting flow lines from receipt to the three tools -->
+  <g stroke="#0a3d2c" stroke-width="1" fill="none" opacity="0.6">
+    <path d="M 240 558 V 600"/>
+    <path d="M 600 558 V 600"/>
+    <path d="M 960 558 V 600"/>
+  </g>
+  <g stroke="#10b981" stroke-width="1" fill="none" stroke-linecap="round">
+    <line x1="240" y1="558" x2="240" y2="600" stroke-dasharray="3 30">
+      <animate attributeName="stroke-dashoffset" values="33;0" dur="2s" repeatCount="indefinite"/>
+    </line>
+    <line x1="600" y1="558" x2="600" y2="600" stroke="#a78bfa" stroke-dasharray="3 30">
+      <animate attributeName="stroke-dashoffset" values="33;0" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+    </line>
+    <line x1="960" y1="558" x2="960" y2="600" stroke="#22d3ee" stroke-dasharray="3 30">
+      <animate attributeName="stroke-dashoffset" values="33;0" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <!-- traveling dots -->
+  <g filter="url(#dotGlowAg)">
+    <circle r="2.5" cx="240" fill="#10b981">
+      <animate attributeName="cy" values="558;600" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="2.5" cx="600" fill="#a78bfa">
+      <animate attributeName="cy" values="558;600" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="2.5" cx="960" fill="#22d3ee">
+      <animate attributeName="cy" values="558;600" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+</svg>

@@ -1,6 +1,8 @@
-<h1 align="center">
-  <img src="docs/assets/colony-logo.png" alt="Colony logo" width="88" />
-</h1>
+<p align="center">
+  <img src="docs/assets/colony-logo.png" alt="Colony — a stone-carved queen ant colony with the COORDINATE, CLAIM, HEALTH, and MEMORY pillars" width="320" />
+</p>
+
+<h1 align="center">Colony</h1>
 
 <p align="center">
   <strong>Local-first coordination for fleets of coding agents.</strong><br/>
@@ -8,19 +10,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/recodeee/colony/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/recodeee/colony/actions/workflows/ci.yml/badge.svg?branch=main" /></a>
-  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm version" src="https://img.shields.io/npm/v/%40imdeadpool%2Fcolony-cli?style=flat-square&label=npm" /></a>
-  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm downloads" src="https://img.shields.io/npm/dm/%40imdeadpool%2Fcolony-cli?style=flat-square&label=downloads" /></a>
-  <a href="https://scorecard.dev/viewer/?uri=github.com/recodeee/colony"><img alt="OpenSSF Scorecard" src="https://api.securityscorecards.dev/projects/github.com/recodeee/colony/badge" /></a>
-</p>
-
-<p align="center">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/recodeee/colony?style=flat-square" /></a>
-  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb?style=flat-square" />
-  <a href="https://github.com/recodeee/colony/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/recodeee/colony?style=flat-square" /></a>
-  <a href="https://github.com/recodeee/colony/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/recodeee/colony/main?style=flat-square" /></a>
-  <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-16a34a?style=flat-square" />
-  <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed?style=flat-square" />
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-111827.svg" /></a>
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-%3E%3D20-2563eb.svg" />
+  <img alt="CLI: colony" src="https://img.shields.io/badge/cli-colony-16a34a.svg" />
+  <img alt="MCP namespace: colony" src="https://img.shields.io/badge/mcp-colony-7c3aed.svg" />
 </p>
 
 <p align="center">
@@ -32,23 +25,6 @@ npm install -g @imdeadpool/colony-cli
 colony install --ide codex
 colony health
 ```
-
-## Release Notes
-
-### `v0.x` — Current Patch Line
-
-Colony is in the v0 hardening line. Upcoming patches focus on making the
-shipped coordination loop easier to trust in real multi-agent runs.
-
-- Patch adoption visibility: keep `colony health`, the local viewer, and
-  `mcp_metrics` receipts aligned so gaps are visible without digging through
-  SQLite.
-- Patch workflow hygiene: make claims, task posts, handoffs, quota cleanup, and
-  stale-session pruning clearer in status surfaces before they create duplicate
-  work.
-- Patch release confidence: keep README badges, publish smoke checks, and
-  `@imdeadpool/colony-cli` package metadata current so users can see CI, npm
-  version, downloads, license, and supply-chain posture before installing.
 
 Colony is **not a hosted control plane** and it does not run your agents. Codex,
 Claude Code, Cursor, OMX, dmux, and other runtimes still execute work. Colony
@@ -80,13 +56,11 @@ until an agent explicitly hydrates the full record. The result is measurable —
 
 ---
 
-## The Problem: One Failing Test, Two Agent Fixes
+## The Problem: Two Agents, One Bug, Two Patches
 
-During a run, multiple agents can hit the same failing runtime-manifest test.
-Without a shared coordination loop, each agent may independently diagnose the
-same Turbopack root-escape bug, patch the same schema file, and race separate
-PRs for one fix. Eventually one agent lands the repair, but the others have
-already spent tokens, touched overlapping files, and created cleanup work.
+A human can ask Codex and Claude to solve the same runtime-manifest bug at the
+same time. Without a shared loop, both agents diagnose the same Turbopack root
+escape, edit the same schema file, and race two PRs for one fix.
 
 <p align="center">
   <img src="docs/assets/colony-vs.svg" alt="Without Colony two agents collide on the same file. With Colony the second agent reads a live claim and stands down." width="100%" />
@@ -105,11 +79,114 @@ shared task thread.
 | Without Colony                         | With Colony                                     |
 | -------------------------------------- | ----------------------------------------------- |
 | Agents collide on the same files.      | Agents claim files before edits.                |
-| Agents chase the same failure alone.   | Agents pull ready subtasks from Colony.         |
+| Humans schedule parallel work by hand. | Agents pull ready subtasks from Colony.         |
 | Progress is trapped in chat windows.   | Working state is saved to task threads.         |
 | Old claims and handoffs stay noisy.    | Signals decay, expire, and can be swept.        |
 | Follow-up ideas disappear.             | Proposals can be reinforced and promoted.       |
 | Task lists become browsing surfaces.   | `task_ready_for_agent` becomes the work picker. |
+
+---
+
+## Every Session Ships a Receipt
+
+When a Codex or Claude session finishes a prompt, it doesn't just say "done" —
+it returns a **structured response** with the PR link, the merge SHA, the files
+that changed, the verification it ran, and what happened to the worktree
+afterward. That format isn't ceremonial: it's the **handoff payload**. Colony
+captures it as one observation, the next agent reads it instead of re-deriving
+context, and `mcp_metrics` records the cost.
+
+<p align="center">
+  <img src="docs/assets/colony-agent-response.svg" alt="When an agent finishes a prompt: prompt → 17 minutes of work → structured response with PR link, merge SHA, changed files, verification, and cleanup → captured by Colony as an observation. GitGuardEx (gx) handles the worktree, OpenSpec hosts the spec change." width="100%" />
+</p>
+
+**The five canonical sections** every session response carries:
+
+| Section            | What it contains                                                | Why it matters                                                              |
+| ------------------ | --------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| **Done.**          | One line. PR link + merge SHA, or "blocked: <reason>".          | The next agent can stop reading after the first line if everything's green. |
+| **Changed**        | Files touched, each with one-line annotation of _what_ changed. | Code review is `git diff`; Colony memory is this list.                      |
+| **Verified**       | Lint, tests, build, typecheck — each as a checkmarked line.     | Lets the next agent skip re-running what already passed.                    |
+| **Cleanup**        | Worktree pruned, branch deleted, claims released.               | Confirms the session left no orphan state behind.                           |
+| **Remaining risk** | Anything not covered. Empty when there's nothing to flag.       | The honest line. If it's empty, the receipt is complete.                    |
+
+When this format is consistent, every downstream agent can treat the response
+as **a parseable artifact, not prose**. That's why the cross-agent handoff
+costs 400 tokens instead of 30,000 — the receiving agent reads the receipt
+and resumes; it never re-reads the repo.
+
+### The Three Tools Behind the Receipt
+
+The receipt is generated and consumed in the same flow, but three different
+projects coordinate to make it work:
+
+#### Colony — captures the receipt as data
+
+The structured response gets written through `task_post` and `task_hand_off`
+into the local SQLite store. After that, `colony search "PR #447"` finds it,
+`colony timeline <session_id>` replays the work that produced it, and
+`mcp_metrics` carries the token cost. **The receipt is searchable; the human
+or next agent doesn't need the original chat window.**
+
+```text
+→ task_post: "PR #447 merged, savings model unified..."
+→ task_hand_off: claims released on packages/core, apps/cli, apps/worker
+→ obs_8af2c1: full structured body, FTS5-indexed
+→ mcp_metrics: 17m 36s wall, ~400 tokens for the handoff
+```
+
+#### GitGuardEx (`gx`) — keeps work in worktrees, not on `main`
+
+[GitGuardEx](https://github.com/recodeee/gitguardex) gives every agent its
+own worktree on an `agent/*` branch. Claims happen in the worktree, edits
+happen in the worktree, the PR opens from the worktree, and after merge the
+worktree is pruned and the branch is deleted — all in one command. Colony's
+branch policy guard refuses claims on `dev` / `main`; `gx` is the part that
+makes "claim on a worktree instead" easy to do.
+
+```bash
+gx branch start "show-live-savings" "codex"   # creates agent/codex-show-live-savings
+# ... agent works ...
+# ... PR merges ...
+gx branch end                                  # prunes worktree + deletes branch
+```
+
+The agent's response carries this provenance in the **Cleanup** line:
+_"Main clean; agent worktree pruned; remote and local agent branch deleted."_
+That's `gx` reporting back through Colony.
+
+#### OpenSpec — the spec change is the task
+
+[OpenSpec](https://github.com/recodeee/openspec) holds the proposal-and-delta
+representation of every change. Before code is written, the change exists as
+`openspec/changes/<change-id>/proposal.md` plus a `tasks.md` and spec deltas.
+The agent works against that change, and **the change ID is the link between
+the prompt and the receipt** — making every PR traceable back to the spec it
+implements.
+
+```text
+openspec/changes/show-live-savings/
+  proposal.md       — why
+  tasks.md          — what to do
+  specs/savings/spec.md  — deltas to the spec
+```
+
+After PR lands, the change is archived under `openspec/changes/archive/`,
+keeping the historical record even after the working files move on.
+
+### Why this triplet matters
+
+| Without this triplet                                                    | With Colony + `gx` + OpenSpec                                                |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Agents finish work and the context dies in the chat window.             | The receipt persists as an observation, searchable forever.                  |
+| Agents edit on `main`, collisions are common, rollbacks are scary.      | Every agent works in an `agent/*` worktree; merge or discard is one command. |
+| "Why was this changed?" requires `git log` archeology and chat history. | The OpenSpec change ID points at the proposal, tasks, and deltas.            |
+| Every handoff replays repo + git log + chat (~30k tokens).              | Every handoff is the structured receipt (~400 tokens).                       |
+
+The structured response isn't a Colony feature — it's a contract that Colony,
+`gx`, and OpenSpec all happen to agree on. Anything else that wants to
+participate (a new runtime, a CI bot, a code-review agent) just needs to
+emit the same five sections.
 
 ---
 
@@ -558,9 +635,9 @@ pnpm build
 
 Before merging changes:
 
-```bash
+````bash
 pnpm typecheck && pnpm lint && pnpm test && pnpm build
-```
+
 
 ---
 
@@ -1009,3 +1086,8 @@ JuliusBrussee for the original base.
 ## License
 
 MIT © Imdeadpool
+
+```
+
+```
+````
