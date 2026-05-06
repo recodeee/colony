@@ -2055,6 +2055,10 @@ function claimBeforeEditPayload(
     recent.recent_stats.claim_miss_reasons,
     recentEditsWithoutClaimBefore,
   );
+  const recentClaimBeforeEditRate =
+    recent.recent_stats.edits_with_file_path < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE
+      ? null
+      : ratio(recent.recent_stats.edits_claimed_before, recent.recent_stats.edits_with_file_path);
   const sessionBindingMissing = stats.session_binding_missing ?? 0;
   const claimMatchSources = claimMatchSourcesPayload(stats.claim_match_sources);
   const claimMissReasons = claimMissReasonsPayload(
@@ -2094,6 +2098,7 @@ function claimBeforeEditPayload(
     recent_hook_capable_edits: recent.recent_stats.edits_with_file_path,
     recent_pre_tool_use_signals: recentPreToolUseSignals,
     recent_pre_tool_use_missing: recentClaimMissReasons.pre_tool_use_missing,
+    recent_claim_before_edit_rate: recentClaimBeforeEditRate,
     recent_claim_mismatch_count: lifecycleClaimMismatchCount(recentClaimMissReasons),
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_miss_reasons: claimMissReasons,
@@ -2138,10 +2143,7 @@ function claimBeforeEditPayload(
     recent_hook_capable_edits: recent.recent_stats.edits_with_file_path,
     recent_pre_tool_use_missing: recentClaimMissReasons.pre_tool_use_missing,
     recent_pre_tool_use_signals: recentPreToolUseSignals,
-    recent_claim_before_edit_rate:
-      recent.recent_stats.edits_with_file_path < RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE
-        ? null
-        : ratio(recent.recent_stats.edits_claimed_before, recent.recent_stats.edits_with_file_path),
+    recent_claim_before_edit_rate: recentClaimBeforeEditRate,
     session_binding_missing: sessionBindingMissing,
     edit_source_breakdown: {
       colony_post_tool_edits: stats.edit_tool_calls,
@@ -2170,6 +2172,7 @@ function lifecycleBridgeRootCause(input: {
   recent_hook_capable_edits: number;
   recent_pre_tool_use_signals: number;
   recent_pre_tool_use_missing: number;
+  recent_claim_before_edit_rate: number | null;
   recent_claim_mismatch_count: number;
   edits_without_claim_before: number;
   claim_miss_reasons: ClaimMissReasons;
@@ -2183,7 +2186,12 @@ function lifecycleBridgeRootCause(input: {
   const evidence = formatRootCauseEvidence(counters);
   const freshPreToolUseMissing =
     input.recent_hook_capable_edits > 0 && input.recent_pre_tool_use_missing > 0;
-  const noFreshBadEdits = !freshPreToolUseMissing && input.recent_claim_mismatch_count === 0;
+  const recentClaimBeforeEditHealthy =
+    input.recent_claim_before_edit_rate !== null &&
+    isAtOrAboveTarget(input.recent_claim_before_edit_rate, TARGET_CLAIM_BEFORE_EDIT);
+  const noFreshBadEdits =
+    !freshPreToolUseMissing &&
+    (input.recent_claim_mismatch_count === 0 || recentClaimBeforeEditHealthy);
 
   if (
     input.runtime_bridge_status === 'available' &&

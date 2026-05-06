@@ -299,7 +299,7 @@ describe('autoClaimFileBeforeEdit', () => {
     expect(store.storage.getParticipantAgent(thread.task_id, 'codex@019dd6c0')).toBe('codex');
   });
 
-  it('resolves exact session before repo_root and branch fallbacks', () => {
+  it('prefers explicit repo_root and branch over a stale exact-session task', () => {
     store.startSession({ id: 'codex@exact', ide: 'codex', cwd: '/repo/exact' });
     store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo/scoped' });
     const exactThread = TaskThread.open(store, {
@@ -326,13 +326,13 @@ describe('autoClaimFileBeforeEdit', () => {
       ok: true,
       status: 'claimed',
       resolution: 'bound',
-      matched_by: 'session_id',
-      task_id: exactThread.task_id,
+      matched_by: 'branch_repo_root',
+      task_id: scopedThread.task_id,
     });
-    expect(store.storage.getClaim(exactThread.task_id, 'src/viewer.tsx')?.session_id).toBe(
+    expect(store.storage.getClaim(scopedThread.task_id, 'src/viewer.tsx')?.session_id).toBe(
       'codex@exact',
     );
-    expect(store.storage.getClaim(scopedThread.task_id, 'src/viewer.tsx')).toBeUndefined();
+    expect(store.storage.getClaim(exactThread.task_id, 'src/viewer.tsx')).toBeUndefined();
   });
 
   it('resolves a missing Codex edit session by repo_root and branch', () => {
@@ -577,7 +577,7 @@ describe('autoClaimFileBeforeEdit', () => {
     });
   });
 
-  it('resolves exact session_id before conflicting repo_root and branch scope', () => {
+  it('prefers explicit repo_root and branch over a stale exact-session binding', () => {
     store.startSession({ id: 'codex@exact', ide: 'codex', cwd: '/repo/exact' });
     store.startSession({ id: 'owner', ide: 'claude-code', cwd: '/repo/other' });
     const exactThread = TaskThread.open(store, {
@@ -601,15 +601,15 @@ describe('autoClaimFileBeforeEdit', () => {
 
     expect(result).toMatchObject({
       status: 'bound',
-      matched_by: 'session_id',
+      matched_by: 'branch_repo_root',
       candidate: {
-        task_id: exactThread.task_id,
-        repo_root: '/repo/exact',
-        branch: 'agent/codex/exact',
+        task_id: scopedThread.task_id,
+        repo_root: '/repo/other',
+        branch: 'agent/codex/scoped',
       },
     });
     expect(result).not.toMatchObject({
-      candidate: { task_id: scopedThread.task_id },
+      candidate: { task_id: exactThread.task_id },
     });
   });
 });
@@ -750,6 +750,40 @@ describe('claimBeforeEditFromToolUse', () => {
       pre_tool_use_signals: 1,
       auto_claimed_before_edit: 1,
     });
+  });
+
+  it('auto-claims on the live worktree branch even when the session is still joined to main', () => {
+    const repo = join(dir, 'stale-main-repo');
+    const branch = 'agent/codex/live-worktree';
+    fakeGitCheckout(repo, branch);
+    const sessionId = 'codex@stale-main';
+    store.startSession({ id: sessionId, ide: 'codex', cwd: repo });
+    const mainThread = TaskThread.open(store, {
+      repo_root: repo,
+      branch: 'main',
+      session_id: sessionId,
+    });
+    mainThread.join(sessionId, 'codex');
+
+    const result = claimBeforeEditFromToolUse(store, {
+      session_id: sessionId,
+      ide: 'codex',
+      cwd: repo,
+      tool_name: 'Edit',
+      tool_input: { file_path: 'src/live.ts' },
+    });
+
+    const liveTask = store.storage.findTaskByBranch(repo, branch);
+    expect(liveTask).toBeDefined();
+    expect(liveTask?.id).not.toBe(mainThread.task_id);
+    expect(result).toMatchObject({
+      edits_with_claim: [],
+      edits_missing_claim: [],
+      auto_claimed_before_edit: ['src/live.ts'],
+      warnings: [],
+    });
+    expect(store.storage.getClaim(liveTask?.id ?? -1, 'src/live.ts')?.session_id).toBe(sessionId);
+    expect(store.storage.getClaim(mainThread.task_id, 'src/live.ts')).toBeUndefined();
   });
 
   it('materializes a task on the detected branch when no task exists for the session yet', () => {

@@ -595,6 +595,66 @@ describe('colony health payload', () => {
     );
   });
 
+  it('treats stale claim_mismatch buckets as old telemetry when the recent window is healthy', () => {
+    const recentSince = NOW - 3_600_000;
+    const stalePathMismatchStats: ClaimBeforeEditStats = {
+      edit_tool_calls: 35,
+      edits_with_file_path: 30,
+      edits_claimed_before: 25,
+      claim_miss_reasons: {
+        pre_tool_use_missing: 0,
+        no_claim_for_file: 0,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 0,
+        path_mismatch: 5,
+        worktree_path_mismatch: 0,
+      },
+      pre_tool_use_signals: 30,
+    };
+    const healthyRecentStats: ClaimBeforeEditStats = {
+      edit_tool_calls: 15,
+      edits_with_file_path: 15,
+      edits_claimed_before: 14,
+      claim_miss_reasons: {
+        pre_tool_use_missing: 0,
+        path_mismatch: 1,
+      },
+      pre_tool_use_signals: 21,
+    };
+
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: Array.from({ length: 12 }, (_, index) =>
+          call(
+            index + 1,
+            'codex-fresh-session',
+            'mcp__colony__task_claim_file',
+            NOW - 60_000 + index,
+          ),
+        ),
+        claimBeforeEdit: stalePathMismatchStats,
+        claimBeforeEditStatsBySince: (since) =>
+          since >= recentSince ? healthyRecentStats : stalePathMismatchStats,
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.task_claim_file_before_edits).toMatchObject({
+      old_telemetry_pollution: true,
+      recent_pre_tool_use_missing: 0,
+      recent_claim_before_edit_rate: 14 / 15,
+    });
+    expect(payload.readiness_summary.execution_safety).toMatchObject({
+      status: 'ok',
+      root_cause: {
+        kind: 'old_telemetry_pollution',
+        summary: expect.stringContaining('older edit telemetry'),
+      },
+    });
+  });
+
   it('marks the recent claim-before-edit rate n/a when there are no recent edits', () => {
     const recentSince = NOW - 3_600_000;
     const payload = buildColonyHealthPayload(

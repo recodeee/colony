@@ -560,7 +560,9 @@ function ensurePreToolUseTask(
 ): void {
   if (!scope.repo_root || !scope.branch) return;
   try {
-    if (store.storage.findActiveTaskForSession(input.session_id) !== undefined) return;
+    const activeTaskId = store.storage.findActiveTaskForSession(input.session_id);
+    const activeTask = activeTaskId === undefined ? undefined : store.storage.getTask(activeTaskId);
+    if (activeTask && taskMatchesToolScope(activeTask, scope)) return;
     const candidates = activeTaskCandidatesForSession(store, {
       session_id: input.session_id,
       ...scope,
@@ -591,22 +593,28 @@ function taskScopeForToolUse(
 } {
   try {
     const session = store.storage.getSession(input.session_id);
-    const activeTaskId = store.storage.findActiveTaskForSession(input.session_id);
-    const activeTask = activeTaskId === undefined ? undefined : store.storage.getTask(activeTaskId);
     const metadataScope = hookMetadataScope(input.metadata);
     const cwd = input.cwd ?? metadataScope.cwd ?? session?.cwd ?? undefined;
-    const detected = activeTask ? null : cwd ? detectRepoBranch(cwd) : null;
+    const detected = cwd ? detectRepoBranch(cwd) : null;
+    const metadataRepoRoot =
+      readString(input.metadata?.repo_root) ?? readString(input.metadata?.repoRoot);
+    const metadataBranch = readString(input.metadata?.branch);
+    const explicitScope =
+      detected ??
+      (metadataRepoRoot && metadataBranch
+        ? { repo_root: metadataRepoRoot, branch: metadataBranch }
+        : null);
+    const activeTask = explicitScope
+      ? undefined
+      : singleActiveTaskForSession(store, input.session_id);
     return {
-      ...(activeTask
-        ? { repo_root: activeTask.repo_root, branch: activeTask.branch }
-        : detected
-          ? { repo_root: detected.repo_root, branch: detected.branch }
+      ...(explicitScope
+        ? { repo_root: explicitScope.repo_root, branch: explicitScope.branch }
+        : activeTask
+          ? { repo_root: activeTask.repo_root, branch: activeTask.branch }
           : {
-              ...optionalString(
-                'repo_root',
-                readString(input.metadata?.repo_root) ?? readString(input.metadata?.repoRoot),
-              ),
-              ...optionalString('branch', readString(input.metadata?.branch)),
+              ...optionalString('repo_root', metadataRepoRoot),
+              ...optionalString('branch', metadataBranch),
             }),
       ...(cwd !== undefined ? { cwd } : {}),
       ...optionalString('worktree_path', metadataScope.worktree_path),
@@ -617,6 +625,25 @@ function taskScopeForToolUse(
   } catch {
     return {};
   }
+}
+
+function singleActiveTaskForSession(
+  store: MemoryStore,
+  sessionId: string,
+): { repo_root: string; branch: string } | undefined {
+  const candidates = activeTaskCandidatesForSession(store, { session_id: sessionId });
+  if (candidates.length !== 1) return undefined;
+  return store.storage.getTask(candidates[0]?.task_id ?? -1);
+}
+
+function taskMatchesToolScope(
+  task: { repo_root: string; branch: string },
+  scope: { repo_root?: string; branch?: string },
+): boolean {
+  return (
+    (scope.repo_root === undefined || resolve(task.repo_root) === resolve(scope.repo_root)) &&
+    (scope.branch === undefined || task.branch === scope.branch)
+  );
 }
 
 function hookMetadataScope(metadata: Record<string, unknown> | undefined): {
