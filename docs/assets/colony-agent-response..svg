@@ -1,0 +1,297 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-label="When an agent finishes a prompt: prompt becomes work becomes a structured receipt. Colony captures it. GitGuardEx manages the worktree. OpenSpec hosts the spec change.">
+  <defs>
+    <radialGradient id="agentBg2" cx="50%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#0a1830"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </radialGradient>
+
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1c2c"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="receiptCardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c1a2e"/>
+      <stop offset="100%" stop-color="#020610"/>
+    </linearGradient>
+    <linearGradient id="termHeader4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <filter id="cardGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="dotGlowR2" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#agentBg2)"/>
+
+  <!-- Subtle grid -->
+  <g stroke="#0c1a2e" stroke-width="1" opacity="0.4">
+    <path d="M 0 100 H 1200 M 0 200 H 1200 M 0 300 H 1200 M 0 400 H 1200 M 0 500 H 1200 M 0 600 H 1200"/>
+    <path d="M 240 0 V 720 M 480 0 V 720 M 720 0 V 720 M 960 0 V 720"/>
+  </g>
+
+  <!-- ============================ HEADER ============================ -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, sans-serif">
+    <text x="600" y="44" text-anchor="middle" fill="#f1f5f9" font-size="22" font-weight="600">Every session ships a receipt</text>
+    <text x="600" y="66" text-anchor="middle" fill="#64748b" font-size="13">Prompt &#8594; work &#8594; structured response. Colony captures it as data.</text>
+  </g>
+
+  <!-- ============================ TOP ROW: 3 STAGES (icons only, big and clean) ============================ -->
+
+  <!-- Stage 1: Prompt -->
+  <g transform="translate(180 170)">
+    <circle r="48" fill="url(#cardBg)" stroke="#475569" stroke-width="1.5"/>
+    <!-- speech bubble icon -->
+    <g stroke="#94a3b8" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M -22 -10 Q -22 -22 -10 -22 L 16 -22 Q 28 -22 28 -10 L 28 4 Q 28 16 16 16 L -2 16 L -12 24 L -10 16 Q -22 16 -22 4 Z" transform="translate(0 -3)"/>
+      <line x1="-12" y1="-3" x2="18" y2="-3"/>
+      <line x1="-12" y1="4" x2="10" y2="4"/>
+    </g>
+    <!-- step badge -->
+    <circle cx="-38" cy="-32" r="14" fill="#020617" stroke="#475569" stroke-width="1"/>
+    <text x="-38" y="-28" text-anchor="middle" fill="#94a3b8" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">1</text>
+
+    <text y="74" text-anchor="middle" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Prompt</text>
+    <text y="92" text-anchor="middle" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">human asks</text>
+  </g>
+
+  <!-- Connecting arrow 1 -->
+  <g stroke="#1e293b" stroke-width="1.5" fill="none">
+    <line x1="240" y1="170" x2="540" y2="170"/>
+  </g>
+  <g stroke="#22d3ee" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.85">
+    <line x1="240" y1="170" x2="540" y2="170" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.6s" repeatCount="indefinite"/>
+    </line>
+  </g>
+  <circle r="3" fill="#22d3ee" filter="url(#dotGlowR2)">
+    <animate attributeName="cx" values="244;540" dur="1.6s" repeatCount="indefinite"/>
+    <animate attributeName="cy" values="170;170" dur="1.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;1;0" dur="1.6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Stage 2: Agent works -->
+  <g transform="translate(600 170)">
+    <!-- Outer pulsing ring -->
+    <circle r="56" fill="none" stroke="#22d3ee" stroke-width="1" opacity="0.4">
+      <animate attributeName="r" values="52;62;52" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.5;0;0.5" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="48" fill="url(#cardBg)" stroke="#22d3ee" stroke-width="1.5"/>
+    <!-- Codex >_ glyph, big and clean -->
+    <text y="9" text-anchor="middle" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="32" font-weight="700">&gt;_</text>
+    <!-- step badge -->
+    <circle cx="-38" cy="-32" r="14" fill="#082f49" stroke="#22d3ee" stroke-width="1"/>
+    <text x="-38" y="-28" text-anchor="middle" fill="#67e8f9" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">2</text>
+    <!-- spinning activity indicator -->
+    <g transform="translate(38 -32)">
+      <circle r="14" fill="#082f49" stroke="#22d3ee" stroke-width="1"/>
+      <g stroke="#22d3ee" stroke-width="1.5" fill="none" stroke-linecap="round">
+        <path d="M -6 0 a 6 6 0 0 1 12 0">
+          <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="2s" repeatCount="indefinite"/>
+        </path>
+      </g>
+    </g>
+
+    <text y="74" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Codex / Claude works</text>
+    <text y="92" text-anchor="middle" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10">17m 36s</text>
+  </g>
+
+  <!-- Connecting arrow 2 -->
+  <g stroke="#1e293b" stroke-width="1.5" fill="none">
+    <line x1="660" y1="170" x2="960" y2="170"/>
+  </g>
+  <g stroke="#10b981" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.85">
+    <line x1="660" y1="170" x2="960" y2="170" stroke-dasharray="4 70">
+      <animate attributeName="stroke-dashoffset" values="74;0" dur="1.6s" begin="0.4s" repeatCount="indefinite"/>
+    </line>
+  </g>
+  <circle r="3" fill="#10b981" filter="url(#dotGlowR2)">
+    <animate attributeName="cx" values="664;960" dur="1.6s" begin="0.4s" repeatCount="indefinite"/>
+    <animate attributeName="cy" values="170;170" dur="1.6s" begin="0.4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;1;0" dur="1.6s" begin="0.4s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Stage 3: Receipt -->
+  <g transform="translate(1020 170)">
+    <circle r="48" fill="url(#cardBg)" stroke="#10b981" stroke-width="1.5">
+      <animate attributeName="stroke-opacity" values="0.7;1;0.7" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <!-- receipt-document icon -->
+    <g stroke="#10b981" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M -16 -22 L 12 -22 L 20 -14 L 20 22 L -16 22 Z"/>
+      <path d="M 12 -22 L 12 -14 L 20 -14"/>
+      <line x1="-10" y1="-8" x2="14" y2="-8" stroke-width="1.4"/>
+      <line x1="-10" y1="-1" x2="14" y2="-1" stroke-width="1.4"/>
+      <line x1="-10" y1="6" x2="10" y2="6" stroke-width="1.4"/>
+      <line x1="-10" y1="13" x2="14" y2="13" stroke-width="1.4"/>
+    </g>
+    <!-- step badge -->
+    <circle cx="-38" cy="-32" r="14" fill="#022c22" stroke="#10b981" stroke-width="1"/>
+    <text x="-38" y="-28" text-anchor="middle" fill="#6ee7b7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="700">3</text>
+    <!-- check badge -->
+    <g transform="translate(38 -32)">
+      <circle r="14" fill="#022c22" stroke="#10b981" stroke-width="1"/>
+      <path d="M -5 0 L -1 4 L 5 -4" stroke="#10b981" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <text y="74" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="600">Receipt</text>
+    <text y="92" text-anchor="middle" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="10">structured response</text>
+  </g>
+
+  <!-- ============================ MIDDLE: THE RECEIPT (centerpiece) ============================ -->
+  <g transform="translate(80 300)">
+    <rect width="1040" height="280" rx="10" fill="url(#receiptCardBg)" stroke="#10b981" stroke-width="1.2" filter="url(#cardGlow)">
+      <animate attributeName="stroke-opacity" values="0.6;0.9;0.6" dur="3s" repeatCount="indefinite"/>
+    </rect>
+    <!-- header strip -->
+    <rect width="1040" height="30" rx="10" fill="url(#termHeader4)"/>
+    <rect y="14" width="1040" height="16" fill="url(#termHeader4)"/>
+    <line x1="0" y1="30" x2="1040" y2="30" stroke="#0a3d2c" stroke-width="0.5"/>
+    <circle cx="16" cy="15" r="5" fill="#ef4444"/>
+    <circle cx="34" cy="15" r="5" fill="#f59e0b"/>
+    <circle cx="52" cy="15" r="5" fill="#10b981"/>
+    <text x="80" y="19" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">codex &#183; worked for 17m 36s &#183; structured response</text>
+    <text x="1020" y="19" text-anchor="end" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">&#8983; copy</text>
+
+    <!-- Receipt body -->
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+      <!-- Done line -->
+      <text x="20" y="56" fill="#34d399" font-weight="700">&#9472;</text>
+      <text x="36" y="56" fill="#6ee7b7" font-weight="700">Done.</text>
+      <text x="84" y="56" fill="#cbd5e1">PR #447 is merged:</text>
+      <text x="224" y="56" fill="#67e8f9" text-decoration="underline">https://github.com/recodeee/colony/pull/447</text>
+      <text x="20" y="74" fill="#cbd5e1">  Merge commit: <tspan fill="#a78bfa">6807d4d31180845065a3b9bbe5d7e21cdb95cdfb</tspan></text>
+
+      <!-- Changed -->
+      <text x="20" y="100" fill="#475569">  Changed:</text>
+      <text x="20" y="118" fill="#cbd5e1">    - <tspan fill="#67e8f9">README.md</tspan>: publish-path block removed.</text>
+      <text x="20" y="136" fill="#cbd5e1">    - <tspan fill="#67e8f9">packages/core/src/savings-reference.ts</tspan>: shared live comparison model.</text>
+      <text x="20" y="154" fill="#cbd5e1">    - <tspan fill="#67e8f9">colony gain</tspan>: live comparison default; static catalog behind <tspan fill="#fcd34d">--reference</tspan>.</text>
+      <text x="20" y="172" fill="#cbd5e1">    - <tspan fill="#67e8f9">savings_report</tspan> + <tspan fill="#67e8f9">worker /savings</tspan>: same live comparison payload/rendering.</text>
+      <text x="20" y="190" fill="#cbd5e1">    - Tests updated for CLI, MCP server, worker.</text>
+
+      <!-- Verified -->
+      <text x="20" y="216" fill="#475569">  Verified:</text>
+      <g transform="translate(0 234)">
+        <text x="20" fill="#10b981">    &#10003;</text>
+        <text x="40" fill="#cbd5e1">biome check --write touched files: pass</text>
+        <text x="320" fill="#10b981">&#10003;</text>
+        <text x="340" fill="#cbd5e1">CLI tests: 18 passed</text>
+        <text x="500" fill="#10b981">&#10003;</text>
+        <text x="520" fill="#cbd5e1">Worker savings test: 1 passed</text>
+        <text x="720" fill="#10b981">&#10003;</text>
+        <text x="740" fill="#cbd5e1">MCP server tests: 21 passed</text>
+      </g>
+      <g transform="translate(0 252)">
+        <text x="20" fill="#10b981">    &#10003;</text>
+        <text x="40" fill="#cbd5e1">Builds: core, CLI, worker, MCP server pass</text>
+        <text x="380" fill="#10b981">&#10003;</text>
+        <text x="400" fill="#cbd5e1">Typechecks: same &#8212; pass</text>
+        <text x="600" fill="#10b981">&#10003;</text>
+        <text x="620" fill="#cbd5e1">Main clean; agent worktree pruned</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- ============================ CONNECTING DOWN-LINES from receipt to tools ============================ -->
+  <g stroke="#0a3d2c" stroke-width="1" fill="none" opacity="0.6">
+    <line x1="240" y1="580" x2="240" y2="630"/>
+    <line x1="600" y1="580" x2="600" y2="630"/>
+    <line x1="960" y1="580" x2="960" y2="630"/>
+  </g>
+  <g stroke-width="1" fill="none" stroke-linecap="round">
+    <line x1="240" y1="580" x2="240" y2="630" stroke="#10b981" stroke-dasharray="3 30">
+      <animate attributeName="stroke-dashoffset" values="33;0" dur="2s" repeatCount="indefinite"/>
+    </line>
+    <line x1="600" y1="580" x2="600" y2="630" stroke="#a78bfa" stroke-dasharray="3 30">
+      <animate attributeName="stroke-dashoffset" values="33;0" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+    </line>
+    <line x1="960" y1="580" x2="960" y2="630" stroke="#22d3ee" stroke-dasharray="3 30">
+      <animate attributeName="stroke-dashoffset" values="33;0" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+    </line>
+  </g>
+  <g filter="url(#dotGlowR2)">
+    <circle r="2.5" cx="240" fill="#10b981">
+      <animate attributeName="cy" values="580;630" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="2.5" cx="600" fill="#a78bfa">
+      <animate attributeName="cy" values="580;630" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="2.5" cx="960" fill="#22d3ee">
+      <animate attributeName="cy" values="580;630" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;1;0" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- ============================ BOTTOM: 3 ECOSYSTEM TOOLS (compact, icon-led) ============================ -->
+
+  <!-- Card: Colony -->
+  <g transform="translate(80 630)">
+    <rect width="320" height="70" rx="12" fill="url(#cardBg)" stroke="#10b981" stroke-width="1"/>
+    <!-- big icon -->
+    <g transform="translate(36 35)">
+      <polygon points="0,-18 15.6,-9 15.6,9 0,18 -15.6,9 -15.6,-9" fill="#020806" stroke="#10b981" stroke-width="1.5"/>
+      <circle r="5" fill="#10b981">
+        <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <!-- text -->
+    <text x="76" y="32" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">Colony</text>
+    <text x="76" y="50" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">captures the receipt</text>
+    <!-- badge -->
+    <g transform="translate(228 35)">
+      <rect x="0" y="-10" width="80" height="20" rx="10" fill="#022c22" stroke="#10b981" stroke-width="0.8"/>
+      <text x="40" y="3" text-anchor="middle" fill="#6ee7b7" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="600">RECEIPT = DATA</text>
+    </g>
+  </g>
+
+  <!-- Card: GitGuardEx -->
+  <g transform="translate(440 630)">
+    <rect width="320" height="70" rx="12" fill="url(#cardBg)" stroke="#a78bfa" stroke-width="1"/>
+    <!-- big icon: lock -->
+    <g transform="translate(36 35)" stroke="#a78bfa" stroke-width="2" fill="none">
+      <rect x="-12" y="-6" width="24" height="20" rx="3"/>
+      <path d="M -7 -6 V -12 a 7 7 0 0 1 14 0 V -6"/>
+      <line x1="0" y1="0" x2="0" y2="6" stroke-width="2.4" stroke-linecap="round"/>
+    </g>
+    <!-- text -->
+    <text x="76" y="32" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">GitGuardEx</text>
+    <text x="170" y="32" fill="#a78bfa" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="700">gx</text>
+    <text x="76" y="50" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">isolates work in worktrees</text>
+    <!-- badge -->
+    <g transform="translate(218 35)">
+      <rect x="0" y="-10" width="92" height="20" rx="10" fill="#3b0764" stroke="#a78bfa" stroke-width="0.8"/>
+      <text x="46" y="3" text-anchor="middle" fill="#c4b5fd" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="600">SAFE BY DEFAULT</text>
+    </g>
+  </g>
+
+  <!-- Card: OpenSpec -->
+  <g transform="translate(800 630)">
+    <rect width="320" height="70" rx="12" fill="url(#cardBg)" stroke="#22d3ee" stroke-width="1"/>
+    <!-- big icon: spec doc -->
+    <g transform="translate(36 35)" stroke="#22d3ee" stroke-width="2" fill="none">
+      <path d="M -12 -16 L 8 -16 L 14 -10 L 14 16 L -12 16 Z"/>
+      <line x1="-7" y1="-8" x2="9" y2="-8" stroke-width="1.5"/>
+      <line x1="-7" y1="-2" x2="9" y2="-2" stroke-width="1.5"/>
+      <line x1="-7" y1="4" x2="6" y2="4" stroke-width="1.5"/>
+      <line x1="-7" y1="10" x2="9" y2="10" stroke-width="1.5"/>
+    </g>
+    <!-- text -->
+    <text x="76" y="32" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">OpenSpec</text>
+    <text x="76" y="50" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="11">spec change as the task</text>
+    <!-- badge -->
+    <g transform="translate(220 35)">
+      <rect x="0" y="-10" width="90" height="20" rx="10" fill="#082f49" stroke="#22d3ee" stroke-width="0.8"/>
+      <text x="45" y="3" text-anchor="middle" fill="#67e8f9" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="600">SPEC = TASK</text>
+    </g>
+  </g>
+</svg>
