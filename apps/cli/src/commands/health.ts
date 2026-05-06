@@ -105,6 +105,10 @@ const CONVERSIONS = [
   ['task_ready_for_agent', 'task_plan_claim_subtask'],
 ] as const;
 
+const HEALTH_HEADER_WIDTH = 72;
+
+type HealthHeadingTone = 'blue' | 'cyan' | 'green' | 'magenta' | 'red' | 'yellow';
+
 type ConversionName =
   | 'hivemind_context_to_attention_inbox'
   | 'attention_inbox_to_task_ready_for_agent'
@@ -407,6 +411,15 @@ interface LiveContentionRecommendedAction {
   mcp_tool_hint?: string;
 }
 
+interface ProtectedClaimActionQueue {
+  protected_claims: number;
+  takeover_actions: number;
+  release_or_weaken_actions: number;
+  keep_owner_actions: number;
+  next_action: string;
+  commands: string[];
+}
+
 interface LiveContentionPayload {
   live_file_contentions: number;
   protected_file_contentions: number;
@@ -416,6 +429,7 @@ interface LiveContentionPayload {
   dirty_contended_files: number;
   top_conflicts: LiveContentionConflict[];
   recommended_actions: LiveContentionRecommendedAction[];
+  protected_claim_action_queue: ProtectedClaimActionQueue;
 }
 
 interface AdoptionSignal {
@@ -798,32 +812,44 @@ export function formatColonyHealthOutput(
   if (options.json) return JSON.stringify(payload, null, 2);
 
   const visibleHints = visibleActionHints(payload, { verbose: Boolean(options.verbose) });
+  const readiness = readinessEntries(payload.readiness_summary);
+  const badReadinessCount = readiness.filter(([, item]) => item.status === 'bad').length;
+  const okReadinessCount = readiness.filter(([, item]) => item.status === 'ok').length;
+  const queueTone = readinessTone(badReadinessCount, okReadinessCount);
   const lines = [
-    kleur.bold('colony health'),
+    kleur.bold(kleur.cyan('COLONY HEALTH')),
+    kleur.cyan('='.repeat(HEALTH_HEADER_WIDTH)),
     kleur.dim(`window: last ${payload.window_hours}h`),
     '',
-    kleur.bold('Queue'),
-    ...formatHealthQueue(payload, visibleHints),
+    healthSectionHeading('At a glance', queueTone),
+    ...formatAtAGlance(payload, visibleHints),
     '',
-    kleur.bold('Readiness summary'),
+    healthSectionHeading('Health focus', visibleHints.length > 0 ? 'red' : 'green'),
+    ...formatHealthFocus(payload, visibleHints),
+    '',
+    healthSectionHeading('Readiness summary', 'blue'),
     ...formatReadinessSummary(payload.readiness_summary),
     '',
-    kleur.bold('Next fixes'),
+    healthSectionHeading('Next fixes', visibleHints.length > 0 ? 'yellow' : 'green'),
     ...formatNextFixes(payload, visibleHints),
   ];
 
   if (options.prompts) {
-    lines.push('', kleur.bold('Codex prompt snippets'), ...formatPromptSnippets(visibleHints));
+    lines.push(
+      '',
+      healthSectionHeading('Codex prompt snippets', 'magenta'),
+      ...formatPromptSnippets(visibleHints),
+    );
   }
 
   if (!options.verbose) return lines.join('\n');
 
   lines.push(
     '',
-    kleur.bold('Detailed diagnostics'),
+    healthSectionHeading('Detailed diagnostics', 'cyan'),
     kleur.dim('  Telemetry below explains the action plan above. Use --json for automation.'),
     '',
-    kleur.bold('Colony MCP share'),
+    healthSubheading('Colony MCP share', 'cyan'),
     `  all tools: ${countRatio(
       payload.colony_mcp_share.colony_mcp_tool_calls,
       payload.colony_mcp_share.total_tool_calls,
@@ -844,7 +870,7 @@ export function formatColonyHealthOutput(
     );
   }
 
-  lines.push('', kleur.bold('MCP capability map'));
+  lines.push('', healthSubheading('MCP capability map', 'blue'));
   if (payload.mcp_capability_map.summary.length === 0) {
     lines.push(kleur.dim('  none configured'));
   } else {
@@ -881,7 +907,7 @@ export function formatColonyHealthOutput(
     }
   }
 
-  lines.push('', kleur.bold('Loop adoption'));
+  lines.push('', healthSubheading('Loop adoption', 'magenta'));
 
   for (const item of Object.values(payload.conversions)) {
     lines.push(
@@ -895,18 +921,18 @@ export function formatColonyHealthOutput(
 
   lines.push(
     '',
-    kleur.bold('task_list vs task_ready_for_agent'),
+    healthSubheading('task_list vs task_ready_for_agent', 'cyan'),
     `  task_list:            ${payload.task_list_vs_task_ready_for_agent.task_list_calls}`,
     `  task_ready_for_agent: ${payload.task_list_vs_task_ready_for_agent.task_ready_for_agent_calls}`,
     `  task_list-first sessions: ${payload.task_list_vs_task_ready_for_agent.task_list_first_sessions}`,
     `  ready share:          ${formatPercent(payload.task_list_vs_task_ready_for_agent.task_ready_share)}`,
     '',
-    kleur.bold('task_post vs task_message'),
+    healthSubheading('task_post vs task_message', 'magenta'),
     `  task_post:    ${payload.task_post_vs_task_message.task_post_calls}`,
     `  task_message: ${payload.task_post_vs_task_message.task_message_calls}`,
     `  message share: ${formatPercent(payload.task_post_vs_task_message.task_message_share)}`,
     '',
-    kleur.bold('task_post vs OMX notepad'),
+    healthSubheading('task_post vs OMX notepad', 'blue'),
     `  status:              ${payload.task_post_vs_omx_notepad.status}`,
     `  task_post:           ${payload.task_post_vs_omx_notepad.task_post_calls}`,
     `  task_note_working:   ${payload.task_post_vs_omx_notepad.task_note_working_calls}`,
@@ -915,7 +941,7 @@ export function formatColonyHealthOutput(
     `  task_post share:     ${formatPercent(payload.task_post_vs_omx_notepad.task_post_share)}`,
     `  colony note share:   ${formatPercent(payload.task_post_vs_omx_notepad.colony_note_share)}`,
     '',
-    kleur.bold('OMX runtime bridge'),
+    healthSubheading('OMX runtime bridge', 'green'),
     `  status:              ${payload.omx_runtime_bridge.status}`,
     `  summaries ingested:  ${payload.omx_runtime_bridge.summaries_ingested}`,
     `  latest summary age:  ${formatDuration(payload.omx_runtime_bridge.latest_summary_age_ms)}`,
@@ -925,7 +951,7 @@ export function formatColonyHealthOutput(
     `  malformed summaries: ${payload.omx_runtime_bridge.malformed_summary_count}`,
     ...formatMalformedSummaryExamples(payload.omx_runtime_bridge.malformed_summary_examples),
     '',
-    kleur.bold('Search calls per session'),
+    healthSubheading('Search calls per session', 'cyan'),
     `  total: ${payload.search_calls_per_session.total_search_calls}`,
     `  avg per active session: ${formatNumber(
       payload.search_calls_per_session.average_per_active_session,
@@ -940,15 +966,15 @@ export function formatColonyHealthOutput(
     }
   }
 
-  lines.push('', kleur.bold('task_claim_file before edits'));
+  lines.push('', healthSubheading('task_claim_file before edits', 'yellow'));
   lines.push(...formatClaimBeforeEdit(payload.task_claim_file_before_edits));
 
-  lines.push('', kleur.bold('Live contention health'));
+  lines.push('', healthSubheading('Live contention health', 'red'));
   lines.push(...formatLiveContention(payload.live_contention_health));
 
   lines.push(
     '',
-    kleur.bold('Signal health'),
+    healthSubheading('Signal health', 'yellow'),
     `  total claims:     ${payload.signal_health.total_claims}`,
     `  active claims:    ${payload.signal_health.active_claims}`,
     `  stale claims:     ${payload.signal_health.stale_claims} (>${payload.signal_health.stale_claim_minutes}m)`,
@@ -964,7 +990,7 @@ export function formatColonyHealthOutput(
     `  expired handoffs: ${payload.signal_health.expired_handoffs}`,
     `  expired messages: ${payload.signal_health.expired_messages}`,
     '',
-    kleur.bold('Proposal decay/promotions'),
+    healthSubheading('Proposal decay/promotions', 'magenta'),
     `  proposals seen:      ${payload.proposal_health.proposals_seen}`,
     `  pending:             ${payload.proposal_health.pending}`,
     `  promoted:            ${payload.proposal_health.promoted}`,
@@ -972,14 +998,14 @@ export function formatColonyHealthOutput(
     `  below noise floor:   ${payload.proposal_health.pending_below_noise_floor}`,
     `  promotion rate:      ${formatPercent(payload.proposal_health.promotion_rate)}`,
     '',
-    kleur.bold('Ready-to-claim vs claimed'),
+    healthSubheading('Ready-to-claim vs claimed', 'cyan'),
     `  plan subtasks:       ${payload.ready_to_claim_vs_claimed.plan_subtasks}`,
     `  ready to claim:      ${payload.ready_to_claim_vs_claimed.ready_to_claim}`,
     `  claimed:             ${payload.ready_to_claim_vs_claimed.claimed}`,
     `  ready/claimed:       ${formatNumber(payload.ready_to_claim_vs_claimed.ready_to_claim_per_claimed)}`,
     `  claimed actionable:  ${formatPercent(payload.ready_to_claim_vs_claimed.claimed_share_of_actionable)}`,
     '',
-    kleur.bold('Queen wave plans'),
+    healthSubheading('Queen wave plans', 'blue'),
     `  active plans:                       ${payload.queen_wave_health.active_plans}`,
     `  completed plans:                    ${payload.queen_wave_health.completed_plans}`,
     `  archived plans:                     ${payload.queen_wave_health.archived_plans}`,
@@ -1044,7 +1070,7 @@ export function formatColonyHealthOutput(
     }
   }
 
-  lines.push('', kleur.bold('Adoption thresholds'));
+  lines.push('', healthSubheading('Adoption thresholds', 'green'));
   for (const signal of payload.adoption_thresholds.good) {
     lines.push(formatSignal(signal));
   }
@@ -1210,12 +1236,40 @@ function formatNextFixes(payload: ColonyHealthPayload, visibleHints: ActionHint[
   });
 }
 
+function healthSectionHeading(title: string, tone: HealthHeadingTone): string {
+  return kleur.bold(colorHealthHeading(paddedHealthHeading(title, '='), tone));
+}
+
+function healthSubheading(title: string, tone: HealthHeadingTone): string {
+  return colorHealthHeading(paddedHealthHeading(title, '-'), tone);
+}
+
+function paddedHealthHeading(title: string, fill: '=' | '-'): string {
+  const prefix = `${title} `;
+  return `${prefix}${fill.repeat(Math.max(3, HEALTH_HEADER_WIDTH - prefix.length))}`;
+}
+
+function readinessTone(badCount: number, okCount: number): HealthHeadingTone {
+  if (badCount > 0) return 'red';
+  if (okCount > 0) return 'yellow';
+  return 'green';
+}
+
+function colorHealthHeading(value: string, tone: HealthHeadingTone): string {
+  if (tone === 'blue') return kleur.blue(value);
+  if (tone === 'cyan') return kleur.cyan(value);
+  if (tone === 'green') return kleur.green(value);
+  if (tone === 'magenta') return kleur.magenta(value);
+  if (tone === 'red') return kleur.red(value);
+  return kleur.yellow(value);
+}
+
 function formatPromptSnippets(visibleHints: ActionHint[]): string[] {
   if (visibleHints.length === 0) return [kleur.green('  none: tracked thresholds meet targets')];
   return visibleHints.map((hint, index) => `  ${index + 1}. ${hint.prompt}`);
 }
 
-function formatHealthQueue(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
+function formatAtAGlance(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
   const entries = readinessEntries(payload.readiness_summary);
   const bad = entries.filter(([, item]) => item.status === 'bad');
   const ok = entries.filter(([, item]) => item.status === 'ok');
@@ -1224,22 +1278,23 @@ function formatHealthQueue(payload: ColonyHealthPayload, visibleHints: ActionHin
   const needsWork =
     bad.length > 0 ? bad.map(([scope]) => READINESS_LABELS[scope]).join(', ') : 'none';
   const lines = [
-    `  status: ${formatOverallReadiness(bad.length, ok.length)}; needs work: ${needsWork}`,
+    `  overall: ${formatOverallReadiness(bad.length, ok.length)}`,
+    `  needs work: ${needsWork}`,
   ];
 
   if (topHint) {
     lines.push(
-      `  fix: ${topHint.metric}`,
+      `  fix first: ${topHint.metric}`,
       `  why: ${topHint.current}`,
       `  next: ${topHint.action}`,
     );
-    lines.push(`  run: ${nextStep ?? 'none'}`);
+    lines.push(`  command: ${nextStep ?? 'none'}`);
   } else {
     lines.push(
-      '  fix: none',
+      '  fix first: none',
       '  why: tracked thresholds meet targets',
       '  next: keep current loop',
-      '  run: none',
+      '  command: none',
     );
   }
 
@@ -1248,6 +1303,50 @@ function formatHealthQueue(payload: ColonyHealthPayload, visibleHints: ActionHin
     lines.push(`    ${formatReadinessBadge(item.status)} ${READINESS_LABELS[scope]} (${scope})`);
   }
   return lines;
+}
+
+function formatHealthFocus(payload: ColonyHealthPayload, visibleHints: ActionHint[]): string[] {
+  const entries = readinessEntries(payload.readiness_summary);
+  const bad = entries.filter(([, item]) => item.status === 'bad');
+  const ok = entries.filter(([, item]) => item.status === 'ok');
+  const topHint = visibleHints[0];
+  const lines = [
+    `  status: ${formatHealthFocusStatus(bad.length, ok.length)}`,
+    `  bad areas: ${bad.length > 0 ? bad.map(([scope]) => scope).join(', ') : 'none'}`,
+  ];
+
+  if (!topHint) {
+    lines.push('  top blocker: none', '  next action: none');
+    return lines;
+  }
+
+  lines.push(
+    `  top blocker: ${topHint.metric}: ${topHint.current}`,
+    `  next action: ${topHint.action}`,
+  );
+  if (topHint.tool_call) lines.push(kleur.dim(`  tool: ${topHint.tool_call}`));
+  if (topHint.command) lines.push(kleur.dim(`  cmd:  ${topHint.command}`));
+
+  const nextCommands = visibleHints
+    .map((hint) => {
+      const action = preferredAction(hint);
+      return action ? `    ${hint.readiness_scope}: ${action}` : null;
+    })
+    .filter((line): line is string => line !== null);
+  if (nextCommands.length > 0) {
+    lines.push('  next commands:', ...nextCommands);
+  }
+  if (payload.task_claim_file_before_edits.reason) {
+    lines.push(...formatClaimBeforeEditMeasurement(payload.task_claim_file_before_edits));
+  }
+
+  return lines;
+}
+
+function formatHealthFocusStatus(badCount: number, okCount: number): string {
+  if (badCount > 0) return `${badCount} bad readiness area(s)`;
+  if (okCount > 0) return `${okCount} watch readiness area(s)`;
+  return 'clear';
 }
 
 function readinessEntries(
@@ -1564,6 +1663,15 @@ export function buildHealthFixPlan(
         : 'No live same-file contention is visible in current health.',
     command: healthCommand,
   });
+  if (payload.live_contention_health.protected_claim_action_queue.protected_claims > 0) {
+    steps.push({
+      title: 'Clear protected branch claims',
+      status: 'suggested',
+      detail: payload.live_contention_health.protected_claim_action_queue.next_action,
+      command:
+        payload.live_contention_health.protected_claim_action_queue.commands[0] ?? healthCommand,
+    });
+  }
 
   if (options.apply) {
     steps.push({
@@ -2837,6 +2945,18 @@ function formatLiveContention(payload: LiveContentionPayload): string[] {
       if (action.mcp_tool_hint) lines.push(`      tool: ${action.mcp_tool_hint}`);
     }
   }
+  if (payload.protected_claim_action_queue.protected_claims > 0) {
+    const queue = payload.protected_claim_action_queue;
+    lines.push('  protected claim action queue:');
+    lines.push(`    protected_claims: ${queue.protected_claims}`);
+    lines.push(
+      `    actions: takeover=${queue.takeover_actions}, release_or_weaken=${queue.release_or_weaken_actions}, keep_owner=${queue.keep_owner_actions}`,
+    );
+    lines.push(`    next: ${queue.next_action}`);
+    for (const command of queue.commands.slice(0, HEALTH_TOOL_LIMIT)) {
+      lines.push(`    command: ${command}`);
+    }
+  }
   return lines;
 }
 
@@ -2930,7 +3050,9 @@ function liveContentionResolutionHint(payload: LiveContentionPayload): {
   tool_call?: string;
   command?: string;
 } | null {
-  const firstAction = payload.recommended_actions[0];
+  const firstAction =
+    payload.recommended_actions.find((action) => !action.action.startsWith('keep owner ')) ??
+    payload.recommended_actions[0];
   if (!firstAction) return null;
   const owner = `${firstAction.owner} ${shortSession(firstAction.session_id)}`.trim();
   return {
@@ -3028,21 +3150,24 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
   );
   if (protectedBranchOwners.length > 0) {
     const branches = [...new Set(protectedBranchOwners.map((owner) => owner.branch))].sort();
+    const queue = liveContention.protected_claim_action_queue;
     hints.push({
       metric: 'claims on protected branches',
       status: 'bad',
       current: `${protectedBranchOwners.length} claim(s) held on ${branches.join(', ')}`,
-      target: '0 (claims should live on agent/* branches inside .omc/agent-worktrees/)',
+      target: '0 (claims should live on agent/* branches inside .omx/agent-worktrees/)',
       action:
-        'Move work to a worktree before claiming files. Run `gx branch start "<task>" "<agent>"` to start an agent/* lane, or hand the claim off to a session that already owns one.',
+        queue.next_action ||
+        'Move work to a worktree before claiming files, then hand off, release, or explicitly reclaim protected-base claims.',
       readiness_scope: 'execution_safety',
       priority: 3,
-      command: 'gx branch start "<task>" "<agent>"',
+      command: queue.commands[0] ?? 'gx branch start "<task>" "<agent>"',
       prompt: codexPrompt({
         goal: 'move active claims off protected base branches onto agent/* worktrees',
         current: `${protectedBranchOwners.length} claim(s) on protected branches: ${branches.join(', ')}`,
-        inspect:
-          'colony health --json (top_conflicts owner branch field), git worktree list, gx branch start',
+        inspect: ['colony health --json (top_conflicts owner branch field)', ...queue.commands]
+          .filter(Boolean)
+          .join(', '),
         acceptance:
           'no LiveContentionOwner claim_strength=strong rows reference branches in main/master/dev/develop/production/release',
       }),
@@ -4505,6 +4630,7 @@ function liveContentionPayload(
   const dirtyWorktreeContentions = worktreeContention?.summary.contention_count ?? 0;
   const competingWorktreesFromDirtyContention = countCompetingWorktrees(worktreeContention);
 
+  const recommendedActions = recommendedLiveContentionActions(conflicts);
   return {
     live_file_contentions: conflicts.length,
     protected_file_contentions: conflicts.filter((conflict) => conflict.protected).length,
@@ -4521,7 +4647,12 @@ function liveContentionPayload(
     ),
     dirty_contended_files: Math.max(dirtyClaimContentions, dirtyWorktreeContentions),
     top_conflicts: conflicts.slice(0, HEALTH_TOOL_LIMIT),
-    recommended_actions: recommendedLiveContentionActions(conflicts).slice(0, HEALTH_TOOL_LIMIT),
+    recommended_actions: recommendedActions.slice(0, HEALTH_TOOL_LIMIT),
+    protected_claim_action_queue: buildProtectedClaimActionQueue(
+      conflicts,
+      recommendedActions,
+      options.repo_root,
+    ),
   };
 }
 
@@ -4824,6 +4955,61 @@ function recommendedLiveContentionActions(
     }
   }
   return actions;
+}
+
+function buildProtectedClaimActionQueue(
+  conflicts: LiveContentionConflict[],
+  actions: LiveContentionRecommendedAction[],
+  repoRoot?: string,
+): ProtectedClaimActionQueue {
+  const protectedOwners = conflicts.flatMap((conflict) =>
+    conflict.owners.filter((owner) => isProtectedBaseBranch(owner.branch)),
+  );
+  const releaseOrWeaken = actions.filter((action) =>
+    action.action.startsWith('release/weaken owner '),
+  );
+  const takeover = actions.filter((action) => action.action === 'require explicit takeover');
+  const keepOwner = actions.filter((action) => action.action.startsWith('keep owner '));
+  const commands = new Set<string>();
+  if (releaseOrWeaken.some((action) => action.classification === 'same branch duplicate')) {
+    commands.add(coordinationSweepCommand(repoRoot, '--release-same-branch-duplicates'));
+  }
+  for (const action of [...releaseOrWeaken, ...takeover]) {
+    if (action.command) commands.add(action.command);
+  }
+  if (protectedOwners.length > 0) commands.add(healthCommandForRepo(repoRoot));
+
+  let nextAction = 'No protected branch claim cleanup needed.';
+  if (protectedOwners.length > 0 && releaseOrWeaken.length > 0) {
+    nextAction =
+      'Release or weaken inactive/duplicate protected claims first, then rerun health before broad verification.';
+  } else if (protectedOwners.length > 0 && takeover.length > 0) {
+    nextAction =
+      'Resolve protected claims with explicit takeover or directed handoff; do not overwrite competing owners.';
+  } else if (protectedOwners.length > 0) {
+    nextAction = 'Keep the active owner, but move future claims off protected base branches.';
+  }
+
+  return {
+    protected_claims: protectedOwners.length,
+    takeover_actions: takeover.length,
+    release_or_weaken_actions: releaseOrWeaken.length,
+    keep_owner_actions: keepOwner.length,
+    next_action: nextAction,
+    commands: [...commands].slice(0, HEALTH_TOOL_LIMIT),
+  };
+}
+
+function coordinationSweepCommand(repoRoot: string | undefined, flag: string): string {
+  return repoRoot
+    ? `colony coordination sweep --repo-root ${shellQuote(repoRoot)} ${flag} --json`
+    : `colony coordination sweep ${flag} --json`;
+}
+
+function healthCommandForRepo(repoRoot: string | undefined): string {
+  return repoRoot
+    ? `colony health --repo-root ${shellQuote(repoRoot)} --json`
+    : 'colony health --json';
 }
 
 function keepOwnerAction(

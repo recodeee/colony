@@ -56,6 +56,7 @@ interface PublishResult {
 interface PlanRollup {
   plan_slug: string;
   title: string;
+  registry_status: 'registered' | 'subtask-only';
   subtask_counts: Record<string, number>;
   next_available: Array<PlanSubtaskSummary>;
   subtasks: PlanSubtaskSummary[];
@@ -506,9 +507,49 @@ describe('task_plan_list', () => {
     const plans = await call<PlanRollup[]>('task_plan_list', {});
     expect(plans).toHaveLength(1);
     expect(plans[0]?.plan_slug).toBe('add-widget-page');
+    expect(plans[0]?.registry_status).toBe('registered');
     expect(plans[0]?.subtask_counts.available).toBe(2);
     // sub-1 depends on sub-0, so only sub-0 is in next_available initially
     expect(plans[0]?.next_available.map((s) => s.subtask_index)).toEqual([0]);
+  });
+
+  it('lists subtask-only plans when the root registry task is missing', async () => {
+    const thread = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'spec/subtask-only-plan/sub-0',
+      title: 'Build subtask-only API',
+      session_id: 'A',
+    });
+    thread.join('A', 'codex');
+    store.storage.insertObservation({
+      session_id: 'A',
+      task_id: thread.task_id,
+      kind: 'plan-subtask',
+      content: 'Build subtask-only API',
+      compressed: false,
+      intensity: null,
+      ts: Date.now(),
+      metadata: {
+        kind: 'plan-subtask',
+        parent_plan_slug: 'subtask-only-plan',
+        parent_plan_title: 'Subtask-only plan',
+        subtask_index: 0,
+        title: 'Build subtask-only API',
+        description: 'Recover plan rollup from subtask rows.',
+        status: 'available',
+        file_scope: ['apps/api/subtask-only.ts'],
+        depends_on: [],
+      },
+    });
+
+    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+
+    expect(plans.find((plan) => plan.plan_slug === 'subtask-only-plan')).toMatchObject({
+      registry_status: 'subtask-only',
+      title: 'Subtask-only plan',
+      subtask_counts: expect.objectContaining({ available: 1 }),
+      next_available: [expect.objectContaining({ subtask_index: 0 })],
+    });
   });
 
   it('adds compact wave metadata to plan list output', async () => {
@@ -993,9 +1034,9 @@ describe('task_plan auto-archive', () => {
       .find((t) => t.branch === 'spec/auto-archive-grace-elapsed');
     expect(parentTask).toBeDefined();
     if (parentTask) {
-      expect(
-        store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10),
-      ).toHaveLength(1);
+      expect(store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10)).toHaveLength(
+        1,
+      );
     }
   });
 
@@ -1069,9 +1110,7 @@ describe('task_plan auto-archive', () => {
 
     await call<unknown>('task_plan_list', { repo_root: repoRoot });
 
-    const parentTask = store.storage
-      .listTasks(2000)
-      .find((t) => t.branch === `spec/${slug}`);
+    const parentTask = store.storage.listTasks(2000).find((t) => t.branch === `spec/${slug}`);
     expect(parentTask).toBeDefined();
     if (parentTask) {
       const archived = store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10);

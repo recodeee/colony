@@ -346,15 +346,23 @@ describe('colony health payload', () => {
     );
 
     const text = formatColonyHealthOutput(payload);
-    expect(text).toContain('colony health');
-    expect(text).toContain('Queue');
-    expect(text.indexOf('Queue')).toBeLessThan(text.indexOf('Readiness summary'));
+    expect(text).toContain('COLONY HEALTH');
+    expect(text).toContain('At a glance ===');
+    expect(text).toContain('Health focus ===');
+    expect(text).toContain('Readiness summary ===');
+    expect(text).toContain('Next fixes ===');
+    expect(text).toContain('At a glance');
+    expect(text.indexOf('At a glance')).toBeLessThan(text.indexOf('Health focus'));
+    expect(text.indexOf('Health focus')).toBeLessThan(text.indexOf('Readiness summary'));
+    expect(text).toContain('overall:');
     expect(text).toContain('status:');
     expect(text).toContain('needs work:');
-    expect(text).toContain('fix:');
+    expect(text).toContain('fix first:');
+    expect(text).toContain('top blocker:');
     expect(text).toContain('why:');
     expect(text).toContain('next:');
-    expect(text).toContain('run:');
+    expect(text).toContain('next action:');
+    expect(text).toContain('command:');
     expect(text).toContain('areas:');
     expect(text).toContain('Coordination loop (coordination_readiness)');
     expect(text).toContain('Edit safety (execution_safety)');
@@ -1421,14 +1429,14 @@ describe('colony health payload', () => {
     expect(payload.signal_health.quota_relay_actions.top_action).toBe('release expired');
 
     const text = formatColonyHealthOutput(payload);
-    const queue = outputSection(text, 'Queue');
-    expect(queue).toContain('fix: live file contentions');
-    expect(queue).toContain('why: 1 conflict(s), 0 dirty; first README.md');
-    expect(queue).toContain(
+    const glance = outputSection(text, 'At a glance');
+    expect(glance).toContain('fix first: live file contentions');
+    expect(glance).toContain('why: 1 conflict(s), 0 dirty; first README.md');
+    expect(glance).toContain(
       'next: Resolve README.md first: require explicit takeover for owner unknown 003bdaee-18... (owner identity is unknown).',
     );
-    expect(queue).toContain(
-      "run: cmd: colony lane takeover 003bdaee-1891-44e1-b867-b67aabc883e5 --file README.md --reason 'owner identity is unknown'",
+    expect(glance).toContain(
+      "command: cmd: colony lane takeover 003bdaee-1891-44e1-b867-b67aabc883e5 --file README.md --reason 'owner identity is unknown'",
     );
 
     const nextFixes = outputSection(text, 'Next fixes');
@@ -1672,7 +1680,17 @@ describe('colony health payload', () => {
     expect(payload.action_hints[0]).toMatchObject({
       metric: 'live file contentions',
       current: '1 conflict(s), 1 dirty; first src/shared.ts',
-      command: 'colony health --json',
+      command:
+        "colony lane takeover claude-right-session --file src/shared.ts --reason 'protected contention resolution'",
+    });
+    expect(payload.live_contention_health.protected_claim_action_queue).toMatchObject({
+      protected_claims: 1,
+      takeover_actions: 2,
+      release_or_weaken_actions: 1,
+      keep_owner_actions: 2,
+      commands: expect.arrayContaining([
+        "colony lane takeover claude-right-session --file src/shared.ts --reason 'protected contention resolution'",
+      ]),
     });
     expect(payload.action_hints).toEqual(
       expect.arrayContaining([
@@ -3142,15 +3160,15 @@ describe('colony health payload', () => {
         latest_summary_age_ms: 30 * 60_000,
       });
       const text = formatColonyHealthOutput(payload, { verbose: true });
-      const queue = outputSection(text, 'Queue');
+      const glance = outputSection(text, 'At a glance');
       expect(text).toContain('status:              stale');
-      expect(queue).toContain('fix: OMX runtime bridge');
-      expect(queue).toContain('why: stale');
-      expect(queue).toContain(
+      expect(glance).toContain('fix first: OMX runtime bridge');
+      expect(glance).toContain('why: stale');
+      expect(glance).toContain(
         'next: Metric unreliable: refresh the OMX runtime summary bridge so health sees current sessions, edit paths, and quota exits before judging claim failures.',
       );
-      expect(queue).toContain(
-        'run: cmd: colony bridge runtime-summary --json --repo-root <repo_root> < .omx/state/colony-runtime-summary.json',
+      expect(glance).toContain(
+        'command: cmd: colony bridge runtime-summary --json --repo-root <repo_root> < .omx/state/colony-runtime-summary.json',
       );
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });

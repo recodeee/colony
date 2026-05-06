@@ -30,6 +30,7 @@ describe('OpenSpec sync status', () => {
   it('reports Colony/OpenSpec drift with exact repair actions', () => {
     writeChangeTask('sync-plan', '- [ ] Final PR merge cleanup\n');
     writePlanCheckpoint('sync-plan', '- [ ] sub-0 Build API [completed]\n');
+    writePlanTask('orphan-plan', '- [ ] sub-2 Orphan row [claimed]\n');
     writeChangeTask('no-pr', '- [x] Implementation complete\n');
     writeChangeTask('stale-change', '- [ ] Decide whether to keep old task\n');
 
@@ -72,6 +73,23 @@ describe('OpenSpec sync status', () => {
       openspec_tier: 'T3',
     });
 
+    writeChangeTask('inferred', '- [ ] Final PR merge cleanup\n');
+    writePlanCheckpoint('inferred', '- [ ] sub-0 Inferred completion [completed]\n');
+    const inferred = openTask('spec/inferred/sub-0', 'Inferred completion');
+    addTaskObservation(
+      inferred,
+      'note',
+      'PR https://github.com/recodeee/colony/pull/555 MERGED',
+      NOW - 15,
+      {
+        openspec_change_path: join(repoRoot, 'openspec/changes/inferred/CHANGE.md'),
+        openspec_plan_slug: 'inferred',
+        pr_url: 'https://github.com/recodeee/colony/pull/555',
+        merge_state: 'MERGED',
+        verification_evidence: ['pnpm test'],
+      },
+    );
+
     const status = openspecSyncStatus({
       store,
       repoRoot,
@@ -86,9 +104,17 @@ describe('OpenSpec sync status', () => {
         'missing-pr-evidence',
         'missing-verification-evidence',
         'merged-pr-cleanup-unchecked',
+        'unlinked-openspec-plan',
         'stale-openspec-checkbox',
       ]),
     );
+    expect(status.tasks.find((task) => task.task_id === inferred.task_id)).toMatchObject({
+      colony_complete: true,
+      metadata: expect.objectContaining({
+        pr_url: 'https://github.com/recodeee/colony/pull/555',
+        merge_state: 'MERGED',
+      }),
+    });
     expect(
       status.issues.find(
         (issue) =>
@@ -104,9 +130,18 @@ describe('OpenSpec sync status', () => {
       branch: 'spec/no-pr/sub-0',
     });
     expect(
-      status.issues.find((issue) => issue.code === 'merged-pr-cleanup-unchecked'),
+      status.issues.find(
+        (issue) =>
+          issue.code === 'merged-pr-cleanup-unchecked' &&
+          issue.file_path === 'openspec/changes/sync-plan/tasks.md',
+      ),
     ).toMatchObject({
       file_path: 'openspec/changes/sync-plan/tasks.md',
+      line: 1,
+    });
+    expect(status.issues.find((issue) => issue.code === 'unlinked-openspec-plan')).toMatchObject({
+      openspec_plan_slug: 'orphan-plan',
+      file_path: 'openspec/plans/orphan-plan/tasks.md',
       line: 1,
     });
     expect(status.issues.flatMap((issue) => issue.repair_actions).join('\n')).toContain(
@@ -135,6 +170,12 @@ function writePlanCheckpoint(slug: string, checkpoints: string): void {
   const dirPath = join(repoRoot, 'openspec', 'plans', slug);
   mkdirSync(dirPath, { recursive: true });
   writeFileSync(join(dirPath, 'checkpoints.md'), checkpoints, 'utf8');
+}
+
+function writePlanTask(slug: string, tasks: string): void {
+  const dirPath = join(repoRoot, 'openspec', 'plans', slug);
+  mkdirSync(dirPath, { recursive: true });
+  writeFileSync(join(dirPath, 'tasks.md'), tasks, 'utf8');
 }
 
 function openTask(branch: string, title: string): { task_id: number; branch: string } {

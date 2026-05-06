@@ -401,6 +401,7 @@ describe('buildAttentionInbox', () => {
             taskName: `Stalled task ${i}`,
             latestTaskPreview: `Stalled lane ${i}`,
             agentName: 'codex',
+            sessionKey: `stalled-session-${i}`,
             worktreePath,
             startedAt: heartbeat,
             lastHeartbeatAt: heartbeat,
@@ -423,6 +424,20 @@ describe('buildAttentionInbox', () => {
     expect(inbox.stalled_lanes).toHaveLength(8);
     expect(inbox.stalled_lanes_truncated).toBe(true);
     expect(inbox.summary.next_action).toMatch(/stalled lanes/i);
+    expect(inbox.stalled_lanes[0]?.next_action).toMatch(/inspect lane evidence/i);
+    expect(inbox.stalled_lanes[0]?.suggested_actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'inspect',
+          command: expect.stringContaining('git -C'),
+        }),
+        expect.objectContaining({
+          action: 'takeover',
+          command: expect.stringContaining('colony lane takeover'),
+        }),
+        expect.objectContaining({ action: 'ignore' }),
+      ]),
+    );
 
     const narrowed = buildAttentionInbox(store, {
       session_id: 'codex',

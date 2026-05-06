@@ -62,6 +62,10 @@ export interface RufloBridgeEvent<Name extends RufloBridgeEventName = RufloBridg
   success?: boolean;
   duration_ms?: number;
   summary?: string;
+  pattern?: string;
+  confidence?: number;
+  domain?: string;
+  quality?: number;
   payload?: unknown;
   body?: unknown;
 }
@@ -83,6 +87,25 @@ export interface RufloBridgeObservation {
   metadata: RufloBridgeObservationMetadata;
   task_id?: number;
 }
+
+export type RufloDerivedObservationKind = 'task-outcome' | 'learned-pattern';
+
+export interface RufloDerivedObservationMetadata extends RufloBridgeObservationMetadata {
+  source: 'ruflo';
+  ruflo_observation_kind: RufloDerivedObservationKind;
+  confidence?: number;
+  domain?: string;
+  quality?: number;
+}
+
+export interface RufloDerivedObservation {
+  kind: RufloDerivedObservationKind;
+  content: string;
+  metadata: RufloDerivedObservationMetadata;
+  task_id?: number;
+}
+
+export type RufloBridgeMappedObservation = RufloBridgeObservation | RufloDerivedObservation;
 
 interface RufloBridgeObservationMetadataDraft {
   ruflo_event_family: RufloBridgeEventFamily;
@@ -119,6 +142,117 @@ export function mapRufloEventToColonyObservation(event: RufloBridgeEvent): Ruflo
     observation.task_id = metadata.task_id;
   }
   return observation;
+}
+
+export function mapRufloEventToColonyObservations(
+  event: RufloBridgeEvent,
+): RufloBridgeMappedObservation[] {
+  const base = mapRufloEventToColonyObservation(event);
+  return [base, ...deriveRufloLearningObservations(event, base.metadata)];
+}
+
+export function deriveRufloLearningObservations(
+  event: RufloBridgeEvent,
+  metadata = mapRufloEventToColonyObservation(event).metadata,
+): RufloDerivedObservation[] {
+  const observations: RufloDerivedObservation[] = [];
+  if (
+    event.name === 'swarm/task-completed' ||
+    event.name === 'agent/finish' ||
+    event.name === 'agent/error'
+  ) {
+    const taskOutcome = derivedTaskOutcomeObservation(event, metadata);
+    if (taskOutcome) observations.push(taskOutcome);
+  }
+  if (event.name === 'memory/write') {
+    const learnedPattern = derivedLearnedPatternObservation(event, metadata);
+    if (learnedPattern) observations.push(learnedPattern);
+  }
+  return observations;
+}
+
+function derivedTaskOutcomeObservation(
+  event: RufloBridgeEvent,
+  metadata: RufloBridgeObservationMetadata,
+): RufloDerivedObservation | null {
+  if (
+    metadata.task_id === undefined &&
+    metadata.success === undefined &&
+    metadata.duration_ms === undefined &&
+    !event.summary
+  ) {
+    return null;
+  }
+  return {
+    kind: 'task-outcome',
+    content: compactText(
+      [
+        'ruflo task outcome:',
+        `event=${metadata.ruflo_event_name}`,
+        metadata.task_id !== undefined ? `task=${metadata.task_id}` : '',
+        metadata.success !== undefined ? `success=${metadata.success}` : '',
+        metadata.duration_ms !== undefined ? `duration_ms=${metadata.duration_ms}` : '',
+        event.summary ? `summary=${compactText(event.summary, CONTENT_FIELD_LIMIT)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      CONTENT_LIMIT,
+    ),
+    metadata: compactDerivedMetadata(metadata, event, 'task-outcome'),
+    ...(typeof metadata.task_id === 'number' && Number.isInteger(metadata.task_id)
+      ? { task_id: metadata.task_id }
+      : {}),
+  };
+}
+
+function derivedLearnedPatternObservation(
+  event: RufloBridgeEvent,
+  metadata: RufloBridgeObservationMetadata,
+): RufloDerivedObservation | null {
+  const pattern = optionalString(event.pattern) ?? optionalString(event.summary);
+  if (!pattern) return null;
+  return {
+    kind: 'learned-pattern',
+    content: compactText(
+      [
+        'ruflo learned pattern:',
+        `pattern=${compactText(pattern, CONTENT_FIELD_LIMIT)}`,
+        event.domain ? `domain=${compactText(event.domain, CONTENT_FIELD_LIMIT)}` : '',
+        typeof event.confidence === 'number' && Number.isFinite(event.confidence)
+          ? `confidence=${event.confidence}`
+          : '',
+        typeof event.quality === 'number' && Number.isFinite(event.quality)
+          ? `quality=${event.quality}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      CONTENT_LIMIT,
+    ),
+    metadata: compactDerivedMetadata(metadata, event, 'learned-pattern'),
+    ...(typeof metadata.task_id === 'number' && Number.isInteger(metadata.task_id)
+      ? { task_id: metadata.task_id }
+      : {}),
+  };
+}
+
+function compactDerivedMetadata(
+  metadata: RufloBridgeObservationMetadata,
+  event: RufloBridgeEvent,
+  kind: RufloDerivedObservationKind,
+): RufloDerivedObservationMetadata {
+  return {
+    ...metadata,
+    source: 'ruflo',
+    ruflo_observation_kind: kind,
+    ...(typeof event.confidence === 'number' && Number.isFinite(event.confidence)
+      ? { confidence: event.confidence }
+      : {}),
+    ...(event.domain ? { domain: compactText(event.domain, CONTENT_FIELD_LIMIT) } : {}),
+    ...(typeof event.quality === 'number' && Number.isFinite(event.quality)
+      ? { quality: event.quality }
+      : {}),
+  };
 }
 
 function compactContent(event: RufloBridgeEvent, metadata: RufloBridgeObservationMetadata): string {

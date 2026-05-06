@@ -106,6 +106,14 @@ export interface InboxLane {
   activity_summary: string;
   worktree_path: string;
   updated_at: string;
+  next_action?: string;
+  suggested_actions?: InboxLaneAction[];
+}
+
+export interface InboxLaneAction {
+  action: 'inspect' | 'takeover' | 'ignore';
+  reason: string;
+  command?: string;
 }
 
 export interface InboxPausedLane {
@@ -1273,6 +1281,10 @@ function isLaneStalled(session: HivemindSession): boolean {
 }
 
 function toInboxLane(session: HivemindSession): InboxLane {
+  const takeoverCommand =
+    session.session_key && session.session_key !== 'unknown'
+      ? `colony lane takeover ${session.session_key} --reason 'stalled lane takeover'`
+      : null;
   return {
     repo_root: session.repo_root,
     branch: session.branch,
@@ -1282,7 +1294,38 @@ function toInboxLane(session: HivemindSession): InboxLane {
     activity_summary: session.activity_summary,
     worktree_path: session.worktree_path,
     updated_at: session.updated_at,
+    next_action:
+      session.activity === 'dead'
+        ? 'Inspect lane evidence, then take over or ignore if already cleaned up.'
+        : 'Inspect lane evidence; take over if work is still relevant, otherwise leave it collapsed.',
+    suggested_actions: [
+      {
+        action: 'inspect',
+        reason: 'Read branch/worktree/task evidence before taking ownership.',
+        ...(session.worktree_path
+          ? { command: `git -C ${shellQuote(session.worktree_path)} status --short --branch` }
+          : {}),
+      },
+      ...(takeoverCommand
+        ? [
+            {
+              action: 'takeover' as const,
+              reason: 'Owner appears stalled or dead; explicit takeover is safer than waiting.',
+              command: takeoverCommand,
+            },
+          ]
+        : []),
+      {
+        action: 'ignore',
+        reason: 'Use only after branch/PR/task evidence shows the lane is already closed.',
+      },
+    ],
   };
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function deriveNextAction(parts: {
