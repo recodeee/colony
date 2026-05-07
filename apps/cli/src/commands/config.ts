@@ -56,7 +56,7 @@ type ZodTypeName =
   | 'ZodEnum';
 
 type ZodNode = {
-  _def: { type?: string; typeName?: string } & Record<string, unknown>;
+  _def: { type?: string; typeName?: string; shape?: unknown } & Record<string, unknown>;
   shape?: Record<string, ZodNode>;
 };
 
@@ -106,7 +106,8 @@ export function leafSchema(root: unknown, path: string): unknown {
   for (const part of path.split('.')) {
     const t = typeName(cur);
     if (t === 'ZodObject') {
-      const shape = (cur as { shape: Record<string, ZodNode> }).shape;
+      const shape = objectShape(cur);
+      if (!shape) return undefined;
       const child = shape[part];
       if (!child) return undefined;
       cur = unwrap(child);
@@ -119,6 +120,15 @@ export function leafSchema(root: unknown, path: string): unknown {
     return undefined;
   }
   return cur;
+}
+
+function objectShape(schema: ZodNode): Record<string, ZodNode> | undefined {
+  const direct = schema.shape;
+  if (direct && typeof direct === 'object') return direct as Record<string, ZodNode>;
+  const defShape = schema._def.shape;
+  if (typeof defShape === 'function') return defShape() as Record<string, ZodNode>;
+  if (defShape && typeof defShape === 'object') return defShape as Record<string, ZodNode>;
+  return undefined;
 }
 
 export function coerceForPath(raw: string, path: string): unknown {

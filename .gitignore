@@ -1,5 +1,6 @@
 node_modules
 dist
+target
 .cache
 *.log
 .DS_Store
@@ -16,6 +17,7 @@ coverage
 apps/cli/README.md
 apps/cli/LICENSE
 apps/cli/hooks-scripts/
+examples/claude-obsidian/
 
 # multiagent-safety:START
 .omx/

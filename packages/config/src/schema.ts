@@ -153,8 +153,47 @@ export const SettingsSchema = z
           .positive()
           .default(10)
           .describe('Default number of hits returned when no limit is given.'),
+        rust: z
+          .object({
+            enabled: z
+              .boolean()
+              .default(false)
+              .describe(
+                'If true, read-side keyword search tries the Rust full-text sidecar first.',
+              ),
+            required: z
+              .boolean()
+              .default(false)
+              .describe(
+                'If true, search fails instead of falling back to SQLite FTS when the Rust sidecar is unavailable.',
+              ),
+            binaryPath: z
+              .string()
+              .min(1)
+              .optional()
+              .describe(
+                'Path or command name for the Rust search binary. Defaults to colony-search.',
+              ),
+            indexDir: z
+              .string()
+              .min(1)
+              .optional()
+              .describe('Directory for the Tantivy index. Defaults to <dataDir>/search-index.'),
+            timeoutMs: z
+              .number()
+              .int()
+              .positive()
+              .default(2_000)
+              .describe('Milliseconds before Colony kills a Rust search sidecar request.'),
+          })
+          .default({ enabled: false, required: false, timeoutMs: 2_000 })
+          .describe('Optional Rust/Tantivy keyword search sidecar.'),
       })
-      .default({ alpha: 0.5, defaultLimit: 10 })
+      .default({
+        alpha: 0.5,
+        defaultLimit: 10,
+        rust: { enabled: false, required: false, timeoutMs: 2_000 },
+      })
       .describe('Search ranking defaults.'),
     privacy: z
       .object({

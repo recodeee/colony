@@ -1,4 +1,5 @@
 export { MemoryStore, type Embedder } from './memory-store.js';
+export type { RustSearchMode, RustSearchOptions } from './rust-search.js';
 export {
   SAVINGS_REFERENCE_ROWS,
   savingsLiveComparison,

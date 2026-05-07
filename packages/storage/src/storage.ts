@@ -1107,6 +1107,40 @@ export class Storage {
     }));
   }
 
+  embeddingsForObservations(
+    observationIds: number[],
+    filter?: { model: string; dim: number },
+  ): Array<{
+    observation_id: number;
+    vec: Float32Array;
+  }> {
+    const ids = Array.from(new Set(observationIds.filter((id) => Number.isInteger(id) && id > 0)));
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const conditions = [`observation_id IN (${placeholders})`];
+    const params: Array<number | string> = [...ids];
+    if (filter) {
+      conditions.push('model = ?', 'dim = ?');
+      params.push(filter.model, filter.dim);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT observation_id, dim, vec FROM embeddings
+         WHERE ${conditions.join(' AND ')}`,
+      )
+      .all(...params) as Array<{
+      observation_id: number;
+      dim: number;
+      vec: Buffer;
+    }>;
+    return rows.map((r) => ({
+      observation_id: r.observation_id,
+      vec: new Float32Array(
+        new Uint8Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength).slice().buffer,
+      ),
+    }));
+  }
+
   observationsMissingEmbeddings(limit = 100, model?: string): ObservationRow[] {
     if (model) {
       return this.db

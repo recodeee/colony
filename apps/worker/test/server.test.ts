@@ -618,6 +618,13 @@ describe('worker HTTP', () => {
     expect(hits.length).toBeGreaterThan(0);
   });
 
+  it('GET /api/search rejects invalid Rust search mode', async () => {
+    seed();
+    const res = await app.request('/api/search?q=config&rust=maybe');
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'rust must be auto, off, or required' });
+  });
+
   it('GET / renders the session index HTML', async () => {
     seed();
     const res = await app.request('/');

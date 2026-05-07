@@ -3,6 +3,7 @@ import type { Settings } from '@colony/config';
 import { type NewObservation, type ObservationRow, Storage } from '@colony/storage';
 import { inferSessionIdentity, sessionIdentityMetadata } from './infer-ide.js';
 import { cosine, hybridRank } from './ranker.js';
+import { type RustSearchOptions, searchWithRust } from './rust-search.js';
 import type { GetObservationsOptions, Observation, SearchResult } from './types.js';
 
 export interface MemoryStoreOptions {
@@ -16,10 +17,12 @@ export interface MemoryStoreOptions {
  * enforce: redact private tags → compress → persist.
  */
 export class MemoryStore {
+  readonly dbPath: string;
   readonly storage: Storage;
   readonly settings: Settings;
 
   constructor(opts: MemoryStoreOptions) {
+    this.dbPath = opts.dbPath;
     this.storage = new Storage(opts.dbPath, opts.readonly === true ? { readonly: true } : {});
     this.settings = opts.settings;
   }
@@ -139,10 +142,11 @@ export class MemoryStore {
     limit?: number,
     embedder?: Embedder,
     filter?: { kind?: string; metadata?: Record<string, string> },
+    options: RustSearchOptions = {},
   ): Promise<SearchResult[]> {
     const cap = limit ?? this.settings.search.defaultLimit;
     const alpha = this.settings.search.alpha;
-    const keyword = this.storage.searchFts(query, cap * 2, filter);
+    const keyword = await this.keywordSearch(query, cap * 2, filter, options);
     // When the caller scopes the result to a `kind` / `metadata` pair,
     // skip vector ranking: the embedding index has no kind filter, so
     // mixing vector hits would bring back observations from other kinds
@@ -154,7 +158,15 @@ export class MemoryStore {
     if (!embedder || this.settings.embedding.provider === 'none') {
       return keyword.slice(0, cap);
     }
-    const vectors = this.storage.allEmbeddings({ model: embedder.model, dim: embedder.dim });
+    // Normal searches already have enough FTS candidates. Bound vector work to
+    // those candidates so semantic reranking does not load every stored vector.
+    const vectors =
+      keyword.length >= cap
+        ? this.storage.embeddingsForObservations(
+            keyword.map((hit) => hit.id),
+            { model: embedder.model, dim: embedder.dim },
+          )
+        : this.storage.allEmbeddings({ model: embedder.model, dim: embedder.dim });
     if (vectors.length === 0) return keyword.slice(0, cap);
     const qvec = await embedder.embed(query);
     if (qvec.length !== embedder.dim) {
@@ -216,6 +228,30 @@ export class MemoryStore {
         task_id: info?.task_id ?? null,
       };
     });
+  }
+
+  private async keywordSearch(
+    query: string,
+    limit: number,
+    filter: { kind?: string; metadata?: Record<string, string> } | undefined,
+    options: RustSearchOptions,
+  ): Promise<SearchResult[]> {
+    // Rust search is a read-side accelerator only. Filtered FTS stays on
+    // SQLite until the sidecar learns the same metadata/kind contract.
+    if (
+      !filter ||
+      (!filter.kind && (!filter.metadata || Object.keys(filter.metadata).length === 0))
+    ) {
+      const rustHits = await searchWithRust({
+        dbPath: this.dbPath,
+        settings: this.settings,
+        query,
+        limit,
+        mode: options.rust ?? 'auto',
+      });
+      if (rustHits) return rustHits.slice(0, limit);
+    }
+    return this.storage.searchFts(query, limit, filter);
   }
 }
 
