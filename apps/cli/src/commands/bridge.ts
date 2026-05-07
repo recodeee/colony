@@ -1,7 +1,10 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadSettings } from '@colony/config';
 import {
   type IngestOmxRuntimeSummaryResult,
-  type MemoryStore,
+  MemoryStore,
   type OmxRuntimeSummaryInput,
   inferIdeFromSessionId,
 } from '@colony/core';
@@ -55,9 +58,11 @@ interface OmxLifecycleRunResult {
 interface BridgeCommandDeps {
   buildBridgeStatusPayload?: BridgeStatusBuilder;
   readStdin?: () => Promise<string>;
+  readReplayFile?: (path: string) => string;
+  createDryRunStore?: () => { store: MemoryStore; cleanup: () => void };
   runOmxLifecycleEnvelope?: (
     payload: unknown,
-    options: { defaultCwd?: string; ide?: string },
+    options: { defaultCwd?: string; ide?: string; store?: MemoryStore },
   ) => Promise<OmxLifecycleRunResult>;
   ingestOmxRuntimeSummary?: (
     store: MemoryStore,
@@ -70,6 +75,8 @@ interface BridgeLifecycleOptions {
   json?: boolean;
   ide?: string;
   cwd?: string;
+  replay?: string;
+  dryRun?: boolean;
 }
 
 interface BridgeRuntimeSummaryOptions {
@@ -160,32 +167,49 @@ export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps 
 
   bridge
     .command('lifecycle')
-    .description('Receive a colony-omx-lifecycle-v1 envelope from stdin')
+    .description('Receive a colony-omx-lifecycle-v1 envelope from stdin or a file')
     .option('--json', 'emit the routing result as JSON')
     .option('--ide <name>', 'IDE/agent hint used when the envelope omits one')
     .option('--cwd <path>', 'cwd hint used when the envelope uses relative paths')
+    .option(
+      '--replay <file>',
+      'read the envelope JSON from a file (e.g. a saved .pre.json fixture) instead of stdin',
+    )
+    .option(
+      '--dry-run',
+      'route the event through an ephemeral SQLite store; the live data dir is untouched',
+    )
     .action(async (opts: BridgeLifecycleOptions) => {
-      const raw = await (deps.readStdin ?? readStdin)();
+      const raw = opts.replay
+        ? (deps.readReplayFile ?? defaultReadReplayFile)(opts.replay)
+        : await (deps.readStdin ?? readStdin)();
       const payload = raw.trim() ? safeJson(raw) : {};
       const runLifecycle =
         deps.runOmxLifecycleEnvelope ?? (await import('@colony/hooks')).runOmxLifecycleEnvelope;
-      const result = await runLifecycle(payload, {
-        defaultCwd: opts.cwd?.trim() || process.cwd(),
-        ...(opts.ide?.trim() ? { ide: opts.ide.trim() } : {}),
-      });
+      const dryRun = opts.dryRun ? (deps.createDryRunStore ?? defaultCreateDryRunStore)() : null;
+      try {
+        const result = await runLifecycle(payload, {
+          defaultCwd: opts.cwd?.trim() || process.cwd(),
+          ...(opts.ide?.trim() ? { ide: opts.ide.trim() } : {}),
+          ...(dryRun ? { store: dryRun.store } : {}),
+        });
 
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      } else if (result.ok) {
-        const duplicate = result.duplicate === true ? ' duplicate=true' : '';
-        process.stdout.write(
-          `${kleur.green('ok')} event=${result.event_type ?? '-'} route=${result.route ?? '-'}${duplicate}\n`,
-        );
-      } else {
-        process.stderr.write(`${kleur.red('error')} ${result.error ?? 'lifecycle failed'}\n`);
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        } else if (result.ok) {
+          const duplicate = result.duplicate === true ? ' duplicate=true' : '';
+          const dryRunTag = opts.dryRun ? ' dry_run=true' : '';
+          process.stdout.write(
+            `${kleur.green('ok')} event=${result.event_type ?? '-'} route=${result.route ?? '-'}${duplicate}${dryRunTag}\n`,
+          );
+        } else {
+          process.stderr.write(`${kleur.red('error')} ${result.error ?? 'lifecycle failed'}\n`);
+        }
+
+        if (!result.ok) process.exitCode = 1;
+      } finally {
+        dryRun?.cleanup();
       }
-
-      if (!result.ok) process.exitCode = 1;
     });
 
   bridge
@@ -249,4 +273,21 @@ function readStdin(): Promise<string> {
     });
     process.stdin.on('end', () => resolve(data));
   });
+}
+
+function defaultReadReplayFile(path: string): string {
+  return readFileSync(path, 'utf8');
+}
+
+function defaultCreateDryRunStore(): { store: MemoryStore; cleanup: () => void } {
+  const settings = loadSettings();
+  const dir = mkdtempSync(join(tmpdir(), 'colony-bridge-replay-'));
+  const store = new MemoryStore({ dbPath: join(dir, 'data.db'), settings });
+  return {
+    store,
+    cleanup: () => {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
