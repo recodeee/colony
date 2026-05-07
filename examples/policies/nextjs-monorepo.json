@@ -1,0 +1,36 @@
+{
+  "privacy": {
+    "excludePatterns": [
+      "**/node_modules/**",
+      "**/.next/**",
+      "**/.turbo/**",
+      "**/.vercel/**",
+      "**/.cache/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/out/**",
+      "**/coverage/**",
+      "**/.env",
+      "**/.env.*",
+      "**/*.log",
+      "**/storybook-static/**",
+      "**/playwright-report/**",
+      "**/test-results/**"
+    ],
+    "redactSecrets": true
+  },
+  "protected_files": [
+    "package.json",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.ts",
+    "turbo.json",
+    "tsconfig.json",
+    "tsconfig.base.json",
+    "middleware.ts",
+    "middleware.js"
+  ]
+}

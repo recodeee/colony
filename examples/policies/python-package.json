@@ -1,0 +1,39 @@
+{
+  "privacy": {
+    "excludePatterns": [
+      "**/__pycache__/**",
+      "**/.venv/**",
+      "**/venv/**",
+      "**/.virtualenv/**",
+      "**/.tox/**",
+      "**/.nox/**",
+      "**/.mypy_cache/**",
+      "**/.pytest_cache/**",
+      "**/.ruff_cache/**",
+      "**/.ipynb_checkpoints/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/*.egg-info/**",
+      "**/.coverage",
+      "**/htmlcov/**",
+      "**/.env",
+      "**/.env.*",
+      "**/*.pyc",
+      "**/*.pyo"
+    ],
+    "redactSecrets": true
+  },
+  "protected_files": [
+    "pyproject.toml",
+    "poetry.lock",
+    "uv.lock",
+    "Pipfile",
+    "Pipfile.lock",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "setup.py",
+    "setup.cfg",
+    "tox.ini",
+    "alembic.ini"
+  ]
+}

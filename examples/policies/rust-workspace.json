@@ -1,0 +1,29 @@
+{
+  "privacy": {
+    "excludePatterns": [
+      "**/target/**",
+      "**/.cargo/**",
+      "**/bindings/**",
+      "**/pkg/**",
+      "**/*.rlib",
+      "**/*.rmeta",
+      "**/*.d",
+      "**/.env",
+      "**/.env.*",
+      "**/*.log",
+      "**/coverage/**",
+      "**/tarpaulin-report.html"
+    ],
+    "redactSecrets": true
+  },
+  "protected_files": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    "rustfmt.toml",
+    "clippy.toml",
+    "deny.toml",
+    ".cargo/config.toml"
+  ]
+}

@@ -34,6 +34,18 @@ npx skills add recodeee/colony/skills/colony-mcp
 colony health
 ```
 
+### See It in 60 Seconds
+
+```bash
+colony demo
+```
+
+`colony demo` runs an isolated, in-memory walkthrough: two simulated agents
+(`claude-code` and `codex`) join the same task, both try to edit `src/api.ts`,
+and you watch the second agent get told `blocked_active_owner` instead of
+clobbering the file. No install side-effects — the demo writes to a temp dir
+and cleans up on exit. Pass `--json` for a structured transcript.
+
 ## Connect Colony to Your Agent
 
 Install the CLI, wire the MCP server into your runtime, then add the Colony MCP
@@ -47,6 +59,20 @@ skill so agents know the coordination loop before they edit.
 
 No sign-in step is required. Colony is local-first and stores coordination state
 under `~/.colony`.
+
+### Pre-baked Policy Snippets
+
+Drop-in fragments for common stacks live in [`examples/policies/`](examples/policies):
+
+- [`nextjs-monorepo.json`](examples/policies/nextjs-monorepo.json) — pnpm/npm workspaces with a Next.js app
+- [`python-package.json`](examples/policies/python-package.json) — Poetry / uv / pip-tools projects
+- [`rust-workspace.json`](examples/policies/rust-workspace.json) — Cargo workspace
+
+Each snippet sets `privacy.excludePatterns` to ignore the stack's build
+output and caches, and `protected_files` to escalate contention on lockfiles
+and root config files. See
+[`examples/policies/README.md`](examples/policies/README.md) for merge
+instructions.
 
 ## Release Notes
 

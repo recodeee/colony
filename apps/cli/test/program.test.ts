@@ -104,6 +104,7 @@ describe('Colony CLI program', () => {
         plan                                              Create and operate OpenSpec-like Colony plan workspaces
         plans                                             Prepare safe launch packets for published Colony plans
         debrief [options]                                 End-of-day collaboration post-mortem over structured DB evidence.
+        demo [options]                                    Run a 60-second guided demo: two simulated agents try the same file, colony prevents the collision.
         inbox [options]                                   Compact list of attention items for a session: pending handoffs, wakes, stalled lanes, recent claims, stale claim signals, hot files
         examples_query [options] <query>                  Search example concepts with compact foraged hits
         examples_integrate_plan [options] <example_name>  Plan concept ports from an indexed example
