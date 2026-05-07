@@ -263,8 +263,9 @@ export function mcpError(err: unknown): {
   isError: true;
 } {
   const error = err instanceof Error ? err.message : String(err);
-  const code =
-    err instanceof TaskThreadError ? err.code : TASK_THREAD_ERROR_CODES.OBSERVATION_NOT_ON_TASK;
+  // Default to INTERNAL_ERROR so generic throws (validation, sqlite BUSY, etc.)
+  // don't get mislabelled as OBSERVATION_NOT_ON_TASK in mcp_metrics telemetry.
+  const code = err instanceof TaskThreadError ? err.code : TASK_THREAD_ERROR_CODES.INTERNAL_ERROR;
   return {
     content: [{ type: 'text', text: JSON.stringify({ code, error }) }],
     isError: true,
