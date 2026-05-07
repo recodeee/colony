@@ -1,0 +1,4 @@
+interface:
+  display_name: "Colony MCP"
+  short_description: "Coordinate agent work through Colony"
+  default_prompt: "Use $colony-mcp to coordinate this repository task through Colony before editing."

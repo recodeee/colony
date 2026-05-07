@@ -30,8 +30,23 @@
 ```bash
 npm install -g @imdeadpool/colony-cli
 colony install --ide codex
+npx skills add recodeee/colony/skills/colony-mcp
 colony health
 ```
+
+## Connect Colony to Your Agent
+
+Install the CLI, wire the MCP server into your runtime, then add the Colony MCP
+skill so agents know the coordination loop before they edit.
+
+| Step | Path | Command | Result |
+| ---- | ---- | ------- | ------ |
+| 1 | CLI | `npm install -g @imdeadpool/colony-cli` | Installs the `colony` command. |
+| 2 | MCP | `colony install --ide codex` | Registers the `colony` MCP server plus lifecycle hooks. |
+| 3 | Skill | `npx skills add recodeee/colony/skills/colony-mcp` | Teaches Claude Code, Cursor, Codex, and other skill-aware agents to call Colony first. |
+
+No sign-in step is required. Colony is local-first and stores coordination state
+under `~/.colony`.
 
 ## Release Notes
 
@@ -410,6 +425,12 @@ colony install --ide codex
 colony install --ide cursor
 colony install --ide gemini-cli
 colony install --ide opencode
+```
+
+Install the agent skill when your runtime supports `npx skills add`:
+
+```bash
+npx skills add recodeee/colony/skills/colony-mcp
 ```
 
 Check the install:
@@ -1132,4 +1153,3 @@ JuliusBrussee for the original base.
 ## License
 
 MIT © Imdeadpool
-

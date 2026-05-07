@@ -17,6 +17,9 @@ import type { Command } from 'commander';
 import kleur from 'kleur';
 import { resolveCliPath } from '../util/resolve.js';
 
+export const COLONY_CLI_INSTALL_COMMAND = 'npm install -g @imdeadpool/colony-cli';
+export const COLONY_SKILL_INSTALL_COMMAND = 'npx skills add recodeee/colony/skills/colony-mcp';
+
 export function registerInstallCommand(program: Command): void {
   program
     .command('install')
@@ -74,6 +77,15 @@ export function registerInstallCommand(program: Command): void {
         `  ${kleur.cyan('colony search "…"')}    query your memory from the terminal\n`,
       );
       process.stdout.write(`  ${kleur.cyan('colony config show')}   see settings + docs\n\n`);
+      process.stdout.write(`${kleur.bold('agent skill:')}\n`);
+      process.stdout.write(
+        `  ${kleur.cyan(COLONY_SKILL_INSTALL_COMMAND)}  teach agents the Colony MCP loop\n`,
+      );
+      process.stdout.write(
+        `${kleur.dim(
+          `${COLONY_CLI_INSTALL_COMMAND} installs the CLI; colony install wires MCP + hooks.`,
+        )}\n\n`,
+      );
 
       if (provider === 'local') {
         process.stdout.write(
