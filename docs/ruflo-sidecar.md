@@ -54,6 +54,28 @@ The bridge should be lossy by default: keep small, useful summaries and hydrate
 only when a caller asks for detail. Colony owns the durable coordination record;
 Ruflo owns sidecar execution.
 
+## CLI setup
+
+Colony can scaffold the optional sidecar boundary without installing or
+vendoring Ruflo:
+
+```bash
+colony sidecar ruflo init
+colony sidecar ruflo status
+colony sidecar ruflo schema --json
+```
+
+`init` creates `ruflo-sidecar/` with:
+
+- `colony-ruflo-sidecar.json` for the event contract and local paths
+- `events.ndjson` as the compact event stream Ruflo can append to
+- `sample-event.json` with one valid `RufloBridgeEvent`
+- `README.md` for the local operator instructions
+
+Use `--dir <path>` to place the sidecar elsewhere and `--force` to refresh the
+generated scaffold files. Colony still works when the directory is absent; the
+sidecar is advisory input, not a required control plane.
+
 ## Design rules
 
 - Prefer event ingestion over API mirroring.
