@@ -30,6 +30,11 @@ describe('SettingsSchema', () => {
     );
     expect(parsed.bridge.writeOmxNotepadPointer).toBe(false);
     expect(parsed.bridge.policyMode).toBe('warn');
+    expect(parsed.search.rust).toEqual({
+      enabled: false,
+      required: false,
+      timeoutMs: 2000,
+    });
   });
 
   it('rejects invalid intensity', () => {
@@ -61,6 +66,11 @@ describe('SettingsSchema', () => {
     expect(defaultSettings.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);
     expect(defaultSettings.bridge.writeOmxNotepadPointer).toBe(false);
     expect(defaultSettings.bridge.policyMode).toBe('warn');
+    expect(defaultSettings.search.rust).toEqual({
+      enabled: false,
+      required: false,
+      timeoutMs: 2000,
+    });
   });
 
   it('uses COLONY_HOME for default settings location and data dir', () => {

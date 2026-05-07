@@ -380,6 +380,41 @@ describe('Storage', () => {
     expect(storage.allEmbeddings({ model: 'new-model', dim: 2 }).length).toBe(0);
   });
 
+  it('embeddingsForObservations filters by observation ids and model shape', () => {
+    storage.createSession({
+      id: 's3-candidates',
+      ide: 'claude-code',
+      cwd: null,
+      started_at: Date.now(),
+      metadata: null,
+    });
+    const ids: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      ids.push(
+        storage.insertObservation({
+          session_id: 's3-candidates',
+          kind: 'note',
+          content: `candidate-${i}`,
+          compressed: true,
+          intensity: 'full',
+        }),
+      );
+    }
+    storage.putEmbedding(ids[0] as number, 'old-model', new Float32Array([1, 2]));
+    storage.putEmbedding(ids[1] as number, 'new-model', new Float32Array([1, 2, 3]));
+    storage.putEmbedding(ids[2] as number, 'new-model', new Float32Array([4, 5, 6]));
+    storage.putEmbedding(ids[3] as number, 'new-model', new Float32Array([7, 8]));
+
+    const hits = storage.embeddingsForObservations([ids[1] as number, ids[2] as number], {
+      model: 'new-model',
+      dim: 3,
+    });
+    expect(hits.map((hit) => hit.observation_id).sort()).toEqual([ids[1], ids[2]].sort());
+    expect(
+      storage.embeddingsForObservations([ids[0] as number], { model: 'new-model', dim: 3 }).length,
+    ).toBe(0);
+  });
+
   it('dropEmbeddingsWhereModelNot clears stale rows', () => {
     storage.createSession({
       id: 's4',
@@ -968,9 +1003,6 @@ describe('Storage.findCompletedQueenPlans', () => {
     const [subTaskId] = subTaskIds;
     if (subTaskId === undefined) {
       throw new Error('expected progressive-plan to create a sub-task');
-    const taskId = subTaskIds[0];
-    if (taskId === undefined) {
-      throw new Error('expected plan sub-task id');
     }
     storage.insertObservation({
       session_id: 'planner',
@@ -979,7 +1011,7 @@ describe('Storage.findCompletedQueenPlans', () => {
       compressed: false,
       intensity: null,
       ts: Date.now() + 1000,
-      task_id: taskId,
+      task_id: subTaskId,
       reply_to: null,
       metadata: { kind: 'plan-subtask-claim', status: 'completed' },
     });

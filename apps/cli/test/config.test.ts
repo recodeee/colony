@@ -19,6 +19,7 @@ describe('coerceForPath (schema-directed)', () => {
 
   it('parses booleans only for boolean fields', () => {
     expect(coerceForPath('true', 'embedding.autoStart')).toBe(true);
+    expect(coerceForPath('true', 'search.rust.enabled')).toBe(true);
     expect(coerceForPath('false', 'privacy.redactSecrets')).toBe(false);
     // A string field named after "true" stays a string
     expect(coerceForPath('true', 'embedding.model')).toBe('true');
@@ -47,6 +48,7 @@ describe('leafSchema', () => {
     expect(leafSchema(SettingsSchema, 'embedding.provider')).toBeDefined();
     expect(leafSchema(SettingsSchema, 'bridge.policyMode')).toBeDefined();
     expect(leafSchema(SettingsSchema, 'search.alpha')).toBeDefined();
+    expect(leafSchema(SettingsSchema, 'search.rust.timeoutMs')).toBeDefined();
   });
 
   it('returns undefined for unknown paths', () => {

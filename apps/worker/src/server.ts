@@ -7,6 +7,7 @@ import {
   type DiscrepancyReport,
   type HivemindOptions,
   MemoryStore,
+  type RustSearchMode,
   buildDiscrepancyReport,
   bulkRescueStrandedSessions,
   listPlans,
@@ -320,7 +321,10 @@ export function buildApp(
   app.get('/api/search', async (c) => {
     const q = c.req.query('q') ?? '';
     const limit = Number(c.req.query('limit') ?? 10);
-    return c.json(await store.search(q, limit));
+    const rustMode = parseRustSearchMode(c.req.query('rust'));
+    if (rustMode === null) return c.json({ error: 'rust must be auto, off, or required' }, 400);
+    const searchOptions = rustMode ? { rust: rustMode } : undefined;
+    return c.json(await store.search(q, limit, undefined, undefined, searchOptions));
   });
 
   app.get('/', (c) =>
@@ -398,6 +402,15 @@ function parseSessionLimit(raw: string | undefined): number | undefined {
   if (raw === undefined || raw.trim() === '') return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+}
+
+function parseRustSearchMode(raw: string | undefined): RustSearchMode | null | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'auto' || normalized === 'off' || normalized === 'required') {
+    return normalized;
+  }
+  return null;
 }
 
 function parseSinceQuery(raw: string | undefined, fallback: number): number {
