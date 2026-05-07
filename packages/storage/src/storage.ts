@@ -308,6 +308,10 @@ export class Storage {
   constructor(dbPath: string, opts: StorageOptions = {}) {
     if (!opts.readonly) mkdirSync(dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath, opts.readonly ? { readonly: true } : {});
+    // busy_timeout is connection-scoped. Multiple processes (worker daemon,
+    // MCP server, CLI hooks) hit the same WAL file; without this they trip
+    // SQLITE_BUSY immediately on contention. 5s lets the kernel retry.
+    this.db.pragma('busy_timeout = 5000');
     if (opts.readonly) {
       this.db.pragma('foreign_keys = ON');
     } else {
