@@ -88,6 +88,11 @@ interface TimelineRow {
   content?: string;
 }
 
+interface ReadyQueueResult {
+  ready: Array<{ plan_slug: string; subtask_index: number }>;
+  total_available: number;
+}
+
 interface ClaimResult {
   task_id: number;
   branch: string;
@@ -237,6 +242,43 @@ describe('task_plan_publish', () => {
     expect(
       readFileSync(join(repoRoot, 'openspec/plans/add-widget-page/tasks.md'), 'utf8'),
     ).toContain('Build widget API');
+  });
+
+  it('publishes claimable plan work when the target repo has no SPEC.md', async () => {
+    rmSync(join(repoRoot, 'SPEC.md'), { force: true });
+
+    const result = await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({ slug: 'no-spec-plan' }),
+    );
+
+    expect(result.plan_slug).toBe('no-spec-plan');
+    expect(result.spec_change_path).toContain('openspec/changes/no-spec-plan/CHANGE.md');
+    expect(readChangeText('no-spec-plan')).toContain('base_root_hash: missing-spec-root');
+
+    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const plan = plans.find((candidate) => candidate.plan_slug === 'no-spec-plan');
+    expect(plan?.next_available.map((subtask) => subtask.subtask_index)).toEqual([0]);
+
+    store.startSession({ id: 'ready-session', ide: 'codex', cwd: repoRoot });
+    const ready = await call<ReadyQueueResult>('task_ready_for_agent', {
+      repo_root: repoRoot,
+      session_id: 'ready-session',
+      agent: 'codex',
+      auto_claim: false,
+    });
+    expect(ready.ready).toContainEqual(
+      expect.objectContaining({ plan_slug: 'no-spec-plan', subtask_index: 0 }),
+    );
+    expect(ready.total_available).toBe(1);
+
+    const claim = await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'no-spec-plan',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+    expect(claim.branch).toBe('spec/no-spec-plan/sub-0');
   });
 
   it('rejects overlapping file scopes between independent sub-tasks', async () => {

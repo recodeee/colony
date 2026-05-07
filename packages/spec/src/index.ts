@@ -11,8 +11,10 @@ export { parseChange, serializeChange, type Change, type DeltaRow } from './chan
 export { computeBaseRootHash, verifyBaseRootHash } from './hash.js';
 export {
   SpecRepository,
+  MISSING_SPEC_ROOT_HASH,
   type SpecRepositoryOptions,
   type OpenChangeInput,
+  type OpenChangeOptions,
   type ArchiveResult,
 } from './repository.js';
 export { SyncEngine, type SyncStrategy, type MergeResult, type MergeConflict } from './sync.js';

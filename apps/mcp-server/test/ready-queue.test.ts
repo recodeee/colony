@@ -174,6 +174,13 @@ interface ReadyResult {
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
+  setup_issue?: {
+    code: 'SPEC_ROOT_NOT_FOUND';
+    repo_root: string;
+    spec_path: string;
+    recovery: string;
+    message: string;
+  };
   claim_required?: boolean;
   auto_claimed?:
     | {
@@ -447,6 +454,27 @@ describe('task_ready_for_agent', () => {
     expect(result.next_action).toBe(
       'Publish a Queen/task plan or promote a proposal into claimable work.',
     );
+  });
+
+  it('points agents at SPEC setup when no plan work exists and SPEC.md is missing', async () => {
+    rmSync(join(repoRoot, 'SPEC.md'), { force: true });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.total_available).toBe(0);
+    expect(result.empty_state).toContain('SPEC.md not found at');
+    expect(result.next_action).toBe(result.empty_state);
+    expect(result.setup_issue).toMatchObject({
+      code: 'SPEC_ROOT_NOT_FOUND',
+      repo_root: repoRoot,
+      spec_path: join(repoRoot, 'SPEC.md'),
+    });
+    expect(result.setup_issue?.recovery).toContain('colony spec init');
   });
 
   it('returns the MCP capability map only when explicitly requested', async () => {

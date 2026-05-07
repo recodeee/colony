@@ -73,12 +73,15 @@ export function publishPlan(args: PublishPlanInput): PublishPlanResult {
 
   const repo = new SpecRepository({ repoRoot: args.repo_root, store: args.store });
   const proposal = renderProposal(args);
-  const opened = repo.openChange({
-    slug: args.slug,
-    session_id: args.session_id,
-    agent: args.agent,
-    proposal,
-  });
+  const opened = repo.openChange(
+    {
+      slug: args.slug,
+      session_id: args.session_id,
+      agent: args.agent,
+      proposal,
+    },
+    { allowMissingRoot: true },
+  );
 
   args.store.addObservation({
     session_id: args.session_id,

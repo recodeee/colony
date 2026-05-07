@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import {
   type AgentProfile,
   type ClaimHolder,
@@ -17,7 +18,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { attemptClaimPlanSubtask } from './plan.js';
-import { type CompactNegativeWarning, searchNegativeWarnings } from './shared.js';
+import {
+  type CompactNegativeWarning,
+  type SpecRootMissingDetails,
+  buildSpecRootMissingDetails,
+  searchNegativeWarnings,
+  specRootMissingMessage,
+  specRootPath,
+} from './shared.js';
 
 const DEFAULT_LIMIT = 5;
 const RELEASE_DENSITY_WINDOW_MS = 60 * 60 * 1000;
@@ -141,6 +149,10 @@ export interface ReadyScopeOverlapWarning {
   message: string;
 }
 
+export interface SpecRootSetupIssue extends SpecRootMissingDetails {
+  message: string;
+}
+
 export interface ReadyForAgentResult {
   ready: ReadyQueueEntry[];
   total_available: number;
@@ -167,6 +179,7 @@ export interface ReadyForAgentResult {
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
+  setup_issue?: SpecRootSetupIssue;
   /**
    * Populated when the caller passed `auto_claim: true` and the server
    * attempted the claim in-band. The result is reported regardless of
@@ -410,6 +423,7 @@ export async function buildReadyForAgent(
   const ranked = rankReadyEntries(quotaRelays, planRanked);
   const selected = ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
   const claimable = ranked.find(isClaimableEntry) ?? null;
+  const setupIssue = specRootSetupIssue(args.repo_root);
   const ready = await Promise.all(
     selected.map(async (entry, index) => {
       const priority = index + 1;
@@ -453,6 +467,7 @@ export async function buildReadyForAgent(
     claimable,
     args,
     plans.length > 0,
+    setupIssue,
     available.length === 0 && quotaRelays.length === 0 ? staleBlockerRescueCandidate(plans) : null,
   );
 }
@@ -465,6 +480,7 @@ function buildReadyResult(
   claimable: ClaimableReadyEntry | null,
   args: { session_id: string; agent: string },
   hasPlans: boolean,
+  setupIssue: SpecRootSetupIssue | null,
   rescueCandidate: StaleBlockerRescueCandidate | null,
 ): ReadyForAgentResult {
   if (claimable === null) {
@@ -483,6 +499,14 @@ function buildReadyResult(
         subtask_index: rescueCandidate.subtask_index,
         rescue_candidate: rescueCandidate,
         rescue_args: { stranded_after_minutes: STALE_BLOCKER_WINDOW_MS / 60_000 },
+      };
+    }
+    if (!hasPlans && setupIssue) {
+      return {
+        ...base,
+        next_action: setupIssue.message,
+        empty_state: setupIssue.message,
+        setup_issue: setupIssue,
       };
     }
     return {
@@ -529,6 +553,15 @@ function buildReadyResult(
     next_action_reason: claimReason(claimable),
     claim_args,
     codex_mcp_call: codexMcpCall(claim_args),
+  };
+}
+
+function specRootSetupIssue(repoRoot: string | undefined): SpecRootSetupIssue | null {
+  if (repoRoot === undefined) return null;
+  if (existsSync(specRootPath(repoRoot))) return null;
+  return {
+    ...buildSpecRootMissingDetails(repoRoot),
+    message: specRootMissingMessage(repoRoot),
   };
 }
 

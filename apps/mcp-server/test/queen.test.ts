@@ -278,6 +278,38 @@ describe('queen_plan_goal', () => {
     expect(publishedPlan?.next_available).toHaveLength(1);
   });
 
+  it('publishes claimable queen work when the target repo has no SPEC.md', async () => {
+    rmSync(join(repoRoot, 'SPEC.md'), { force: true });
+
+    const result = await call<QueenPublishResult>(
+      'queen_plan_goal',
+      queenArgs({ goal_title: 'Coordinate no spec repo' }),
+    );
+
+    expect(result.plan_slug).toBe('coordinate-no-spec-repo');
+    expect(result.subtasks[0]?.branch).toBe('spec/coordinate-no-spec-repo/sub-0');
+    expect(
+      readFileSync(join(repoRoot, 'openspec/changes', result.plan_slug, 'CHANGE.md'), 'utf8'),
+    ).toContain('base_root_hash: missing-spec-root');
+
+    const listed = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const publishedPlan = listed.find((plan) => plan.plan_slug === result.plan_slug);
+    expect(publishedPlan?.next_available.map((subtask) => subtask.subtask_index)).toEqual([0]);
+
+    store.startSession({ id: 'ready-session', ide: 'codex', cwd: repoRoot });
+    const queue = await call<ReadyQueueResult>('task_ready_for_agent', {
+      repo_root: repoRoot,
+      session_id: 'ready-session',
+      agent: 'codex',
+      limit: 20,
+      auto_claim: false,
+    });
+    expect(queue.ready).toContainEqual(
+      expect.objectContaining({ plan_slug: result.plan_slug, subtask_index: 0 }),
+    );
+    expect(queue.total_available).toBe(1);
+  });
+
   it('accepts wave ordering hints and publishes task-plan-compatible dependencies', async () => {
     const result = await call<QueenPublishResult>(
       'queen_plan_goal',
