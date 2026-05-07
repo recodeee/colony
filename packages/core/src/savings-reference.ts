@@ -231,6 +231,38 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     'caveman compression preserves technical tokens byte-for-byte',
     ['savings_report'],
   ),
+  row(
+    'Plan publication & goal anchoring',
+    2,
+    25_000,
+    2_500,
+    'queen_plan_goal sets the goal once and task_plan_publish ships compact subtasks/edges; without colony each agent re-derives the plan from a multi-page doc and re-validates dependencies by hand',
+    ['queen_plan_goal', 'task_plan_publish', 'task_plan_validate', 'task_propose'],
+  ),
+  row(
+    'Task thread note',
+    8,
+    3_500,
+    200,
+    'task_post / task_reinforce attach a structured note (branch/blocker/next/evidence) to the task thread; without colony each note re-states context in a PR comment, Slack, and chat scrollback',
+    ['task_post', 'task_reinforce'],
+  ),
+  row(
+    'Task dependency linking',
+    1,
+    6_000,
+    600,
+    'task_link / task_links / task_unlink record edges between tasks; without colony dependencies live in a freeform TODO doc that has to be re-read on every refresh',
+    ['task_link', 'task_links', 'task_unlink'],
+  ),
+  row(
+    'Agent profile sync',
+    1,
+    4_000,
+    350,
+    'agent_upsert_profile / agent_get_profile keep agent role, tooling, and tier preferences as one compact record; without colony each new session re-introduces the agent in the prompt',
+    ['agent_get_profile', 'agent_upsert_profile'],
+  ),
 ];
 
 export interface SavingsReferenceTotals {

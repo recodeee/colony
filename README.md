@@ -304,13 +304,14 @@ The Colony column is the measured cost through `mcp_metrics`.
 | Coordinate parallel agents   |   20,000 |  3,000 |     🟢 85% |
 
 <details>
-<summary><strong>Show all 21 operations</strong></summary>
+<summary><strong>Show all 25 operations</strong></summary>
 
 | Operation                            | Frequency / session | Standard | Colony | Saved |
 | ------------------------------------ | ------------------- | -------- | ------ | ----- |
 | Cross-agent handoff                  | 2x                  | 30,000   | 400    | 99%   |
 | Quota-exhausted handoff              | 1x                  | 22,000   | 500    | 98%   |
 | Search result shape                  | 8x                  | 5,000    | 150    | 97%   |
+| Task thread note                     | 8x                  | 3,500    | 200    | 94%   |
 | Unread message triage                | 4x                  | 10,000   | 600    | 94%   |
 | Review task timeline                 | 4x                  | 12,000   | 900    | 93%   |
 | Find active owner for a file         | 6x                  | 6,000    | 500    | 92%   |
@@ -318,8 +319,11 @@ The Colony column is the measured cost through `mcp_metrics`.
 | Plan subtask claim                   | 2x                  | 12,000   | 1,100  | 91%   |
 | Examples pattern lookup              | 2x                  | 11,000   | 1,000  | 91%   |
 | Blocker recurrence                   | 2x                  | 10,000   | 900    | 91%   |
+| Agent profile sync                   | 1x                  | 4,000    | 350    | 91%   |
 | Startup coordination sweep           | 1x                  | 25,000   | 2,500  | 90%   |
 | Recover stranded lane                | 1x                  | 18,000   | 1,800  | 90%   |
+| Plan publication & goal anchoring    | 2x                  | 25,000   | 2,500  | 90%   |
+| Task dependency linking              | 1x                  | 6,000    | 600    | 90%   |
 | Claim-before-edit check              | 8x                  | 4,000    | 450    | 89%   |
 | Spec context recall                  | 2x                  | 14,000   | 1,600  | 89%   |
 | Health/adoption diagnosis            | 1x                  | 16,000   | 1,800  | 89%   |
