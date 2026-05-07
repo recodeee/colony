@@ -10,14 +10,7 @@
     "Focused MCP server tests cover no-SPEC repo publication and ready queue claimability.",
     "Task #3 records the fix and the PH12 Agent 84 plan can be published/claimed after the Colony repair is available or an exact reload/retry step is recorded."
   ],
-  "roles": [
-    "planner",
-    "architect",
-    "critic",
-    "executor",
-    "writer",
-    "verifier"
-  ],
+  "roles": ["planner", "architect", "critic", "executor", "writer", "verifier"],
   "tasks": [
     {
       "subtask_index": 0,
@@ -44,13 +37,8 @@
       "subtask_index": 1,
       "title": "Record task #3 recovery evidence",
       "description": "Post evidence on recodee task #3 and republish/claim the PH12 Agent 84 live plan if the running Colony MCP server sees the fix. If the live server is not reloaded, record exact reload/retry next step.",
-      "file_scope": [
-        "openspec/changes",
-        "SPEC.md"
-      ],
-      "depends_on": [
-        0
-      ],
+      "file_scope": ["openspec/changes", "SPEC.md"],
+      "depends_on": [0],
       "spec_row_id": null,
       "capability_hint": "doc_work",
       "status": "available",
