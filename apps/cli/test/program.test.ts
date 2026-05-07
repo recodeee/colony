@@ -23,6 +23,7 @@ describe('Colony CLI program', () => {
       'examples_integrate_plan',
       'examples_query',
       'foraging',
+      'heal',
       'health',
       'hook',
       'inbox',
@@ -74,6 +75,7 @@ describe('Colony CLI program', () => {
         uninstall [options]                               Remove IDE integration
         status [options]                                  Show colony wiring, data, and worker state
         health [options]                                  Show Colony adoption ratios from local DB evidence
+        heal [options]                                    Propose and apply reversible Colony coordination repairs
         config                                            View or edit colony settings
         doctor                                            Run health checks
         start                                             Start the worker daemon (embeddings + viewer)

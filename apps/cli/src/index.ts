@@ -17,6 +17,7 @@ import { registerDoctorCommand } from './commands/doctor.js';
 import { registerExportCommand } from './commands/export.js';
 import { registerForagingCommand } from './commands/foraging.js';
 import { registerGainCommand } from './commands/gain.js';
+import { registerHealCommand } from './commands/heal.js';
 import { registerHealthCommand } from './commands/health.js';
 import { registerHookCommand } from './commands/hook.js';
 import { registerInboxCommand } from './commands/inbox.js';
@@ -65,6 +66,7 @@ export function createProgram(): Command {
   registerUninstallCommand(program);
   registerStatusCommand(program);
   registerHealthCommand(program);
+  registerHealCommand(program);
   registerConfigCommand(program);
   registerDoctorCommand(program);
   registerLifecycleCommands(program);
