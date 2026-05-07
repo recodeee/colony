@@ -1,5 +1,116 @@
 # @colony/core
 
+## 0.7.0
+
+### Minor Changes
+
+- cb4c9f9: Add `--release-expired-quota` mode to `colony coordination sweep`.
+  Quota-pending claims past their `expires_at` are now downgraded to
+  `weak_expired` and their linked relay/handoff observations are marked
+  `expired`, with a coordination-sweep audit observation written for each
+  release. Without the flag, expired quota-pending claims are still
+  counted in `summary.quota_pending_claims` and `safe_cleanup` so health
+  can recommend the cleanup. The new `release_expired_quota_claims`
+  option on `buildCoordinationSweep` mirrors the existing
+  `release_safe_stale_claims` / `release_same_branch_duplicates` shape:
+  audit history is retained, dry-run remains the default, and the CLI's
+  `--dry-run` flag continues to suppress all release modes.
+- 46d0153: Add `colony lane contentions` to surface every file currently held by
+  two or more concurrent strong claims, regardless of which session is
+  asking. The verb prints each contended file with all its claimers
+  (session id, agent, branch, last-seen heartbeat) and emits a suggested
+  `colony lane takeover` command per losing claim — defaults to keeping
+  the most recent claim and demoting the older ones. Auto-resolution is
+  intentionally not done because breaking an active session's claim
+  mid-edit is risky; the operator confirms by running the suggested
+  takeover.
+
+  Backed by a new `listLiveFileContentions(store, options)` helper in
+  `@colony/core` that complements the existing per-session
+  `liveFileContentionsForSessionClaims` / `liveFileContentionsForClaim`
+  walkers.
+
+- a27c52c: Add `--release-aged-quota-minutes <minutes>` to `colony coordination
+sweep` (and the matching `release_aged_quota_pending_minutes` option on
+  `buildCoordinationSweep`) for evacuating quota-pending claims that have
+  been sitting open longer than the supplied threshold, regardless of
+  whether the per-claim TTL has been reached. The existing
+  `--release-expired-quota` flag only handles claims past `expires_at`,
+  so handoffs posted while no agent was around to accept them stay in
+  the signal-evaporation metric until their TTL — often hours.
+
+  Released aged claims still go to `weak_expired` and emit a
+  `coordination-sweep` audit observation; the linked relay observation
+  is marked expired the same way it is for the expired-TTL path. The
+  `released_expired_quota_pending_claims` array now contains both the
+  expired-TTL and aged-threshold cleanups, distinguished by their
+  `cleanup_action` (`release_expired_quota_pending` vs
+  `release_aged_quota_pending`).
+
+- 919cc9b: Add per-operation token instrumentation and a savings surface with three
+  entry points that share one data source:
+
+  - New `mcp_metrics` SQLite table records `(operation, ts, input_bytes,
+output_bytes, input_tokens, output_tokens, duration_ms, ok)` for every
+    wrapped MCP tool call. Recording is best-effort: a write failure cannot
+    break a tool call. Tokens are counted via `@colony/compress#countTokens`
+    so values align with observation token receipts.
+  - `Storage.recordMcpMetric` and `Storage.aggregateMcpMetrics` expose the
+    table; new types `NewMcpMetric`, `AggregateMcpMetricsOptions`,
+    `McpMetricsAggregate`, and `McpMetricsAggregateRow` ship from
+    `@colony/storage`.
+  - `apps/mcp-server` composes a metrics wrapper alongside the existing
+    heartbeat wrapper. Heartbeat outer (touches active session before the
+    handler), metrics inner (measures handler input/output around the actual
+    work).
+  - New MCP tool `savings_report` returns hand-authored reference rows plus
+    live per-operation usage. CLI `colony gain` renders the same data with
+    optional `--hours`, `--since`, `--operation`, `--json` flags. Worker
+    exposes `/savings` (HTML) and `/api/colony/savings` (JSON), reachable
+    from the index page link.
+  - Hand-authored reference table lives in
+    `packages/core/src/savings-reference.ts` so all three surfaces stay in
+    sync from one source.
+
+### Patch Changes
+
+- b937fb7: Cap `attention_inbox` stalled lane rows by default while preserving total
+  counts and explicit expansion.
+- 6b09a3d: Add a CocoIndex-ready compact session source for Codex and Claude token usage.
+- 7d86bd2: `buildCoordinationSweep` now accepts an `archive_completed_plans` option that scans for queen plans whose every sub-task's latest `plan-subtask-claim` observation is `metadata.status='completed'` and archives the parent + sub-task rows via `archiveQueenPlan`. The MCP plan-tool sweep only fires for plans with `auto_archive=true` in plan-config, so opt-out plans linger as "completed but unarchived" on the queen_plan_readiness health signal forever; this gives operators an explicit CLI-driven path to clear them. Sweep result gains `archived_completed_plans` (rows) and `summary.archived_completed_plan_count` (count). Idempotent — already-archived plans are not re-counted.
+
+  Exposed via `colony coordination sweep --archive-completed-plans` (skipped automatically when `--dry-run` is set, like the other release flags).
+
+- 36e95ba: Show live gain receipts before the reference model and expand the savings
+  operation catalog.
+- 528b5ba: Add `task_autopilot_tick` and `task_drift_check` MCP tools — light-weight ports of two ideas from the Ruflo autopilot/swarm playbook, mapped onto Colony primitives.
+
+  `task_autopilot_tick` is a one-shot advisor that combines `attention_inbox` + `task_ready_for_agent` into a single decision (next tool + args + sleep hint). The loop itself stays caller-side (Claude Code's `ScheduleWakeup`, the `/loop` skill, or cron) — this MCP call is stateless. Decision priority: pending handoff → quota relay → blocking message → claim ready subtask → continue current claim → no-op. Stalled lanes whose only signal is "Session start"/"No active swarm" are classified as dead heartbeats and excluded from the actionable count, so callers don't escalate on noise.
+
+  `task_drift_check` compares a session's claims for a given task against its recent edit-tool observations within a configurable window. Surfaces files edited without a matching claim (drift) and claims with no recent edit activity (potentially abandoned). File-scope drift only — does not analyze semantic drift from the task description.
+
+  Both tools are pure compositions of existing storage and core helpers; no SQL migration, no new package, no edits to `packages/storage/src/storage.ts`. `@colony/core` re-exports `InboxQuotaPendingClaim` so downstream tools can build typed quota-relay payloads.
+
+- 9424987: Expand the token-savings reference model and README explanation so publishable
+  packages show clearer Colony gain examples.
+- 2a077ed: Add an optional Rust/Tantivy keyword search sidecar with SQLite FTS fallback.
+- 08e4700: Add 3 reference rows to `SAVINGS_REFERENCE_ROWS`: **Blocker recurrence** (search-keyed lookup of prior `failed_approach` notes vs cold re-investigation), **Drift / failed-verification recovery** (`spec_build_record_failure` surfacing the matching §V invariant after a test fails vs re-deriving the constraint), and **Quota-exhausted handoff** (`task_relay` carrying claim+next+evidence to the rescuer vs reconstructing from worktree + git log). README savings table updated to match.
+- 2ddc284: Add 4 reference rows to `SAVINGS_REFERENCE_ROWS` so `colony gain` can match operations that were previously bucketed as unmatched: **Plan publication & goal anchoring** (`queen_plan_goal`, `task_plan_publish`, `task_plan_validate`, `task_propose`), **Task thread note** (`task_post`, `task_reinforce`), **Task dependency linking** (`task_link`, `task_links`, `task_unlink`), and **Agent profile sync** (`agent_get_profile`, `agent_upsert_profile`). The "Live matched total" and "Top saving" lines in the gain report now reflect savings on these surfaces instead of leaving the calls in the unmatched footer.
+- 7d86bd2: `guardedClaimFile` now attaches a `protected_branch` warning to its `GuardedClaimResult` when the task lives on a protected base branch (`main`, `master`, `dev`, `develop`, `production`, `release`). Soft signal only — the claim is still recorded so sessions that lawfully resume an existing `main`-bound task aren't broken — but downstream callers (MCP, hooks, CLI) can now surface the worktree-discipline violation before it shows up on the health dashboard as a same-branch duplicate-owner contention. Uses the new `isProtectedBranch` helper exported from `@colony/storage` so all coordination layers share one definition.
+- fa4e1a3: Add typed signal metadata helpers for decaying coordination signals.
+- Updated dependencies [77c9e30]
+- Updated dependencies [c94ed35]
+- Updated dependencies [f769824]
+- Updated dependencies [43ef76a]
+- Updated dependencies [211c646]
+- Updated dependencies [2d84352]
+- Updated dependencies [127fdf3]
+- Updated dependencies [2a077ed]
+- Updated dependencies [610d5c8]
+- Updated dependencies [919cc9b]
+  - @colony/storage@0.7.0
+  - @colony/config@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

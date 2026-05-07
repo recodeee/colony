@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "plan_slug": "bump-colony-cli-patch-release-for-npm-pu",
+  "title": "Bump Colony CLI release for npm publish",
+  "problem": "Prepare @imdeadpool/colony-cli for the next unpublished npm release with matching release notes so the maintainer can publish.",
+  "acceptance_criteria": [
+    "@imdeadpool/colony-cli version is bumped to the next Changesets-computed version above npm latest.",
+    "Release notes/changelog describe the publishable package change for that version.",
+    "Package artifacts are dry-run verified for npm publish readiness.",
+    "Changes are committed on an agent branch with PR-ready evidence."
+  ],
+  "roles": ["planner", "architect", "critic", "executor", "writer", "verifier"],
+  "tasks": [
+    {
+      "subtask_index": 0,
+      "title": "Update release metadata",
+      "description": "Update workspace release manifests, changelogs, and public release notes for Bump Colony CLI release for npm publish.",
+      "file_scope": [
+        "apps/cli/package.json",
+        "apps/cli/CHANGELOG.md",
+        "workspace package manifests/changelogs",
+        "README.md",
+        ".changeset"
+      ],
+      "depends_on": [],
+      "spec_row_id": null,
+      "capability_hint": "doc_work",
+      "status": "completed",
+      "claimed_by_session_id": "codex-app-release-bump-2026-05-08",
+      "claimed_by_agent": "codex",
+      "completed_summary": "Bumped @imdeadpool/colony-cli and linked release metadata to 0.7.0 with generated changelogs and README release notes."
+    },
+    {
+      "subtask_index": 1,
+      "title": "Verify publish readiness",
+      "description": "Verify the release metadata and public CLI dry-run package for Bump Colony CLI release for npm publish.",
+      "file_scope": [
+        "apps/cli/package.json",
+        "apps/cli/CHANGELOG.md",
+        "workspace package manifests/changelogs",
+        "README.md",
+        ".changeset"
+      ],
+      "depends_on": [0],
+      "spec_row_id": null,
+      "capability_hint": "doc_work",
+      "status": "completed",
+      "claimed_by_session_id": "codex-app-release-bump-2026-05-08",
+      "claimed_by_agent": "codex",
+      "completed_summary": "Verified release metadata with check:no-bridge-deps, CLI typecheck, Biome, OpenSpec specs, and publish:cli dry-run."
+    }
+  ],
+  "published": {
+    "spec_task_id": 53,
+    "spec_change_path": "/home/deadpool/Documents/recodee/colony/openspec/changes/bump-colony-cli-patch-release-for-npm-pu/CHANGE.md",
+    "auto_archive": true
+  },
+  "created_at": "2026-05-07T22:45:08.434Z",
+  "updated_at": "2026-05-07T22:45:08.434Z"
+}

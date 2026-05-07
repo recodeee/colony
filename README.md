@@ -50,6 +50,22 @@ under `~/.colony`.
 
 ## Release Notes
 
+### `v0.7.0` - Coordination Hardening Release
+
+This release prepares `@imdeadpool/colony-cli` for the next public npm publish
+after registry `latest` `0.6.0`.
+
+- Faster hook path: `colony bridge lifecycle --json` now uses the long-running
+  worker daemon when available, with the Node CLI fallback kept intact.
+- Safer coordination cleanup: `colony coordination sweep` can release expired
+  or aged quota-pending claims while preserving audit history.
+- Better operator visibility: `colony health`, `colony gain`,
+  `attention_inbox`, and contention views expose stale lanes, Codex rollout
+  MCP usage, token savings, and claim drift with compact default output.
+- Publish readiness: the public CLI package keeps the shell bin wrapper,
+  staged README/LICENSE/hooks assets, and versioned changelog aligned for
+  `pnpm publish:cli`.
+
 ### `v0.x` - Current Patch Line
 
 Colony is in the v0 hardening line. Upcoming patches focus on making the
