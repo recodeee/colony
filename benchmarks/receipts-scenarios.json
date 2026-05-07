@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "name": "Colony receipt benchmark scenarios",
+  "description": "Deterministic coordination scenarios for comparing standard prompt-heavy agent loops with Colony MCP receipt flows.",
+  "scenarios": [
+    {
+      "id": "cross-agent-handoff",
+      "title": "Cross-agent handoff",
+      "description": "One agent transfers branch, task, blocker, next step, and evidence to another agent.",
+      "standard_tokens": 60000,
+      "colony_tokens": 800,
+      "receipt_surface": "task_hand_off + task_accept_handoff + mcp_metrics"
+    },
+    {
+      "id": "parallel-edits",
+      "title": "Parallel edits",
+      "description": "Three agents check file ownership, claim disjoint paths, and avoid duplicate scans.",
+      "standard_tokens": 72000,
+      "colony_tokens": 6200,
+      "receipt_surface": "hivemind_context + attention_inbox + task_claim_file"
+    },
+    {
+      "id": "resume-after-quota",
+      "title": "Resume after quota",
+      "description": "A rescuer resumes an expired lane from structured relay state instead of rebuilding context from logs.",
+      "standard_tokens": 88000,
+      "colony_tokens": 3500,
+      "receipt_surface": "task_relay + task_accept_relay + get_observations"
+    }
+  ]
+}

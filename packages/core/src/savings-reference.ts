@@ -327,6 +327,35 @@ export interface SavingsLiveComparison {
   unmatched_operations: SavingsLiveUnmatchedOperation[];
 }
 
+export interface SavingsLiveMetricCostRow {
+  operation: string;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+export interface SavingsLiveComparisonCostRow {
+  operation: string;
+  calls: number;
+  baseline_cost_usd: number;
+  colony_cost_usd: number;
+  saved_cost_usd: number;
+  matched_operations: ReadonlyArray<string>;
+}
+
+export interface SavingsLiveComparisonCostTotals {
+  calls: number;
+  baseline_cost_usd: number;
+  colony_cost_usd: number;
+  saved_cost_usd: number;
+}
+
+export interface SavingsLiveComparisonCost {
+  kind: 'estimated_live_window_usd';
+  note: string;
+  rows: SavingsLiveComparisonCostRow[];
+  totals: SavingsLiveComparisonCostTotals;
+}
+
 export function savingsLiveComparison(
   metrics: ReadonlyArray<SavingsLiveMetricRow>,
   referenceRows: ReadonlyArray<SavingsReferenceRow> = SAVINGS_REFERENCE_ROWS,
@@ -400,4 +429,56 @@ export function savingsLiveComparison(
     },
     unmatched_operations: unmatchedOperations,
   };
+}
+
+export function savingsLiveComparisonCost(
+  comparison: SavingsLiveComparison,
+  metrics: ReadonlyArray<SavingsLiveMetricCostRow>,
+): SavingsLiveComparisonCost {
+  const metricByOperation = new Map(metrics.map((metric) => [metric.operation, metric]));
+  const rows: SavingsLiveComparisonCostRow[] = [];
+
+  for (const row of comparison.rows) {
+    let matchedTokens = 0;
+    let colonyCost = 0;
+    for (const operation of row.matched_operations) {
+      const metric = metricByOperation.get(operation);
+      if (metric === undefined) continue;
+      matchedTokens += metric.total_tokens;
+      colonyCost += metric.total_cost_usd;
+    }
+    if (matchedTokens <= 0) continue;
+    const usdPerToken = colonyCost / matchedTokens;
+    const baselineCost = roundUsd(row.baseline_tokens * usdPerToken);
+    const normalizedColonyCost = roundUsd(colonyCost);
+    rows.push({
+      operation: row.operation,
+      calls: row.calls,
+      baseline_cost_usd: baselineCost,
+      colony_cost_usd: normalizedColonyCost,
+      saved_cost_usd: roundUsd(baselineCost - normalizedColonyCost),
+      matched_operations: row.matched_operations,
+    });
+  }
+
+  const totals = rows.reduce<SavingsLiveComparisonCostTotals>(
+    (acc, row) => ({
+      calls: acc.calls + row.calls,
+      baseline_cost_usd: roundUsd(acc.baseline_cost_usd + row.baseline_cost_usd),
+      colony_cost_usd: roundUsd(acc.colony_cost_usd + row.colony_cost_usd),
+      saved_cost_usd: roundUsd(acc.saved_cost_usd + row.saved_cost_usd),
+    }),
+    { calls: 0, baseline_cost_usd: 0, colony_cost_usd: 0, saved_cost_usd: 0 },
+  );
+
+  return {
+    kind: 'estimated_live_window_usd',
+    note: 'Estimated by applying each matched live mcp_metrics operation USD/token rate to the reference-model token delta for the same observed calls.',
+    rows,
+    totals,
+  };
+}
+
+function roundUsd(value: number): number {
+  return Number(value.toFixed(12));
 }

@@ -317,8 +317,78 @@ describe('gain command output', () => {
     expect(output).toContain('Coverage: 1 / 1 live calls (100%)');
     expect(output).toContain('Saved: 4.9k saved');
     expect(output).toContain('Top saving: Search result shape 4.9k saved across 1 call');
+    expect(output).toContain('USD saved: $0.008208 saved');
+    expect(output).toContain('Colony spent: $0.000125');
+    expect(output).toContain('Standard est: $0.008333');
     expect(output).toContain('Live matched total');
     expect(output).not.toContain('Static total / session');
+  });
+
+  it('keeps honest mode to live mcp_metrics receipts only', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    const row: McpMetricsAggregateRow = {
+      operation: 'search',
+      calls: 1,
+      ok_count: 1,
+      error_count: 0,
+      error_reasons: [],
+      ...METRIC_DETAIL,
+      input_bytes: 100,
+      output_bytes: 200,
+      total_bytes: 300,
+      input_tokens: 25,
+      output_tokens: 50,
+      total_tokens: 75,
+      input_cost_usd: 0.000025,
+      output_cost_usd: 0.0001,
+      total_cost_usd: 0.000125,
+      avg_cost_usd: 0.000125,
+      avg_input_tokens: 25,
+      avg_output_tokens: 50,
+      total_duration_ms: 40,
+      avg_duration_ms: 40,
+      last_ts: Date.now(),
+    };
+
+    writeGainReport(
+      [
+        {
+          operation: 'Search result shape',
+          frequency_per_session: 5,
+          baseline_tokens: 5000,
+          colony_tokens: 150,
+          savings_pct: 97,
+          rationale: 'compact IDs + snippets vs inline full bodies',
+          mcp_operations: ['search'],
+        },
+      ],
+      {
+        baseline_tokens: 40_000,
+        colony_tokens: 7500,
+        savings_pct: 81,
+      },
+      [row],
+      row,
+      SESSION_SUMMARY,
+      [SESSION_ROW],
+      COST_BASIS,
+      24,
+      undefined,
+      true,
+      true,
+    );
+
+    expect(output).toContain('colony gain — live mcp_metrics');
+    expect(output).toContain('Operations');
+    expect(output).not.toContain('live comparison model');
+    expect(output).not.toContain('Search result shape');
+    expect(output).not.toContain('reference model');
+    expect(output).not.toContain('USD saved');
   });
 
   it('keeps reference output compact without the cut explainer', () => {

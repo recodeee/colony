@@ -1,4 +1,8 @@
-import { type SavingsLiveComparison, savingsLiveComparison } from '@colony/core';
+import {
+  type SavingsLiveComparison,
+  savingsLiveComparison,
+  savingsLiveComparisonCost,
+} from '@colony/core';
 import type { McpMetricsAggregate, McpMetricsAggregateRow } from '@colony/storage';
 import { html, layout, raw } from '../html.js';
 
@@ -8,11 +12,10 @@ export interface SavingsPagePayload {
 }
 
 export function renderSavingsPage(payload: SavingsPagePayload): string {
+  const comparison = savingsLiveComparison(payload.live.operations);
   const live = renderLiveTable(payload.live, payload.windowHours);
-  const comparison = renderLiveComparisonTable(
-    savingsLiveComparison(payload.live.operations),
-    payload.windowHours,
-  );
+  const value = renderReceiptValue(payload.live, comparison);
+  const comparisonTable = renderLiveComparisonTable(comparison, payload.windowHours);
   const body = html`
     <p><a href="/">&larr; back to sessions</a></p>
     <h2>Token savings</h2>
@@ -25,9 +28,27 @@ export function renderSavingsPage(payload: SavingsPagePayload): string {
       raw live table.
     </p>
     ${raw(live)}
-    ${raw(comparison)}
+    ${raw(value)}
+    ${raw(comparisonTable)}
   `;
   return layout('agents-hivemind · savings', body);
+}
+
+function renderReceiptValue(live: McpMetricsAggregate, comparison: SavingsLiveComparison): string {
+  if (!live.cost_basis.configured) return '';
+  const cost = savingsLiveComparisonCost(comparison, live.operations);
+  if (cost.totals.calls === 0) return '';
+  return html`
+    <div class="card">
+      <h2>Receipt value</h2>
+      <p class="meta">${cost.note}</p>
+      <p class="receipt-value">
+        <strong>${formatUsd(cost.totals.saved_cost_usd, true)} saved</strong>
+        <span>Colony spent ${formatUsd(cost.totals.colony_cost_usd, true)}</span>
+        <span>Standard estimate ${formatUsd(cost.totals.baseline_cost_usd, true)}</span>
+      </p>
+      ${raw(savingsTableStyle)}
+    </div>`;
 }
 
 function renderLiveComparisonTable(comparison: SavingsLiveComparison, windowHours: number): string {
@@ -270,5 +291,8 @@ const savingsTableStyle = `
   .savings-table .savings-cell { color: #8bd5a6; font-weight: 600; }
   .savings-table .err-cell { color: #fca5a5; font-weight: 600; }
   .savings-table tbody tr:hover { background: #11161e; }
+  .receipt-value { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+  .receipt-value strong { color: #8bd5a6; font-size: 22px; }
+  .receipt-value span { color: #8a94a3; }
 </style>
 `;

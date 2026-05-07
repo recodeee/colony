@@ -2,9 +2,11 @@ import { loadSettings } from '@colony/config';
 import {
   SAVINGS_REFERENCE_ROWS,
   type SavingsLiveComparison,
+  type SavingsLiveComparisonCost,
   type SavingsReferenceRow,
   type SavingsReferenceTotals,
   savingsLiveComparison,
+  savingsLiveComparisonCost,
   savingsReferenceTotals,
 } from '@colony/core';
 import type {
@@ -26,6 +28,7 @@ interface GainOptions {
   inputCostPer1m?: string;
   outputCostPer1m?: string;
   reference?: boolean;
+  honest?: boolean;
 }
 
 interface TopErrorReason {
@@ -39,13 +42,14 @@ interface TopErrorReason {
 export function registerGainCommand(program: Command): void {
   program
     .command('gain')
-    .description('Show colony token savings: live mcp_metrics receipts + comparison model')
+    .description('Show colony token/cost savings from live mcp_metrics receipts')
     .option('--json', 'emit structured JSON')
     .option('--hours <n>', 'live window in hours (default 168 = 7 days)')
     .option('--since <ms>', 'absolute epoch-ms cutoff; overrides --hours')
     .option('--operation <name>', 'filter live rows to one operation')
     .option('--session-limit <n>', 'number of live sessions to print (default 12; 0 = all)')
     .option('--reference', 'also print the static per-session reference catalog')
+    .option('--honest', 'show only live mcp_metrics receipts; omit reference/comparison models')
     .option(
       '--input-cost-per-1m <usd>',
       'USD rate per 1M input tokens; env COLONY_MCP_INPUT_USD_PER_1M',
@@ -83,14 +87,10 @@ export function registerGainCommand(program: Command): void {
 
       const referenceTotals = savingsReferenceTotals();
       const comparison = savingsLiveComparison(live.operations);
-      const payload = {
-        reference: {
-          kind: 'static_per_session_model',
-          note: 'Static hand-authored comparison model; not derived from the live mcp_metrics window.',
-          rows: SAVINGS_REFERENCE_ROWS,
-          totals: referenceTotals,
-        },
-        comparison,
+      const comparisonCost = live.cost_basis.configured
+        ? savingsLiveComparisonCost(comparison, live.operations)
+        : null;
+      const livePayload = {
         live: {
           window: { since, until: now, hours: windowHours },
           ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
@@ -101,6 +101,23 @@ export function registerGainCommand(program: Command): void {
           sessions: live.sessions,
         },
       };
+      const payload =
+        opts.honest === true
+          ? {
+              mode: 'honest_live_receipts',
+              ...livePayload,
+            }
+          : {
+              reference: {
+                kind: 'static_per_session_model',
+                note: 'Static hand-authored comparison model; not derived from the live mcp_metrics window.',
+                rows: SAVINGS_REFERENCE_ROWS,
+                totals: referenceTotals,
+              },
+              comparison,
+              comparison_cost: comparisonCost,
+              ...livePayload,
+            };
 
       if (opts.json === true) {
         process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -118,6 +135,7 @@ export function registerGainCommand(program: Command): void {
         windowHours,
         opts.operation,
         opts.reference === true,
+        opts.honest === true,
       );
     });
 }
@@ -133,8 +151,12 @@ export function writeGainReport(
   hours: number,
   operationFilter: string | undefined,
   includeReference = false,
+  honest = false,
 ): void {
   const comparison = savingsLiveComparison(liveRows, referenceRows);
+  const comparisonCost = costBasis.configured
+    ? savingsLiveComparisonCost(comparison, liveRows)
+    : null;
   writeLiveSection(
     liveRows,
     liveTotals,
@@ -144,8 +166,9 @@ export function writeGainReport(
     hours,
     operationFilter,
   );
+  if (honest) return;
   process.stdout.write('\n');
-  writeLiveComparisonSection(comparison, hours, operationFilter);
+  writeLiveComparisonSection(comparison, comparisonCost, hours, operationFilter);
   if (includeReference) {
     process.stdout.write('\n');
     writeReferenceSection(referenceRows, referenceTotals);
@@ -154,6 +177,7 @@ export function writeGainReport(
 
 export function writeLiveComparisonSection(
   comparison: SavingsLiveComparison,
+  comparisonCost: SavingsLiveComparisonCost | null,
   hours: number,
   operationFilter: string | undefined,
 ): void {
@@ -170,7 +194,7 @@ export function writeLiveComparisonSection(
     return;
   }
   w.write(`${kleur.dim(`${comparison.note}\n\n`)}`);
-  writeGainFocus(comparison);
+  writeGainFocus(comparison, comparisonCost);
   w.write('\n');
   const head = padRow(
     ['Operation', 'Calls', 'Standard', 'Colony', 'Saved', 'Matched ops'],
@@ -539,7 +563,10 @@ function findTopErrorReason(rows: ReadonlyArray<McpMetricsAggregateRow>): TopErr
   return top;
 }
 
-function writeGainFocus(comparison: SavingsLiveComparison): void {
+function writeGainFocus(
+  comparison: SavingsLiveComparison,
+  comparisonCost: SavingsLiveComparisonCost | null,
+): void {
   const matchedCalls = comparison.totals.calls;
   const totalCalls = matchedCalls + comparison.totals.unmatched_calls;
   const topSaving = findTopSaving(comparison);
@@ -569,6 +596,21 @@ function writeGainFocus(comparison: SavingsLiveComparison): void {
         topSaving.baseline_tokens - topSaving.colony_tokens,
       )} across ${topSaving.calls} call${topSaving.calls === 1 ? '' : 's'}\n`,
     );
+  }
+  if (comparisonCost !== null && comparisonCost.totals.calls > 0) {
+    process.stdout.write(
+      [
+        `${kleur.dim('USD saved:')} ${formatUsdDelta(comparisonCost.totals.saved_cost_usd)}`,
+        `${kleur.dim('Colony spent:')} ${formatUsdConfigured(
+          comparisonCost.totals.colony_cost_usd,
+        )}`,
+        `${kleur.dim('Standard est:')} ${formatUsdConfigured(
+          comparisonCost.totals.baseline_cost_usd,
+        )}`,
+      ].join('  '),
+    );
+    process.stdout.write('\n');
+    process.stdout.write(`${kleur.dim(`${comparisonCost.note}\n`)}`);
   }
 }
 
@@ -673,10 +715,19 @@ function formatRate(value: number): string {
 
 function formatUsd(value: number, costBasis: McpMetricsCostBasis): string {
   if (!costBasis.configured) return '-';
+  return formatUsdConfigured(value);
+}
+
+function formatUsdConfigured(value: number): string {
   if (value === 0) return '$0';
   if (value < 0.000001) return '<$0.000001';
   if (value < 0.01) return `$${value.toFixed(6)}`;
   return `$${value.toFixed(4)}`;
+}
+
+function formatUsdDelta(value: number): string {
+  const formatted = formatUsdConfigured(Math.abs(value));
+  return value >= 0 ? kleur.green(`${formatted} saved`) : kleur.red(`${formatted} over`);
 }
 
 function formatPercent(part: number, whole: number): string {
