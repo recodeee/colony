@@ -1,5 +1,14 @@
 # @colony/embedding
 
+## 0.7.0
+
+### Patch Changes
+
+- Updated dependencies [f769824]
+- Updated dependencies [43ef76a]
+- Updated dependencies [2a077ed]
+  - @colony/config@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

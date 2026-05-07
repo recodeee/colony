@@ -1,5 +1,76 @@
 # @colony/hooks
 
+## 0.7.0
+
+### Minor Changes
+
+- 6bfc818: Surface a `claim_required: true` flag on `task_ready_for_agent` whenever
+  the response carries a claimable plan sub-task or quota-relay handoff
+  that the calling agent should follow up on with
+  `task_plan_claim_subtask` (or `task_claim_quota_accept`). Loop adoption
+  sat at 0% across sessions because the queue response only carried a
+  hint inside `next_action`; agents that stopped reading at the result
+  shape skipped the claim. The new boolean lets clients gate work
+  selection on the explicit signal.
+
+  SessionStart now appends a one-line `## Ready Queen sub-tasks` preface
+  when the active repo has unclaimed plan sub-tasks, listing the count
+  and reminding the agent to follow `task_ready_for_agent` with
+  `task_plan_claim_subtask`. The nudge is silent when no cwd is detected,
+  no real `(repo_root, branch)` resolves, or no plan has unclaimed work.
+
+### Patch Changes
+
+- 77c9e30: Make PreToolUse auto-claim coverage observable and surface hook-wiring problems instead of agent-discipline ones.
+
+  - The Claude installer now scopes PreToolUse and PostToolUse to a write-tool matcher so the hook does not fire (or get blamed) for unrelated tools.
+  - `colony hook run pre-tool-use` now writes its warning back through Claude Code's PreToolUse `permissionDecision: allow` so the agent sees the missing-claim warning instead of it being silently dropped on stderr.
+  - The pre-tool-use warning embeds a concrete `next_call` (an exact `mcp__colony__task_claim_file({...})` invocation) and a multi-line actionable `message`, so an agent that hits ACTIVE_TASK_NOT_FOUND / AMBIGUOUS_ACTIVE_TASK / SESSION_NOT_FOUND knows exactly what to do.
+  - `claimBeforeEditStats` adds a `pre_tool_use_signals` count of `claim-before-edit` telemetry rows in the window. `colony health` and `hivemind_context`'s claim-before-edit nudge use it to distinguish "hook is not firing" from "agent skipped the claim", and emit an install/restart hint in the former case.
+  - `colony health` also reports explicit/manual vs auto-claim breakdown and reads "had a claim before edit" instead of "explicit claims first".
+
+- 43ef76a: Reduce burst load from many concurrent agents by coalescing SessionStart foraging scans and adding configurable active-session reconciliation throttling for MCP servers.
+- 99b9715: Make PreToolUse auto-claim work for fresh sessions in real worktrees.
+  Previously, sessions that hadn't joined any Colony task (e.g. external
+  agents in `agent/...` worktrees that share Colony as a memory backend)
+  hit `ACTIVE_TASK_NOT_FOUND` on every edit, leaving the
+  `claim-before-edit` health metric stuck at 0% even when PreToolUse
+  signals fired correctly. PreToolUse now mirrors the existing PostToolUse
+  fallback: when the session has no candidate task and the working tree
+  resolves to a real `(repo_root, branch)`, it materializes a TaskThread
+  on that branch and joins the session before retrying the auto-claim.
+  Sessions without a real checkout keep the existing
+  `ACTIVE_TASK_NOT_FOUND` warning so callers still see actionable
+  guidance instead of silent synthetic-task creation.
+- 36bd261: Trim the session-start "Joined with" line and the per-turn conflict
+  preface so they stop scaling with all-time-joined participants and full
+  agent-worktree paths. Long-running task threads were spending hundreds
+  of tokens on stale session lists every resume; the conflict preface was
+  spending hundreds more per turn on duplicated worktree prefixes. Cap
+  joined-with at 8 entries with `+N more` overflow, gate by a 1-hour
+  last-activity window, and strip `.omx|.omc/agent-worktrees/<dir>/`
+  from claimed file paths plus collapse session ids to their 8-char
+  shorthand.
+- Updated dependencies [b937fb7]
+- Updated dependencies [6b09a3d]
+- Updated dependencies [f769824]
+- Updated dependencies [7d86bd2]
+- Updated dependencies [cb4c9f9]
+- Updated dependencies [43ef76a]
+- Updated dependencies [46d0153]
+- Updated dependencies [36e95ba]
+- Updated dependencies [528b5ba]
+- Updated dependencies [9424987]
+- Updated dependencies [a27c52c]
+- Updated dependencies [2a077ed]
+- Updated dependencies [08e4700]
+- Updated dependencies [2ddc284]
+- Updated dependencies [7d86bd2]
+- Updated dependencies [fa4e1a3]
+- Updated dependencies [919cc9b]
+  - @colony/core@0.7.0
+  - @colony/config@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

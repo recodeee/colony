@@ -1,5 +1,69 @@
 # @colony/worker
 
+## 0.7.0
+
+### Minor Changes
+
+- 919cc9b: Add per-operation token instrumentation and a savings surface with three
+  entry points that share one data source:
+
+  - New `mcp_metrics` SQLite table records `(operation, ts, input_bytes,
+output_bytes, input_tokens, output_tokens, duration_ms, ok)` for every
+    wrapped MCP tool call. Recording is best-effort: a write failure cannot
+    break a tool call. Tokens are counted via `@colony/compress#countTokens`
+    so values align with observation token receipts.
+  - `Storage.recordMcpMetric` and `Storage.aggregateMcpMetrics` expose the
+    table; new types `NewMcpMetric`, `AggregateMcpMetricsOptions`,
+    `McpMetricsAggregate`, and `McpMetricsAggregateRow` ship from
+    `@colony/storage`.
+  - `apps/mcp-server` composes a metrics wrapper alongside the existing
+    heartbeat wrapper. Heartbeat outer (touches active session before the
+    handler), metrics inner (measures handler input/output around the actual
+    work).
+  - New MCP tool `savings_report` returns hand-authored reference rows plus
+    live per-operation usage. CLI `colony gain` renders the same data with
+    optional `--hours`, `--since`, `--operation`, `--json` flags. Worker
+    exposes `/savings` (HTML) and `/api/colony/savings` (JSON), reachable
+    from the index page link.
+  - Hand-authored reference table lives in
+    `packages/core/src/savings-reference.ts` so all three surfaces stay in
+    sync from one source.
+
+### Patch Changes
+
+- 2a077ed: Add an optional Rust/Tantivy keyword search sidecar with SQLite FTS fallback.
+- Updated dependencies [b937fb7]
+- Updated dependencies [77c9e30]
+- Updated dependencies [6b09a3d]
+- Updated dependencies [c94ed35]
+- Updated dependencies [f769824]
+- Updated dependencies [7d86bd2]
+- Updated dependencies [cb4c9f9]
+- Updated dependencies [43ef76a]
+- Updated dependencies [46d0153]
+- Updated dependencies [36e95ba]
+- Updated dependencies [211c646]
+- Updated dependencies [528b5ba]
+- Updated dependencies [99b9715]
+- Updated dependencies [2d84352]
+- Updated dependencies [127fdf3]
+- Updated dependencies [9424987]
+- Updated dependencies [6bfc818]
+- Updated dependencies [a27c52c]
+- Updated dependencies [2a077ed]
+- Updated dependencies [08e4700]
+- Updated dependencies [2ddc284]
+- Updated dependencies [7d86bd2]
+- Updated dependencies [fa4e1a3]
+- Updated dependencies [610d5c8]
+- Updated dependencies [919cc9b]
+- Updated dependencies [36bd261]
+  - @colony/core@0.7.0
+  - @colony/storage@0.7.0
+  - @colony/hooks@0.7.0
+  - @colony/config@0.7.0
+  - @colony/embedding@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

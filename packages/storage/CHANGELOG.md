@@ -1,5 +1,89 @@
 # @colony/storage
 
+## 0.7.0
+
+### Minor Changes
+
+- 919cc9b: Add per-operation token instrumentation and a savings surface with three
+  entry points that share one data source:
+
+  - New `mcp_metrics` SQLite table records `(operation, ts, input_bytes,
+output_bytes, input_tokens, output_tokens, duration_ms, ok)` for every
+    wrapped MCP tool call. Recording is best-effort: a write failure cannot
+    break a tool call. Tokens are counted via `@colony/compress#countTokens`
+    so values align with observation token receipts.
+  - `Storage.recordMcpMetric` and `Storage.aggregateMcpMetrics` expose the
+    table; new types `NewMcpMetric`, `AggregateMcpMetricsOptions`,
+    `McpMetricsAggregate`, and `McpMetricsAggregateRow` ship from
+    `@colony/storage`.
+  - `apps/mcp-server` composes a metrics wrapper alongside the existing
+    heartbeat wrapper. Heartbeat outer (touches active session before the
+    handler), metrics inner (measures handler input/output around the actual
+    work).
+  - New MCP tool `savings_report` returns hand-authored reference rows plus
+    live per-operation usage. CLI `colony gain` renders the same data with
+    optional `--hours`, `--since`, `--operation`, `--json` flags. Worker
+    exposes `/savings` (HTML) and `/api/colony/savings` (JSON), reachable
+    from the index page link.
+  - Hand-authored reference table lives in
+    `packages/core/src/savings-reference.ts` so all three surfaces stay in
+    sync from one source.
+
+### Patch Changes
+
+- 77c9e30: Make PreToolUse auto-claim coverage observable and surface hook-wiring problems instead of agent-discipline ones.
+
+  - The Claude installer now scopes PreToolUse and PostToolUse to a write-tool matcher so the hook does not fire (or get blamed) for unrelated tools.
+  - `colony hook run pre-tool-use` now writes its warning back through Claude Code's PreToolUse `permissionDecision: allow` so the agent sees the missing-claim warning instead of it being silently dropped on stderr.
+  - The pre-tool-use warning embeds a concrete `next_call` (an exact `mcp__colony__task_claim_file({...})` invocation) and a multi-line actionable `message`, so an agent that hits ACTIVE_TASK_NOT_FOUND / AMBIGUOUS_ACTIVE_TASK / SESSION_NOT_FOUND knows exactly what to do.
+  - `claimBeforeEditStats` adds a `pre_tool_use_signals` count of `claim-before-edit` telemetry rows in the window. `colony health` and `hivemind_context`'s claim-before-edit nudge use it to distinguish "hook is not firing" from "agent skipped the claim", and emit an install/restart hint in the former case.
+  - `colony health` also reports explicit/manual vs auto-claim breakdown and reads "had a claim before edit" instead of "explicit claims first".
+
+- c94ed35: Three colony-health fixes:
+
+  - `claimBeforeEditStats` now strips the managed agent-worktree prefix (`.omx/agent-worktrees/<lane>/` and `.omc/agent-worktrees/<lane>/`) when comparing edit and claim file paths. Edits recorded inside a worktree now line up with claims posted on canonical repo-relative paths, so the claim-before-edit metric stops reporting `path_mismatch` for the same logical file.
+  - `task_ready_for_agent` accepts a new opt-in `auto_claim` boolean. When set, the server claims the unambiguous ready sub-task in the same call and reports the outcome as `auto_claimed` so harnesses no longer have to call `task_plan_claim_subtask` as a follow-up. Skips the auto-claim when the candidate is routed to a different agent or when no claimable work is ready.
+  - The plan auto-archive sweep now reconciles plans whose change directory was already moved to `openspec/changes/archive/<date>-<slug>/` on disk: it records a `plan-archived` observation referencing the archive path instead of looping forever as completed-but-unarchived. The sweep also strips a deleted agent-worktree segment from the parent task's `repo_root` before opening `SpecRepository`, so plans whose lane was pruned still archive cleanly.
+
+- 211c646: `claimBeforeEditStats` now surfaces the _triggering_ claim in
+  `nearest_claim_examples` instead of the closest-by-rank match. Previously a
+  `path_mismatch` bucket could report a same-file claim that was 4+ days old
+  (outside the 5-minute window) with `same_file_path: true`,
+  `claim_before_edit: true`, contradicting the bucket label. The example now
+  carries the in-window same-lane claim that actually triggered the
+  `path_mismatch` (different file, recent timestamp). The same correction
+  applies to `claim_after_edit` and the prior-same-file `*_mismatch` buckets;
+  `pre_tool_use_missing` and `no_claim_for_file` keep the existing
+  nearest-by-rank fallback.
+- 2d84352: `colony queen archive` now resolves the plan by branch directly via
+  `findTaskByBranch` instead of routing through `queenPlans()`. The queen
+  listing only surfaces plans with a `queen` participant, so orphan plans
+  published by codex/claude lanes (auto-plan-builder, ad-hoc spec lanes)
+  were rejected with `queen plan not found` even though their parent
+  task and sub-task rows existed in the DB. Add a public
+  `countClaimedQueenPlanSubtasks` helper so the CLI can keep its
+  `--force` safety check without reaching into the private `Storage.db`
+  handle.
+- 127fdf3: Add `colony queen archive <slug>` to dismiss orphan queen plans whose
+  openspec change directory was never published. The existing `colony plan
+close` and `mcp__colony__spec_archive` paths require a `CHANGE.md` and
+  cannot reach DB-only plans (e.g. duplicate auto-plans), so health stayed
+  red even after the work was abandoned. The new verb sets `status =
+'archived'` on the parent task plus every `spec/<slug>/sub-N` row in one
+  transaction, records a `plan-archived` observation, and refuses to run
+  with claimed sub-tasks unless `--force` is set. Idempotent: re-running
+  on an already-archived plan reports zero rows updated.
+- 610d5c8: Wave 1 storage self-heal helpers — additive only:
+
+  - `Storage.sweepStaleClaims({ stale_after_ms, now?, limit? })` bulk-demotes `state='active'` claims older than the cutoff to `state='weak_expired'` and returns the demoted rows. The attention_inbox already surfaces stale claims as a cleanup signal, but until something actually demotes them they keep blocking other agents who treat any 'active' row as live ownership. Pure data update; callers emit `claim-weakened` observations themselves if they want the demotion to surface in timelines.
+  - `Storage.findCompletedQueenPlans(repo_root?)` returns queen-plan candidates whose every `spec/<slug>/sub-N` row has its latest `plan-subtask-claim` observation in `metadata.status='completed'` and whose parent `spec/<slug>` row isn't archived. The MCP plan tool's read-path sweep only fires for plans with `auto_archive=true`; this scan exposes the same candidate set so non-MCP callers (CLI, periodic sweep, autopilot) can archive them via `archiveQueenPlan` without the per-plan opt-in.
+  - `isProtectedBranch(branch)` and the exported `PROTECTED_BRANCH_NAMES` set codify the worktree-discipline rule that protected base branches (`main`, `master`, `dev`, `develop`, `production`, `release`) should never carry agent file claims directly. Hooks, MCP, and CLI can share one definition instead of drifting copies.
+
+- Updated dependencies [f769824]
+- Updated dependencies [43ef76a]
+- Updated dependencies [2a077ed]
+  - @colony/config@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

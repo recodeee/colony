@@ -1,5 +1,138 @@
 # @colony/mcp-server
 
+## 0.7.0
+
+### Minor Changes
+
+- 8e800f4: `attention_inbox` now defaults to a compact payload (`summary` +
+  `observation_ids`) and accepts a new `format: "compact" | "full"` flag
+  that opts back into the historical fully hydrated shape. Compact mode
+  trims the response to the counts and IDs an agent actually needs to
+  decide what to call next; bodies stay one `get_observations(ids)` call
+  away.
+
+  The `verbose` and `audit` flags keep their existing semantics
+  (weak-expired audit-claim visibility) and are now orthogonal to
+  `format` — full payload + audit, compact + audit, etc., are all valid.
+  Existing `attention_inbox` callers that depended on the inbox arrays
+  must pass `format: "full"`.
+
+- d919011: Auto-archive completed Queen plans after a 60-second grace window, even
+  when the plan was published with `auto_archive: false`. Previously, plans
+  without explicit opt-in lingered forever after their last sub-task
+  completed, leaving `queen_plan_readiness` red and forcing operators to
+  run `colony plan close` by hand.
+
+  `runAutoArchiveIfReady` now compares the latest `plan-subtask-claim`
+  completion timestamp against an `AUTO_ARCHIVE_GRACE_PERIOD_MS` constant
+  (60 seconds). Within the window the call still returns `skipped` with
+  reason `auto_archive grace period pending`, giving the lane time to
+  land a manual close or reject the archive entirely. Past the window the
+  three-way merge runs and the change is moved to
+  `openspec/changes/archive/<date>-<slug>` as before.
+
+  `task_plan_list` now triggers an opportunistic sweep over completed
+  plans before returning, so health/agents that read plans drive the
+  archive without a daemon. Conflicts and errors continue to surface as
+  `plan-archive-blocked` / `plan-archive-error` observations on the
+  parent spec task instead of failing the list call.
+
+- 528b5ba: Add `task_autopilot_tick` and `task_drift_check` MCP tools — light-weight ports of two ideas from the Ruflo autopilot/swarm playbook, mapped onto Colony primitives.
+
+  `task_autopilot_tick` is a one-shot advisor that combines `attention_inbox` + `task_ready_for_agent` into a single decision (next tool + args + sleep hint). The loop itself stays caller-side (Claude Code's `ScheduleWakeup`, the `/loop` skill, or cron) — this MCP call is stateless. Decision priority: pending handoff → quota relay → blocking message → claim ready subtask → continue current claim → no-op. Stalled lanes whose only signal is "Session start"/"No active swarm" are classified as dead heartbeats and excluded from the actionable count, so callers don't escalate on noise.
+
+  `task_drift_check` compares a session's claims for a given task against its recent edit-tool observations within a configurable window. Surfaces files edited without a matching claim (drift) and claims with no recent edit activity (potentially abandoned). File-scope drift only — does not analyze semantic drift from the task description.
+
+  Both tools are pure compositions of existing storage and core helpers; no SQL migration, no new package, no edits to `packages/storage/src/storage.ts`. `@colony/core` re-exports `InboxQuotaPendingClaim` so downstream tools can build typed quota-relay payloads.
+
+- 6bfc818: Surface a `claim_required: true` flag on `task_ready_for_agent` whenever
+  the response carries a claimable plan sub-task or quota-relay handoff
+  that the calling agent should follow up on with
+  `task_plan_claim_subtask` (or `task_claim_quota_accept`). Loop adoption
+  sat at 0% across sessions because the queue response only carried a
+  hint inside `next_action`; agents that stopped reading at the result
+  shape skipped the claim. The new boolean lets clients gate work
+  selection on the explicit signal.
+
+  SessionStart now appends a one-line `## Ready Queen sub-tasks` preface
+  when the active repo has unclaimed plan sub-tasks, listing the count
+  and reminding the agent to follow `task_ready_for_agent` with
+  `task_plan_claim_subtask`. The nudge is silent when no cwd is detected,
+  no real `(repo_root, branch)` resolves, or no plan has unclaimed work.
+
+- 919cc9b: Add per-operation token instrumentation and a savings surface with three
+  entry points that share one data source:
+
+  - New `mcp_metrics` SQLite table records `(operation, ts, input_bytes,
+output_bytes, input_tokens, output_tokens, duration_ms, ok)` for every
+    wrapped MCP tool call. Recording is best-effort: a write failure cannot
+    break a tool call. Tokens are counted via `@colony/compress#countTokens`
+    so values align with observation token receipts.
+  - `Storage.recordMcpMetric` and `Storage.aggregateMcpMetrics` expose the
+    table; new types `NewMcpMetric`, `AggregateMcpMetricsOptions`,
+    `McpMetricsAggregate`, and `McpMetricsAggregateRow` ship from
+    `@colony/storage`.
+  - `apps/mcp-server` composes a metrics wrapper alongside the existing
+    heartbeat wrapper. Heartbeat outer (touches active session before the
+    handler), metrics inner (measures handler input/output around the actual
+    work).
+  - New MCP tool `savings_report` returns hand-authored reference rows plus
+    live per-operation usage. CLI `colony gain` renders the same data with
+    optional `--hours`, `--since`, `--operation`, `--json` flags. Worker
+    exposes `/savings` (HTML) and `/api/colony/savings` (JSON), reachable
+    from the index page link.
+  - Hand-authored reference table lives in
+    `packages/core/src/savings-reference.ts` so all three surfaces stay in
+    sync from one source.
+
+### Patch Changes
+
+- b937fb7: Cap `attention_inbox` stalled lane rows by default while preserving total
+  counts and explicit expansion.
+- 77c9e30: Make PreToolUse auto-claim coverage observable and surface hook-wiring problems instead of agent-discipline ones.
+
+  - The Claude installer now scopes PreToolUse and PostToolUse to a write-tool matcher so the hook does not fire (or get blamed) for unrelated tools.
+  - `colony hook run pre-tool-use` now writes its warning back through Claude Code's PreToolUse `permissionDecision: allow` so the agent sees the missing-claim warning instead of it being silently dropped on stderr.
+  - The pre-tool-use warning embeds a concrete `next_call` (an exact `mcp__colony__task_claim_file({...})` invocation) and a multi-line actionable `message`, so an agent that hits ACTIVE_TASK_NOT_FOUND / AMBIGUOUS_ACTIVE_TASK / SESSION_NOT_FOUND knows exactly what to do.
+  - `claimBeforeEditStats` adds a `pre_tool_use_signals` count of `claim-before-edit` telemetry rows in the window. `colony health` and `hivemind_context`'s claim-before-edit nudge use it to distinguish "hook is not firing" from "agent skipped the claim", and emit an install/restart hint in the former case.
+  - `colony health` also reports explicit/manual vs auto-claim breakdown and reads "had a claim before edit" instead of "explicit claims first".
+
+- 7d93a48: Make task_claim_file discoverable as the normal before-edit soft claim path.
+- c94ed35: Three colony-health fixes:
+
+  - `claimBeforeEditStats` now strips the managed agent-worktree prefix (`.omx/agent-worktrees/<lane>/` and `.omc/agent-worktrees/<lane>/`) when comparing edit and claim file paths. Edits recorded inside a worktree now line up with claims posted on canonical repo-relative paths, so the claim-before-edit metric stops reporting `path_mismatch` for the same logical file.
+  - `task_ready_for_agent` accepts a new opt-in `auto_claim` boolean. When set, the server claims the unambiguous ready sub-task in the same call and reports the outcome as `auto_claimed` so harnesses no longer have to call `task_plan_claim_subtask` as a follow-up. Skips the auto-claim when the candidate is routed to a different agent or when no claimable work is ready.
+  - The plan auto-archive sweep now reconciles plans whose change directory was already moved to `openspec/changes/archive/<date>-<slug>/` on disk: it records a `plan-archived` observation referencing the archive path instead of looping forever as completed-but-unarchived. The sweep also strips a deleted agent-worktree segment from the parent task's `repo_root` before opening `SpecRepository`, so plans whose lane was pruned still archive cleanly.
+
+- Updated dependencies [b937fb7]
+- Updated dependencies [77c9e30]
+- Updated dependencies [6b09a3d]
+- Updated dependencies [f769824]
+- Updated dependencies [7d86bd2]
+- Updated dependencies [cb4c9f9]
+- Updated dependencies [43ef76a]
+- Updated dependencies [46d0153]
+- Updated dependencies [36e95ba]
+- Updated dependencies [528b5ba]
+- Updated dependencies [99b9715]
+- Updated dependencies [9424987]
+- Updated dependencies [6bfc818]
+- Updated dependencies [a27c52c]
+- Updated dependencies [2a077ed]
+- Updated dependencies [08e4700]
+- Updated dependencies [2ddc284]
+- Updated dependencies [7d86bd2]
+- Updated dependencies [fa4e1a3]
+- Updated dependencies [919cc9b]
+- Updated dependencies [36bd261]
+  - @colony/core@0.7.0
+  - @colony/hooks@0.7.0
+  - @colony/config@0.7.0
+  - @colony/foraging@0.7.0
+  - @colony/queen@0.7.0
+  - @colony/spec@0.7.0
+  - @colony/embedding@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes
