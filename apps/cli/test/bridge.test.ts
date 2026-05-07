@@ -261,6 +261,120 @@ describe('bridge lifecycle --json', () => {
       route: 'task_bind',
     });
   });
+
+  it('reads the envelope from --replay <file> and skips stdin', async () => {
+    const envelope = {
+      event_id: 'evt_replay',
+      event_name: 'pre_tool_use',
+      session_id: 'codex@replay',
+      agent: 'codex',
+      cwd: '/repo',
+      repo_root: '/repo',
+      branch: 'main',
+      timestamp: '2026-04-29T10:01:00.000Z',
+      source: 'omx',
+      tool_name: 'Write',
+    };
+    const readReplayFile = vi.fn((path: string) => {
+      expect(path).toBe('/tmp/saved.pre.json');
+      return JSON.stringify(envelope);
+    });
+    mocks.runOmxLifecycleEnvelope.mockResolvedValue({
+      ok: true,
+      ms: 4,
+      event_id: 'evt_replay',
+      event_type: 'pre_tool_use',
+      route: 'pre-tool-use',
+    });
+
+    const program = new Command();
+    registerBridgeCommand(program, {
+      readStdin: mocks.readStdin,
+      readReplayFile,
+      runOmxLifecycleEnvelope: mocks.runOmxLifecycleEnvelope,
+    });
+
+    await program.parseAsync(
+      ['node', 'test', 'bridge', 'lifecycle', '--json', '--replay', '/tmp/saved.pre.json'],
+      { from: 'node' },
+    );
+
+    expect(readReplayFile).toHaveBeenCalledTimes(1);
+    expect(mocks.readStdin).not.toHaveBeenCalled();
+    expect(mocks.runOmxLifecycleEnvelope).toHaveBeenCalledWith(
+      envelope,
+      expect.objectContaining({ defaultCwd: expect.any(String) }),
+    );
+  });
+
+  it('uses the injected ephemeral store when --dry-run is passed and cleans up after', async () => {
+    mocks.readStdin.mockResolvedValue(
+      JSON.stringify({
+        event_id: 'evt_dry',
+        event_name: 'task_bind',
+        session_id: 'codex@dry',
+        agent: 'codex',
+        cwd: '/repo',
+        repo_root: '/repo',
+        branch: 'main',
+        timestamp: '2026-04-29T10:01:00.000Z',
+        source: 'omx',
+      }),
+    );
+    const ephemeralStore = { kind: 'ephemeral-store' } as unknown;
+    const cleanup = vi.fn();
+    const createDryRunStore = vi.fn(() => ({
+      store: ephemeralStore as never,
+      cleanup,
+    }));
+    mocks.runOmxLifecycleEnvelope.mockResolvedValue({
+      ok: true,
+      ms: 1,
+      event_id: 'evt_dry',
+      event_type: 'task_bind',
+      route: 'task_bind',
+    });
+
+    const program = new Command();
+    registerBridgeCommand(program, {
+      readStdin: mocks.readStdin,
+      createDryRunStore,
+      runOmxLifecycleEnvelope: mocks.runOmxLifecycleEnvelope,
+    });
+
+    await program.parseAsync(['node', 'test', 'bridge', 'lifecycle', '--json', '--dry-run'], {
+      from: 'node',
+    });
+
+    expect(createDryRunStore).toHaveBeenCalledTimes(1);
+    expect(mocks.runOmxLifecycleEnvelope).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ store: ephemeralStore }),
+    );
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs cleanup even when the lifecycle handler throws', async () => {
+    mocks.readStdin.mockResolvedValue('{}');
+    const cleanup = vi.fn();
+    const createDryRunStore = vi.fn(() => ({
+      store: { kind: 'ephemeral-store' } as never,
+      cleanup,
+    }));
+    mocks.runOmxLifecycleEnvelope.mockRejectedValue(new Error('boom'));
+
+    const program = new Command();
+    registerBridgeCommand(program, {
+      readStdin: mocks.readStdin,
+      createDryRunStore,
+      runOmxLifecycleEnvelope: mocks.runOmxLifecycleEnvelope,
+    });
+
+    await expect(
+      program.parseAsync(['node', 'test', 'bridge', 'lifecycle', '--dry-run'], { from: 'node' }),
+    ).rejects.toThrow('boom');
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('bridge runtime-summary --json', () => {
