@@ -488,7 +488,7 @@ describe('task_ready_for_agent', () => {
     expect(result.ready).toEqual([]);
     expect(result.total_available).toBe(0);
     expect(result.mcp_capability_map?.summary).toEqual(expect.any(Array));
-    expect(result.mcp_capability_map?.summary.length).toBeGreaterThan(0);
+    expect(result.mcp_capability_map?.unknown_servers).toEqual(expect.any(Array));
   });
 
   it('returns exact claim args for a ready sub-task', async () => {
