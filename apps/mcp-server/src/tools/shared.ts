@@ -27,6 +27,16 @@ export interface HivemindToolOptions {
   limit: number | undefined;
 }
 
+export interface SpecRootMissingDetails {
+  code: 'SPEC_ROOT_NOT_FOUND';
+  repo_root: string;
+  spec_path: string;
+  recovery: string;
+}
+
+export const SPEC_ROOT_NOT_FOUND_RECOVERY =
+  'Run `colony spec init` at repo root, restore SPEC.md, or pass the repo_root that already contains SPEC.md before publishing claimable work.';
+
 export interface HivemindContextBuildOptions {
   maxClaims?: number;
   maxHotFiles?: number;
@@ -295,6 +305,24 @@ export function mcpErrorResponse(
     content: [{ type: 'text', text: JSON.stringify({ code, error, ...details }) }],
     isError: true,
   };
+}
+
+export function specRootPath(repoRoot: string): string {
+  return resolve(repoRoot, 'SPEC.md');
+}
+
+export function buildSpecRootMissingDetails(repoRoot: string): SpecRootMissingDetails {
+  return {
+    code: 'SPEC_ROOT_NOT_FOUND',
+    repo_root: repoRoot,
+    spec_path: specRootPath(repoRoot),
+    recovery: SPEC_ROOT_NOT_FOUND_RECOVERY,
+  };
+}
+
+export function specRootMissingMessage(repoRoot: string): string {
+  const details = buildSpecRootMissingDetails(repoRoot);
+  return `SPEC.md not found at ${details.spec_path}. ${details.recovery}`;
 }
 
 export function buildContextQuery(query: string | undefined, sessions: HivemindSession[]): string {

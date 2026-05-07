@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "plan_slug": "repo-without-spec-plan-publish-fallback",
+  "title": "Allow plan publication for repos without Colony SPEC.md",
+  "problem": "Colony ready-task guard stranded multiple recodee static prompt lanes because task_plan_publish and queen_plan_goal fail hard when target repo root lacks SPEC.md. Operators need live Colony plans to be publishable for coordination even when a product repo has OpenSpec but no Colony SPEC.md.",
+  "acceptance_criteria": [
+    "task_plan_publish can publish claimable work for a repo root that lacks SPEC.md, or returns a repairable result that preserves ready-task flow without marking static prompts done.",
+    "queen_plan_goal follows the same behavior and does not strand agents behind OBSERVATION_NOT_ON_TASK for missing SPEC.md alone.",
+    "Existing spec-backed behavior remains intact for repos that do have SPEC.md.",
+    "Focused MCP server tests cover no-SPEC repo publication and ready queue claimability.",
+    "Task #3 records the fix and the PH12 Agent 84 plan can be published/claimed after the Colony repair is available or an exact reload/retry step is recorded."
+  ],
+  "roles": [
+    "planner",
+    "architect",
+    "critic",
+    "executor",
+    "writer",
+    "verifier"
+  ],
+  "tasks": [
+    {
+      "subtask_index": 0,
+      "title": "Patch and test no-SPEC plan publication",
+      "description": "Inspect MCP plan/queen/spec handling and patch the narrow behavior that turns missing target repo SPEC.md into a hard OBSERVATION_NOT_ON_TASK failure during live plan publication. Add focused tests for task_plan_publish and queen_plan_goal without SPEC.md while preserving existing spec-backed behavior.",
+      "file_scope": [
+        "apps/mcp-server/src/tools/plan.ts",
+        "apps/mcp-server/src/tools/queen.ts",
+        "apps/mcp-server/src/tools/spec.ts",
+        "apps/mcp-server/test/plan.test.ts",
+        "apps/mcp-server/test/queen.test.ts",
+        "apps/mcp-server/test/ready-queue.test.ts",
+        "packages/core/src"
+      ],
+      "depends_on": [],
+      "spec_row_id": null,
+      "capability_hint": "api_work",
+      "status": "available",
+      "claimed_by_session_id": null,
+      "claimed_by_agent": null,
+      "completed_summary": null
+    },
+    {
+      "subtask_index": 1,
+      "title": "Record task #3 recovery evidence",
+      "description": "Post evidence on recodee task #3 and republish/claim the PH12 Agent 84 live plan if the running Colony MCP server sees the fix. If the live server is not reloaded, record exact reload/retry next step.",
+      "file_scope": [
+        "openspec/changes",
+        "SPEC.md"
+      ],
+      "depends_on": [
+        0
+      ],
+      "spec_row_id": null,
+      "capability_hint": "doc_work",
+      "status": "available",
+      "claimed_by_session_id": null,
+      "claimed_by_agent": null,
+      "completed_summary": null
+    }
+  ],
+  "published": {
+    "spec_task_id": 5,
+    "spec_change_path": "/home/deadpool/Documents/recodee/colony/openspec/changes/repo-without-spec-plan-publish-fallback/CHANGE.md",
+    "auto_archive": false
+  },
+  "created_at": "2026-05-07T08:37:00.272Z",
+  "updated_at": "2026-05-07T08:37:00.272Z"
+}

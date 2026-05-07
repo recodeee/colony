@@ -25,6 +25,10 @@ export interface OpenChangeInput {
   proposal?: string;
 }
 
+export interface OpenChangeOptions {
+  allowMissingRoot?: boolean | undefined;
+}
+
 export interface ArchiveResult {
   archivedPath: string;
   mergedRootHash: string;
@@ -40,6 +44,8 @@ export const LAYOUT = {
   archiveDir: 'openspec/changes/archive',
   configFile: 'openspec/config.yaml',
 } as const;
+
+export const MISSING_SPEC_ROOT_HASH = 'missing-spec-root';
 
 export class SpecRepository {
   readonly repoRoot: string;
@@ -93,11 +99,14 @@ export class SpecRepository {
 
   // ---- change lifecycle ------------------------------------------------
 
-  openChange(input: OpenChangeInput): { change: Change; task_id: number; path: string } {
-    const root = this.readRoot();
+  openChange(
+    input: OpenChangeInput,
+    opts: OpenChangeOptions = {},
+  ): { change: Change; task_id: number; path: string } {
+    const root = this.readRootOrNull(opts);
     const change: Change = {
       slug: input.slug,
-      baseRootHash: root.rootHash,
+      baseRootHash: root?.rootHash ?? MISSING_SPEC_ROOT_HASH,
       proposal: input.proposal ?? '',
       deltaRows: [],
       tasks: [],
@@ -120,13 +129,17 @@ export class SpecRepository {
     this.store.addObservation({
       session_id: input.session_id,
       kind: SPEC_OBSERVATION_KINDS.SPEC_DELTA,
-      content: `Opened change ${input.slug}; base_root_hash=${change.baseRootHash}`,
+      content:
+        root === null
+          ? `Opened change ${input.slug}; base_root_hash=${change.baseRootHash}; root_spec=missing`
+          : `Opened change ${input.slug}; base_root_hash=${change.baseRootHash}`,
       task_id: thread.task_id,
       metadata: {
         openspec_change_path: changePath,
         openspec_change_slug: input.slug,
         openspec_plan_slug: null,
         openspec_task_id: null,
+        spec_root_missing: root === null,
       },
     });
 
@@ -182,6 +195,21 @@ export class SpecRepository {
 
   private changePath(slug: string): string {
     return join(this.repoRoot, LAYOUT.changesDir, slug, 'CHANGE.md');
+  }
+
+  private readRootOrNull(opts: OpenChangeOptions): Spec | null {
+    try {
+      return this.readRoot();
+    } catch (err) {
+      if (
+        opts.allowMissingRoot === true &&
+        err instanceof Error &&
+        err.message.startsWith('SPEC.md not found')
+      ) {
+        return null;
+      }
+      throw err;
+    }
   }
 }
 

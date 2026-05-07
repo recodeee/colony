@@ -141,8 +141,10 @@ function touchActiveSession(
 }
 
 function heartbeatOptionsFromSettings(settings?: Settings): HeartbeatOptions {
+  const minIntervalMs = settings?.runtime.activeSessionReconcileMinIntervalMs;
+  if (minIntervalMs === undefined) return {};
   return {
-    activeSessionReconcileMinIntervalMs: settings?.runtime.activeSessionReconcileMinIntervalMs,
+    activeSessionReconcileMinIntervalMs: minIntervalMs,
   };
 }
 
