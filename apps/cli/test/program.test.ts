@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ensureWritableHookHome } from '../src/commands/hook.js';
+import {
+  COLONY_CLI_INSTALL_COMMAND,
+  COLONY_SKILL_INSTALL_COMMAND,
+} from '../src/commands/install.js';
 import { createProgram } from '../src/index.js';
 
 describe('Colony CLI program', () => {
@@ -119,6 +123,11 @@ describe('Colony CLI program', () => {
     const verify = install?.options.find((o) => o.long === '--verify');
     expect(ide?.defaultValue).toBe('claude-code');
     expect(verify).toBeDefined();
+  });
+
+  it('documents the CLI and npx skill install commands', () => {
+    expect(COLONY_CLI_INSTALL_COMMAND).toBe('npm install -g @imdeadpool/colony-cli');
+    expect(COLONY_SKILL_INSTALL_COMMAND).toBe('npx skills add recodeee/colony/skills/colony-mcp');
   });
 
   it('exposes a hook subcommand with a `run` action', () => {
