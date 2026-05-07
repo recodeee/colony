@@ -28,6 +28,7 @@
     "lint": "node --test test/agents-contract.test.js && pnpm run check:no-bridge-deps && biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
+    "benchmark:receipts": "node scripts/benchmark-receipts.mjs",
     "clean": "pnpm -r exec rm -rf dist && rm -rf node_modules/.cache",
     "p": "pnpm run release",
     "publish:cli": "bash scripts/publish-cli.sh",

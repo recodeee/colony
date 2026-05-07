@@ -9,6 +9,14 @@ function aggregate(): McpMetricsAggregate {
     ok_count: 2,
     error_count: 0,
     error_reasons: [],
+    success_tokens: 120,
+    error_tokens: 0,
+    avg_success_tokens: 60,
+    avg_error_tokens: 0,
+    max_input_tokens: 20,
+    max_output_tokens: 40,
+    max_total_tokens: 60,
+    max_duration_ms: 10,
     input_bytes: 100,
     output_bytes: 200,
     total_bytes: 300,
@@ -82,6 +90,10 @@ describe('savings viewer', () => {
     expect(page).toContain('Live sessions');
     expect(page).toContain('avg/session 2 calls');
     expect(page).toContain('019df99a-');
+    expect(page).toContain('Receipt value');
+    expect(page).toContain('$0.0165 saved');
+    expect(page).toContain('Colony spent $0.000200');
+    expect(page).toContain('Standard estimate $0.0167');
     expect(page).toContain('Search result shape');
     expect(page).toContain('Live matched total');
     expect(page).not.toContain('Static total / session');

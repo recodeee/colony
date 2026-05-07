@@ -257,6 +257,10 @@ describe('MCP server', () => {
         totals: { calls: number; baseline_tokens: number; colony_tokens: number };
         rows: Array<{ operation: string; calls: number; matched_operations: string[] }>;
       };
+      comparison_cost: {
+        kind: string;
+        totals: { baseline_cost_usd: number; colony_cost_usd: number; saved_cost_usd: number };
+      } | null;
     };
 
     expect(payload.live.cost_basis.configured).toBe(true);
@@ -282,6 +286,43 @@ describe('MCP server', () => {
       baseline_tokens: 5000,
       colony_tokens: 3000,
     });
+    expect(payload.comparison_cost?.kind).toBe('estimated_live_window_usd');
+    expect(payload.comparison_cost?.totals.baseline_cost_usd).toBeCloseTo(0.008333333333, 12);
+    expect(payload.comparison_cost?.totals.colony_cost_usd).toBeCloseTo(0.005, 12);
+    expect(payload.comparison_cost?.totals.saved_cost_usd).toBeCloseTo(0.003333333333, 12);
+  });
+
+  it('savings_report honest mode returns only live receipts', async () => {
+    store.storage.recordMcpMetric({
+      ts: Date.now(),
+      operation: 'search',
+      input_bytes: 100,
+      output_bytes: 200,
+      input_tokens: 1000,
+      output_tokens: 2000,
+      duration_ms: 12,
+      ok: true,
+    });
+
+    const res = await client.callTool({
+      name: 'savings_report',
+      arguments: { hours: 1, input_usd_per_1m: 1, output_usd_per_1m: 2, honest: true },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      mode: string;
+      live: { operations: Array<{ operation: string }>; totals: { total_cost_usd: number } };
+      comparison?: unknown;
+      comparison_cost?: unknown;
+      reference?: unknown;
+    };
+
+    expect(payload.mode).toBe('honest_live_receipts');
+    expect(payload.live.operations[0]?.operation).toBe('search');
+    expect(payload.live.totals.total_cost_usd).toBeCloseTo(0.005, 12);
+    expect(payload.comparison).toBeUndefined();
+    expect(payload.comparison_cost).toBeUndefined();
+    expect(payload.reference).toBeUndefined();
   });
 
   it('task_post reports a structured error for stale task ids', async () => {

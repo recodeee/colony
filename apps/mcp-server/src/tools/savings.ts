@@ -1,6 +1,7 @@
 import {
   SAVINGS_REFERENCE_ROWS,
   savingsLiveComparison,
+  savingsLiveComparisonCost,
   savingsReferenceTotals,
 } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -63,6 +64,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .describe(
           'USD price per 1M output tokens; falls back to COLONY_MCP_OUTPUT_USD_PER_1M when omitted',
         ),
+      honest: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true, return only live mcp_metrics receipts; omit reference/comparison models',
+        ),
     },
     wrapHandler(
       'savings_report',
@@ -73,6 +80,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         session_limit,
         input_usd_per_1m,
         output_usd_per_1m,
+        honest,
       }) => {
         const now = Date.now();
         const windowHours = hours ?? DEFAULT_WINDOW_HOURS;
@@ -94,22 +102,39 @@ export function register(server: McpServer, ctx: ToolContext): void {
         });
         const totals = savingsReferenceTotals();
         const comparison = savingsLiveComparison(live.operations);
+        const livePayload = {
+          note: 'Recorded mcp_metrics receipts for the requested window. input_tokens / output_tokens come from @colony/compress#countTokens; error_reasons are populated for new thrown/isError calls.',
+          window: { since: live.since, until: live.until, hours: windowHours },
+          ...(operation !== undefined ? { operation } : {}),
+          cost_basis: live.cost_basis,
+          totals: live.totals,
+          operations: live.operations,
+          session_summary: live.session_summary,
+          sessions: live.sessions,
+        };
+        if (honest === true) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  mode: 'honest_live_receipts',
+                  live: livePayload,
+                }),
+              },
+            ],
+          };
+        }
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify({
-                live: {
-                  note: 'Recorded mcp_metrics receipts for the requested window. input_tokens / output_tokens come from @colony/compress#countTokens; error_reasons are populated for new thrown/isError calls.',
-                  window: { since: live.since, until: live.until, hours: windowHours },
-                  ...(operation !== undefined ? { operation } : {}),
-                  cost_basis: live.cost_basis,
-                  totals: live.totals,
-                  operations: live.operations,
-                  session_summary: live.session_summary,
-                  sessions: live.sessions,
-                },
+                live: livePayload,
                 comparison,
+                comparison_cost: live.cost_basis.configured
+                  ? savingsLiveComparisonCost(comparison, live.operations)
+                  : null,
                 reference: {
                   kind: 'static_per_session_model',
                   note: 'Static estimated per-session token cost catalog for common coordination loops. Runtime comparison lives in comparison and is derived from the live mcp_metrics window. Source: packages/core/src/savings-reference.ts.',
