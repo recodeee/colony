@@ -11,4 +11,4 @@
 
 ## Cleanup
 
-- [ ] Finish PR, merge, and sandbox cleanup; record PR URL and `MERGED` evidence.
+- [x] Finish PR, merge, and sandbox cleanup; PR https://github.com/recodeee/colony/pull/486 state `MERGED`, merge commit `49b05b5b26fe7c6c1f59768c68c7ed6e6fa4b000`, source worktree pruned.
