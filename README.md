@@ -549,6 +549,7 @@ Practical effects:
 | Clean stale signals        | `colony coordination sweep`, `colony queen sweep`, health fix plans             |
 | Inspect the graph          | `colony viewer` local read-only graph                                           |
 | Measure token savings      | `colony gain`, MCP `savings_report`, viewer `/savings`                          |
+| Add optional sidecars      | `colony sidecar ruflo init`, `status`, `schema --json`                          |
 | Prove behavior             | `colony health`, smoke tests, adoption metrics                                  |
 
 Use Colony when you run more than one coding agent in the same repo, use
@@ -661,6 +662,7 @@ Deeper docs:
 - [Architecture](docs/architecture.md)
 - [MCP tools](docs/mcp.md)
 - [Queen plans](docs/QUEEN.md)
+- [Ruflo sidecar](docs/ruflo-sidecar.md)
 - [Compression](docs/compression.md)
 - [Development](docs/development.md)
 - [Proposal task threads](docs/proposal-task-threads.md)
