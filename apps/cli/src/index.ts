@@ -13,6 +13,7 @@ import { registerCompressCommands } from './commands/compress.js';
 import { registerConfigCommand } from './commands/config.js';
 import { registerCoordinationCommand } from './commands/coordination.js';
 import { registerDebriefCommand } from './commands/debrief.js';
+import { registerDemoCommand } from './commands/demo.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerExportCommand } from './commands/export.js';
 import { registerForagingCommand } from './commands/foraging.js';
@@ -90,6 +91,7 @@ export function createProgram(): Command {
   registerPlanCommand(program);
   registerPlansCommand(program);
   registerDebriefCommand(program);
+  registerDemoCommand(program);
   registerInboxCommand(program);
   registerForagingCommand(program);
   registerGainCommand(program);
