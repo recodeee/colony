@@ -1746,20 +1746,24 @@ export class TaskThread {
     this.assertTaskExists();
     this.assertParticipant(args.session_id);
     const normalizedFilePath = this.normalizeOptionalClaimPath(args.file_path);
-    const claims = this.claims().filter((claim) => {
-      if (claim.state !== 'handoff_pending') return false;
-      if (typeof claim.expires_at !== 'number' || now < claim.expires_at) return false;
-      if (normalizedFilePath !== null && claim.file_path !== normalizedFilePath) return false;
-      if (
-        args.handoff_observation_id !== undefined &&
-        claim.handoff_observation_id !== args.handoff_observation_id
-      ) {
-        return false;
-      }
-      return true;
-    });
 
+    // BEGIN IMMEDIATE so that the read of expired claims and all subsequent
+    // writes are serialized across processes. Without IMMEDIATE, two concurrent
+    // cleanup callers both read the same expired claims in DEFERRED mode, then
+    // both attempt to write — producing duplicate claim-weakened observations.
     return this.store.storage.transaction(() => {
+      const claims = this.claims().filter((claim) => {
+        if (claim.state !== 'handoff_pending') return false;
+        if (typeof claim.expires_at !== 'number' || now < claim.expires_at) return false;
+        if (normalizedFilePath !== null && claim.file_path !== normalizedFilePath) return false;
+        if (
+          args.handoff_observation_id !== undefined &&
+          claim.handoff_observation_id !== args.handoff_observation_id
+        ) {
+          return false;
+        }
+        return true;
+      });
       const audit_observation_ids: number[] = [];
       const seenBatons = new Set<number>();
       for (const claim of claims) {
@@ -1821,7 +1825,7 @@ export class TaskThread {
         })),
         audit_observation_ids,
       };
-    });
+    }, { immediate: true });
   }
 
   private assertTaskExists(): void {
