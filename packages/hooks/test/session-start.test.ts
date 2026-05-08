@@ -109,6 +109,12 @@ function depsFor(similar_tasks: ReturnType<typeof similarTasks>, embedder = new 
   return { deps, embedder, findSimilarTasks, buildSuggestionPayload };
 }
 
+function noSuggestionDeps(): SuggestionPrefaceDeps {
+  return {
+    loadCore: async () => null,
+  };
+}
+
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'colony-session-start-suggestions-'));
   repo = join(dir, 'repo');
@@ -163,7 +169,11 @@ describe('SessionStart predictive suggestion preface', () => {
   it.each(['codex', 'claude-code'])(
     'injects the quota-safe Colony operating contract for %s generated instructions',
     async (ide) => {
-      const preface = await sessionStart(store, { session_id: `S-${ide}`, ide, cwd: repo });
+      const preface = await sessionStart(
+        store,
+        { session_id: `S-${ide}`, ide, cwd: repo },
+        noSuggestionDeps(),
+      );
 
       expect(preface).toContain('## Quota-safe Colony operating contract');
       expect(preface).toContain('RTK command policy:');
