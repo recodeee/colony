@@ -1,3 +1,0 @@
-[submodule "examples/agentic-flow"]
-	path = examples/agentic-flow
-	url = https://github.com/ruvnet/agentic-flow.git

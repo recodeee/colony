@@ -1,9 +1,9 @@
 # Agentic Bridge Research Notes
 
 This document records the narrow patterns Colony should port from
-`examples/agentic-flow` and `https://github.com/ruvnet/ruvector`. It is a
-research anchor for waves 2-5, not an implementation spec and not permission to
-vendor either project.
+`https://github.com/ruvnet/agentic-flow` and `https://github.com/ruvnet/ruvector`.
+It is a research anchor for waves 2-5, not an implementation spec and not
+permission to vendor either project.
 
 ## Pattern catalog
 
@@ -17,7 +17,7 @@ improvement chain by attempt. Colony gains a task-scoped observation kind for
 structured post-failure learning without changing the write path: handoff
 expiry, declined quota claims, and failed approaches can become searchable
 learning signals instead of prose-only notes. Evidence:
-`examples/agentic-flow/src/controllers/reflexion-memory.ts`,
+`https://github.com/ruvnet/agentic-flow/blob/f31065cabd423b53748fd94a86f9e2b919ee070b/src/controllers/reflexion-memory.ts`,
 `packages/core/src/task-thread.ts`, `packages/core/src/memory-store.ts`,
 `packages/storage/src/types.ts`. Rough effort: medium; schema/type changes plus
 three writer call sites and search/render support, but no external runtime.
@@ -30,7 +30,7 @@ bounded retries with deterministic backoff around transient local operations
 such as embedding generation, GitHub/CLI polling, or bridge-status refresh.
 Colony gains less flaky wave execution while preserving explicit failure
 surface area when retries exhaust. Evidence:
-`examples/agentic-flow/src/notifications/notification-manager.ts`,
+`https://github.com/ruvnet/agentic-flow/blob/f31065cabd423b53748fd94a86f9e2b919ee070b/src/notifications/notification-manager.ts`,
 `packages/embedding/src/index.ts`, `packages/core/src/omx-runtime-summary.ts`.
 Rough effort: small-to-medium; one shared retry helper and focused adoption at
 callers that already have recoverable transient failures.
@@ -105,8 +105,8 @@ backfill tests make this a later wave.
   may cite their files and URLs, but Colony must keep its own types, storage,
   tests, and release surface.
 - Documentation-only source use: do not vendor source from
-  `examples/agentic-flow` or `ruvnet/ruvector`; cite it as evidence and port
-  only the behavior shape that matches Colony invariants.
+  `ruvnet/agentic-flow` or `ruvnet/ruvector`; cite it as evidence and port only
+  the behavior shape that matches Colony invariants.
 
 ## Wave map
 
