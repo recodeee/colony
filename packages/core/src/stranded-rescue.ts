@@ -357,46 +357,49 @@ export function bulkRescueStrandedSessions(
     // subsequent deletes/writes are atomic across processes. Two concurrent
     // rescue callers could otherwise both read the same held claims outside
     // the transaction and then both attempt to release and audit them.
-    const audit_observation_id = store.storage.transaction(() => {
-      // Re-read claims inside the transaction so the set we release matches
-      // exactly what is visible under the write lock — guards against a
-      // concurrent caller having already released some of them between the
-      // outer read and this point.
-      const liveClaims = heldClaimsForCandidate(store, candidate);
-      if (liveClaims.length === 0) return -1;
-      for (const claim of liveClaims) {
-        store.storage.releaseClaim({
-          task_id: claim.task_id,
-          file_path: claim.file_path,
-          session_id,
-        });
-      }
-      const auditId = store.addObservation({
-        session_id,
-        kind: 'rescue-stranded',
-        content: `Bulk rescue released ${liveClaims.length} claim(s) for stranded session ${session_id}; audit history retained.`,
-        metadata: {
-          kind: 'rescue-stranded',
-          action: 'bulk-release-claims',
-          stranded_session_id: session_id,
-          agent: row.agent,
-          repo_root: row.repo_root,
-          branch: row.branch,
-          repo_roots: row.repo_roots,
-          branches: row.branches,
-          task_ids: row.task_ids,
-          last_activity: row.last_activity,
-          held_claim_count: liveClaims.length,
-          released_claims: liveClaims.map((claim) => ({
+    const audit_observation_id = store.storage.transaction(
+      () => {
+        // Re-read claims inside the transaction so the set we release matches
+        // exactly what is visible under the write lock — guards against a
+        // concurrent caller having already released some of them between the
+        // outer read and this point.
+        const liveClaims = heldClaimsForCandidate(store, candidate);
+        if (liveClaims.length === 0) return -1;
+        for (const claim of liveClaims) {
+          store.storage.releaseClaim({
             task_id: claim.task_id,
             file_path: claim.file_path,
-            claimed_at: claim.claimed_at,
-          })),
-        },
-      });
-      store.storage.endSession(session_id, now);
-      return auditId;
-    }, { immediate: true });
+            session_id,
+          });
+        }
+        const auditId = store.addObservation({
+          session_id,
+          kind: 'rescue-stranded',
+          content: `Bulk rescue released ${liveClaims.length} claim(s) for stranded session ${session_id}; audit history retained.`,
+          metadata: {
+            kind: 'rescue-stranded',
+            action: 'bulk-release-claims',
+            stranded_session_id: session_id,
+            agent: row.agent,
+            repo_root: row.repo_root,
+            branch: row.branch,
+            repo_roots: row.repo_roots,
+            branches: row.branches,
+            task_ids: row.task_ids,
+            last_activity: row.last_activity,
+            held_claim_count: liveClaims.length,
+            released_claims: liveClaims.map((claim) => ({
+              task_id: claim.task_id,
+              file_path: claim.file_path,
+              claimed_at: claim.claimed_at,
+            })),
+          },
+        });
+        store.storage.endSession(session_id, now);
+        return auditId;
+      },
+      { immediate: true },
+    );
 
     // -1 means another concurrent caller already released the claims before
     // this transaction acquired the write lock — skip rather than double-count.

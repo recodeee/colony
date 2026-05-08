@@ -466,6 +466,46 @@ describe('tasks', () => {
 
     expect(storage.getClaim(task.id, 'src/x.ts')).toMatchObject({ state: 'weak_expired' });
   });
+
+  it('listProtectedBranchTasksByRepo returns only tasks on protected branches at the given repo', () => {
+    seedSessions('s-a');
+    const targetMain = storage.findOrCreateTask({
+      title: 'main lane',
+      repo_root: '/repo-a',
+      branch: 'main',
+      created_by: 's-a',
+    });
+    const targetDev = storage.findOrCreateTask({
+      title: 'dev lane',
+      repo_root: '/repo-a',
+      branch: 'dev',
+      created_by: 's-a',
+    });
+    storage.findOrCreateTask({
+      title: 'agent lane same repo',
+      repo_root: '/repo-a',
+      branch: 'agent/claude/feature',
+      created_by: 's-a',
+    });
+    storage.findOrCreateTask({
+      title: 'main lane different repo',
+      repo_root: '/repo-b',
+      branch: 'main',
+      created_by: 's-a',
+    });
+    for (let i = 0; i < 25; i++) {
+      storage.findOrCreateTask({
+        title: `noise ${i}`,
+        repo_root: '/repo-a',
+        branch: `agent/claude/noise-${i}`,
+        created_by: 's-a',
+      });
+    }
+
+    const rows = storage.listProtectedBranchTasksByRepo('/repo-a');
+    const ids = rows.map((row) => row.id).sort((a, b) => a - b);
+    expect(ids).toEqual([targetMain.id, targetDev.id].sort((a, b) => a - b));
+  });
 });
 
 function rewriteTaskClaimsAsOldSchema(dbPath: string): void {
