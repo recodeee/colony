@@ -1,7 +1,8 @@
 import type { MemoryStore } from '@colony/core';
-import { FILE_EDIT_TOOLS, type ObservationRow, normalizeClaimPath } from '@colony/storage';
+import { FILE_EDIT_TOOLS, normalizeClaimPath } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { parseMeta } from './_meta.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 
 export interface DriftCheckResult {
@@ -178,16 +179,6 @@ function normalizeForCompare(path: string | null | undefined): string | null {
 
 function readString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
-function parseMeta(raw: ObservationRow['metadata']): Record<string, unknown> {
-  if (typeof raw !== 'string' || raw.length === 0) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
 }
 
 function roundTwo(value: number): number {

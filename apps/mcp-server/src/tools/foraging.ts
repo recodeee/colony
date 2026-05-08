@@ -1,6 +1,7 @@
 import { buildIntegrationPlan, expandForagingConceptQuery } from '@colony/foraging';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { parseMeta } from './_meta.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 
 /**
@@ -94,10 +95,7 @@ function enrichForagingHits(
   const rows = store.storage.getObservations(hits.map((h) => h.id));
   const metadataById = new Map<number, Record<string, unknown>>();
   for (const row of rows) {
-    if (!row.metadata) continue;
-    try {
-      metadataById.set(row.id, JSON.parse(row.metadata) as Record<string, unknown>);
-    } catch {}
+    metadataById.set(row.id, parseMeta(row.metadata));
   }
   return hits.map((h) => {
     const md = metadataById.get(h.id);
