@@ -152,10 +152,7 @@ describe('releaseExpiredQuotaClaims idempotency', () => {
           handoff_observation_id?: number;
           reason?: string;
         };
-        return (
-          meta.reason === 'quota_pending_expired' &&
-          meta.handoff_observation_id === handoffId
-        );
+        return meta.reason === 'quota_pending_expired' && meta.handoff_observation_id === handoffId;
       });
     expect(weakenedAfterFirst).toHaveLength(1);
 
@@ -176,10 +173,7 @@ describe('releaseExpiredQuotaClaims idempotency', () => {
           handoff_observation_id?: number;
           reason?: string;
         };
-        return (
-          meta.reason === 'quota_pending_expired' &&
-          meta.handoff_observation_id === handoffId
-        );
+        return meta.reason === 'quota_pending_expired' && meta.handoff_observation_id === handoffId;
       });
     expect(weakenedAfterSecond).toHaveLength(1);
   });

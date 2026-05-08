@@ -1566,6 +1566,22 @@ export class Storage {
       .all(limit) as TaskRow[];
   }
 
+  /**
+   * Tasks rooted at `repoRoot` whose `branch` is one of `PROTECTED_BRANCH_NAMES`.
+   * Backed by the existing `UNIQUE(repo_root, branch)` index on `tasks`.
+   * Used by the PreToolUse hook to detect protected-branch claim conflicts
+   * without scanning the full task table on every editor tool call.
+   */
+  listProtectedBranchTasksByRepo(repoRoot: string): TaskRow[] {
+    const names = Array.from(PROTECTED_BRANCH_NAMES);
+    const placeholders = names.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE repo_root = ? AND branch IN (${placeholders}) ORDER BY updated_at DESC`,
+      )
+      .all(repoRoot, ...names) as TaskRow[];
+  }
+
   touchTask(id: number, ts = Date.now()): void {
     this.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, id);
   }
