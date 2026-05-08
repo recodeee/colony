@@ -146,9 +146,10 @@ function kickForagingScan(store: MemoryStore, input: HookInput): void {
   if (!claimForagingSessionStartScan(settings, cwd)) return;
   try {
     spawnNodeScript(cli, ['foraging', 'scan', '--cwd', cwd]);
-  } catch {
+  } catch (err) {
     releaseForagingSessionStartScan(settings, cwd);
     // Best-effort. Foraging is not load-bearing for the hook's primary job.
+    console.error(`[colony] kickForagingScan: ${(err as Error)?.message ?? err}`);
   }
 }
 
@@ -180,7 +181,9 @@ function releaseForagingSessionStartScan(settings: Settings, cwd: string): void 
   const markerPath = foragingSessionStartMarkerPath(settings, cwd);
   try {
     if (existsSync(markerPath)) unlinkSync(markerPath);
-  } catch {}
+  } catch {
+    // Tolerant: marker cleanup is best-effort; a stale marker just delays the next scan.
+  }
 }
 
 function foragingSessionStartMarkerPath(settings: Settings, cwd: string): string {
@@ -194,6 +197,7 @@ function readForagingSessionStartMarker(markerPath: string): number | null {
     const value = parsed.last_started_at;
     return typeof value === 'number' && Number.isFinite(value) ? value : null;
   } catch {
+    // Tolerant: missing or malformed marker is treated as no prior scan; scan will proceed.
     return null;
   }
 }
@@ -237,7 +241,8 @@ export function buildReadyClaimNudgePreface(
   let plans: ReturnType<typeof listPlans>;
   try {
     plans = listPlans(store, { repo_root: detected.repo_root, limit: 50 });
-  } catch {
+  } catch (err) {
+    console.error(`[colony] buildReadyClaimNudgePreface: ${(err as Error)?.message ?? err}`);
     return '';
   }
   let unclaimed = 0;
@@ -276,7 +281,8 @@ export function buildAttentionBudgetSection(
       agent,
       repo_root: detected.repo_root,
     });
-  } catch {
+  } catch (err) {
+    console.error(`[colony] buildAttentionBudgetSection: ${(err as Error)?.message ?? err}`);
     return '';
   }
   const budget = applyAttentionBudget(inbox);
@@ -378,7 +384,8 @@ export function buildTaskPreface(
       repo_root: detected.repo_root,
       include_stalled_lanes: false,
     }).unread_messages;
-  } catch {
+  } catch (err) {
+    console.error(`[colony] buildTaskPreface unreadMessages: ${(err as Error)?.message ?? err}`);
     unreadMessages = [];
   }
   const others = thread.participants().filter((p) => p.session_id !== input.session_id);
@@ -506,7 +513,8 @@ export async function buildSuggestionPreface(
   let queryEmbedding: Float32Array;
   try {
     queryEmbedding = await embedder.embed(suggestionQuery(input, detected.branch));
-  } catch {
+  } catch (err) {
+    console.error(`[colony] buildSuggestionPreface embed: ${(err as Error)?.message ?? err}`);
     return '';
   }
 
@@ -518,7 +526,10 @@ export async function buildSuggestionPreface(
       exclude_task_ids: [thread.task_id],
       min_similarity: thresholds.SIMILARITY_FLOOR,
     });
-  } catch {
+  } catch (err) {
+    console.error(
+      `[colony] buildSuggestionPreface findSimilarTasks: ${(err as Error)?.message ?? err}`,
+    );
     return '';
   }
   const top = similarTasks[0];
@@ -527,7 +538,10 @@ export async function buildSuggestionPreface(
   let payload: unknown;
   try {
     payload = core.buildSuggestionPayload(store, similarTasks);
-  } catch {
+  } catch (err) {
+    console.error(
+      `[colony] buildSuggestionPreface buildSuggestionPayload: ${(err as Error)?.message ?? err}`,
+    );
     return '';
   }
   if (!isSuggestionPayload(payload)) return '';
@@ -668,7 +682,8 @@ async function resolveSuggestionEmbedder(store: MemoryStore): Promise<Embedder |
     cachedSuggestionEmbedder = await embeddingModule.createEmbedder(store.settings, {
       log: () => {},
     });
-  } catch {
+  } catch (err) {
+    console.error(`[colony] resolveSuggestionEmbedder: ${(err as Error)?.message ?? err}`);
     cachedSuggestionEmbedder = null;
   }
   return cachedSuggestionEmbedder;
@@ -689,7 +704,8 @@ async function loadSuggestionCore(): Promise<SuggestionCore | null> {
       findSimilarTasks: core.findSimilarTasks,
       buildSuggestionPayload: core.buildSuggestionPayload,
     };
-  } catch {
+  } catch (err) {
+    console.error(`[colony] loadSuggestionCore: ${(err as Error)?.message ?? err}`);
     return null;
   }
 }

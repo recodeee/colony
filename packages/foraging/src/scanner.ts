@@ -295,7 +295,9 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
   let names: string[];
   try {
     names = readdirSync(examplesDir);
-  } catch {
+  } catch (err) {
+    // examples/ directory may not exist on repos that haven't set up foraging yet.
+    process.stderr.write(`[colony] scanExamplesFs: ${(err as Error)?.message ?? err}\n`);
     return { scanned: [] };
   }
   names.sort();
@@ -307,7 +309,9 @@ export function scanExamplesFs(opts: ScanFsOptions): ScanFsResult {
     let isDir = false;
     try {
       isDir = statSync(abs_path).isDirectory();
-    } catch {}
+    } catch {
+      // Tolerant: entry disappeared between readdir and stat (race or dangling symlink); skip it.
+    }
     if (!isDir) continue;
 
     if (example_name === COCOINDEX_EXAMPLE_NAME && isLargeCocoindexExample(abs_path)) {
@@ -441,7 +445,9 @@ function compactExistingPaths(abs_path: string, paths: readonly string[]): strin
     try {
       const st = statSync(abs);
       out.add(st.isDirectory() ? `${p.replace(/\/$/, '')}/` : p);
-    } catch {}
+    } catch {
+      // Tolerant: path listed in spec does not exist in this repo's working copy; omit it.
+    }
   }
   return Array.from(out).sort();
 }
@@ -460,7 +466,9 @@ function computeRufloContentHash(
     let st: Stats | null = null;
     try {
       st = statSync(abs);
-    } catch {}
+    } catch {
+      // Tolerant: filetree path may not exist in all repo variants; skip for hash contribution.
+    }
     if (!st) continue;
     hash.update(`${rel}\t${st.size}\n`);
     if (st.isFile()) {
@@ -476,6 +484,7 @@ function fileExists(abs: string): boolean {
   try {
     return statSync(abs).isFile();
   } catch {
+    // Tolerant: stat failure (ENOENT, EACCES) means file is absent from this working copy.
     return false;
   }
 }
@@ -484,6 +493,7 @@ function directoryExists(abs: string): boolean {
   try {
     return statSync(abs).isDirectory();
   } catch {
+    // Tolerant: stat failure (ENOENT, EACCES) means directory is absent from this working copy.
     return false;
   }
 }

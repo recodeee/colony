@@ -95,7 +95,14 @@ function enrichForagingHits(
   const rows = store.storage.getObservations(hits.map((h) => h.id));
   const metadataById = new Map<number, Record<string, unknown>>();
   for (const row of rows) {
-    metadataById.set(row.id, parseMeta(row.metadata));
+    if (!row.metadata) continue;
+    try {
+      metadataById.set(row.id, JSON.parse(row.metadata) as Record<string, unknown>);
+    } catch (err) {
+      process.stderr.write(
+        `[colony] enrichForagingHits: observation ${row.id} metadata parse failed: ${(err as Error)?.message ?? err}\n`,
+      );
+    }
   }
   return hits.map((h) => {
     const md = metadataById.get(h.id);
