@@ -2399,9 +2399,18 @@ export class Storage {
     return row.t ?? 0;
   }
 
-  /** Run a function inside a SQLite transaction. All-or-nothing. */
-  transaction<T>(fn: () => T): T {
-    return this.db.transaction(fn)();
+  /**
+   * Run a function inside a SQLite transaction. All-or-nothing.
+   *
+   * Pass `{ immediate: true }` to use BEGIN IMMEDIATE instead of the default
+   * BEGIN DEFERRED. IMMEDIATE acquires the write lock at transaction start,
+   * which prevents read-then-write races when two callers both read the same
+   * rows and then try to modify them (e.g. claim cleanup loops running in
+   * parallel processes).
+   */
+  transaction<T>(fn: () => T, options?: { immediate?: boolean }): T {
+    const txFn = this.db.transaction(fn);
+    return options?.immediate ? txFn.immediate() : txFn();
   }
 
   // --- foraging food sources (indexed <repo_root>/examples/<name>) ---
