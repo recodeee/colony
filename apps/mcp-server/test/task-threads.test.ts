@@ -1517,3 +1517,62 @@ describe('task threads — handoff lifecycle', () => {
     expect(afterMeta.status).toBe('expired');
   });
 });
+
+describe('task_claim_file — protected-branch guard', () => {
+  // Isolated store + server with the guard enabled (default setting).
+  // The module-level beforeEach uses rejectProtectedBranchClaims:false so the
+  // existing fixtures keep working; this suite needs the default-on behavior.
+  let guardedDir: string;
+  let guardedStore: MemoryStore;
+  let guardedClient: Client;
+
+  beforeEach(async () => {
+    guardedDir = mkdtempSync(join(tmpdir(), 'colony-protected-branch-'));
+    const settings = { ...defaultSettings, rejectProtectedBranchClaims: true };
+    guardedStore = new MemoryStore({ dbPath: join(guardedDir, 'data.db'), settings });
+    const server = buildServer(guardedStore, settings);
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    guardedClient = new Client({ name: 'test-guard', version: '0.0.0' });
+    await Promise.all([server.connect(serverT), guardedClient.connect(clientT)]);
+  });
+
+  afterEach(async () => {
+    await guardedClient.close();
+    guardedStore.close();
+    rmSync(guardedDir, { recursive: true, force: true });
+  });
+
+  it('rejects task_claim_file with PROTECTED_BRANCH_CLAIM_REJECTED when task branch is main', async () => {
+    guardedStore.startSession({ id: 'S1', ide: 'claude-code', cwd: '/repo' });
+    const thread = TaskThread.open(guardedStore, {
+      repo_root: '/repo',
+      branch: 'main',
+      session_id: 'S1',
+    });
+    const res = await guardedClient.callTool({
+      name: 'task_claim_file',
+      arguments: { task_id: thread.task_id, session_id: 'S1', file_path: '/repo/src/index.ts' },
+    });
+    expect(res.isError).toBe(true);
+    const body = JSON.parse((res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}');
+    expect(body.code).toBe(TASK_THREAD_ERROR_CODES.PROTECTED_BRANCH_CLAIM_REJECTED);
+    // No claim row written.
+    expect(guardedStore.storage.getClaim(thread.task_id, '/repo/src/index.ts')).toBeFalsy();
+  });
+
+  it('allows task_claim_file when task branch is an agent/* branch', async () => {
+    guardedStore.startSession({ id: 'S2', ide: 'claude-code', cwd: '/repo' });
+    const thread = TaskThread.open(guardedStore, {
+      repo_root: '/repo',
+      branch: 'agent/claude/my-fix',
+      session_id: 'S2',
+    });
+    const res = await guardedClient.callTool({
+      name: 'task_claim_file',
+      arguments: { task_id: thread.task_id, session_id: 'S2', file_path: '/repo/src/index.ts' },
+    });
+    expect(res.isError).toBeFalsy();
+    const body = JSON.parse((res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}');
+    expect(body.claim_status).toBe('claimed');
+  });
+});

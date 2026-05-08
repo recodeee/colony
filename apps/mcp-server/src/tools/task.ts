@@ -315,7 +315,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_claim_file',
-    'Claim a file before editing so other agents see ownership and overlap warnings. Use before editing to avoid conflict and make file ownership visible; claims are soft coordination and never block writes.',
+    'Claim a file before editing so other agents see ownership and overlap warnings. Use before editing to avoid conflict and make file ownership visible; claims are soft coordination and never block writes. Rejected with PROTECTED_BRANCH_CLAIM_REJECTED when the task branch is a protected base branch (main/master/dev/develop/production/release) — start a sandbox worktree first.',
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1),
@@ -355,6 +355,14 @@ export function register(server: McpServer, ctx: ToolContext): void {
       }
       if (guarded.status === 'task_not_found') {
         return mcpErrorResponse('TASK_NOT_FOUND', `task ${task_id} not found`);
+      }
+      if (guarded.status === 'protected_branch_rejected') {
+        return mcpErrorResponse(
+          'PROTECTED_BRANCH_CLAIM_REJECTED',
+          guarded.recommendation ??
+            `task ${task_id} is on protected branch ${guarded.protected_branch?.branch}; start a sandbox worktree first`,
+          { ...guarded },
+        );
       }
       new TaskThread(store, task_id).join(session_id, agentForTaskClaim(session_id));
       const id = store.addObservation({
