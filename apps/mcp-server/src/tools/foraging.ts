@@ -1,6 +1,7 @@
 import { buildIntegrationPlan, expandForagingConceptQuery } from '@colony/foraging';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { parseMeta } from './_meta.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 
 /**

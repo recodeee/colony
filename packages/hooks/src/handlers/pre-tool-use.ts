@@ -22,7 +22,6 @@ import { extractTouchedFiles, pathExtractionWarningsForToolUse } from './post-to
 
 const CLAIM_WARNING_DEBOUNCE_MS = 60_000;
 const CLAIM_BEFORE_EDIT_FALLBACK_SESSION_ID = 'colony-pre-tool-use-diagnostics';
-const ALL_TASKS_LIMIT = 1_000_000;
 const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 const claimWarningDebounceByStore = new WeakMap<MemoryStore, Map<string, number>>();
 
@@ -433,7 +432,7 @@ function protectedLiveClaimConflict(
     const repoRoot = candidate?.repo_root ?? scope.repo_root;
     if (!repoRoot) return null;
     const normalizedRepoRoot = resolve(repoRoot);
-    const tasks = store.storage.listTasks(ALL_TASKS_LIMIT);
+    const tasks = store.storage.listProtectedBranchTasksByRepo(repoRoot);
     const conflicts: ClaimConflictInfo[] = [];
 
     for (const task of tasks) {

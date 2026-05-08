@@ -1746,82 +1746,89 @@ export class TaskThread {
     this.assertTaskExists();
     this.assertParticipant(args.session_id);
     const normalizedFilePath = this.normalizeOptionalClaimPath(args.file_path);
-    const claims = this.claims().filter((claim) => {
-      if (claim.state !== 'handoff_pending') return false;
-      if (typeof claim.expires_at !== 'number' || now < claim.expires_at) return false;
-      if (normalizedFilePath !== null && claim.file_path !== normalizedFilePath) return false;
-      if (
-        args.handoff_observation_id !== undefined &&
-        claim.handoff_observation_id !== args.handoff_observation_id
-      ) {
-        return false;
-      }
-      return true;
-    });
 
-    return this.store.storage.transaction(() => {
-      const audit_observation_ids: number[] = [];
-      const seenBatons = new Set<number>();
-      for (const claim of claims) {
-        if (claim.handoff_observation_id !== null) seenBatons.add(claim.handoff_observation_id);
-        if (claim.handoff_observation_id !== null) {
-          this.store.storage.markClaimWeakExpired({
+    // BEGIN IMMEDIATE so that the read of expired claims and all subsequent
+    // writes are serialized across processes. Without IMMEDIATE, two concurrent
+    // cleanup callers both read the same expired claims in DEFERRED mode, then
+    // both attempt to write — producing duplicate claim-weakened observations.
+    return this.store.storage.transaction(
+      () => {
+        const claims = this.claims().filter((claim) => {
+          if (claim.state !== 'handoff_pending') return false;
+          if (typeof claim.expires_at !== 'number' || now < claim.expires_at) return false;
+          if (normalizedFilePath !== null && claim.file_path !== normalizedFilePath) return false;
+          if (
+            args.handoff_observation_id !== undefined &&
+            claim.handoff_observation_id !== args.handoff_observation_id
+          ) {
+            return false;
+          }
+          return true;
+        });
+        const audit_observation_ids: number[] = [];
+        const seenBatons = new Set<number>();
+        for (const claim of claims) {
+          if (claim.handoff_observation_id !== null) seenBatons.add(claim.handoff_observation_id);
+          if (claim.handoff_observation_id !== null) {
+            this.store.storage.markClaimWeakExpired({
+              task_id: this.task_id,
+              file_path: claim.file_path,
+              session_id: claim.session_id,
+              handoff_observation_id: claim.handoff_observation_id,
+            });
+          }
+          const auditObservationId = this.store.addObservation({
+            session_id: args.session_id,
+            kind: 'claim-weakened',
+            content: `claim ${claim.file_path} downgraded to weak_expired from quota-pending owner ${claim.session_id}`,
             task_id: this.task_id,
-            file_path: claim.file_path,
-            session_id: claim.session_id,
-            handoff_observation_id: claim.handoff_observation_id,
+            reply_to: claim.handoff_observation_id,
+            metadata: {
+              kind: 'claim-weakened',
+              file_path: claim.file_path,
+              previous_session_id: claim.session_id,
+              ownership_strength: 'weak',
+              state: 'weak_expired',
+              reason: 'quota_pending_expired',
+              handoff_observation_id: claim.handoff_observation_id,
+              previous_claimed_at: claim.claimed_at,
+              expires_at: claim.expires_at,
+            },
+          });
+          audit_observation_ids.push(auditObservationId);
+          recordReflexion(this.store, {
+            session_id: args.session_id,
+            task_id: this.task_id,
+            kind: 'rollback',
+            action: 'quota claim released',
+            observation_summary: `quota claim rolled back to weak_expired for task ${this.task_id}`,
+            reflection: 'expired quota claims should be weakened before another agent proceeds',
+            source_kind: 'claim-weakened',
+            source_observation_id: auditObservationId,
+            idempotency_key: `quota-release:${this.task_id}:${claim.file_path}:${claim.session_id}:${claim.handoff_observation_id ?? 'none'}`,
+            reply_to: claim.handoff_observation_id,
+            now,
+            tags: ['quota', 'claim'],
           });
         }
-        const auditObservationId = this.store.addObservation({
-          session_id: args.session_id,
-          kind: 'claim-weakened',
-          content: `claim ${claim.file_path} downgraded to weak_expired from quota-pending owner ${claim.session_id}`,
+        for (const batonId of seenBatons) {
+          this.expireQuotaBatonIfPending(batonId, now);
+        }
+        this.store.storage.touchTask(this.task_id, now);
+        return {
+          status: 'released_expired',
           task_id: this.task_id,
-          reply_to: claim.handoff_observation_id,
-          metadata: {
-            kind: 'claim-weakened',
+          released_claims: claims.map((claim) => ({
             file_path: claim.file_path,
             previous_session_id: claim.session_id,
-            ownership_strength: 'weak',
-            state: 'weak_expired',
-            reason: 'quota_pending_expired',
             handoff_observation_id: claim.handoff_observation_id,
-            previous_claimed_at: claim.claimed_at,
-            expires_at: claim.expires_at,
-          },
-        });
-        audit_observation_ids.push(auditObservationId);
-        recordReflexion(this.store, {
-          session_id: args.session_id,
-          task_id: this.task_id,
-          kind: 'rollback',
-          action: 'quota claim released',
-          observation_summary: `quota claim rolled back to weak_expired for task ${this.task_id}`,
-          reflection: 'expired quota claims should be weakened before another agent proceeds',
-          source_kind: 'claim-weakened',
-          source_observation_id: auditObservationId,
-          idempotency_key: `quota-release:${this.task_id}:${claim.file_path}:${claim.session_id}:${claim.handoff_observation_id ?? 'none'}`,
-          reply_to: claim.handoff_observation_id,
-          now,
-          tags: ['quota', 'claim'],
-        });
-      }
-      for (const batonId of seenBatons) {
-        this.expireQuotaBatonIfPending(batonId, now);
-      }
-      this.store.storage.touchTask(this.task_id, now);
-      return {
-        status: 'released_expired',
-        task_id: this.task_id,
-        released_claims: claims.map((claim) => ({
-          file_path: claim.file_path,
-          previous_session_id: claim.session_id,
-          handoff_observation_id: claim.handoff_observation_id,
-          state: 'weak_expired' as const,
-        })),
-        audit_observation_ids,
-      };
-    });
+            state: 'weak_expired' as const,
+          })),
+          audit_observation_ids,
+        };
+      },
+      { immediate: true },
+    );
   }
 
   private assertTaskExists(): void {

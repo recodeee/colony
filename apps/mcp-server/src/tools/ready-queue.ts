@@ -16,6 +16,7 @@ import {
 import type { ObservationRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { parseMeta } from './_meta.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { attemptClaimPlanSubtask } from './plan.js';
 import {
@@ -1523,16 +1524,6 @@ function readStringArray(value: unknown): string[] {
 
 function countOverlap(files: string[], scope: Set<string>): number {
   return files.filter((file) => scope.has(file)).length;
-}
-
-function parseMeta(raw: string | null): Record<string, unknown> {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
 }
 
 function buildReasoning(args: {

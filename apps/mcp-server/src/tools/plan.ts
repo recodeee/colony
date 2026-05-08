@@ -35,6 +35,7 @@ import {
 } from '@colony/spec';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { parseMeta } from './_meta.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { withPlanPublishGuidance } from './plan-output.js';
 import { buildPlanValidationSummary } from './plan-validation-summary.js';
@@ -1159,13 +1160,7 @@ function latestSubtaskCompletedAt(
   for (const task of siblingTasks) {
     const claims = store.storage.taskObservationsByKind(task.id, 'plan-subtask-claim', 100);
     for (const row of claims) {
-      if (!row.metadata) continue;
-      let parsed: { status?: unknown; completed_at?: unknown };
-      try {
-        parsed = JSON.parse(row.metadata) as typeof parsed;
-      } catch {
-        continue;
-      }
+      const parsed = parseMeta(row.metadata);
       if (parsed.status !== 'completed') continue;
       const ts =
         typeof parsed.completed_at === 'number' && Number.isFinite(parsed.completed_at)
@@ -1185,12 +1180,10 @@ function readPlanConfig(
   // taskObservationsByKind returns DESC by ts; latest config wins.
   const latest = rows[0];
   if (!latest?.metadata) return null;
-  try {
-    const parsed = JSON.parse(latest.metadata) as { auto_archive?: unknown };
-    return { auto_archive: Boolean(parsed.auto_archive) };
-  } catch {
-    return null;
-  }
+  const parsed = parseMeta(latest.metadata);
+  // parseMeta returns {} for malformed JSON; treat that the same as null (no config).
+  if (Object.keys(parsed).length === 0) return null;
+  return { auto_archive: Boolean(parsed.auto_archive) };
 }
 
 function readPlanSubtasks(store: MemoryStore, planSlug: string): SubtaskInfo[] {

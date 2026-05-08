@@ -1566,6 +1566,22 @@ export class Storage {
       .all(limit) as TaskRow[];
   }
 
+  /**
+   * Tasks rooted at `repoRoot` whose `branch` is one of `PROTECTED_BRANCH_NAMES`.
+   * Backed by the existing `UNIQUE(repo_root, branch)` index on `tasks`.
+   * Used by the PreToolUse hook to detect protected-branch claim conflicts
+   * without scanning the full task table on every editor tool call.
+   */
+  listProtectedBranchTasksByRepo(repoRoot: string): TaskRow[] {
+    const names = Array.from(PROTECTED_BRANCH_NAMES);
+    const placeholders = names.map(() => '?').join(', ');
+    return this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE repo_root = ? AND branch IN (${placeholders}) ORDER BY updated_at DESC`,
+      )
+      .all(repoRoot, ...names) as TaskRow[];
+  }
+
   touchTask(id: number, ts = Date.now()): void {
     this.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(ts, id);
   }
@@ -2399,9 +2415,18 @@ export class Storage {
     return row.t ?? 0;
   }
 
-  /** Run a function inside a SQLite transaction. All-or-nothing. */
-  transaction<T>(fn: () => T): T {
-    return this.db.transaction(fn)();
+  /**
+   * Run a function inside a SQLite transaction. All-or-nothing.
+   *
+   * Pass `{ immediate: true }` to use BEGIN IMMEDIATE instead of the default
+   * BEGIN DEFERRED. IMMEDIATE acquires the write lock at transaction start,
+   * which prevents read-then-write races when two callers both read the same
+   * rows and then try to modify them (e.g. claim cleanup loops running in
+   * parallel processes).
+   */
+  transaction<T>(fn: () => T, options?: { immediate?: boolean }): T {
+    const txFn = this.db.transaction(fn);
+    return options?.immediate ? txFn.immediate() : txFn();
   }
 
   // --- foraging food sources (indexed <repo_root>/examples/<name>) ---
