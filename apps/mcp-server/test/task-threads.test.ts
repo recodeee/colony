@@ -1554,7 +1554,9 @@ describe('task_claim_file — protected-branch guard', () => {
       arguments: { task_id: thread.task_id, session_id: 'S1', file_path: '/repo/src/index.ts' },
     });
     expect(res.isError).toBe(true);
-    const body = JSON.parse((res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}');
+    const body = JSON.parse(
+      (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}',
+    );
     expect(body.code).toBe(TASK_THREAD_ERROR_CODES.PROTECTED_BRANCH_CLAIM_REJECTED);
     // No claim row written.
     expect(guardedStore.storage.getClaim(thread.task_id, '/repo/src/index.ts')).toBeFalsy();
@@ -1572,7 +1574,9 @@ describe('task_claim_file — protected-branch guard', () => {
       arguments: { task_id: thread.task_id, session_id: 'S2', file_path: '/repo/src/index.ts' },
     });
     expect(res.isError).toBeFalsy();
-    const body = JSON.parse((res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}');
+    const body = JSON.parse(
+      (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}',
+    );
     expect(body.claim_status).toBe('claimed');
   });
 });
