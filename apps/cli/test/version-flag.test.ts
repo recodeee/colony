@@ -13,7 +13,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, '..', 'dist', 'index.js');
 
 function runCli(flag: string): { status: number; stdout: string; stderr: string } {
-  const result = spawnSync('node', [DIST, flag], { encoding: 'utf8', timeout: 10_000 });
+  const result = spawnSync('node', [DIST, flag], {
+    encoding: 'utf8',
+    env: { ...process.env, COLONY_SKIP_AUTO_BUILD: '1' },
+    timeout: 10_000,
+  });
   return {
     status: result.status ?? -1,
     stdout: (result.stdout ?? '').trim(),

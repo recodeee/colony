@@ -36,7 +36,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch --onSuccess \"node dist/index.js\"",
-    "test": "vitest run",
+    "test": "pnpm run build && vitest run",
     "typecheck": "tsc --noEmit",
     "stage-publish": "node scripts/prepack.mjs",
     "prepack": "node scripts/prepack.mjs",
