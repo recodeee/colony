@@ -1,7 +1,6 @@
 ---
 "@colony/hooks": patch
 "@colony/foraging": patch
-"@colony/mcp-server": patch
 ---
 
 Surface silent `catch {}` failures to stderr (rule #9).

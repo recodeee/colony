@@ -527,7 +527,9 @@ export async function buildSuggestionPreface(
       min_similarity: thresholds.SIMILARITY_FLOOR,
     });
   } catch (err) {
-    console.error(`[colony] buildSuggestionPreface findSimilarTasks: ${(err as Error)?.message ?? err}`);
+    console.error(
+      `[colony] buildSuggestionPreface findSimilarTasks: ${(err as Error)?.message ?? err}`,
+    );
     return '';
   }
   const top = similarTasks[0];
@@ -537,7 +539,9 @@ export async function buildSuggestionPreface(
   try {
     payload = core.buildSuggestionPayload(store, similarTasks);
   } catch (err) {
-    console.error(`[colony] buildSuggestionPreface buildSuggestionPayload: ${(err as Error)?.message ?? err}`);
+    console.error(
+      `[colony] buildSuggestionPreface buildSuggestionPayload: ${(err as Error)?.message ?? err}`,
+    );
     return '';
   }
   if (!isSuggestionPayload(payload)) return '';

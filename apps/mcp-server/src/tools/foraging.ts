@@ -98,7 +98,9 @@ function enrichForagingHits(
     try {
       metadataById.set(row.id, JSON.parse(row.metadata) as Record<string, unknown>);
     } catch (err) {
-      process.stderr.write(`[colony] enrichForagingHits: observation ${row.id} metadata parse failed: ${(err as Error)?.message ?? err}\n`);
+      process.stderr.write(
+        `[colony] enrichForagingHits: observation ${row.id} metadata parse failed: ${(err as Error)?.message ?? err}\n`,
+      );
     }
   }
   return hits.map((h) => {
