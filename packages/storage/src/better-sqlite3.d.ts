@@ -15,6 +15,14 @@ declare module 'better-sqlite3' {
       run(...params: unknown[]): RunResult;
     }
 
+    interface Transaction<TArgs extends unknown[], TResult> {
+      (...args: TArgs): TResult;
+      default(...args: TArgs): TResult;
+      deferred(...args: TArgs): TResult;
+      immediate(...args: TArgs): TResult;
+      exclusive(...args: TArgs): TResult;
+    }
+
     interface Database {
       close(): void;
       exec(source: string): this;
@@ -22,7 +30,7 @@ declare module 'better-sqlite3' {
       prepare(source: string): Statement;
       transaction<TArgs extends unknown[], TResult>(
         fn: (...args: TArgs) => TResult,
-      ): (...args: TArgs) => TResult;
+      ): Transaction<TArgs, TResult>;
     }
   }
 
