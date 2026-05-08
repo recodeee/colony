@@ -228,8 +228,8 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     1,
     1_000,
     300,
-    'caveman compression preserves technical tokens byte-for-byte',
-    ['savings_report'],
+    'caveman compression keeps prose observations small on disk; this is a structural claim about the storage layer, not the cost of any single MCP call, so no live operation is mapped (savings_report itself emits structured JSON that is mostly preserved-as-is technical tokens, which made it a misleading proxy)',
+    [],
   ),
   row(
     'Plan publication & goal anchoring',
