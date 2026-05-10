@@ -1039,6 +1039,9 @@ def main() -> int:
     repo_root = Path(args.repo).resolve()
 
     if args.history is not None:
+        if args.gain:
+            print("--gain has no effect with --history (history report uses its own format)", file=sys.stderr)
+            return 64
         sessions = discover_sessions(repo_root, projects, codex_root, args.history)
         reports: list[dict] = []
         for j in sessions:

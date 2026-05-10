@@ -72,8 +72,10 @@ session at 95% cache hit can be cheaper than a 10M-ctx session at 0%.
 | `no-claim-coverage` | 60%+ of tokens unattributed (pre-task + protected-branch tasks with no claims) | start an agent lane and claim files early so attribution covers the bulk of the session |
 
 Suggestions are tagged with **streak counts** (`[med ×3]`) when the same
-pattern fired in the prior cached session reports. A streak ≥ 2 means the same
-issue is recurring across sessions — fix it once, save it forever.
+pattern fired in this session **plus** prior cached sessions. The number
+counts total sessions in which the pattern appeared, including the current
+one — so `×3` means "this + the last 2 sessions." Streak ≥ 2 means the same
+issue is recurring; fix it once, save it forever.
 
 `--history` adds:
 - a TREND bar chart of billable-eq across the N sessions
