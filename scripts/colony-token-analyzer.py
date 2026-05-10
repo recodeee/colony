@@ -451,6 +451,89 @@ def render_human(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tu
     return "\n".join(out)
 
 
+def render_gain(session_id: str, jsonl: Path, windows: list[TaskWindow], all_turns: list[Turn], suggestions: list[dict]) -> str:
+    # Marketing-style "colony gain" report — same data as render_human, framed
+    # around savings + leaderboard. Mirrors `rtk gain`.
+    out: list[str] = []
+    if not all_turns:
+        return "  no assistant turns to report"
+
+    input_t = sum(t.input_tokens for t in all_turns)
+    cc_t = sum(t.cache_creation for t in all_turns)
+    cr_t = sum(t.cache_read for t in all_turns)
+    out_t = sum(t.output_tokens for t in all_turns)
+    ctx_total = input_t + cc_t + cr_t + out_t
+
+    bill = input_t * 1.0 + cc_t * 1.25 + cr_t * 0.1 + out_t * 5.0
+    no_cache_bill = (input_t + cc_t + cr_t) * 1.0 + out_t * 5.0
+    saved = max(0.0, no_cache_bill - bill)
+    saved_pct = (saved / no_cache_bill * 100) if no_cache_bill else 0.0
+    cache_share = (cr_t / max(1, cr_t + cc_t + input_t)) * 100
+
+    duration_min = (all_turns[-1].ts_ms - all_turns[0].ts_ms) / 60000
+
+    out.append("")
+    out.append("  ╭───────────────────────────────────────────────────────────────╮")
+    out.append("  │  COLONY · session gain                                        │")
+    out.append("  ╰───────────────────────────────────────────────────────────────╯")
+    out.append("")
+    out.append(f"   {fmt_int(ctx_total):>9}  ctx tokens routed       {duration_min:>6.1f}  min wall-clock")
+    out.append(f"   {fmt_int(int(bill)):>9}  billable-equivalent     {len(all_turns):>6}  assistant turns")
+    out.append(f"   {fmt_int(int(saved)):>9}  saved by cache hits     {saved_pct:>5.1f}%  vs no-cache")
+    out.append("")
+
+    sorted_w = sorted([w for w in windows if w.turns], key=lambda x: x.billable_equivalent, reverse=True)
+    total_bill = sum(w.billable_equivalent for w in sorted_w) or 1
+    if sorted_w:
+        out.append("  TOP TASKS · by cost")
+        max_bill = sorted_w[0].billable_equivalent or 1
+        for i, w in enumerate(sorted_w[:5]):
+            mark = "★" if i < 2 else "·"
+            label = f"#{w.task_id} {w.title}"[:38]
+            bar_w = int(w.billable_equivalent / max_bill * 18)
+            bar = "█" * bar_w + "░" * (18 - bar_w)
+            pct = w.billable_equivalent / total_bill * 100
+            out.append(
+                f"   {mark}  {label:<38}  {fmt_int(int(w.billable_equivalent)):>7}  "
+                f"{bar} {pct:>4.0f}%"
+            )
+        out.append("")
+
+    wins: list[str] = []
+    if cache_share >= 80:
+        wins.append(f"{cache_share:.0f}% cache reuse, well-warmed prompts")
+    elif cache_share >= 50:
+        wins.append(f"{cache_share:.0f}% cache reuse")
+    high_cache = [w for w in sorted_w if w.cache_hit_ratio >= 0.95 and len(w.turns) >= 5]
+    if high_cache:
+        wins.append(f"{len(high_cache)} task(s) at 95%+ cache hit")
+    files_total = sum(len(set(w.claimed_files)) for w in sorted_w)
+    if files_total >= 5:
+        wins.append(f"{files_total} files cleanly attributed")
+    if saved >= 500_000:
+        wins.append(f"{fmt_int(int(saved))} input-equiv saved by cache")
+
+    opps = [f"[{s['severity']}] {s['detail']}" for s in suggestions]
+
+    if wins or opps:
+        out.append(f"  {'WINS':<34}  {'OPPORTUNITIES':<32}")
+        rows = max(len(wins), len(opps))
+        for i in range(rows):
+            w = wins[i] if i < len(wins) else ""
+            o = opps[i] if i < len(opps) else ""
+            w_line = (f"✓ {w}")[:34] if w else ""
+            o_line = (f"→ {o}")[:36] if o else ""
+            out.append(f"   {w_line:<34}   {o_line}")
+        out.append("")
+
+    if suggestions:
+        out.append(f"  next session → {suggestions[0]['fix']}")
+    else:
+        out.append("  next session → no patterns detected; keep going")
+    out.append("")
+    return "\n".join(out)
+
+
 def render_json(session_id: str, jsonl: Path, windows: list[TaskWindow], all_turns: list[Turn], suggestions: list[dict]) -> str:
     payload = {
         "session_id": session_id,
@@ -491,6 +574,7 @@ def main() -> int:
     p.add_argument("--db", default=str(DEFAULT_DB), help=f"Colony SQLite path (default: {DEFAULT_DB})")
     p.add_argument("--projects-dir", default=str(DEFAULT_PROJECTS), help="Claude Code projects dir")
     p.add_argument("--json", action="store_true", help="Emit JSON instead of human report")
+    p.add_argument("--gain", action="store_true", help="Render marketing-style gain report (mirrors `rtk gain`)")
     args = p.parse_args()
 
     projects = Path(args.projects_dir).expanduser()
@@ -520,6 +604,8 @@ def main() -> int:
 
     if args.json:
         print(render_json(session_id, jsonl, windows, turns, suggestions))
+    elif args.gain:
+        print(render_gain(session_id, jsonl, windows, turns, suggestions))
     else:
         print(render_human(session_id, jsonl, windows, turns, suggestions))
     return 0

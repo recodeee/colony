@@ -32,8 +32,14 @@ claim names a different task. Turns before the first claim get a synthetic
    ```bash
    python3 scripts/colony-token-analyzer.py --latest
    python3 scripts/colony-token-analyzer.py --session <uuid>
+   python3 scripts/colony-token-analyzer.py --latest --gain   # marketing-style
    python3 scripts/colony-token-analyzer.py --latest --json   # for piping
    ```
+
+   `--gain` mirrors `rtk gain`: hero stats (ctx, billable-eq, savings vs
+   no-cache), a TOP TASKS leaderboard with bars, and a WINS / OPPORTUNITIES
+   side-by-side. Use it when you want a glanceable session report rather than
+   a debug-style table.
 3. Read the report. The shape is:
    - **header** — session id, JSONL path, turns, `ctx` tokens (raw context
      volume), `bill-eq` tokens (cost-weighted: cache_read ×0.1, input ×1,
