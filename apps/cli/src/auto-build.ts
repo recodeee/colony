@@ -104,7 +104,7 @@ export function maybeReexecAfterAutoBuild({
   if (!shouldAutoBuild({ distEntry, sourceRoots })) return { ran: false, reason: 'fresh' };
 
   stderr.write('colony: local sources changed; rebuilding CLI dist...\n');
-  const build = spawn('pnpm', ['--filter', '@imdeadpool/colony-cli', 'build'], {
+  const build = spawn('pnpm', ['--filter', './apps/cli', 'build'], {
     cwd: repoRoot,
     stdio: 'inherit',
     env: { ...env, COLONY_SKIP_AUTO_BUILD: '1' },
