@@ -764,6 +764,75 @@ describe('colony health payload', () => {
     );
   });
 
+  it('does not tell agents to reclaim when branch telemetry drifts from matching claims', () => {
+    const branchDetectorMismatchStats: ClaimBeforeEditStats = {
+      edit_tool_calls: 12,
+      edits_with_file_path: 12,
+      edits_claimed_before: 0,
+      claim_miss_reasons: {
+        no_claim_for_file: 0,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 12,
+        path_mismatch: 0,
+        worktree_path_mismatch: 0,
+        pre_tool_use_missing: 0,
+      },
+      nearest_claim_examples: [
+        nearestClaimExample({
+          reason: 'branch_mismatch',
+          edit_session_id: 'codex-session',
+          claim_session_id: 'codex-session',
+          edit_file_path: 'apps/cli/src/commands/health.ts',
+          claim_file_path: 'apps/cli/src/commands/health.ts',
+          edit_branch: 'main',
+          claim_branch: 'agent/codex/fix-health',
+          edit_worktree_path: '/repo/.omx/agent-worktrees/work',
+          claim_worktree_path: '/repo/.omx/agent-worktrees/work',
+          claim_ts: NOW - 1_000,
+          relation: {
+            same_file_path: true,
+            same_session_id: true,
+            same_repo_root: true,
+            same_branch: false,
+            same_worktree_path: true,
+            claim_before_edit: true,
+          },
+        }),
+      ],
+      pre_tool_use_signals: 12,
+    };
+
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: Array.from({ length: 12 }, (_, index) =>
+          call(
+            index + 1,
+            'codex-session',
+            'mcp__colony__task_claim_file',
+            NOW - 60_000 + index,
+          ),
+        ),
+        claimBeforeEdit: branchDetectorMismatchStats,
+        claimBeforeEditStatsBySince: () => branchDetectorMismatchStats,
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.readiness_summary.execution_safety).toMatchObject({
+      status: 'ok',
+      root_cause: {
+        kind: 'lifecycle_branch_detection_mismatch',
+        summary: expect.stringContaining('branch detector mismatch'),
+      },
+    });
+    expect(payload.task_claim_file_before_edits.install_hint).toBeNull();
+    expect(payload.action_hints).not.toContainEqual(
+      expect.objectContaining({ metric: 'claim-before-edit' }),
+    );
+  });
+
   it('reports recent claim-before-edit as insufficient sample below RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
