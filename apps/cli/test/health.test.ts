@@ -690,6 +690,80 @@ describe('colony health payload', () => {
     expect(text).not.toContain('Lifecycle bridge missing');
   });
 
+  it('does not report stale branch mismatch as active when recent PreToolUse is alive', () => {
+    const recentSince = NOW - 3_600_000;
+    const staleBranchMismatchStats: ClaimBeforeEditStats = {
+      edit_tool_calls: 250,
+      edits_with_file_path: 250,
+      edits_claimed_before: 93,
+      claim_miss_reasons: {
+        no_claim_for_file: 0,
+        claim_after_edit: 0,
+        session_id_mismatch: 0,
+        repo_root_mismatch: 0,
+        branch_mismatch: 157,
+        path_mismatch: 0,
+        worktree_path_mismatch: 0,
+        pre_tool_use_missing: 0,
+      },
+      pre_tool_use_signals: 440,
+    };
+    const recentBridgeSignalsOnly: ClaimBeforeEditStats = {
+      edit_tool_calls: 0,
+      edits_with_file_path: 0,
+      edits_claimed_before: 0,
+      claim_miss_reasons: {
+        pre_tool_use_missing: 0,
+        branch_mismatch: 0,
+      },
+      pre_tool_use_signals: 7,
+    };
+
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          ...Array.from({ length: 11 }, (_, index) =>
+            call(
+              index + 1,
+              'codex-current-session',
+              'mcp__colony__task_claim_file',
+              SINCE + 1_000 + index,
+            ),
+          ),
+          ...Array.from({ length: 7 }, (_, index) =>
+            call(
+              index + 20,
+              'codex-current-session',
+              'mcp__colony__task_claim_file',
+              NOW - 60_000 + index,
+            ),
+          ),
+        ],
+        claimBeforeEdit: staleBranchMismatchStats,
+        claimBeforeEditStatsBySince: (since) =>
+          since >= recentSince ? recentBridgeSignalsOnly : staleBranchMismatchStats,
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.task_claim_file_before_edits).toMatchObject({
+      old_telemetry_pollution: true,
+      recent_hook_capable_edits: 0,
+      recent_pre_tool_use_signals: 7,
+      recent_pre_tool_use_missing: 0,
+    });
+    expect(payload.readiness_summary.execution_safety).toMatchObject({
+      status: 'ok',
+      root_cause: {
+        kind: 'old_telemetry_pollution',
+        summary: expect.stringContaining('older edit telemetry'),
+      },
+    });
+    expect(payload.action_hints).not.toContainEqual(
+      expect.objectContaining({ metric: 'claim-before-edit' }),
+    );
+  });
+
   it('reports recent claim-before-edit as insufficient sample below RECENT_CLAIM_BEFORE_EDIT_MIN_SAMPLE', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
@@ -3715,6 +3789,13 @@ function fakeStorage(args: {
           }
         : undefined,
     listClaims: (taskId: number) => claimsByTask[taskId] ?? [],
+    listParticipants: (taskId: number) => {
+      const task = tasks.find((candidate) => candidate.id === taskId);
+      const isPlanRoot = task?.branch.startsWith('spec/') && !task.branch.includes('/sub-');
+      return isPlanRoot
+        ? [{ task_id: taskId, session_id: 'queen-session', agent: 'queen', joined_at: NOW - 90_000 }]
+        : [];
+    },
     taskTimeline: (taskId: number) => observationsByTask[taskId] ?? [],
     taskObservationsByKind: (taskId: number, kind: string) =>
       (observationsByTask[taskId] ?? []).filter((row) => row.kind === kind),
