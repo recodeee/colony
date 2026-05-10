@@ -27,6 +27,7 @@ from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".colony" / "data.db"
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
+DEFAULT_CODEX = Path.home() / ".codex" / "sessions"
 
 
 # ---------------------------------------------------------------------------
@@ -94,29 +95,178 @@ class TaskWindow:
 # ---------------------------------------------------------------------------
 
 
-def find_jsonl(session_id: str, projects: Path) -> Path | None:
+def detect_format(path: Path) -> str:
+    """Return 'codex' if the JSONL is a Codex rollout, 'claude' if it's a Claude
+    Code session transcript, 'unknown' otherwise. Probes the first few lines."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(8):
+                raw = fh.readline()
+                if not raw:
+                    break
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "session_meta":
+                    return "codex"
+                if obj.get("type") in ("last-prompt", "permission-mode", "user", "assistant"):
+                    return "claude"
+                if "sessionId" in obj:
+                    return "claude"
+    except OSError:
+        pass
+    return "unknown"
+
+
+def codex_session_meta(path: Path) -> dict | None:
+    """First line of a Codex rollout is `session_meta` carrying id, cwd, model.
+    Returns the payload dict or None."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(4):
+                raw = fh.readline()
+                if not raw:
+                    break
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "session_meta":
+                    return obj.get("payload") or {}
+    except OSError:
+        return None
+    return None
+
+
+def find_jsonl(session_id: str, projects: Path, codex_root: Path) -> Path | None:
     matches = list(projects.glob(f"*/{session_id}.jsonl"))
-    return matches[0] if matches else None
+    if matches:
+        return matches[0]
+    cd = list(codex_root.glob(f"**/rollout-*-{session_id}.jsonl"))
+    return cd[0] if cd else None
 
 
-def latest_session_jsonl(repo_root: Path, projects: Path) -> Path | None:
-    # Walk up from repo_root so a Claude Code session running inside a
-    # `.omc/agent-worktrees/<branch>/` worktree still finds the encoded path
-    # for the primary checkout (or any ancestor whose JSONL dir exists).
+def _repo_ancestors(repo_root: Path) -> list[str]:
+    out: list[str] = []
     cur = repo_root.resolve()
     while True:
-        enc = "-" + str(cur).lstrip("/").replace("/", "-")
-        candidates = list((projects / enc).glob("*.jsonl"))
-        if candidates:
-            return max(candidates, key=lambda p: p.stat().st_mtime)
+        out.append(str(cur))
         if cur.parent == cur:
-            return None
+            return out
         cur = cur.parent
+
+
+def latest_session_jsonl(repo_root: Path, projects: Path, codex_root: Path) -> Path | None:
+    # Walk up from repo_root so a session running inside an agent worktree
+    # still finds the JSONL dir for the primary checkout. Search both Claude
+    # Code projects and Codex rollouts (filtered by session_meta.cwd).
+    candidates: list[Path] = []
+    for ancestor in _repo_ancestors(repo_root):
+        enc = "-" + ancestor.lstrip("/").replace("/", "-")
+        candidates.extend((projects / enc).glob("*.jsonl"))
+
+    ancestors_set = set(_repo_ancestors(repo_root))
+    if codex_root.is_dir():
+        recent = __import__("time").time() - 30 * 86400
+        for rollout in codex_root.glob("**/rollout-*.jsonl"):
+            try:
+                if rollout.stat().st_mtime < recent:
+                    continue
+            except OSError:
+                continue
+            meta = codex_session_meta(rollout)
+            if not meta:
+                continue
+            if meta.get("cwd") in ancestors_set:
+                candidates.append(rollout)
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def iso_to_ms(iso: str) -> int:
     iso = iso.replace("Z", "+00:00")
     return int(dt.datetime.fromisoformat(iso).timestamp() * 1000)
+
+
+def parse_codex_jsonl(path: Path) -> list[Turn]:
+    """Codex rollouts emit token_count `event_msg` events with both
+    `last_token_usage` (per-call delta) and `total_token_usage` (cumulative).
+    Each event seems to be logged twice consecutively, so we dedupe by
+    cumulative-total stagnation. Cached input is reported as a subset of the
+    input bucket; we split it into our (input_tokens, cache_read) shape."""
+    turns: list[Turn] = []
+    last_total_in = -1
+    last_total_out = -1
+    try:
+        fh = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return turns
+    with fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") != "event_msg":
+                continue
+            payload = obj.get("payload") or {}
+            if payload.get("type") != "token_count":
+                continue
+            info = payload.get("info") or {}
+            if not info:
+                continue
+            total = info.get("total_token_usage") or {}
+            t_in = int(total.get("input_tokens", 0) or 0)
+            t_out = int(total.get("output_tokens", 0) or 0)
+            if t_in == last_total_in and t_out == last_total_out:
+                continue
+            last_total_in, last_total_out = t_in, t_out
+            ts = obj.get("timestamp")
+            if not ts:
+                continue
+            try:
+                ts_ms = iso_to_ms(ts)
+            except ValueError:
+                continue
+            last = info.get("last_token_usage") or {}
+            input_total = int(last.get("input_tokens", 0) or 0)
+            cached = int(last.get("cached_input_tokens", 0) or 0)
+            output = int(last.get("output_tokens", 0) or 0)
+            reasoning = int(last.get("reasoning_output_tokens", 0) or 0)
+            turns.append(
+                Turn(
+                    ts_ms=ts_ms,
+                    model="codex",
+                    input_tokens=max(0, input_total - cached),
+                    cache_creation=0,
+                    cache_read=cached,
+                    output_tokens=output + reasoning,
+                    tool_calls=[],
+                )
+            )
+    turns.sort(key=lambda t: t.ts_ms)
+    return turns
+
+
+def parse_session(path: Path) -> tuple[list[Turn], str]:
+    fmt = detect_format(path)
+    if fmt == "codex":
+        return parse_codex_jsonl(path), "codex"
+    return parse_jsonl(path), "claude"
+
+
+def session_id_for(path: Path, fmt: str) -> str:
+    if fmt == "codex":
+        meta = codex_session_meta(path)
+        if meta and meta.get("id"):
+            return meta["id"]
+    return path.stem
 
 
 def parse_jsonl(path: Path) -> list[Turn]:
@@ -654,29 +804,33 @@ def main() -> int:
     p.add_argument("--repo", default=os.getcwd(), help="Repo root for --latest (default: cwd)")
     p.add_argument("--db", default=str(DEFAULT_DB), help=f"Colony SQLite path (default: {DEFAULT_DB})")
     p.add_argument("--projects-dir", default=str(DEFAULT_PROJECTS), help="Claude Code projects dir")
+    p.add_argument("--codex-dir", default=str(DEFAULT_CODEX), help="Codex rollouts dir")
     p.add_argument("--json", action="store_true", help="Emit JSON instead of human report")
     p.add_argument("--gain", action="store_true", help="Render marketing-style gain report (mirrors `rtk gain`)")
     args = p.parse_args()
 
     projects = Path(args.projects_dir).expanduser()
+    codex_root = Path(args.codex_dir).expanduser()
     db = Path(args.db).expanduser()
 
     if args.latest:
-        jsonl = latest_session_jsonl(Path(args.repo).resolve(), projects)
+        jsonl = latest_session_jsonl(Path(args.repo).resolve(), projects, codex_root)
         if not jsonl:
-            print(f"no JSONL found under {projects} for repo {args.repo}", file=sys.stderr)
+            print(f"no JSONL found for repo {args.repo}", file=sys.stderr)
             return 2
-        session_id = jsonl.stem
+        fmt = detect_format(jsonl)
+        session_id = session_id_for(jsonl, fmt)
     else:
         session_id = args.session
-        jsonl = find_jsonl(session_id, projects)
+        jsonl = find_jsonl(session_id, projects, codex_root)
         if not jsonl:
-            print(f"no JSONL for session {session_id} under {projects}", file=sys.stderr)
+            print(f"no JSONL for session {session_id}", file=sys.stderr)
             return 2
+        fmt = detect_format(jsonl)
 
-    turns = parse_jsonl(jsonl)
+    turns, _ = parse_session(jsonl)
     if not turns:
-        print(f"no assistant turns with usage in {jsonl}", file=sys.stderr)
+        print(f"no usage events in {jsonl}", file=sys.stderr)
         return 3
 
     session_tasks = fetch_session_tasks(db, session_id)
