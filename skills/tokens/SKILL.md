@@ -35,9 +35,14 @@ claim names a different task. Turns before the first claim get a synthetic
    python3 scripts/colony-token-analyzer.py --latest --json   # for piping
    ```
 3. Read the report. The shape is:
-   - **header** — session id, JSONL path, turns, total tokens, wall-clock
-   - **per-task** — task id, title, turns, tokens, cache hit %, distinct files
+   - **header** — session id, JSONL path, turns, `ctx` tokens (raw context
+     volume), `bill-eq` tokens (cost-weighted: cache_read ×0.1, input ×1,
+     cache_creation ×1.25, output ×5), wall-clock
+   - **per-task** — task id, title, turns, ctx, bill-eq, cache hit %, files
    - **suggestions** — severity-tagged patterns with a one-line fix
+
+Use `bill-eq` to rank by cost; use `ctx` to gauge context pressure. A 60M-ctx
+session at 95% cache hit can be cheaper than a 10M-ctx session at 0%.
 
 ## What the patterns mean
 
@@ -48,7 +53,7 @@ claim names a different task. Turns before the first claim get a synthetic
 | `task_list-overuse` | `task_list` >= 3 and beats `task_ready_for_agent` | task_list is for inventory, not scheduling |
 | `cache-miss` | task with 5+ turns and `cache_read` share <30% | context churn; front-load files once per task |
 | `fragmentation` | 50%+ of turns produce <50 output tokens | many short replies inflate input via state replay |
-| `no-claim-coverage` | 30%+ of tokens spent before first `task_claim_file` | claim earlier so attribution exists for most of the session |
+| `no-claim-coverage` | 60%+ of tokens spent before first `task_claim_file` | claim earlier so attribution exists for most of the session |
 
 ## Output discipline
 

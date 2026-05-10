@@ -48,6 +48,19 @@ class Turn:
     def total(self) -> int:
         return self.input_tokens + self.cache_creation + self.cache_read + self.output_tokens
 
+    @property
+    def billable_equivalent(self) -> float:
+        # Weights normalized to "input token" units using Anthropic's published
+        # ratios for the Opus / Sonnet tier: cache_read ≈ 0.1x input,
+        # cache_creation ≈ 1.25x input, output ≈ 5x input. Lets the user rank
+        # tasks by *cost*, not just context volume.
+        return (
+            self.input_tokens * 1.0
+            + self.cache_creation * 1.25
+            + self.cache_read * 0.1
+            + self.output_tokens * 5.0
+        )
+
 
 @dataclass
 class TaskWindow:
@@ -62,6 +75,10 @@ class TaskWindow:
     @property
     def total_tokens(self) -> int:
         return sum(t.total for t in self.turns)
+
+    @property
+    def billable_equivalent(self) -> float:
+        return sum(t.billable_equivalent for t in self.turns)
 
     @property
     def cache_hit_ratio(self) -> float:
@@ -83,11 +100,18 @@ def find_jsonl(session_id: str, projects: Path) -> Path | None:
 
 
 def latest_session_jsonl(repo_root: Path, projects: Path) -> Path | None:
-    enc = "-" + str(repo_root).lstrip("/").replace("/", "-")
-    candidates = list((projects / enc).glob("*.jsonl"))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    # Walk up from repo_root so a Claude Code session running inside a
+    # `.omc/agent-worktrees/<branch>/` worktree still finds the encoded path
+    # for the primary checkout (or any ancestor whose JSONL dir exists).
+    cur = repo_root.resolve()
+    while True:
+        enc = "-" + str(cur).lstrip("/").replace("/", "-")
+        candidates = list((projects / enc).glob("*.jsonl"))
+        if candidates:
+            return max(candidates, key=lambda p: p.stat().st_mtime)
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
 
 
 def iso_to_ms(iso: str) -> int:
@@ -355,17 +379,19 @@ def detect_patterns(windows: list[TaskWindow], all_turns: list[Turn]) -> list[di
             }
         )
 
-    # 6. Pre-claim token spend (work happening before a task is claimed)
+    # 6. Pre-claim token spend (work happening before a task is claimed). Some
+    # orientation before the first claim is healthy; only flag when the share
+    # is high enough that most of the session is unattributed.
     pre = next((w for w in windows if w.task_id == "pre-claim"), None)
     if pre:
         share = pre.total_tokens / max(1, sum(w.total_tokens for w in windows))
-        if share >= 0.30:
+        if share >= 0.60:
             suggestions.append(
                 {
                     "kind": "no-claim-coverage",
-                    "severity": "high" if share >= 0.60 else "med",
+                    "severity": "high" if share >= 0.85 else "med",
                     "task": "session-wide",
-                    "detail": f"{share*100:.0f}% of tokens spent before any task_claim_file",
+                    "detail": f"{share*100:.0f}% of tokens spent before any task_claim_file ({len(pre.turns)} turns)",
                     "fix": "Claim files earlier so attribution and ownership exist for the bulk of the session.",
                 }
             )
@@ -391,8 +417,9 @@ def render_human(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tu
     total = sum(t.total for t in all_turns)
     out.append(f"session  {session_id}")
     out.append(f"jsonl    {jsonl}")
+    billable = sum(t.billable_equivalent for t in all_turns)
     out.append(f"turns    {len(all_turns)}")
-    out.append(f"tokens   {fmt_int(total)} total")
+    out.append(f"tokens   {fmt_int(total)} ctx · {fmt_int(int(billable))} billable-eq")
     if all_turns:
         first = dt.datetime.fromtimestamp(all_turns[0].ts_ms / 1000, dt.timezone.utc)
         last = dt.datetime.fromtimestamp(all_turns[-1].ts_ms / 1000, dt.timezone.utc)
@@ -401,13 +428,14 @@ def render_human(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tu
 
     out.append("")
     out.append("per-task")
-    out.append(f"  {'task':<32}  {'turns':>5}  {'tokens':>8}  {'cache%':>6}  files")
-    for w in sorted(windows, key=lambda x: x.total_tokens, reverse=True):
+    out.append(f"  {'task':<32}  {'turns':>5}  {'ctx':>8}  {'bill-eq':>8}  {'cache%':>6}  files")
+    for w in sorted(windows, key=lambda x: x.billable_equivalent, reverse=True):
         if not w.turns:
             continue
         label = f"#{w.task_id} {w.title}"[:32]
         out.append(
             f"  {label:<32}  {len(w.turns):>5}  {fmt_int(w.total_tokens):>8}  "
+            f"{fmt_int(int(w.billable_equivalent)):>8}  "
             f"{w.cache_hit_ratio*100:>5.1f}%  {len(set(w.claimed_files))}"
         )
 
@@ -429,6 +457,7 @@ def render_json(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tur
         "jsonl": str(jsonl),
         "turns": len(all_turns),
         "total_tokens": sum(t.total for t in all_turns),
+        "billable_equivalent": int(sum(t.billable_equivalent for t in all_turns)),
         "tasks": [
             {
                 "task_id": w.task_id,
@@ -436,6 +465,7 @@ def render_json(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tur
                 "branch": w.branch,
                 "turns": len(w.turns),
                 "tokens": w.total_tokens,
+                "billable_equivalent": int(w.billable_equivalent),
                 "cache_hit_ratio": round(w.cache_hit_ratio, 4),
                 "claimed_files": sorted(set(w.claimed_files)),
             }
