@@ -53,6 +53,7 @@ const QUOTA_RELAY_EXAMPLE_LIMIT = 5;
 const QUOTA_RELAY_FILE_PREVIEW_LIMIT = 2;
 const DEFAULT_HEALTH_TEXT_LIMIT = 64;
 const DEFAULT_HANDOFF_TTL_MS = 2 * 60 * 60_000;
+const QUEEN_AGENT = 'queen';
 const PLAN_SUBTASK_BRANCH_RE = /^spec\/([a-z0-9-]+)\/sub-(\d+)$/;
 const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
 const TARGET_HIVEMIND_TO_ATTENTION = 0.5;
@@ -338,6 +339,7 @@ interface QueenPlanStateSummary {
 
 interface QueenWaveHealthPayload {
   active_plans: number;
+  non_queen_plan_subtasks: number;
   completed_plans: number;
   archived_plans: number;
   archived_plans_with_remaining_subtasks: number;
@@ -600,6 +602,7 @@ export function buildColonyHealthPayload(
     | 'getSession'
     | 'taskTimeline'
     | 'taskObservationsByKind'
+    | 'listParticipants'
     | 'listProposalsForBranch'
     | 'listReinforcements'
   >,
@@ -1116,8 +1119,11 @@ function readinessSummaryPayload(
     !claimBeforeEdit.codex_rollout_without_bridge &&
     claimBeforeEdit.session_binding_missing === 0 &&
     claimBeforeEdit.root_cause?.kind === 'old_telemetry_pollution' &&
-    claimBeforeEdit.recent_claim_before_edit_rate !== null &&
-    isAtOrAboveTarget(claimBeforeEdit.recent_claim_before_edit_rate, TARGET_CLAIM_BEFORE_EDIT);
+    ((claimBeforeEdit.recent_claim_before_edit_rate !== null &&
+      isAtOrAboveTarget(claimBeforeEdit.recent_claim_before_edit_rate, TARGET_CLAIM_BEFORE_EDIT)) ||
+      (claimBeforeEdit.recent_hook_capable_edits === 0 &&
+        claimBeforeEdit.recent_pre_tool_use_signals > 0 &&
+        claimBeforeEdit.recent_pre_tool_use_missing === 0));
   const executionStatus: ReadinessStatus = onlyOldTelemetryPollution
     ? 'ok'
     : hasLiveContentionFailure ||
@@ -1149,7 +1155,9 @@ function readinessSummaryPayload(
           : 'ok'
       : queen.completed_plans > 0 || queen.archived_plans > 0
         ? 'ok'
-        : 'bad';
+        : queen.non_queen_plan_subtasks > 0
+          ? 'good'
+          : 'bad';
 
   const noteMigration = payload.task_post_vs_omx_notepad;
   const noteStatus: ReadinessStatus =
@@ -2329,9 +2337,14 @@ function lifecycleBridgeRootCause(input: {
     // and Next-fixes guidance match the existing
     // `narrow --hours when checking current bridge state` recovery
     // path instead of demanding another lifecycle bridge install.
+    const recentBridgeAliveWithoutEditSample =
+      input.recent_hook_capable_edits === 0 &&
+      input.recent_pre_tool_use_signals > 0 &&
+      input.recent_pre_tool_use_missing === 0;
     if (
       noFreshBadEdits &&
-      input.recent_hook_capable_edits >= LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS
+      (input.recent_hook_capable_edits >= LIFECYCLE_BRIDGE_MISSING_MIN_HOOK_CAPABLE_EDITS ||
+        recentBridgeAliveWithoutEditSample)
     ) {
       return {
         kind: 'old_telemetry_pollution',
@@ -2785,10 +2798,15 @@ function proposalHealthPayload(
 }
 
 function readyClaimPayload(
-  storage: Pick<Storage, 'taskTimeline'>,
+  storage: Pick<Storage, 'taskTimeline' | 'listParticipants'>,
   tasks: TaskRow[],
 ): ReadyClaimPayload {
-  const subtasks = readPlanSubtasks(storage, tasks);
+  const allSubtasks = readPlanSubtasks(storage, tasks);
+  const queenKeys = queenPlanKeys(storage, tasks);
+  const rootStatusByKey = planRootStatusByKey(tasks);
+  const subtasks = allSubtasks.filter((subtask) =>
+    isReadyClaimPlanKey(planKey(subtask.repo_root, subtask.plan_slug), queenKeys, rootStatusByKey),
+  );
   const byPlan = new Map<string, PlanSubtaskHealth[]>();
   for (const subtask of subtasks) {
     const bucket = byPlan.get(subtask.plan_slug) ?? [];
@@ -3613,7 +3631,8 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
 
   if (
     payload.queen_wave_health.active_plans === 0 &&
-    payload.ready_to_claim_vs_claimed.plan_subtasks === 0
+    payload.ready_to_claim_vs_claimed.plan_subtasks === 0 &&
+    payload.queen_wave_health.non_queen_plan_subtasks === 0
   ) {
     hints.push({
       metric: 'Queen plan activation',
@@ -3812,7 +3831,6 @@ function visibleActionHints(
       (hint) =>
         hint.metric === 'OMX runtime bridge' ||
         hint.metric === 'quota relay accept/release' ||
-        hint.metric === 'Queen activation/claim' ||
         hint.metric === 'Queen ready subtask claim',
     );
   const uniqueHints = (hints: ActionHint[]) => {
@@ -4380,12 +4398,19 @@ function queenPlanStateRank(state: QueenPlanLifecycleState): number {
 }
 
 function queenWaveHealthPayload(
-  storage: Pick<Storage, 'taskTimeline' | 'taskObservationsByKind' | 'listClaims' | 'getSession'>,
+  storage: Pick<
+    Storage,
+    'taskTimeline' | 'taskObservationsByKind' | 'listClaims' | 'getSession' | 'listParticipants'
+  >,
   tasks: TaskRow[],
   options: { now: number; stale_claim_minutes: number },
 ): QueenWaveHealthPayload {
   const plans: QueenWavePlanSummary[] = [];
-  const subtasks = readPlanSubtasks(storage, tasks);
+  const allSubtasks = readPlanSubtasks(storage, tasks);
+  const queenKeys = queenPlanKeys(storage, tasks);
+  const subtasks = allSubtasks.filter((subtask) =>
+    queenKeys.has(planKey(subtask.repo_root, subtask.plan_slug)),
+  );
   const planStates = queenPlanStateSummaries(storage, tasks, subtasks);
   const activePlanSlugs = new Set(
     planStates
@@ -4439,6 +4464,7 @@ function queenWaveHealthPayload(
   );
   return {
     active_plans: plans.length,
+    non_queen_plan_subtasks: allSubtasks.length - subtasks.length,
     completed_plans: planStates.filter((state) => state.state === 'completed').length,
     archived_plans: planStates.filter((state) => state.state === 'archived').length,
     archived_plans_with_remaining_subtasks: planStates.filter(
@@ -4485,6 +4511,68 @@ function queenWaveHealthPayload(
 
 function firstReadyUnclaimedQueenPlan(queen: QueenWaveHealthPayload): QueenWavePlanSummary | null {
   return queen.plans.find((plan) => plan.ready_subtasks > 0 && plan.claimed_subtasks === 0) ?? null;
+}
+
+function queenPlanKeys(
+  storage: Partial<Pick<Storage, 'listParticipants'>>,
+  tasks: TaskRow[],
+): Set<string> {
+  const keys = new Set<string>();
+  const rootKeys = new Set<string>();
+  const listParticipants = storage.listParticipants?.bind(storage);
+  const canReadParticipants = typeof listParticipants === 'function';
+  for (const task of tasks) {
+    const match = task.branch.match(PLAN_ROOT_BRANCH_RE);
+    const planSlug = match?.[1];
+    if (!planSlug) continue;
+    const key = planKey(task.repo_root, planSlug);
+    rootKeys.add(key);
+    if (!canReadParticipants) {
+      keys.add(key);
+      continue;
+    }
+    const hasQueenParticipant = listParticipants(task.id).some(
+      (participant) => participant.agent === QUEEN_AGENT,
+    );
+    if (hasQueenParticipant) keys.add(key);
+  }
+
+  for (const task of tasks) {
+    const match = task.branch.match(PLAN_SUBTASK_BRANCH_RE);
+    const planSlug = match?.[1];
+    if (!planSlug) continue;
+    const key = planKey(task.repo_root, planSlug);
+    if (rootKeys.has(key)) continue;
+    if (!canReadParticipants) {
+      keys.add(key);
+      continue;
+    }
+    const hasQueenParticipant = listParticipants(task.id).some(
+      (participant) => participant.agent === QUEEN_AGENT,
+    );
+    if (hasQueenParticipant) keys.add(key);
+  }
+  return keys;
+}
+
+function planRootStatusByKey(tasks: TaskRow[]): Map<string, string> {
+  const statuses = new Map<string, string>();
+  for (const task of tasks) {
+    const match = task.branch.match(PLAN_ROOT_BRANCH_RE);
+    const planSlug = match?.[1];
+    if (planSlug) statuses.set(planKey(task.repo_root, planSlug), task.status.toLowerCase());
+  }
+  return statuses;
+}
+
+function isReadyClaimPlanKey(
+  key: string,
+  queenKeys: Set<string>,
+  rootStatusByKey: Map<string, string>,
+): boolean {
+  if (!queenKeys.has(key)) return false;
+  const status = rootStatusByKey.get(key);
+  return status !== 'archived' && status !== 'auto-archived';
 }
 
 function planReplacementRecommendation(

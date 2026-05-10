@@ -183,6 +183,43 @@ describe('queen wave health', () => {
     expect(text).toContain('blocked subtasks:                   4');
   });
 
+  it('ignores non-Queen dashboard plans in Queen readiness', () => {
+    store.startSession({ id: 'dashboard-session', ide: 'codex', cwd: repoRoot });
+    publishOrderedPlan({
+      store,
+      plan: colonyAdoptionFixesPlanInput,
+      repo_root: repoRoot,
+      session_id: 'dashboard-session',
+      agent: 'codex',
+      auto_archive: false,
+    });
+
+    const payload = buildColonyHealthPayload(store.storage as never, {
+      since: SINCE,
+      window_hours: 24,
+      now: NOW,
+      codex_sessions_root: NO_CODEX_ROOT,
+    });
+
+    expect(payload.queen_wave_health).toMatchObject({
+      active_plans: 0,
+      non_queen_plan_subtasks: 7,
+      ready_subtasks: 0,
+      claimed_subtasks: 0,
+      blocked_subtasks: 0,
+      plans: [],
+    });
+    expect(payload.ready_to_claim_vs_claimed).toMatchObject({
+      plan_subtasks: 0,
+      ready_to_claim: 0,
+      claimed: 0,
+    });
+    expect(payload.readiness_summary.queen_plan_readiness.status).toBe('good');
+    expect(payload.action_hints).not.toContainEqual(
+      expect.objectContaining({ metric: 'Queen ready subtasks unclaimed' }),
+    );
+  });
+
   it('reports stale-blocked waves as ready after release and unblocked after completion', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(NOW - 5 * 3_600_000);
