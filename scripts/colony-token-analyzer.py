@@ -169,25 +169,51 @@ def parse_jsonl(path: Path) -> list[Turn]:
 # ---------------------------------------------------------------------------
 
 
-def fetch_claims(db: Path, session_id: str) -> list[tuple]:
-    """Returns rows: (task_id, title, branch, file_path, claimed_at)."""
+def fetch_session_tasks(db: Path, session_id: str) -> list[dict]:
+    """One row per task linked to this session, anchored at the earliest signal:
+    claim_at, participant joined_at, or observation ts. The richer linkage is
+    what lets us retroactively attribute pre-claim turns by file path."""
     if not db.exists():
         return []
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         rows = con.execute(
             """
-            SELECT c.task_id, t.title, t.branch, c.file_path, c.claimed_at
-            FROM task_claims c
-            JOIN tasks t ON t.id = c.task_id
-            WHERE c.session_id = ?
-            ORDER BY c.claimed_at ASC
+            WITH events AS (
+              SELECT task_id, claimed_at AS ts FROM task_claims WHERE session_id = ?
+              UNION ALL
+              SELECT task_id, joined_at FROM task_participants WHERE session_id = ?
+              UNION ALL
+              SELECT task_id, ts FROM observations
+              WHERE session_id = ? AND task_id IS NOT NULL
+            ),
+            anchors AS (
+              SELECT task_id, MIN(ts) AS started_ms FROM events GROUP BY task_id
+            )
+            SELECT a.task_id, t.title, t.branch, a.started_ms
+            FROM anchors a JOIN tasks t ON t.id = a.task_id
+            ORDER BY a.started_ms ASC
             """,
-            (session_id,),
+            (session_id, session_id, session_id),
         ).fetchall()
+        files: dict[int, list[str]] = {}
+        for tid, fp in con.execute(
+            "SELECT task_id, file_path FROM task_claims WHERE session_id = ?",
+            (session_id,),
+        ).fetchall():
+            files.setdefault(tid, []).append(fp)
     finally:
         con.close()
-    return rows
+    return [
+        {
+            "task_id": r[0],
+            "title": r[1],
+            "branch": r[2],
+            "started_ms": r[3],
+            "files": files.get(r[0], []),
+        }
+        for r in rows
+    ]
 
 
 def session_window(db: Path, session_id: str) -> tuple[int, int] | None:
@@ -212,65 +238,112 @@ def session_window(db: Path, session_id: str) -> tuple[int, int] | None:
 # ---------------------------------------------------------------------------
 
 
-def build_windows(claims: list[tuple], turns: list[Turn]) -> list[TaskWindow]:
-    """A window opens at the first claim for a task and closes when the next
-    claim names a *different* task. Pre-first-claim turns get bucketed into a
-    synthetic 'uncategorized' window."""
+def build_windows(session_tasks: list[dict], turns: list[Turn]) -> list[TaskWindow]:
+    """One window per (session, task), anchored at the task's first signal in
+    this session. Turns before the first signal go to a 'pre-task' bucket that
+    is then deflated by retroactive file-path attribution: any pre-task turn
+    that touches a later-claimed file gets reassigned to that task."""
 
     if not turns:
         return []
     end_ms = turns[-1].ts_ms + 1
 
+    if not session_tasks:
+        only = TaskWindow(
+            task_id="—",
+            title="(no Colony task links found in this session)",
+            branch="—",
+            start_ms=turns[0].ts_ms,
+            end_ms=end_ms,
+        )
+        only.turns.extend(turns)
+        return [only]
+
     windows: list[TaskWindow] = []
-    if not claims:
+    first_started = session_tasks[0]["started_ms"]
+    pre: TaskWindow | None = None
+    if turns[0].ts_ms < first_started:
+        pre = TaskWindow(
+            task_id="pre-task",
+            title="(turns before any task link)",
+            branch="—",
+            start_ms=turns[0].ts_ms,
+            end_ms=first_started,
+        )
+        windows.append(pre)
+
+    for i, st in enumerate(session_tasks):
+        next_start = (
+            session_tasks[i + 1]["started_ms"] if i + 1 < len(session_tasks) else end_ms
+        )
         windows.append(
             TaskWindow(
-                task_id="—",
-                title="(no Colony claims found in this session)",
-                branch="—",
-                start_ms=turns[0].ts_ms,
-                end_ms=end_ms,
+                task_id=st["task_id"],
+                title=st["title"] or f"task #{st['task_id']}",
+                branch=st["branch"] or "—",
+                start_ms=st["started_ms"],
+                end_ms=next_start,
+                claimed_files=list(st["files"]),
             )
         )
-    else:
-        first_claim_ms = min(c[4] for c in claims)
-        if turns[0].ts_ms < first_claim_ms:
-            windows.append(
-                TaskWindow(
-                    task_id="pre-claim",
-                    title="(turns before first task_claim)",
-                    branch="—",
-                    start_ms=turns[0].ts_ms,
-                    end_ms=first_claim_ms,
-                )
-            )
-
-        # Group successive claims by task_id transitions
-        ordered = sorted(claims, key=lambda r: r[4])
-        current: TaskWindow | None = None
-        for task_id, title, branch, file_path, claimed_at in ordered:
-            if current is None or current.task_id != task_id:
-                if current is not None:
-                    current.end_ms = claimed_at
-                    windows.append(current)
-                current = TaskWindow(
-                    task_id=task_id,
-                    title=title or f"task #{task_id}",
-                    branch=branch or "—",
-                    start_ms=claimed_at,
-                    end_ms=end_ms,
-                    claimed_files=[file_path],
-                )
-            else:
-                current.claimed_files.append(file_path)
-        if current is not None:
-            windows.append(current)
 
     for turn in turns:
         for w in windows:
             if w.start_ms <= turn.ts_ms < w.end_ms:
                 w.turns.append(turn)
                 break
+
+    if pre and pre.turns:
+        # Build path -> task_id map (first claim wins on overlap).
+        file_to_task: dict[str, int] = {}
+        base_to_task: dict[str, int] = {}
+        windows_by_id: dict[int, TaskWindow] = {
+            w.task_id: w for w in windows if isinstance(w.task_id, int)
+        }
+        for w in windows:
+            if not isinstance(w.task_id, int):
+                continue
+            for fp in w.claimed_files:
+                file_to_task.setdefault(fp, w.task_id)
+                base = os.path.basename(fp)
+                if len(base) >= 6:
+                    base_to_task.setdefault(base, w.task_id)
+
+        unassigned: list[Turn] = []
+        for turn in pre.turns:
+            target: int | None = None
+            for name, inp in turn.tool_calls:
+                inp = inp or {}
+                candidates: list[str] = []
+                if name in ("Read", "Edit", "Write", "MultiEdit"):
+                    fp = inp.get("file_path")
+                    if fp:
+                        candidates.append(fp)
+                elif name == "Bash":
+                    cmd = inp.get("command") or ""
+                    for fp in file_to_task:
+                        if fp in cmd:
+                            candidates.append(fp)
+                            break
+                    else:
+                        for base, tid in base_to_task.items():
+                            if base in cmd:
+                                target = tid
+                                break
+                for fp in candidates:
+                    tid = file_to_task.get(fp) or base_to_task.get(os.path.basename(fp))
+                    if tid and tid in windows_by_id:
+                        target = tid
+                        break
+                if target:
+                    break
+            if target is not None and target in windows_by_id:
+                windows_by_id[target].turns.append(turn)
+            else:
+                unassigned.append(turn)
+        pre.turns = unassigned
+        if not pre.turns:
+            windows.remove(pre)
 
     return windows
 
@@ -379,22 +452,30 @@ def detect_patterns(windows: list[TaskWindow], all_turns: list[Turn]) -> list[di
             }
         )
 
-    # 6. Pre-claim token spend (work happening before a task is claimed). Some
-    # orientation before the first claim is healthy; only flag when the share
-    # is high enough that most of the session is unattributed.
-    pre = next((w for w in windows if w.task_id == "pre-claim"), None)
-    if pre:
-        share = pre.total_tokens / max(1, sum(w.total_tokens for w in windows))
-        if share >= 0.60:
-            suggestions.append(
-                {
-                    "kind": "no-claim-coverage",
-                    "severity": "high" if share >= 0.85 else "med",
-                    "task": "session-wide",
-                    "detail": f"{share*100:.0f}% of tokens spent before any task_claim_file ({len(pre.turns)} turns)",
-                    "fix": "Claim files earlier so attribution and ownership exist for the bulk of the session.",
-                }
-            )
+    # 6. Unattributed token spend. Counts pre-task turns AND turns on
+    # protected-branch tasks (dev/main/etc.) that carry zero file claims —
+    # both mean "work happened but Colony has no specific ownership for it."
+    PROTECTED_BRANCHES = {"main", "master", "dev", "develop", "production", "release"}
+    total_window_tokens = sum(w.total_tokens for w in windows) or 1
+    unattributed_tokens = 0
+    unattributed_turns = 0
+    for w in windows:
+        is_pre = w.task_id == "pre-task"
+        is_protected_unclaimed = w.branch in PROTECTED_BRANCHES and not w.claimed_files
+        if is_pre or is_protected_unclaimed:
+            unattributed_tokens += w.total_tokens
+            unattributed_turns += len(w.turns)
+    share = unattributed_tokens / total_window_tokens
+    if share >= 0.60:
+        suggestions.append(
+            {
+                "kind": "no-claim-coverage",
+                "severity": "high" if share >= 0.85 else "med",
+                "task": "session-wide",
+                "detail": f"{share*100:.0f}% of tokens unattributed (no file claims, {unattributed_turns} turns)",
+                "fix": "Start an agent lane and task_claim_file early so attribution covers the bulk of the session.",
+            }
+        )
 
     return suggestions
 
@@ -598,8 +679,8 @@ def main() -> int:
         print(f"no assistant turns with usage in {jsonl}", file=sys.stderr)
         return 3
 
-    claims = fetch_claims(db, session_id)
-    windows = build_windows(claims, turns)
+    session_tasks = fetch_session_tasks(db, session_id)
+    windows = build_windows(session_tasks, turns)
     suggestions = detect_patterns(windows, turns)
 
     if args.json:
