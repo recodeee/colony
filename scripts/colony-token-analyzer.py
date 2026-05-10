@@ -28,6 +28,8 @@ from pathlib import Path
 DEFAULT_DB = Path.home() / ".colony" / "data.db"
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 DEFAULT_CODEX = Path.home() / ".codex" / "sessions"
+CACHE_DIR = Path.home() / ".colony" / "cache" / "token-reports"
+CACHE_VERSION = 1
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +633,138 @@ def detect_patterns(windows: list[TaskWindow], all_turns: list[Turn]) -> list[di
 
 
 # ---------------------------------------------------------------------------
+# Report dict (canonical data shape, used by cache + every renderer)
+# ---------------------------------------------------------------------------
+
+
+def compute_report_dict(
+    jsonl: Path,
+    session_id: str,
+    fmt: str,
+    turns: list[Turn],
+    windows: list[TaskWindow],
+    suggestions: list[dict],
+) -> dict:
+    input_t = sum(t.input_tokens for t in turns)
+    cc_t = sum(t.cache_creation for t in turns)
+    cr_t = sum(t.cache_read for t in turns)
+    out_t = sum(t.output_tokens for t in turns)
+    ctx_total = input_t + cc_t + cr_t + out_t
+    bill = input_t * 1.0 + cc_t * 1.25 + cr_t * 0.1 + out_t * 5.0
+    no_cache = (input_t + cc_t + cr_t) * 1.0 + out_t * 5.0
+    saved = max(0.0, no_cache - bill)
+    cache_share = (cr_t / max(1, cr_t + cc_t + input_t)) * 100
+    return {
+        "version": CACHE_VERSION,
+        "session_id": session_id,
+        "format": fmt,
+        "jsonl_path": str(jsonl),
+        "jsonl_mtime": jsonl.stat().st_mtime,
+        "started_at_ms": turns[0].ts_ms if turns else 0,
+        "ended_at_ms": turns[-1].ts_ms if turns else 0,
+        "turns": len(turns),
+        "totals": {
+            "input_tokens": input_t,
+            "cache_creation": cc_t,
+            "cache_read": cr_t,
+            "output_tokens": out_t,
+            "total_ctx": ctx_total,
+            "billable_eq": int(bill),
+            "saved_by_cache": int(saved),
+            "cache_share_pct": round(cache_share, 2),
+        },
+        "tasks": [
+            {
+                "task_id": w.task_id,
+                "title": w.title,
+                "branch": w.branch,
+                "turns": len(w.turns),
+                "ctx": w.total_tokens,
+                "bill_eq": int(w.billable_equivalent),
+                "cache_hit_ratio": round(w.cache_hit_ratio, 4),
+                "files": sorted(set(w.claimed_files)),
+            }
+            for w in windows
+            if w.turns
+        ],
+        "suggestions": suggestions,
+    }
+
+
+def cached_or_compute(jsonl: Path, db: Path) -> dict | None:
+    fmt = detect_format(jsonl)
+    sid = session_id_for(jsonl, fmt)
+    cache_path = CACHE_DIR / f"{sid}.json"
+    try:
+        if cache_path.exists():
+            cached = json.loads(cache_path.read_text())
+            if cached.get("version") == CACHE_VERSION and cached.get("jsonl_mtime", 0) >= jsonl.stat().st_mtime:
+                return cached
+    except (json.JSONDecodeError, OSError):
+        pass
+
+    turns, _ = parse_session(jsonl)
+    if not turns:
+        return None
+    session_tasks = fetch_session_tasks(db, sid)
+    windows = build_windows(session_tasks, turns)
+    suggestions = detect_patterns(windows, turns)
+    report = compute_report_dict(jsonl, sid, fmt, turns, windows, suggestions)
+
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(report))
+        tmp.replace(cache_path)
+    except OSError:
+        pass
+    return report
+
+
+def discover_sessions(
+    repo_root: Path, projects: Path, codex_root: Path, limit: int = 10
+) -> list[Path]:
+    candidates: list[Path] = []
+    for ancestor in _repo_ancestors(repo_root):
+        enc = "-" + ancestor.lstrip("/").replace("/", "-")
+        candidates.extend((projects / enc).glob("*.jsonl"))
+    ancestors_set = set(_repo_ancestors(repo_root))
+    if codex_root.is_dir():
+        recent = __import__("time").time() - 90 * 86400
+        for rollout in codex_root.glob("**/rollout-*.jsonl"):
+            try:
+                if rollout.stat().st_mtime < recent:
+                    continue
+            except OSError:
+                continue
+            meta = codex_session_meta(rollout)
+            if meta and meta.get("cwd") in ancestors_set:
+                candidates.append(rollout)
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[:limit]
+
+
+def _suggestion_key(s: dict) -> str:
+    if s.get("kind") == "duplicate-reads":
+        first = (s.get("detail") or "").split(",")[0].strip()
+        return f"duplicate-reads::{first}"
+    return s.get("kind") or ""
+
+
+def annotate_streaks(suggestions: list[dict], prior_reports: list[dict]) -> None:
+    """Tag each suggestion with `streak: N` if the same pattern fired in N
+    prior sessions. N counts current + matches in prior_reports."""
+    for s in suggestions:
+        key = _suggestion_key(s)
+        count = 1
+        for past in prior_reports:
+            if any(_suggestion_key(ps) == key for ps in past.get("suggestions") or []):
+                count += 1
+        if count >= 2:
+            s["streak"] = count
+
+
+# ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
 
@@ -676,7 +810,10 @@ def render_human(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tu
         out.append("  (no patterns detected — looks clean)")
     else:
         for s in suggestions:
-            out.append(f"  [{s['severity']}] {s['kind']} · {s['task']}")
+            tag = s["severity"]
+            if s.get("streak"):
+                tag = f"{tag} ×{s['streak']}"
+            out.append(f"  [{tag}] {s['kind']} · {s['task']}")
             out.append(f"        {s['detail']}")
             out.append(f"    fix→ {s['fix']}")
     return "\n".join(out)
@@ -744,7 +881,12 @@ def render_gain(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tur
     if saved >= 500_000:
         wins.append(f"{fmt_int(int(saved))} input-equiv saved by cache")
 
-    opps = [f"[{s['severity']}] {s['detail']}" for s in suggestions]
+    opps = []
+    for s in suggestions:
+        tag = s["severity"]
+        if s.get("streak"):
+            tag = f"{tag} ×{s['streak']}"
+        opps.append(f"[{tag}] {s['detail']}")
 
     if wins or opps:
         out.append(f"  {'WINS':<34}  {'OPPORTUNITIES':<32}")
@@ -761,6 +903,80 @@ def render_gain(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tur
         out.append(f"  next session → {suggestions[0]['fix']}")
     else:
         out.append("  next session → no patterns detected; keep going")
+    out.append("")
+    return "\n".join(out)
+
+
+def render_history(reports: list[dict]) -> str:
+    out: list[str] = []
+    if not reports:
+        return "  no sessions found"
+
+    total_ctx = sum(r["totals"]["total_ctx"] for r in reports)
+    total_bill = sum(r["totals"]["billable_eq"] for r in reports)
+    total_saved = sum(r["totals"]["saved_by_cache"] for r in reports)
+    saved_pct = (total_saved / max(1, total_saved + total_bill)) * 100
+
+    pattern_session_counts: Counter = Counter()
+    pattern_keys: dict[str, Counter] = defaultdict(Counter)
+    file_offenders: Counter = Counter()
+    for r in reports:
+        seen_kinds: set[str] = set()
+        for s in r.get("suggestions") or []:
+            seen_kinds.add(s["kind"])
+            if s["kind"] == "duplicate-reads":
+                first = (s.get("detail") or "").split(",")[0].strip()
+                pattern_keys[s["kind"]][first] += 1
+                file_offenders[first] += 1
+        for k in seen_kinds:
+            pattern_session_counts[k] += 1
+
+    starts = [r["started_at_ms"] for r in reports if r["started_at_ms"]]
+    ends = [r["ended_at_ms"] for r in reports if r["ended_at_ms"]]
+
+    out.append("")
+    title = f"COLONY · history (last {len(reports)} sessions)"
+    out.append("  ╭───────────────────────────────────────────────────────────────╮")
+    out.append(f"  │  {title:<61}│")
+    out.append("  ╰───────────────────────────────────────────────────────────────╯")
+    out.append("")
+    if starts and ends:
+        first = dt.datetime.fromtimestamp(min(starts) / 1000, dt.timezone.utc).date()
+        last = dt.datetime.fromtimestamp(max(ends) / 1000, dt.timezone.utc).date()
+        days = (last - first).days + 1
+        out.append(f"   span      {first} → {last}  ({days} days)")
+    out.append(f"   ctx       {fmt_int(total_ctx):>10}  total context")
+    out.append(f"   bill-eq   {fmt_int(total_bill):>10}  billable-equivalent")
+    out.append(f"   saved     {fmt_int(total_saved):>10}  by cache hits  ({saved_pct:>4.1f}% vs no-cache)")
+    out.append("")
+
+    out.append("  TREND · billable-eq per session, most recent first")
+    max_bill = max((r["totals"]["billable_eq"] for r in reports), default=1) or 1
+    for r in reports:
+        sid = r["session_id"][:6]
+        bill = r["totals"]["billable_eq"]
+        bar_w = int(bill / max_bill * 20)
+        bar = "█" * bar_w + "░" * (20 - bar_w)
+        tag = "  ← peak" if bill == max_bill else ""
+        fmt_label = "claude" if r.get("format") == "claude" else "codex "
+        out.append(f"   {fmt_label} {sid}  {bar} {fmt_int(bill):>6}{tag}")
+    out.append("")
+
+    if pattern_session_counts:
+        out.append("  RECURRING PATTERNS")
+        for kind, count in pattern_session_counts.most_common():
+            extra = ""
+            if kind in pattern_keys and pattern_keys[kind]:
+                top_key, top_n = pattern_keys[kind].most_common(1)[0]
+                extra = f"  ({top_key} ×{top_n})"
+            out.append(f"   {kind:<24}  {count}/{len(reports)} sessions{extra}")
+        out.append("")
+
+    if pattern_session_counts:
+        top_kind, top_count = pattern_session_counts.most_common(1)[0]
+        out.append(f"  next session → {top_count} sessions hit {top_kind}; address that first")
+    else:
+        out.append("  next session → clean run across all sessions")
     out.append("")
     return "\n".join(out)
 
@@ -799,8 +1015,16 @@ def render_json(session_id: str, jsonl: Path, windows: list[TaskWindow], all_tur
 def main() -> int:
     p = argparse.ArgumentParser(description="Bucket Claude Code session tokens into Colony tasks.")
     g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--session", help="Claude Code session id (matches JSONL filename)")
+    g.add_argument("--session", help="Session id (Claude Code or Codex)")
     g.add_argument("--latest", action="store_true", help="Use the most-recent session for --repo")
+    g.add_argument(
+        "--history",
+        nargs="?",
+        const=10,
+        type=int,
+        metavar="N",
+        help="Aggregate the last N sessions for --repo (default 10)",
+    )
     p.add_argument("--repo", default=os.getcwd(), help="Repo root for --latest (default: cwd)")
     p.add_argument("--db", default=str(DEFAULT_DB), help=f"Colony SQLite path (default: {DEFAULT_DB})")
     p.add_argument("--projects-dir", default=str(DEFAULT_PROJECTS), help="Claude Code projects dir")
@@ -812,9 +1036,26 @@ def main() -> int:
     projects = Path(args.projects_dir).expanduser()
     codex_root = Path(args.codex_dir).expanduser()
     db = Path(args.db).expanduser()
+    repo_root = Path(args.repo).resolve()
+
+    if args.history is not None:
+        sessions = discover_sessions(repo_root, projects, codex_root, args.history)
+        reports: list[dict] = []
+        for j in sessions:
+            r = cached_or_compute(j, db)
+            if r:
+                reports.append(r)
+        if not reports:
+            print(f"no sessions found for repo {args.repo}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(reports, indent=2))
+        else:
+            print(render_history(reports))
+        return 0
 
     if args.latest:
-        jsonl = latest_session_jsonl(Path(args.repo).resolve(), projects, codex_root)
+        jsonl = latest_session_jsonl(repo_root, projects, codex_root)
         if not jsonl:
             print(f"no JSONL found for repo {args.repo}", file=sys.stderr)
             return 2
@@ -836,6 +1077,20 @@ def main() -> int:
     session_tasks = fetch_session_tasks(db, session_id)
     windows = build_windows(session_tasks, turns)
     suggestions = detect_patterns(windows, turns)
+
+    # Streak annotation: pull last 5 cached reports for this repo, excluding
+    # the current session, and tag matching pattern kinds.
+    prior_reports: list[dict] = []
+    for j in discover_sessions(repo_root, projects, codex_root, 8):
+        prior_sid = session_id_for(j, detect_format(j))
+        if prior_sid == session_id:
+            continue
+        r = cached_or_compute(j, db)
+        if r:
+            prior_reports.append(r)
+            if len(prior_reports) >= 5:
+                break
+    annotate_streaks(suggestions, prior_reports)
 
     if args.json:
         print(render_json(session_id, jsonl, windows, turns, suggestions))
