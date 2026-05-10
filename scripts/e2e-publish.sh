@@ -43,7 +43,7 @@ echo "==> 1. build everything"
 pnpm build >/dev/null
 
 echo "==> 2. stage publish files (README, LICENSE, hooks-scripts)"
-pnpm --filter @imdeadpool/colony-cli stage-publish
+pnpm --filter colonyq stage-publish
 
 echo "==> 3. npm pack from apps/cli"
 ( cd "$REPO/apps/cli" && npm pack --pack-destination "$PACK" >/dev/null )
