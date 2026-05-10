@@ -1,5 +1,19 @@
 # @imdeadpool/colony-cli
 
+## 0.8.0
+
+### Minor Changes
+
+- 86a62d9: `colony bridge lifecycle` gains `--replay <file>` and `--dry-run` so a saved `colony-omx-lifecycle-v1` envelope (e.g. captured `.pre.json`) can be routed offline through the real lifecycle logic without touching the live data dir. Combined with `--json`, this gives runtime integrators a CI-shaped harness for asserting on `route`, `event_type`, `extracted_paths`, and `ok`.
+
+### Patch Changes
+
+- 55581ed: Add `colony demo`: a 60-second guided walkthrough of file-claim contention prevention. Two simulated agents (`claude-code` and `codex`) join the same task and try to claim `src/api.ts`; the second agent gets `blocked_active_owner`, then `claude-code` releases and `codex` retries successfully. The demo runs against an isolated temp data dir and cleans up on exit, with `--json` for a structured transcript and `--keep-data` for inspection. Also ship pre-baked `~/.colony/settings.json` fragments under `examples/policies/` for Next.js monorepos, Python packages, and Rust workspaces — each fragment lists stack-appropriate `privacy.excludePatterns` (build output, caches, `.env`) and `protected_files` (lockfiles, root config). README points to both surfaces from the install block.
+- 9376314: Stop mislabelling generic MCP errors and reduce SQLite contention failures.
+
+  - `mcpError` now codes non-`TaskThreadError` throws as `INTERNAL_ERROR` instead of `OBSERVATION_NOT_ON_TASK`, so validation failures and SQLite "database is locked" errors surface honestly in `mcp_metrics` and `colony gain`.
+  - Storage now sets `PRAGMA busy_timeout = 5000` on every connection (worker daemon, MCP server, CLI hooks all open separate handles to the same WAL DB), so concurrent writers wait the kernel out instead of throwing `SQLITE_BUSY` immediately.
+
 ## 0.7.0
 
 ### Minor Changes

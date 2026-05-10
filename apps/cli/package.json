@@ -1,6 +1,6 @@
 {
   "name": "colonyq",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "license": "MIT",
   "description": "Local-first memory and coordination for Claude Code, Gemini CLI, OpenCode, Codex, and Cursor.",
   "keywords": [
@@ -32,7 +32,13 @@
     "colony": "bin/colony.sh"
   },
   "main": "./dist/index.js",
-  "files": ["bin", "dist", "hooks-scripts", "README.md", "LICENSE"],
+  "files": [
+    "bin",
+    "dist",
+    "hooks-scripts",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch --onSuccess \"node dist/index.js\"",

@@ -1,5 +1,40 @@
 # @colony/core
 
+## 0.8.0
+
+### Patch Changes
+
+- 4a68470: Fix read-then-write race in claim cleanup paths
+
+  `releaseExpiredQuotaClaims` and `bulkRescueStrandedSessions` previously read
+  eligible claims outside their DEFERRED transaction, allowing two concurrent
+  callers to both snapshot the same rows and each emit a duplicate
+  `claim-weakened` or `rescue-stranded` audit observation.
+
+  The fix moves the claim read inside a `BEGIN IMMEDIATE` transaction on both
+  paths so the write lock is acquired before any row is inspected. The storage
+  `transaction()` helper gains an `{ immediate: true }` option that maps to
+  better-sqlite3's `.immediate()` mode. A new idempotency test confirms that
+  calling each cleanup path twice produces exactly one audit observation.
+
+- e6c5766: Reject `task_claim_file` at the MCP layer when the task's branch is a protected base branch.
+
+  `guardedClaimFile` already returned `protected_branch_rejected` (controlled by the `rejectProtectedBranchClaims` setting, default `true`) but the MCP handler silently fell through and recorded the claim anyway. The handler now checks for that status and returns a distinct `PROTECTED_BRANCH_CLAIM_REJECTED` error code with a message directing the agent to start a sandbox worktree first.
+
+  `PROTECTED_BRANCH_CLAIM_REJECTED` is added to `TASK_THREAD_ERROR_CODES` in `@colony/core`. Two new integration tests cover the reject and allow cases.
+
+  Note: the same `guardedClaimFile` call in `task_plan_claim_subtask` has the same gap; that is out of scope for this patch.
+
+- 2e8fba1: Stop attributing the storage-at-rest compression claim to live `savings_report` calls
+
+  The `Storage at rest (per observation)` reference row used to map to `['savings_report']`. Live `savings_report` output is structured JSON (~3.5k tokens per call) where the caveman compressor preserves technical tokens byte-for-byte, so the live comparison projected the row's 1k-token baseline against ~3.5k actual tokens and reported negative savings (e.g. `-155%`).
+
+  The row stays in the static reference — caveman compression really does shrink prose observations on disk — but it is now a structural claim about the storage layer rather than a per-call cost, so `mcp_operations` is empty. `savings_report` calls now show up under `unmatched_operations` instead of inflating the row.
+
+- Updated dependencies [4a68470]
+- Updated dependencies [3898ff3]
+  - @colony/storage@0.8.0
+
 ## 0.7.0
 
 ### Minor Changes

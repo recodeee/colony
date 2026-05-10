@@ -1,5 +1,16 @@
 # @colony/spec
 
+## 0.8.0
+
+### Patch Changes
+
+- Updated dependencies [4a68470]
+- Updated dependencies [e6c5766]
+- Updated dependencies [2e8fba1]
+- Updated dependencies [3898ff3]
+  - @colony/storage@0.8.0
+  - @colony/core@0.8.0
+
 ## 0.7.0
 
 ### Patch Changes

@@ -1,5 +1,28 @@
 # @colony/storage
 
+## 0.8.0
+
+### Patch Changes
+
+- 4a68470: Fix read-then-write race in claim cleanup paths
+
+  `releaseExpiredQuotaClaims` and `bulkRescueStrandedSessions` previously read
+  eligible claims outside their DEFERRED transaction, allowing two concurrent
+  callers to both snapshot the same rows and each emit a duplicate
+  `claim-weakened` or `rescue-stranded` audit observation.
+
+  The fix moves the claim read inside a `BEGIN IMMEDIATE` transaction on both
+  paths so the write lock is acquired before any row is inspected. The storage
+  `transaction()` helper gains an `{ immediate: true }` option that maps to
+  better-sqlite3's `.immediate()` mode. A new idempotency test confirms that
+  calling each cleanup path twice produces exactly one audit observation.
+
+- 3898ff3: Stop scanning the full task table on every PreToolUse tool call
+
+  `protectedLiveClaimConflict` in the PreToolUse hook used `listTasks(1_000_000)` to find conflicting protected-branch claims and then linearly filtered the result by `repo_root` and `isProtectedBranch(branch)`. With the task table growing into the thousands across all agents, that scan dominated p95 latency on every editor tool call and violated the <150ms hook-handler budget.
+
+  `@colony/storage` now exposes `listProtectedBranchTasksByRepo(repoRoot)`, a single index-backed query against the existing `UNIQUE(repo_root, branch)` constraint. The PreToolUse hook calls this in place of the unbounded scan; defensive `resolve()` and `isProtectedBranch()` checks remain inside the loop so storage path inconsistencies still get filtered out. No new migration is needed — the unique index already covers the new query shape.
+
 ## 0.7.0
 
 ### Minor Changes

@@ -1,5 +1,20 @@
 # @colony/foraging
 
+## 0.8.0
+
+### Patch Changes
+
+- 829556b: Surface silent `catch {}` failures to stderr (rule #9).
+
+  Every empty catch in `session-start`, `scanner`, and the foraging MCP tool now either logs a `[colony] <site>: <message>` line to stderr or carries a one-line comment explaining why silence is intentional (fs-stat races, missing-directory guards, best-effort cleanup). Previously a whole session's 43/43 MCP call failures could vanish with no trace.
+
+- Updated dependencies [4a68470]
+- Updated dependencies [e6c5766]
+- Updated dependencies [2e8fba1]
+- Updated dependencies [3898ff3]
+  - @colony/storage@0.8.0
+  - @colony/core@0.8.0
+
 ## 0.7.0
 
 ### Patch Changes
