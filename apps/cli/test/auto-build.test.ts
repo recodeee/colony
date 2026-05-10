@@ -87,7 +87,7 @@ describe('CLI auto-build', () => {
     expect(calls).toEqual([
       {
         command: 'pnpm',
-        args: ['--filter', '@imdeadpool/colony-cli', 'build'],
+        args: ['--filter', './apps/cli', 'build'],
         cwd: root,
       },
       {
