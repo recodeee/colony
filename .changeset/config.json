@@ -3,7 +3,7 @@
   "changelog": "@changesets/cli/changelog",
   "commit": false,
   "fixed": [],
-  "linked": [["@colony/*", "@imdeadpool/colony-cli"]],
+  "linked": [["@colony/*", "colonyq"]],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",

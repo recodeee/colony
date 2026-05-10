@@ -1,5 +1,5 @@
 ---
-"@imdeadpool/colony-cli": patch
+"colonyq": patch
 ---
 
 Stop mislabelling generic MCP errors and reduce SQLite contention failures.
