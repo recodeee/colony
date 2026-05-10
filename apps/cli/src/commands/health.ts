@@ -80,6 +80,8 @@ const LIFECYCLE_SUMMARY_NOT_JOINED_ROOT_CAUSE =
   'Runtime bridge is fresh and sees edit paths, but claim-before-edit telemetry is not joined into health stats.';
 const LIFECYCLE_CLAIM_MISMATCH_ROOT_CAUSE =
   'Lifecycle claim mismatch: file paths are present, but lifecycle claims do not match edit scope.';
+const LIFECYCLE_BRANCH_DETECTION_MISMATCH_ROOT_CAUSE =
+  'Lifecycle branch detector mismatch: claims matched the edit scope, but edit telemetry reported the protected base branch.';
 const NO_HOOK_CAPABLE_EDITS_ROOT_CAUSE =
   'No hook-capable edits: health saw no file edit events in the selected window.';
 const OLD_TELEMETRY_POLLUTION_ROOT_CAUSE =
@@ -469,6 +471,7 @@ interface RootCauseSummary {
     | 'lifecycle_paths_missing'
     | 'lifecycle_summary_not_joined'
     | 'lifecycle_claim_mismatch'
+    | 'lifecycle_branch_detection_mismatch'
     | 'no_hook_capable_edits'
     | 'old_telemetry_pollution';
   summary: string;
@@ -1108,23 +1111,25 @@ function readinessSummaryPayload(
     liveContention.live_file_contentions > 0 ||
     liveContention.protected_file_contentions > 0 ||
     liveContention.dirty_contended_files > 0;
-  // `old_telemetry_pollution` represents stale 24h data, not an active
-  // failure. When the recent window is healthy and nothing else is on
-  // fire, the readiness status should de-escalate to 'ok' so operators
-  // are not nagged to "fix" a bridge that is already fine. Any other
-  // root cause keeps the 'bad' status — those reflect real, current
-  // bridge problems.
-  const onlyOldTelemetryPollution =
+  // Some claim-before-edit root causes are diagnostics, not active safety
+  // failures: stale 24h telemetry, or branch metadata drift where the claim
+  // matched the edit but PostToolUse reported the base branch. De-escalate
+  // those so operators are not told to reclaim files that were already claimed.
+  const nonBlockingClaimTelemetry =
     !hasLiveContentionFailure &&
     !claimBeforeEdit.codex_rollout_without_bridge &&
     claimBeforeEdit.session_binding_missing === 0 &&
-    claimBeforeEdit.root_cause?.kind === 'old_telemetry_pollution' &&
-    ((claimBeforeEdit.recent_claim_before_edit_rate !== null &&
-      isAtOrAboveTarget(claimBeforeEdit.recent_claim_before_edit_rate, TARGET_CLAIM_BEFORE_EDIT)) ||
-      (claimBeforeEdit.recent_hook_capable_edits === 0 &&
-        claimBeforeEdit.recent_pre_tool_use_signals > 0 &&
-        claimBeforeEdit.recent_pre_tool_use_missing === 0));
-  const executionStatus: ReadinessStatus = onlyOldTelemetryPollution
+    ((claimBeforeEdit.root_cause?.kind === 'old_telemetry_pollution' &&
+      ((claimBeforeEdit.recent_claim_before_edit_rate !== null &&
+        isAtOrAboveTarget(
+          claimBeforeEdit.recent_claim_before_edit_rate,
+          TARGET_CLAIM_BEFORE_EDIT,
+        )) ||
+        (claimBeforeEdit.recent_hook_capable_edits === 0 &&
+          claimBeforeEdit.recent_pre_tool_use_signals > 0 &&
+          claimBeforeEdit.recent_pre_tool_use_missing === 0))) ||
+      claimBeforeEdit.root_cause?.kind === 'lifecycle_branch_detection_mismatch');
+  const executionStatus: ReadinessStatus = nonBlockingClaimTelemetry
     ? 'ok'
     : hasLiveContentionFailure ||
         claimBeforeEdit.codex_rollout_without_bridge ||
@@ -2133,6 +2138,9 @@ function claimBeforeEditPayload(
     recent_claim_mismatch_count: lifecycleClaimMismatchCount(recentClaimMissReasons),
     edits_without_claim_before: editsWithoutClaimBefore,
     claim_miss_reasons: claimMissReasons,
+    claim_branch_detection_mismatch: hasClaimedBranchDetectionMismatch(
+      stats.nearest_claim_examples ?? [],
+    ),
     runtime_summary_recent_edit_paths: recent.omx_runtime_bridge.recent_edit_paths.length,
     runtime_summary_hook_capable_edits:
       recent.omx_runtime_bridge.claim_before_edit.hook_capable_edits,
@@ -2145,11 +2153,13 @@ function claimBeforeEditPayload(
     sessionBindingMissing > 0
       ? 'PreToolUse is firing, but Colony session binding is missing. Restart the editor session so SessionStart binds the session id; keep calling task_claim_file manually until binding is restored.'
       : null;
+  const blockingRootCause =
+    rootCause !== null &&
+    rootCause.kind !== 'old_telemetry_pollution' &&
+    rootCause.kind !== 'lifecycle_branch_detection_mismatch';
   const installHint =
     codexRolloutHint ??
-    (rootCause !== null && rootCause.kind !== 'old_telemetry_pollution'
-      ? rootCause.action
-      : null) ??
+    (blockingRootCause ? rootCause.action : null) ??
     (likelyMissingHook
       ? 'PreToolUse auto-claim is not covering hook-capable edits in this window. Run colony install --ide <ide>, restart the editor session, and ensure an active task is bound for the session.'
       : sessionBindingHint);
@@ -2207,6 +2217,7 @@ function lifecycleBridgeRootCause(input: {
   recent_claim_mismatch_count: number;
   edits_without_claim_before: number;
   claim_miss_reasons: ClaimMissReasons;
+  claim_branch_detection_mismatch: boolean;
   runtime_summary_recent_edit_paths: number;
   runtime_summary_hook_capable_edits: number;
   runtime_summary_pre_tool_use_signals: number;
@@ -2355,6 +2366,17 @@ function lifecycleBridgeRootCause(input: {
           'Wait for older telemetry to age out of the selected health window, or narrow --hours when checking current bridge state.',
       };
     }
+    if (input.claim_branch_detection_mismatch && input.recent_pre_tool_use_missing === 0) {
+      return {
+        kind: 'lifecycle_branch_detection_mismatch',
+        summary: LIFECYCLE_BRANCH_DETECTION_MISMATCH_ROOT_CAUSE,
+        evidence,
+        evidence_counters: counters,
+        action:
+          'Fix lifecycle branch metadata normalization; do not ask agents to reclaim files when the nearest claim already matched file, session, and worktree before the edit.',
+        command: LIFECYCLE_BRIDGE_COMMAND,
+      };
+    }
     return {
       kind: 'lifecycle_claim_mismatch',
       summary: LIFECYCLE_CLAIM_MISMATCH_ROOT_CAUSE,
@@ -2439,6 +2461,17 @@ function lifecycleClaimMismatchCount(reasons: ClaimMissReasons): number {
     reasons.branch_mismatch +
     reasons.path_mismatch +
     reasons.worktree_path_mismatch
+  );
+}
+
+function hasClaimedBranchDetectionMismatch(examples: NearestClaimExample[]): boolean {
+  return examples.some(
+    (example) =>
+      example.reason === 'branch_mismatch' &&
+      example.relation.same_file_path === true &&
+      example.relation.same_session_id === true &&
+      example.relation.same_worktree_path === true &&
+      example.relation.claim_before_edit === true,
   );
 }
 
@@ -3818,7 +3851,7 @@ function isDominantPreToolUseMiss(reasons: ClaimMissReasons): boolean {
 }
 
 function isLifecycleRootCauseKind(kind: RootCauseSummary['kind']): boolean {
-  return kind !== 'old_telemetry_pollution';
+  return kind !== 'old_telemetry_pollution' && kind !== 'lifecycle_branch_detection_mismatch';
 }
 
 function visibleActionHints(
