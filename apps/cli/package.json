@@ -1,5 +1,5 @@
 {
-  "name": "@imdeadpool/colony-cli",
+  "name": "colonyq",
   "version": "0.7.0",
   "license": "MIT",
   "description": "Local-first memory and coordination for Claude Code, Gemini CLI, OpenCode, Codex, and Cursor.",

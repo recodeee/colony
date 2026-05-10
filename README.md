@@ -9,8 +9,8 @@
 
 <p align="center">
   <a href="https://github.com/recodeee/colony/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/recodeee/colony/ci.yml?branch=main&style=flat-square&label=ci&labelColor=0b1220" /></a>
-  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm package status" src="https://img.shields.io/badge/npm-unpublished-f59e0b?style=flat-square&labelColor=0b1220" /></a>
-  <a href="https://www.npmjs.com/package/@imdeadpool/colony-cli"><img alt="npm downloads status" src="https://img.shields.io/badge/downloads-after%20publish-64748b?style=flat-square&labelColor=0b1220" /></a>
+  <a href="https://www.npmjs.com/package/colonyq"><img alt="npm package status" src="https://img.shields.io/badge/npm-unpublished-f59e0b?style=flat-square&labelColor=0b1220" /></a>
+  <a href="https://www.npmjs.com/package/colonyq"><img alt="npm downloads status" src="https://img.shields.io/badge/downloads-after%20publish-64748b?style=flat-square&labelColor=0b1220" /></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/recodeee/colony"><img alt="OpenSSF Scorecard status" src="https://img.shields.io/badge/openssf-pending-64748b?style=flat-square&labelColor=0b1220" /></a>
 </p>
 
@@ -28,7 +28,7 @@
 </p>
 
 ```bash
-npm install -g @imdeadpool/colony-cli
+npm install -g colonyq
 colony install --ide codex
 npx skills add recodeee/colony/skills/colony-mcp
 colony health
@@ -53,7 +53,7 @@ skill so agents know the coordination loop before they edit.
 
 | Step | Path | Command | Result |
 | ---- | ---- | ------- | ------ |
-| 1 | CLI | `npm install -g @imdeadpool/colony-cli` | Installs the `colony` command. |
+| 1 | CLI | `npm install -g colonyq` | Installs the `colony` command. |
 | 2 | MCP | `colony install --ide codex` | Registers the `colony` MCP server plus lifecycle hooks. |
 | 3 | Skill | `npx skills add recodeee/colony/skills/colony-mcp` | Teaches Claude Code, Cursor, Codex, and other skill-aware agents to call Colony first. |
 
@@ -78,7 +78,7 @@ instructions.
 
 ### `v0.7.0` - Coordination Hardening Release
 
-This release prepares `@imdeadpool/colony-cli` for the next public npm publish
+This release prepares `colonyq` for the next public npm publish
 after registry `latest` `0.6.0`.
 
 - Faster hook path: `colony bridge lifecycle --json` now uses the long-running
@@ -104,7 +104,7 @@ shipped coordination loop easier to trust in real multi-agent runs.
   stale-session pruning clearer in status surfaces before they create duplicate
   work.
 - Patch release confidence: keep README badges, publish smoke checks, and
-  `@imdeadpool/colony-cli` package metadata current so users can see CI, npm
+  `colonyq` package metadata current so users can see CI, npm
   version, downloads, license, and supply-chain posture before installing.
 
 Colony is **not a hosted control plane** and it does not run your agents. Codex,
@@ -460,7 +460,7 @@ coordination state shared, inspectable, and local.
 ## Install
 
 ```bash
-npm install -g @imdeadpool/colony-cli
+npm install -g colonyq
 ```
 
 Register one or more runtimes:
