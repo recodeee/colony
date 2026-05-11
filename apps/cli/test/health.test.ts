@@ -1700,6 +1700,7 @@ describe('colony health payload', () => {
     expect(json.task_claim_file_before_edits).toHaveProperty('nearest_claim_examples');
     expect(json.task_claim_file_before_edits).toHaveProperty('root_cause');
     expect(json).toHaveProperty('signal_health');
+    expect(json).toHaveProperty('stale_claim_evaporation');
     expect(json).toHaveProperty('proposal_health');
     expect(json).toHaveProperty('ready_to_claim_vs_claimed');
     expect(json).toHaveProperty('queen_wave_health');
@@ -1707,7 +1708,7 @@ describe('colony health payload', () => {
     expect(json.live_contention_health).toHaveProperty('recommended_actions');
     expect(json).toHaveProperty('adoption_thresholds');
     expect(json).toHaveProperty('action_hints');
-    expect(json.action_hints[0]).toHaveProperty('tool_call');
+    expect(json.action_hints[0]).toHaveProperty('command');
     expect(json.action_hints[0]).toHaveProperty('prompt');
   });
 
@@ -2620,8 +2621,7 @@ describe('colony health payload', () => {
         current: '1',
         target: '0',
         action: expect.stringContaining('dry stale-claim sweep'),
-        tool_call: expect.stringContaining('mcp__colony__rescue_stranded_scan'),
-        command: 'colony coordination sweep --json',
+        command: 'colony coordination sweep --release-safe-stale-claims --json',
         prompt: expect.stringContaining('colony coordination sweep --json'),
       }),
       expect.objectContaining({
@@ -2656,7 +2656,7 @@ describe('colony health payload', () => {
     );
     expect(text).toContain('cmd:  colony install --ide <ide>');
     expect(text).toContain('stale claims: 1 (target 0) - Run a dry stale-claim sweep');
-    expect(text).toContain('cmd:  colony coordination sweep --json');
+    expect(text).toContain('cmd:  colony coordination sweep --release-safe-stale-claims --json');
     expect(text).toContain(
       'task_post/task_note_working share: 0% (target 70%+) - Use task_note_working first',
     );

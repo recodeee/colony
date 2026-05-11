@@ -100,6 +100,10 @@ const PROTECTED_BRANCHES = new Set(['main', 'dev', 'master', 'trunk']);
 const CLAIM_MISMATCH_TOOL_CALL =
   'mcp__colony__task_claim_file({ task_id: <task_id>, session_id: "<session_id>", file_path: "<file>", note: "pre-edit claim in same repo/branch/worktree" })';
 const STALE_CLAIM_SWEEP_COMMAND = 'colony coordination sweep --json';
+const STALE_CLAIM_EVAPORATION_COMMAND =
+  'colony coordination sweep --release-safe-stale-claims --json';
+const STALE_BLOCKER_EVAPORATION_COMMAND =
+  'colony coordination sweep --release-stale-blockers --json';
 
 const CONVERSIONS = [
   ['hivemind_context', 'attention_inbox'],
@@ -242,6 +246,19 @@ interface SignalHealthPayload {
   stale_claim_minutes: number;
   expired_handoffs: number;
   expired_messages: number;
+}
+
+interface StaleClaimEvaporationPayload {
+  status: 'clear' | 'needs_safe_release' | 'blocked_by_downstream' | 'needs_quota_resolution';
+  stale_claims: number;
+  expired_weak_claims: number;
+  quota_pending_claims: number;
+  stale_downstream_blockers: number;
+  quota_downstream_blockers: number;
+  dry_run_command: string;
+  safe_release_command: string;
+  downstream_release_command: string;
+  next_action: string;
 }
 
 type QuotaRelayState = 'active' | 'expired' | 'accepted' | 'declined/rerouted' | 'unknown';
@@ -580,6 +597,7 @@ export interface ColonyHealthPayload {
   search_calls_per_session: SearchCallsPayload;
   task_claim_file_before_edits: ClaimBeforeEditPayload;
   signal_health: SignalHealthPayload;
+  stale_claim_evaporation: StaleClaimEvaporationPayload;
   proposal_health: ProposalHealthPayload;
   ready_to_claim_vs_claimed: ReadyClaimPayload;
   queen_wave_health: QueenWaveHealthPayload;
@@ -719,6 +737,15 @@ export function buildColonyHealthPayload(
     calls.filter((call) => call.ts >= recentSince),
     'task_claim_file',
   );
+  const signalHealth = signalHealthPayload(storage, tasks, {
+    since: options.since,
+    now,
+    stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+  });
+  const queenWaveHealth = queenWaveHealthPayload(storage, tasks, {
+    now,
+    stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
+  });
   const liveContention = liveContentionPayload(storage, tasks, {
     since: options.since,
     now,
@@ -779,20 +806,14 @@ export function buildColonyHealthPayload(
         dirty_contended_files: liveContention.dirty_contended_files,
       },
     ),
-    signal_health: signalHealthPayload(storage, tasks, {
-      since: options.since,
-      now,
-      stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
-    }),
+    signal_health: signalHealth,
+    stale_claim_evaporation: staleClaimEvaporationPayload(signalHealth, queenWaveHealth),
     proposal_health: proposalHealthPayload(storage, tasks, {
       since: options.since,
       now,
     }),
     ready_to_claim_vs_claimed: readyClaimPayload(storage, tasks),
-    queen_wave_health: queenWaveHealthPayload(storage, tasks, {
-      now,
-      stale_claim_minutes: options.claim_stale_minutes ?? defaultSettings.claimStaleMinutes,
-    }),
+    queen_wave_health: queenWaveHealth,
     live_contention_health: liveContention,
     adoption_thresholds: adoptionThresholds(calls, {
       colony_mcp_share: ratio(colonyMcpToolCalls, mcpToolCalls),
@@ -801,7 +822,6 @@ export function buildColonyHealthPayload(
       task_note_working_calls: taskNoteWorkingCalls,
     }),
   };
-
   const readinessSummary = readinessSummaryPayload(payload);
 
   return {
@@ -995,6 +1015,17 @@ export function formatColonyHealthOutput(
       : []),
     `  expired handoffs: ${payload.signal_health.expired_handoffs}`,
     `  expired messages: ${payload.signal_health.expired_messages}`,
+    '',
+    healthSubheading('Stale claim evaporation', 'yellow'),
+    `  status:              ${payload.stale_claim_evaporation.status}`,
+    `  stale claims:        ${payload.stale_claim_evaporation.stale_claims}`,
+    `  expired/weak:        ${payload.stale_claim_evaporation.expired_weak_claims}`,
+    `  quota pending:       ${payload.stale_claim_evaporation.quota_pending_claims}`,
+    `  downstream blockers: ${payload.stale_claim_evaporation.stale_downstream_blockers}`,
+    `  next:                ${payload.stale_claim_evaporation.next_action}`,
+    `  dry run:             ${payload.stale_claim_evaporation.dry_run_command}`,
+    `  safe release:        ${payload.stale_claim_evaporation.safe_release_command}`,
+    `  blocker release:     ${payload.stale_claim_evaporation.downstream_release_command}`,
     '',
     healthSubheading('Proposal decay/promotions', 'magenta'),
     `  proposals seen:      ${payload.proposal_health.proposals_seen}`,
@@ -2584,6 +2615,44 @@ function signalHealthPayload(
   };
 }
 
+function staleClaimEvaporationPayload(
+  signal: SignalHealthPayload,
+  queen: QueenWaveHealthPayload,
+): StaleClaimEvaporationPayload {
+  const staleDownstreamBlockers = queen.stale_claims_blocking_downstream;
+  const quotaDownstreamBlockers = queen.quota_handoffs_blocking_downstream;
+  const status: StaleClaimEvaporationPayload['status'] =
+    staleDownstreamBlockers > 0
+      ? 'blocked_by_downstream'
+      : signal.quota_pending_claims > 0 || quotaDownstreamBlockers > 0
+        ? 'needs_quota_resolution'
+        : signal.stale_claims > 0 || signal.expired_claims > 0
+          ? 'needs_safe_release'
+          : 'clear';
+
+  const next_action =
+    status === 'clear'
+      ? 'none'
+      : status === 'blocked_by_downstream'
+        ? 'run safe stale-claim release first; then release stale downstream blockers only after owner/rescue review'
+        : status === 'needs_quota_resolution'
+          ? 'accept, decline, reroute, or expire quota-pending claims before trusting downstream readiness'
+          : 'run a dry coordination sweep, then release only safe inactive/non-dirty stale claims';
+
+  return {
+    status,
+    stale_claims: signal.stale_claims,
+    expired_weak_claims: signal.expired_claims,
+    quota_pending_claims: signal.quota_pending_claims,
+    stale_downstream_blockers: staleDownstreamBlockers,
+    quota_downstream_blockers: quotaDownstreamBlockers,
+    dry_run_command: STALE_CLAIM_SWEEP_COMMAND,
+    safe_release_command: STALE_CLAIM_EVAPORATION_COMMAND,
+    downstream_release_command: STALE_BLOCKER_EVAPORATION_COMMAND,
+    next_action,
+  };
+}
+
 function quotaRelayExamplesPayload(
   storage: Pick<Storage, 'taskObservationsByKind'>,
   tasks: TaskRow[],
@@ -3727,8 +3796,7 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
         'Run a dry stale-claim sweep; release only safe inactive/non-dirty claims with --release-safe-stale-claims, and hand off or reclaim the rest.',
       readiness_scope: 'signal_evaporation',
       priority: 11,
-      tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
-      command: STALE_CLAIM_SWEEP_COMMAND,
+      command: STALE_CLAIM_EVAPORATION_COMMAND,
       prompt: codexPrompt({
         goal: 'clear stale ownership before agents trust current file claims',
         current: `${payload.signal_health.stale_claims} stale claims`,
@@ -3770,16 +3838,16 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
       status: 'bad',
       current: String(payload.queen_wave_health.stale_claims_blocking_downstream),
       target: '0',
-      action: 'Run colony queen sweep/rescue so later waves can become claimable.',
+      action:
+        'Release stale downstream blockers with coordination sweep after owner/rescue review so later waves can become claimable.',
       readiness_scope: 'queen_plan_readiness',
       priority: 3,
-      tool_call: 'mcp__colony__rescue_stranded_scan({ stranded_after_minutes: <minutes> })',
-      command: 'colony queen sweep --json',
+      command: STALE_BLOCKER_EVAPORATION_COMMAND,
       prompt: codexPrompt({
         goal: 'unblock downstream Queen waves',
         current: `${payload.queen_wave_health.stale_claims_blocking_downstream} stale blockers`,
         inspect:
-          'colony queen sweep --json, mcp__colony__rescue_stranded_scan, packages/queen/src/sweep.ts',
+          'colony coordination sweep --json, colony coordination sweep --release-stale-blockers --json, mcp__colony__rescue_stranded_scan, packages/core/src/coordination-sweep.ts',
         acceptance: 'stale blockers are rescued and later wave subtasks become claimable',
       }),
     });
