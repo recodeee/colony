@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const CompressionIntensity = z.enum(['lite', 'full', 'ultra']);
 export type CompressionIntensity = z.infer<typeof CompressionIntensity>;
 
-export const EmbeddingProvider = z.enum(['local', 'ollama', 'openai', 'none']);
+export const EmbeddingProvider = z.enum(['local', 'ollama', 'openai', 'codex-gpu', 'none']);
 export type EmbeddingProvider = z.infer<typeof EmbeddingProvider>;
 
 export const NotifyProvider = z.enum(['desktop', 'none']);
@@ -100,7 +100,7 @@ export const SettingsSchema = z
     embedding: z
       .object({
         provider: EmbeddingProvider.default('local').describe(
-          'Embedding provider: local (Transformers.js, default), ollama, openai, or none.',
+          'Embedding provider: local (Transformers.js, default), ollama, openai, codex-gpu (recodee codex-gpu-embedder HTTP service), or none.',
         ),
         model: z
           .string()
@@ -108,7 +108,12 @@ export const SettingsSchema = z
           .describe(
             'Embedding model id. Switching models clears existing vectors and re-embeds on next worker start.',
           ),
-        endpoint: z.string().optional().describe('Remote endpoint for ollama / openai providers.'),
+        endpoint: z
+          .string()
+          .optional()
+          .describe(
+            'Remote endpoint for ollama / openai / codex-gpu providers. codex-gpu defaults to http://127.0.0.1:8100.',
+          ),
         apiKey: z.string().optional().describe('API key for remote providers.'),
         batchSize: z
           .number()

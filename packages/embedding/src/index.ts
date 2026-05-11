@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { type Settings, resolveDataDir } from '@colony/config';
+import { createCodexGpuEmbedder } from './providers/codex-gpu.js';
 import { createLocalEmbedder } from './providers/local.js';
 import { createOllamaEmbedder } from './providers/ollama.js';
 import { createOpenAIEmbedder } from './providers/openai.js';
@@ -34,6 +35,8 @@ export async function createEmbedder(
       return createOpenAIEmbedder(model, settings.embedding.endpoint, settings.embedding.apiKey, {
         log,
       });
+    case 'codex-gpu':
+      return createCodexGpuEmbedder(model, settings.embedding.endpoint, { log });
     default: {
       // Exhaustiveness check — if a new provider is added to the schema, this
       // throws at runtime so tests catch it immediately.
