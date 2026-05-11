@@ -67,7 +67,7 @@ describe('rescue stranded MCP tools', () => {
     expect(store.storage.listClaims(taskId)).toHaveLength(1);
   });
 
-  it('rescue_stranded_run with confirm: true mutates state and returns the rescued list', async () => {
+  it('rescue_stranded_run with confirm: true releases stale claims and returns the rescued list', async () => {
     const outcome = await call<RescueOutcome>('rescue_stranded_run', {
       stranded_after_minutes: 5,
       confirm: true,
@@ -76,14 +76,11 @@ describe('rescue stranded MCP tools', () => {
     expect(outcome.dry_run).toBe(false);
     expect(outcome.stranded).toHaveLength(1);
     expect(outcome.rescued).toHaveLength(1);
-    const relay = store.storage.taskObservationsByKind(taskId, 'relay', 10)[0];
-    expect(relay).toBeDefined();
-    expect(store.storage.listClaims(taskId)).toEqual([
-      expect.objectContaining({
-        state: 'handoff_pending',
-        handoff_observation_id: relay?.id,
-      }),
-    ]);
+    const auditId = outcome.rescued[0]?.audit_observation_id as number | undefined;
+    const audit = store.storage.getObservation(auditId ?? -1);
+    expect(audit).toBeDefined();
+    expect(audit?.kind).toBe('rescue-stranded');
+    expect(store.storage.listClaims(taskId)).toEqual([]);
   });
 });
 

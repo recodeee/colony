@@ -2,7 +2,7 @@ import type { ObservationRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import { type HivemindSession, readHivemind } from './hivemind.js';
 import { inferIdeFromSessionId } from './infer-ide.js';
 import type { MemoryStore } from './memory-store.js';
-import { type PlanInfo, type SubtaskInfo, listPlans } from './plan.js';
+import { type PlanInfo, type SubtaskInfo, listPlans, readSubtaskByBranch } from './plan.js';
 import {
   type MessageUrgency,
   type RelayReason,
@@ -372,6 +372,11 @@ export function bulkRescueStrandedSessions(
             session_id,
           });
         }
+        const requeuedSubtasks = requeueReleasedPlanSubtasks(store, {
+          session_id,
+          claims: liveClaims,
+          agent: row.agent,
+        });
         const auditId = store.addObservation({
           session_id,
           kind: 'rescue-stranded',
@@ -388,6 +393,7 @@ export function bulkRescueStrandedSessions(
             task_ids: row.task_ids,
             last_activity: row.last_activity,
             held_claim_count: liveClaims.length,
+            requeued_plan_subtasks: requeuedSubtasks,
             released_claims: liveClaims.map((claim) => ({
               task_id: claim.task_id,
               file_path: claim.file_path,
@@ -419,6 +425,44 @@ export function bulkRescueStrandedSessions(
   }
 
   return outcome;
+}
+
+function requeueReleasedPlanSubtasks(
+  store: MemoryStore,
+  args: { session_id: string; claims: ParsedHeldClaim[]; agent: string },
+): Array<{ plan_slug: string; subtask_index: number; task_id: number }> {
+  const requeued: Array<{ plan_slug: string; subtask_index: number; task_id: number }> = [];
+  const taskIds = [...new Set(args.claims.map((claim) => claim.task_id))];
+  for (const taskId of taskIds) {
+    const task = store.storage.getTask(taskId);
+    if (!task) continue;
+    const located = readSubtaskByBranch(store, task.branch);
+    if (!located) continue;
+    if (located.info.status !== 'claimed') continue;
+    if (located.info.claimed_by_session_id !== args.session_id) continue;
+
+    store.addObservation({
+      session_id: args.session_id,
+      kind: 'plan-subtask-claim',
+      task_id: taskId,
+      content: `Bulk rescue re-queued ${located.info.parent_plan_slug}/sub-${located.info.subtask_index} after releasing stranded session ${args.session_id}.`,
+      metadata: {
+        kind: 'plan-subtask-claim',
+        status: 'available',
+        session_id: args.session_id,
+        agent: args.agent,
+        plan_slug: located.info.parent_plan_slug,
+        subtask_index: located.info.subtask_index,
+        rescue_reason: 'bulk-stranded-release',
+      },
+    });
+    requeued.push({
+      plan_slug: located.info.parent_plan_slug,
+      subtask_index: located.info.subtask_index,
+      task_id: taskId,
+    });
+  }
+  return requeued;
 }
 
 function compareRescueJobs(left: RescueJob, right: RescueJob): number {
