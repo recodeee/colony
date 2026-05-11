@@ -6,6 +6,13 @@ interface CodexGpuResponse {
   dim?: number;
 }
 
+interface CodexGpuBatchResponse {
+  vectors?: number[][];
+  backend?: string;
+  dim?: number;
+  count?: number;
+}
+
 interface CodexGpuError {
   error?: string;
   message?: string;
@@ -38,18 +45,16 @@ export async function createCodexGpuEmbedder(
 
   let dim = 0;
 
-  const embed = async (text: string): Promise<Float32Array> => {
+  const requestJson = async <T>(path: string, body: unknown): Promise<T> => {
     let res: Response;
     try {
-      res = await fetch(`${base}/embed`, {
+      res = await fetch(`${base}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(body),
       });
     } catch (err) {
-      throw new Error(
-        `codex-gpu-embedder fetch ${base}/embed failed: ${(err as Error).message}`,
-      );
+      throw new Error(`codex-gpu-embedder fetch ${base}${path} failed: ${(err as Error).message}`);
     }
     if (!res.ok) {
       // Try to read the error body for a clearer message; fall through to
@@ -69,7 +74,11 @@ export async function createCodexGpuEmbedder(
         `codex-gpu-embedder ${res.status} ${res.statusText}${detail ? `: ${detail}` : ''}`,
       );
     }
-    const json = (await res.json()) as CodexGpuResponse;
+    return (await res.json()) as T;
+  };
+
+  const embed = async (text: string): Promise<Float32Array> => {
+    const json = await requestJson<CodexGpuResponse>('/embed', { text });
     const raw = json.vector;
     if (!Array.isArray(raw) || raw.length === 0) {
       throw new Error('codex-gpu-embedder response missing or empty `vector` field');
@@ -78,6 +87,26 @@ export async function createCodexGpuEmbedder(
     for (let i = 0; i < raw.length; i++) vec[i] = raw[i] ?? 0;
     if (dim === 0) dim = vec.length;
     return vec;
+  };
+
+  const embedBatch = async (texts: readonly string[]): Promise<Float32Array[]> => {
+    if (texts.length === 1) {
+      const [text] = texts;
+      return [await embed(text ?? '')];
+    }
+    const json = await requestJson<CodexGpuBatchResponse>('/embed/batch', { texts: [...texts] });
+    const rows = json.vectors;
+    if (!Array.isArray(rows) || rows.length !== texts.length) {
+      throw new Error(
+        `codex-gpu-embedder returned ${rows?.length ?? 0} vectors for ${texts.length} texts`,
+      );
+    }
+    return rows.map((raw) => {
+      const vec = new Float32Array(raw.length);
+      for (let i = 0; i < raw.length; i++) vec[i] = raw[i] ?? 0;
+      if (dim === 0) dim = vec.length;
+      return vec;
+    });
   };
 
   // Warm-up probe — confirms the endpoint is reachable, captures `dim`,
@@ -95,5 +124,6 @@ export async function createCodexGpuEmbedder(
       return dim;
     },
     embed,
+    embedBatch,
   };
 }

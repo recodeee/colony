@@ -33,6 +33,197 @@ export function stateFilePath(settings: Settings): string {
   return join(resolveDataDir(settings.dataDir), 'worker.state.json');
 }
 
+export const BATCH_MAX = 32;
+export const BATCH_WINDOW_MS = 50;
+const INGEST_CHANNEL_CAPACITY = BATCH_MAX * 4;
+const SMALL_BUCKET_MIN = 4;
+
+export class IngestError extends Error {
+  static readonly BACKPRESSURE = 'Backpressure';
+
+  readonly code: string;
+
+  private constructor(code: string, message: string) {
+    super(message);
+    this.name = 'IngestError';
+    this.code = code;
+  }
+
+  static backpressure(): IngestError {
+    return new IngestError(IngestError.BACKPRESSURE, 'ingest batcher channel is full');
+  }
+}
+
+interface PendingObservation {
+  id: number;
+  text: string;
+  resolve: (result: IngestResult) => void;
+  reject: (err: unknown) => void;
+}
+
+interface IngestResult {
+  id: number;
+  vector: Float32Array;
+}
+
+export class IngestBatcher {
+  private readonly buffer: PendingObservation[] = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private queued = 0;
+
+  constructor(
+    private readonly embedder: Embedder,
+    private readonly opts: {
+      maxBatch?: number;
+      windowMs?: number;
+      capacity?: number;
+      log?: (line: string) => void;
+    } = {},
+  ) {}
+
+  ingest(id: number, text: string): Promise<IngestResult> {
+    const capacity = this.opts.capacity ?? INGEST_CHANNEL_CAPACITY;
+    if (this.queued >= capacity) {
+      return Promise.reject(IngestError.backpressure());
+    }
+    this.queued += 1;
+    return new Promise((resolve, reject) => {
+      this.buffer.push({ id, text, resolve, reject });
+      if (this.buffer.length >= (this.opts.maxBatch ?? BATCH_MAX)) {
+        this.flushSoon();
+        return;
+      }
+      this.armTimer();
+    });
+  }
+
+  private armTimer(): void {
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flushSoon();
+    }, this.opts.windowMs ?? BATCH_WINDOW_MS);
+  }
+
+  private flushSoon(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    void this.flush();
+  }
+
+  private async flush(): Promise<void> {
+    if (this.buffer.length === 0) return;
+    const batch = this.buffer.splice(0, this.opts.maxBatch ?? BATCH_MAX);
+    const t0 = Date.now();
+    try {
+      const vectorsById = new Map<PendingObservation, Float32Array>();
+      const buckets = buildPaddingAwareBuckets(batch, this.opts.maxBatch ?? BATCH_MAX);
+      for (const bucket of buckets) {
+        const vectors = await embedTexts(
+          this.embedder,
+          bucket.map((item) => item.text),
+        );
+        if (vectors.length !== bucket.length) {
+          throw new Error(`embedder returned ${vectors.length} vectors for ${bucket.length} texts`);
+        }
+        for (let i = 0; i < bucket.length; i++) {
+          const item = bucket[i];
+          const vector = vectors[i];
+          if (item && vector) vectorsById.set(item, vector);
+        }
+      }
+      if (vectorsById.size !== batch.length) {
+        throw new Error(`embedder returned ${vectorsById.size} vectors for ${batch.length} texts`);
+      }
+      const elapsedMs = Math.max(1, Date.now() - t0);
+      const textsPerSec = Number(((batch.length * 1000) / elapsedMs).toFixed(1));
+      (this.opts.log ?? defaultBatchLog)(
+        `[colony worker] embed batch flush batch_size=${batch.length} bucket_count=${buckets.length} elapsed_ms=${elapsedMs} texts_per_sec=${textsPerSec}`,
+      );
+      for (const item of batch) {
+        const vector = vectorsById.get(item);
+        if (!item || !vector) continue;
+        item.resolve({ id: item.id, vector });
+      }
+    } catch (err) {
+      for (const item of batch) item.reject(err);
+    } finally {
+      this.queued -= batch.length;
+      if (this.buffer.length > 0) this.armTimer();
+    }
+  }
+}
+
+function buildPaddingAwareBuckets(
+  batch: readonly PendingObservation[],
+  maxBatch: number,
+): PendingObservation[][] {
+  const buckets: PendingObservation[][] = [[], [], [], []];
+  const sorted = [...batch].sort((a, b) => estimateTokens(a.text) - estimateTokens(b.text));
+  for (const item of sorted) {
+    buckets[bucketIndex(estimateTokens(item.text))]?.push(item);
+  }
+
+  for (let index = 0; index < buckets.length; index++) {
+    const bucket = buckets[index];
+    if (!bucket || bucket.length === 0 || bucket.length >= SMALL_BUCKET_MIN) continue;
+    const targetIndex = mergeTargetIndex(buckets, index, maxBatch);
+    if (targetIndex === null) continue;
+    buckets[targetIndex]?.push(...bucket);
+    bucket.length = 0;
+  }
+
+  return buckets.filter((bucket) => bucket.length > 0);
+}
+
+function mergeTargetIndex(
+  buckets: readonly PendingObservation[][],
+  sourceIndex: number,
+  maxBatch: number,
+): number | null {
+  const source = buckets[sourceIndex];
+  if (!source) return null;
+  const candidates = [sourceIndex - 1, sourceIndex + 1].filter(
+    (index) => index >= 0 && index < buckets.length,
+  );
+  for (const index of candidates) {
+    const bucket = buckets[index];
+    if (bucket && bucket.length > 0 && bucket.length + source.length <= maxBatch) {
+      return index;
+    }
+  }
+  return null;
+}
+
+function bucketIndex(estimatedTokens: number): number {
+  if (estimatedTokens < 64) return 0;
+  if (estimatedTokens < 256) return 1;
+  if (estimatedTokens < 1024) return 2;
+  return 3;
+}
+
+function estimateTokens(text: string): number {
+  return Math.floor(text.length / 4);
+}
+
+async function embedTexts(embedder: Embedder, texts: readonly string[]): Promise<Float32Array[]> {
+  if (texts.length === 1) {
+    const [text] = texts;
+    if (text === undefined) return [];
+    return [await embedder.embed(text)];
+  }
+  if (embedder.embedBatch) {
+    return embedder.embedBatch(texts);
+  }
+  return Promise.all(texts.map((text) => embedder.embed(text)));
+}
+
+function defaultBatchLog(line: string): void {
+  process.stderr.write(`${line}\n`);
+}
+
 /**
  * Run the embedding backfill loop in-process. Writes a snapshot JSON after
  * every batch so `colony status` can read it without HTTP.
@@ -88,6 +279,7 @@ export function startEmbedLoop(opts: {
   let highWaterObservationId = 0;
   let needsFullScan = true;
   let nextFullScanAt = Date.now() + fullScanIntervalMs;
+  const batcher = new IngestBatcher(embedder);
 
   const snapshot = () => {
     try {
@@ -125,24 +317,24 @@ export function startEmbedLoop(opts: {
       return false;
     }
     const t0 = Date.now();
+    const pending = rows.map((row) => {
+      // Expand for semantic fidelity: caveman grammar is lossless but
+      // models were trained on natural text, so expand first.
+      return batcher.ingest(row.id, expand(row.content));
+    });
+    const results = await Promise.allSettled(pending);
     let processed = 0;
-    for (const row of rows) {
+    for (const result of results) {
       if (stopped) return true;
-      try {
-        // Expand for semantic fidelity: caveman grammar is lossless but
-        // models were trained on natural text, so expand first.
-        const text = expand(row.content);
-        const vec = await embedder.embed(text);
-        store.storage.putEmbedding(row.id, embedder.model, vec);
-        highWaterObservationId = Math.max(highWaterObservationId, row.id);
-        processed += 1;
-      } catch (err) {
-        state.lastError = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[colony worker] embed error row=${row.id}: ${state.lastError}\n`);
-        // Do not spin on a persistent embed error. The outer loop will sleep
-        // before retrying, keeping one bad observation from pinning a CPU.
-        break;
+      if (result.status === 'rejected') {
+        state.lastError =
+          result.reason instanceof Error ? result.reason.message : String(result.reason);
+        process.stderr.write(`[colony worker] embed error: ${state.lastError}\n`);
+        continue;
       }
+      store.storage.putEmbedding(result.value.id, embedder.model, result.value.vector);
+      highWaterObservationId = Math.max(highWaterObservationId, result.value.id);
+      processed += 1;
     }
     if (processed === 0) return false;
     state.lastBatchAt = Date.now();

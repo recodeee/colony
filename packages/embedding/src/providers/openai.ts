@@ -31,14 +31,14 @@ export async function createOpenAIEmbedder(
   const log = opts.log ?? (() => {});
   let dim = MODEL_DIMS[model] ?? 0;
 
-  const embed = async (text: string): Promise<Float32Array> => {
+  const embedBatch = async (texts: readonly string[]): Promise<Float32Array[]> => {
     const res = await fetch(`${base}/embeddings`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ model, input: text }),
+      body: JSON.stringify({ model, input: texts.length === 1 ? texts[0] : texts }),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
@@ -46,11 +46,26 @@ export async function createOpenAIEmbedder(
     }
     const json = (await res.json()) as OpenAIResponse;
     if (json.error) throw new Error(`OpenAI embed error: ${json.error.message}`);
-    const raw = json.data?.[0]?.embedding;
-    if (!raw) throw new Error('OpenAI response missing embedding field');
-    const vec = new Float32Array(raw.length);
-    for (let i = 0; i < raw.length; i++) vec[i] = raw[i] ?? 0;
-    if (dim === 0) dim = vec.length;
+    const rows = json.data;
+    if (!rows || rows.length !== texts.length) {
+      throw new Error(
+        `OpenAI response returned ${rows?.length ?? 0} embeddings for ${texts.length} inputs`,
+      );
+    }
+    const vectors = rows.map((row) => {
+      const raw = row.embedding;
+      if (!raw) throw new Error('OpenAI response missing embedding field');
+      const vec = new Float32Array(raw.length);
+      for (let i = 0; i < raw.length; i++) vec[i] = raw[i] ?? 0;
+      if (dim === 0) dim = vec.length;
+      return vec;
+    });
+    return vectors;
+  };
+
+  const embed = async (text: string): Promise<Float32Array> => {
+    const [vec] = await embedBatch([text]);
+    if (!vec) throw new Error('OpenAI response missing embedding field');
     return vec;
   };
 
@@ -66,5 +81,6 @@ export async function createOpenAIEmbedder(
       return dim;
     },
     embed,
+    embedBatch,
   };
 }

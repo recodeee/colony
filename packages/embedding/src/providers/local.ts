@@ -44,15 +44,39 @@ export async function createLocalEmbedder(
 
   let dim = MODEL_DIMS[model] ?? 0;
 
-  const embed = async (text: string): Promise<Float32Array> => {
-    const out = await extractor(text, { pooling: 'mean', normalize: true });
+  const embedBatch = async (texts: readonly string[]): Promise<Float32Array[]> => {
+    const input = texts.length === 1 ? (texts[0] ?? '') : [...texts];
+    const out = await extractor(input, {
+      pooling: 'mean',
+      normalize: true,
+    });
     // Tensor.data is a typed array — for mean-pooled sentence embeddings it's
-    // a single row whose length === dim. Copy into a dense Float32Array the
-    // storage layer can persist directly.
-    const data = (out as { data: ArrayLike<number> }).data;
-    const vec = new Float32Array(data.length);
-    for (let i = 0; i < data.length; i++) vec[i] = data[i] ?? 0;
-    if (dim === 0) dim = vec.length;
+    // one row per input. Copy into dense Float32Array rows the storage layer
+    // can persist directly.
+    const tensor = out as { data: ArrayLike<number>; dims?: number[] };
+    const data = tensor.data;
+    const inferredDim =
+      texts.length > 1 && tensor.dims && tensor.dims.length >= 2
+        ? (tensor.dims.at(-1) ?? 0)
+        : data.length;
+    if (dim === 0) dim = inferredDim;
+    const rowDim = dim || inferredDim;
+    if (rowDim <= 0 || data.length !== texts.length * rowDim) {
+      throw new Error(`Local embedder returned ${data.length} values for ${texts.length} inputs`);
+    }
+    const vectors: Float32Array[] = [];
+    for (let row = 0; row < texts.length; row++) {
+      const vec = new Float32Array(rowDim);
+      const offset = row * rowDim;
+      for (let i = 0; i < rowDim; i++) vec[i] = data[offset + i] ?? 0;
+      vectors.push(vec);
+    }
+    return vectors;
+  };
+
+  const embed = async (text: string): Promise<Float32Array> => {
+    const [vec] = await embedBatch([text]);
+    if (!vec) throw new Error('Local embedder returned no vector');
     return vec;
   };
 
@@ -69,5 +93,6 @@ export async function createLocalEmbedder(
       return dim;
     },
     embed,
+    embedBatch,
   };
 }

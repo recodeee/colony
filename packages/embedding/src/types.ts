@@ -9,6 +9,7 @@ export interface Embedder {
   readonly model: string;
   readonly dim: number;
   embed(text: string): Promise<Float32Array>;
+  embedBatch?(texts: readonly string[]): Promise<Float32Array[]>;
 }
 
 export interface EmbeddingFactoryOptions {
