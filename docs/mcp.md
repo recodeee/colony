@@ -373,6 +373,34 @@ Search hits include `kind` and `task_id` so agents can recognize advisory negati
 
 Scoring is hybrid: keyword (FTS5 BM25) blended with vector similarity via `settings.search.alpha`. Missing fields fall back gracefully.
 
+## `semantic_search`
+
+Pure-vector semantic recall over observation embeddings. Use when keywords
+likely do not match the stored content — cross-language queries, concept-
+level queries, or novel phrasings of an idea that prior agents recorded
+with different words. `search` starts with a BM25 candidate pool and
+re-ranks it with vectors; `semantic_search` skips FTS entirely and scores
+every stored vector by cosine.
+
+```json
+{
+  "name": "semantic_search",
+  "input": { "query": "GPU embedder performance optimization", "limit": 10 }
+}
+```
+
+Requires an embedding provider (`settings.embedding.provider` ∈
+`local | ollama | openai | codex-gpu`). When the provider is `none` the
+tool returns `{ "error": "...", "hits": [] }` with a clear message.
+
+Returns the same compact shape as `search`: `[ { id, session_id, kind,
+snippet, score, ts, task_id } ]`. Fetch full bodies with
+`get_observations`.
+
+Cost is O(N) over stored embeddings matching `(model, dim)`. For ≤ 50k
+observations this stays inside the `search` p95 budget (50 ms); larger
+corpora will move behind an ANN index without changing the tool surface.
+
 ## `timeline`
 
 Chronological observation identifiers for a given session.

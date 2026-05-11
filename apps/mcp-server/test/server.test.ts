@@ -66,6 +66,7 @@ describe('MCP server', () => {
       'rescue_stranded_scan',
       'savings_report',
       'search',
+      'semantic_search',
       'spec_archive',
       'spec_build_context',
       'spec_build_record_failure',
