@@ -124,25 +124,30 @@ export function startEmbedLoop(opts: {
       }
       return false;
     }
+    if (stopped) return true;
     const t0 = Date.now();
     let processed = 0;
-    for (const row of rows) {
-      if (stopped) return true;
-      try {
-        // Expand for semantic fidelity: caveman grammar is lossless but
-        // models were trained on natural text, so expand first.
-        const text = expand(row.content);
-        const vec = await embedder.embed(text);
-        store.storage.putEmbedding(row.id, embedder.model, vec);
-        highWaterObservationId = Math.max(highWaterObservationId, row.id);
-        processed += 1;
-      } catch (err) {
-        state.lastError = err instanceof Error ? err.message : String(err);
-        process.stderr.write(`[colony worker] embed error row=${row.id}: ${state.lastError}\n`);
-        // Do not spin on a persistent embed error. The outer loop will sleep
-        // before retrying, keeping one bad observation from pinning a CPU.
-        break;
+    try {
+      const texts = rows.map((row) => expand(row.content));
+      const embeds = embedder.embedBatch
+        ? await embedder.embedBatch(texts)
+        : await embedSequentially(embedder, texts);
+      if (embeds.length !== rows.length) {
+        throw new Error(`embed batch returned ${embeds.length} vectors for ${rows.length} rows`);
       }
+      store.storage.transaction(() => {
+        rows.forEach((row, index) => {
+          const vec = embeds[index];
+          if (!vec) throw new Error(`embed batch missing vector for row=${row.id}`);
+          store.storage.putEmbedding(row.id, embedder.model, vec);
+          highWaterObservationId = Math.max(highWaterObservationId, row.id);
+          processed += 1;
+        });
+      });
+    } catch (err) {
+      state.lastError = err instanceof Error ? err.message : String(err);
+      const firstRowId = rows[0]?.id ?? 'unknown';
+      process.stderr.write(`[colony worker] embed error row=${firstRowId}: ${state.lastError}\n`);
     }
     if (processed === 0) return false;
     state.lastBatchAt = Date.now();
@@ -199,4 +204,15 @@ export function startEmbedLoop(opts: {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function embedSequentially(
+  embedder: Embedder,
+  texts: readonly string[],
+): Promise<Float32Array[]> {
+  const embeds: Float32Array[] = [];
+  for (const text of texts) {
+    embeds.push(await embedder.embed(text));
+  }
+  return embeds;
 }

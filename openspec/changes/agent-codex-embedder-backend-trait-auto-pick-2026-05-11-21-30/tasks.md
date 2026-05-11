@@ -9,7 +9,7 @@ This change is complete only when **all** of the following are true:
 ## Handoff
 
 - Handoff: change=`agent-codex-embedder-backend-trait-auto-pick-2026-05-11-21-30`; branch=`agent/codex/embedder-backend-trait-auto-pick-2026-05-11-21-30`; scope=`batched embedding backfill`; action=`finish cleanup after verification`.
-- Copy prompt: Continue `agent-codex-embedder-backend-trait-auto-pick-2026-05-11-21-30` on branch `agent/codex/embedder-backend-trait-auto-pick-2026-05-11-21-30`. Work inside the existing sandbox, review `openspec/changes/agent-codex-embedder-backend-trait-auto-pick-2026-05-11-21-27-2/tasks.md`, continue from the current state instead of creating a new sandbox, and when the work is done run `gx branch finish --branch agent/codex/embedder-backend-trait-auto-pick-2026-05-11-21-30 --base main --via-pr --wait-for-merge --cleanup`.
+- Copy prompt: Continue `agent-codex-embedder-backend-trait-auto-pick-2026-05-11-21-30` on branch `agent/codex/embedder-backend-trait-auto-pick-2026-05-11-21-30`. Work inside the existing sandbox, review `openspec/changes/agent-codex-embedder-backend-trait-auto-pick-2026-05-11-21-30/tasks.md`, continue from the current state instead of creating a new sandbox, and when the work is done run `gx branch finish --branch agent/codex/embedder-backend-trait-auto-pick-2026-05-11-21-30 --base main --via-pr --wait-for-merge --cleanup`.
 
 ## 1. Specification
 

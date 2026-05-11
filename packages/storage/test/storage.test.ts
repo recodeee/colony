@@ -348,6 +348,7 @@ describe('Storage', () => {
       expect.closeTo(0.2, 5),
       expect.closeTo(0.3, 5),
     ]);
+    expect(got?.vec.buffer).not.toBe(vec.buffer);
   });
 
   it('allEmbeddings filters by model + dim', () => {
