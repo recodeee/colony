@@ -119,10 +119,8 @@ function buildReflexionMetadata(args: RecordReflexionArgs, observed_at: number):
 function validateShortText(value: string, field: string, maxLength: number): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`reflexion ${field} is required`);
-  if (trimmed.length > maxLength) {
-    throw new Error(`reflexion ${field} must be <= ${maxLength} chars`);
-  }
-  return trimmed;
+  if (trimmed.length <= maxLength) return trimmed;
+  return `${trimmed.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 function hasRecentReflexion(

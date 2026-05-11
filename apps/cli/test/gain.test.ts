@@ -439,4 +439,16 @@ describe('gain command output', () => {
     expect(SAVINGS_REFERENCE_ROWS.length).toBeGreaterThan(12);
     expect(savingsReferenceTotals().baseline_tokens).toBeGreaterThan(572_000);
   });
+
+  it('maps savings_report and task_list live calls into the comparison model', () => {
+    const readySelection = SAVINGS_REFERENCE_ROWS.find(
+      (row) => row.operation === 'Ready-work selection',
+    );
+    const healthDiagnosis = SAVINGS_REFERENCE_ROWS.find(
+      (row) => row.operation === 'Health/adoption diagnosis',
+    );
+
+    expect(readySelection?.mcp_operations).toContain('task_list');
+    expect(healthDiagnosis?.mcp_operations).toContain('savings_report');
+  });
 });

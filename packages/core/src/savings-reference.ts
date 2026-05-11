@@ -136,7 +136,7 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     9_000,
     700,
     'task_ready_for_agent returns one claimable next tool instead of browsing task lists',
-    ['task_ready_for_agent', 'task_plan_list', 'task_foraging_report'],
+    ['task_ready_for_agent', 'task_plan_list', 'task_foraging_report', 'task_list'],
   ),
   row(
     'Unread message triage',
@@ -189,7 +189,7 @@ export const SAVINGS_REFERENCE_ROWS: ReadonlyArray<SavingsReferenceRow> = [
     16_000,
     1_800,
     'startup_panel + health nudges vs reconstructing adoption from raw events',
-    ['task_autopilot_tick', 'hivemind', 'list_sessions'],
+    ['task_autopilot_tick', 'hivemind', 'list_sessions', 'savings_report'],
   ),
   row(
     'Examples pattern lookup',
