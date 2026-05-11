@@ -119,7 +119,7 @@ export const SettingsSchema = z
           .number()
           .int()
           .positive()
-          .default(16)
+          .default(32)
           .describe('How many observations the worker embeds per backfill batch.'),
         autoStart: z
           .boolean()
@@ -139,7 +139,7 @@ export const SettingsSchema = z
       .default({
         provider: 'local',
         model: 'Xenova/all-MiniLM-L6-v2',
-        batchSize: 16,
+        batchSize: 32,
         autoStart: true,
         idleShutdownMs: 600_000,
       })

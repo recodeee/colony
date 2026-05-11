@@ -15,13 +15,13 @@ import {
 let dir: string;
 let store: MemoryStore;
 
-function buildSettings() {
+function buildSettings(batchSize = 8) {
   return SettingsSchema.parse({
     dataDir: dir,
     embedding: {
       provider: 'local',
       model: 'mock-model',
-      batchSize: 8,
+      batchSize,
       autoStart: false,
       idleShutdownMs: 60_000,
     },
@@ -63,6 +63,24 @@ function trackingEmbedder(batches: string[][]): Embedder {
     async embedBatch(texts: readonly string[]) {
       batches.push([...texts]);
       return texts.map(() => new Float32Array(4));
+    },
+  };
+}
+
+function mockBatchEmbedder(model: string, dim: number, calls: string[][]): Embedder {
+  return {
+    model,
+    dim,
+    async embed(_text: string) {
+      throw new Error('single embed should not run when embedBatch is available');
+    },
+    async embedBatch(texts: readonly string[]) {
+      calls.push([...texts]);
+      return texts.map(() => {
+        const v = new Float32Array(dim);
+        for (let i = 0; i < dim; i++) v[i] = Math.random();
+        return v;
+      });
     },
   };
 }
@@ -225,6 +243,64 @@ describe('embed loop', () => {
     // Stale rows dropped, new rows created.
     expect(store.storage.countEmbeddings({ model: 'old-model', dim: 2 })).toBe(0);
     expect(store.storage.countEmbeddings({ model: 'new-model', dim: 3 })).toBe(2);
+  });
+
+  it('embeds each worker batch with one embedBatch call and one storage transaction', async () => {
+    store.startSession({ id: 'sess', ide: 'test', cwd: '/tmp' });
+    for (let i = 0; i < 8; i++) {
+      store.addObservation({ session_id: 'sess', kind: 'note', content: `observation ${i}` });
+    }
+    const calls: string[][] = [];
+    let transactions = 0;
+    const transaction = store.storage.transaction.bind(store.storage);
+    store.storage.transaction = (...args) => {
+      transactions += 1;
+      return transaction(...args);
+    };
+
+    const handle = startEmbedLoop({
+      store,
+      embedder: mockBatchEmbedder('mock-model', 4, calls),
+      settings: buildSettings(),
+      idleTickMs: 20,
+    });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && store.storage.countEmbeddings() < 8) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await handle.stop();
+
+    expect(store.storage.countEmbeddings()).toBe(8);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(8);
+    expect(transactions).toBe(1);
+  });
+
+  it('backfills a 1000-row corpus in 32-row embed batches', async () => {
+    store.startSession({ id: 'sess', ide: 'test', cwd: '/tmp' });
+    for (let i = 0; i < 1000; i++) {
+      store.addObservation({ session_id: 'sess', kind: 'note', content: `observation ${i}` });
+    }
+    const calls: string[][] = [];
+
+    const handle = startEmbedLoop({
+      store,
+      embedder: mockBatchEmbedder('mock-model', 4, calls),
+      settings: buildSettings(32),
+      idleTickMs: 20,
+    });
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && store.storage.countEmbeddings() < 1000) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    await handle.stop();
+
+    expect(store.storage.countEmbeddings()).toBe(1000);
+    expect(calls).toHaveLength(32);
+    expect(calls.slice(0, -1).every((batch) => batch.length === 32)).toBe(true);
+    expect(calls.at(-1)).toHaveLength(8);
   });
 
   it('writes state file at a predictable path', () => {

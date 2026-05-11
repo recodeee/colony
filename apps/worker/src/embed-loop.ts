@@ -217,7 +217,11 @@ async function embedTexts(embedder: Embedder, texts: readonly string[]): Promise
   if (embedder.embedBatch) {
     return embedder.embedBatch(texts);
   }
-  return Promise.all(texts.map((text) => embedder.embed(text)));
+  const vectors: Float32Array[] = [];
+  for (const text of texts) {
+    vectors.push(await embedder.embed(text));
+  }
+  return vectors;
 }
 
 function defaultBatchLog(line: string): void {
@@ -316,6 +320,7 @@ export function startEmbedLoop(opts: {
       }
       return false;
     }
+    if (stopped) return true;
     const t0 = Date.now();
     const pending = rows.map((row) => {
       // Expand for semantic fidelity: caveman grammar is lossless but
@@ -324,6 +329,7 @@ export function startEmbedLoop(opts: {
     });
     const results = await Promise.allSettled(pending);
     let processed = 0;
+    const fulfilled: IngestResult[] = [];
     for (const result of results) {
       if (stopped) return true;
       if (result.status === 'rejected') {
@@ -332,10 +338,15 @@ export function startEmbedLoop(opts: {
         process.stderr.write(`[colony worker] embed error: ${state.lastError}\n`);
         continue;
       }
-      store.storage.putEmbedding(result.value.id, embedder.model, result.value.vector);
-      highWaterObservationId = Math.max(highWaterObservationId, result.value.id);
-      processed += 1;
+      fulfilled.push(result.value);
     }
+    store.storage.transaction(() => {
+      for (const result of fulfilled) {
+        store.storage.putEmbedding(result.id, embedder.model, result.vector);
+        highWaterObservationId = Math.max(highWaterObservationId, result.id);
+        processed += 1;
+      }
+    });
     if (processed === 0) return false;
     state.lastBatchAt = Date.now();
     state.lastBatchMs = state.lastBatchAt - t0;

@@ -1082,7 +1082,9 @@ export class Storage {
       .prepare('SELECT model, dim, vec FROM embeddings WHERE observation_id = ?')
       .get(observationId) as { model: string; dim: number; vec: Buffer } | undefined;
     if (!row) return undefined;
-    const vec = new Float32Array(row.vec.buffer, row.vec.byteOffset, row.dim);
+    const vec = new Float32Array(
+      new Uint8Array(row.vec.buffer, row.vec.byteOffset, row.vec.byteLength).slice().buffer,
+    );
     return { model: row.model, dim: row.dim, vec };
   }
 

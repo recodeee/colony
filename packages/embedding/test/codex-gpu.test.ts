@@ -18,7 +18,11 @@ describe('codex-gpu provider', () => {
     globalThis.fetch = vi.fn(async (input, init) => {
       calls.push({ url: String(input), body: String(init?.body) });
       return new Response(
-        JSON.stringify({ vector: new Array(384).fill(0.0001), backend: 'ort-cuda-minilm', dim: 384 }),
+        JSON.stringify({
+          vector: new Array(384).fill(0.0001),
+          backend: 'ort-cuda-minilm',
+          dim: 384,
+        }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     }) as unknown as typeof fetch;
@@ -42,8 +46,8 @@ describe('codex-gpu provider', () => {
   });
 
   it('produces a Float32Array of the response vector length', async () => {
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ vector: [0.1, 0.2, 0.3] }), { status: 200 }),
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify({ vector: [0.1, 0.2, 0.3] }), { status: 200 }),
     ) as unknown as typeof fetch;
     const embedder = await createCodexGpuEmbedder('m', 'http://127.0.0.1:8100');
     const out = await embedder.embed('hello');
@@ -52,36 +56,65 @@ describe('codex-gpu provider', () => {
     expect(out[0]).toBeCloseTo(0.1);
   });
 
+  it('sends text arrays to the batch endpoint', async () => {
+    const calls: { url: string; body: string }[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      calls.push({ url: String(input), body: String(init?.body) });
+      if (String(input).endsWith('/embed/batch')) {
+        return new Response(JSON.stringify({ vectors: [[0.1], [0.2]], count: 2, dim: 1 }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ vector: [0] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const embedder = await createCodexGpuEmbedder('m', 'http://127.0.0.1:8100');
+
+    const out = await embedder.embedBatch?.(['hello', 'world']);
+
+    expect(out?.map((vec) => Array.from(vec))).toEqual([
+      [expect.closeTo(0.1, 5)],
+      [expect.closeTo(0.2, 5)],
+    ]);
+    expect(calls[1]?.url).toBe('http://127.0.0.1:8100/embed/batch');
+    expect(JSON.parse(calls[1]?.body ?? '{}')).toEqual({ texts: ['hello', 'world'] });
+  });
+
   it('throws a clear error on non-2xx response, including the server message', async () => {
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ error: 'text must be non-empty' }), {
-        status: 400,
-        statusText: 'Bad Request',
-        headers: { 'content-type': 'application/json' },
-      }),
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'text must be non-empty' }), {
+          status: 400,
+          statusText: 'Bad Request',
+          headers: { 'content-type': 'application/json' },
+        }),
     ) as unknown as typeof fetch;
     await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(/400/);
     await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(/text must be non-empty/);
   });
 
   it('throws when response is missing the vector field', async () => {
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ backend: 'ort-cuda-minilm', dim: 384 }), { status: 200 }),
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ backend: 'ort-cuda-minilm', dim: 384 }), { status: 200 }),
     ) as unknown as typeof fetch;
-    await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(/missing or empty `vector`/);
+    await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(
+      /missing or empty `vector`/,
+    );
   });
 
   it('throws when fetch itself rejects (server unreachable)', async () => {
     globalThis.fetch = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
-    await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(/codex-gpu-embedder fetch/);
+    await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(
+      /codex-gpu-embedder fetch/,
+    );
     await expect(createCodexGpuEmbedder('m', undefined)).rejects.toThrow(/ECONNREFUSED/);
   });
 
   it('createEmbedder factory routes codex-gpu provider correctly', async () => {
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ vector: new Array(384).fill(0) }), { status: 200 }),
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify({ vector: new Array(384).fill(0) }), { status: 200 }),
     ) as unknown as typeof fetch;
     const settings = SettingsSchema.parse({
       embedding: {
