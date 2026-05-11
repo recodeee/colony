@@ -110,6 +110,7 @@ describe('Colony CLI program', () => {
         examples_integrate_plan [options] <example_name>  Plan concept ports from an indexed example
         foraging                                          Index and query <repo_root>/examples food sources
         gain [options]                                    Show colony token/cost savings from live mcp_metrics receipts
+        grab                                              react-grab localhost intake — receive submits, create tasks, spawn codex
         queen                                             Queen coordination helpers for published plan lanes
         resume                                            Build read-only recovery packets
         rescue                                            Clean up stranded sessions safely
