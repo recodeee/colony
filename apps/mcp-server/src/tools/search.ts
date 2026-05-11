@@ -47,6 +47,37 @@ export function register(server: McpServer, ctx: ToolContext): void {
   );
 
   server.tool(
+    'cluster_observations',
+    'Group near-duplicate observations by semantic similarity. Use after collecting observation_ids from attention_inbox, search, or task_messages to dedupe pending handoffs / repeated reports / noisy lanes before showing the user a list. Returns clusters of `{ canonical_id, member_ids }` where the earliest-id row is the canonical representative; observations without a stored embedding (or with a model/dim mismatch) come back in a separate `unembedded` list. Requires an embedding provider. Threshold default 0.85 (cosine ~= "same idea, different wording"); lower for looser grouping, higher for strict.',
+    {
+      ids: z.array(z.number().int().positive()).min(1).max(500),
+      threshold: z.number().min(-1).max(1).optional(),
+    },
+    wrapHandler('cluster_observations', async ({ ids, threshold }) => {
+      const e = await resolveEmbedder();
+      if (!e) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error:
+                  'cluster_observations requires an embedding provider; set settings.embedding.provider to local, ollama, openai, or codex-gpu',
+                clusters: [],
+                unembedded: ids,
+              }),
+            },
+          ],
+        };
+      }
+      const result = await store.clusterObservations(ids, threshold ?? 0.85, e);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result) }],
+      };
+    }),
+  );
+
+  server.tool(
     'timeline',
     'See a session timeline around an observation or recent turn. Returns chronological IDs, kinds, and timestamps for neighboring context before fetching bodies.',
     {

@@ -52,6 +52,7 @@ describe('MCP server', () => {
       'agent_upsert_profile',
       'attention_inbox',
       'bridge_status',
+      'cluster_observations',
       'examples_integrate_plan',
       'examples_list',
       'examples_query',

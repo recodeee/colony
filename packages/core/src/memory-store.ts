@@ -313,6 +313,83 @@ export class MemoryStore {
     return out;
   }
 
+  // --- cluster observations by semantic similarity ---
+  //
+  // Greedy single-linkage clustering by cosine threshold over a caller-
+  // supplied set of observation IDs. The intended consumer is handoff /
+  // attention_inbox dedupe: an agent collects a list of pending handoff
+  // observation_ids, calls clusterObservations(ids, 0.85), and groups
+  // near-duplicate reports under a single canonical row.
+  //
+  // The algorithm:
+  //   1. Load the embedding for every input id that has one stored.
+  //   2. Sort the survivors by id ascending (deterministic + the earlier
+  //      observation is the natural canonical).
+  //   3. Walk the list. Each unassigned id starts a new cluster; every
+  //      later id whose cosine to the canonical is >= `threshold` joins it.
+  //
+  // Cost: O(N^2) cosine evaluations. Typical attention_inbox payloads are
+  // < 100 IDs, so this is fractions of a millisecond. If a caller asks
+  // for thousands of IDs the budget gets enforced at the MCP-tool layer
+  // (input cap of 500 in the tool's zod schema).
+  //
+  // Items whose embeddings are missing or whose dim does not match the
+  // embedder are reported in `unembedded` and left out of clusters; the
+  // caller decides whether to keep them as singleton entries or skip.
+  async clusterObservations(
+    ids: number[],
+    threshold: number,
+    embedder: Embedder,
+  ): Promise<{ clusters: { canonical_id: number; member_ids: number[] }[]; unembedded: number[] }> {
+    if (ids.length === 0) {
+      return { clusters: [], unembedded: [] };
+    }
+    if (!Number.isFinite(threshold) || threshold <= -1 || threshold > 1) {
+      throw new Error(`clusterObservations: threshold must be in (-1, 1], got ${threshold}`);
+    }
+
+    const stored = this.storage.embeddingsForObservations(ids, {
+      model: embedder.model,
+      dim: embedder.dim,
+    });
+    const byId = new Map<number, Float32Array>(stored.map((r) => [r.observation_id, r.vec]));
+
+    const unembedded: number[] = [];
+    const embedded: { id: number; vec: Float32Array }[] = [];
+    // Preserve input order for unembedded reporting; sort the embedded
+    // subset by id ascending so the earliest observation in each cluster
+    // becomes the canonical representative.
+    const seen = new Set<number>();
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const vec = byId.get(id);
+      if (!vec || vec.length !== embedder.dim) {
+        unembedded.push(id);
+        continue;
+      }
+      embedded.push({ id, vec });
+    }
+    embedded.sort((a, b) => a.id - b.id);
+
+    const clusters: { canonical_id: number; member_ids: number[] }[] = [];
+    const assigned = new Set<number>();
+    for (const item of embedded) {
+      if (assigned.has(item.id)) continue;
+      const cluster = { canonical_id: item.id, member_ids: [item.id] };
+      assigned.add(item.id);
+      for (const other of embedded) {
+        if (assigned.has(other.id)) continue;
+        if (cosine(item.vec, other.vec) >= threshold) {
+          cluster.member_ids.push(other.id);
+          assigned.add(other.id);
+        }
+      }
+      clusters.push(cluster);
+    }
+    return { clusters, unembedded };
+  }
+
   private async keywordSearch(
     query: string,
     limit: number,
