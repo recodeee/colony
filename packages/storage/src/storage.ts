@@ -2003,7 +2003,10 @@ export class Storage {
         // If the same account is already bound, refresh the row in place.
         // Otherwise release the prior binding before inserting the new one,
         // so the partial unique index never trips.
-        if (existing.account_id === c.account_id && existing.session_id === (c.session_id ?? null)) {
+        if (
+          existing.account_id === c.account_id &&
+          existing.session_id === (c.session_id ?? null)
+        ) {
           this.db
             .prepare(
               `UPDATE account_claims
@@ -2072,9 +2075,9 @@ export class Storage {
   }
 
   getAccountClaimById(id: number): AccountClaimRow | undefined {
-    const row = this.db
-      .prepare('SELECT * FROM account_claims WHERE id = ?')
-      .get(id) as Partial<AccountClaimRow> | undefined;
+    const row = this.db.prepare('SELECT * FROM account_claims WHERE id = ?').get(id) as
+      | Partial<AccountClaimRow>
+      | undefined;
     return this.normalizeAccountClaimRow(row);
   }
 
@@ -2089,12 +2092,14 @@ export class Storage {
     return this.normalizeAccountClaimRow(row);
   }
 
-  listAccountClaims(opts: {
-    plan_slug?: string;
-    account_id?: string;
-    state?: AccountClaimState;
-    limit?: number;
-  } = {}): AccountClaimRow[] {
+  listAccountClaims(
+    opts: {
+      plan_slug?: string;
+      account_id?: string;
+      state?: AccountClaimState;
+      limit?: number;
+    } = {},
+  ): AccountClaimRow[] {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
     if (opts.plan_slug) {

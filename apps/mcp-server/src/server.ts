@@ -6,6 +6,7 @@ import { createEmbedder } from '@colony/embedding';
 import { isMainEntry } from '@colony/process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import * as accountClaims from './tools/account-claims.js';
 import * as attention from './tools/attention.js';
 import * as autopilot from './tools/autopilot.js';
 import * as bridge from './tools/bridge.js';
@@ -97,6 +98,7 @@ export function buildServer(
   search.register(server, ctx);
   hivemind.register(server, ctx);
   task.register(server, ctx);
+  accountClaims.register(server, ctx);
   handoff.register(server, ctx);
   proposal.register(server, ctx);
   profile.register(server, ctx);

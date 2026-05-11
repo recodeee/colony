@@ -807,12 +807,7 @@ describe('colony health payload', () => {
     const payload = buildColonyHealthPayload(
       fakeStorage({
         calls: Array.from({ length: 12 }, (_, index) =>
-          call(
-            index + 1,
-            'codex-session',
-            'mcp__colony__task_claim_file',
-            NOW - 60_000 + index,
-          ),
+          call(index + 1, 'codex-session', 'mcp__colony__task_claim_file', NOW - 60_000 + index),
         ),
         claimBeforeEdit: branchDetectorMismatchStats,
         claimBeforeEditStatsBySince: () => branchDetectorMismatchStats,
@@ -3862,7 +3857,14 @@ function fakeStorage(args: {
       const task = tasks.find((candidate) => candidate.id === taskId);
       const isPlanRoot = task?.branch.startsWith('spec/') && !task.branch.includes('/sub-');
       return isPlanRoot
-        ? [{ task_id: taskId, session_id: 'queen-session', agent: 'queen', joined_at: NOW - 90_000 }]
+        ? [
+            {
+              task_id: taskId,
+              session_id: 'queen-session',
+              agent: 'queen',
+              joined_at: NOW - 90_000,
+            },
+          ]
         : [];
     },
     taskTimeline: (taskId: number) => observationsByTask[taskId] ?? [],
