@@ -20,6 +20,33 @@ export function register(server: McpServer, ctx: ToolContext): void {
   );
 
   server.tool(
+    'semantic_search',
+    'Pure-vector semantic search over observation embeddings. Skips BM25 entirely — use this for concept-level queries, cross-language recall, or novel phrasings whose keywords are absent from the stored content (where the hybrid `search` tool returns no useful hits). Requires an embedding provider to be configured. Returns the same compact shape as `search`; fetch full bodies with `get_observations`.',
+    { query: z.string().min(1), limit: z.number().int().positive().max(50).optional() },
+    wrapHandler('semantic_search', async ({ query, limit }) => {
+      const e = await resolveEmbedder();
+      if (!e) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                error:
+                  'semantic_search requires an embedding provider; set settings.embedding.provider to local, ollama, openai, or codex-gpu',
+                hits: [],
+              }),
+            },
+          ],
+        };
+      }
+      const hits = await store.semanticSearch(query, limit, e);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(hits) }],
+      };
+    }),
+  );
+
+  server.tool(
     'timeline',
     'See a session timeline around an observation or recent turn. Returns chronological IDs, kinds, and timestamps for neighboring context before fetching bodies.',
     {

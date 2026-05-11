@@ -230,6 +230,89 @@ export class MemoryStore {
     });
   }
 
+  // --- pure-vector semantic search ---
+  //
+  // The hybrid `search` above starts with a BM25 candidate pool, then vector-
+  // reranks it. That works great when the query shares keywords with the
+  // stored content, but fails for cross-language queries, novel-phrase
+  // queries, and concept-level recall where no FTS candidate ever surfaces.
+  // `semanticSearch` is the escape hatch: skip FTS entirely, score every
+  // stored vector by cosine, return top-K.
+  //
+  // Cost: O(N) cosine evaluations over all observations matching the
+  // embedder's (model, dim). For ≤ 50k observations on the dev box this is
+  // ~5–25 ms in JS — well inside the 50 ms p95 budget for `search`.
+  // Beyond that we'd reach for an ANN index (sqlite-vss / HNSW); the storage
+  // schema already has `idx_embeddings_model` keyed on (model, dim) so the
+  // upgrade path doesn't touch this method's signature.
+  async semanticSearch(
+    query: string,
+    limit: number | undefined,
+    embedder: Embedder,
+    filter?: { kind?: string; metadata?: Record<string, string> },
+  ): Promise<SearchResult[]> {
+    const cap = limit ?? this.settings.search.defaultLimit;
+    const qvec = await embedder.embed(query);
+    if (qvec.length !== embedder.dim) {
+      // Provider lied about dim — cannot meaningfully compare. Return empty
+      // rather than mix dimensions and produce garbage scores.
+      return [];
+    }
+
+    const vectors = this.storage.allEmbeddings({ model: embedder.model, dim: embedder.dim });
+    if (vectors.length === 0) return [];
+
+    const scored = vectors.map((v) => ({ id: v.observation_id, score: cosine(qvec, v.vec) }));
+    scored.sort((a, b) => b.score - a.score);
+
+    // Over-fetch when a filter is set so the post-rank filter can drop
+    // non-matching rows without dropping below `cap`. Bounded so a tiny
+    // filter set on a huge corpus still terminates quickly.
+    const overFetch = filter && (filter.kind || filter.metadata) ? cap * 4 : cap;
+    const candidateIds = scored.slice(0, overFetch).map((s) => s.id);
+    const rows = this.storage.getObservations(candidateIds);
+    const byId = new Map<number, ObservationRow>(rows.map((r) => [r.id, r]));
+
+    const out: SearchResult[] = [];
+    for (const s of scored) {
+      if (out.length >= cap) break;
+      const row = byId.get(s.id);
+      if (!row) continue;
+      if (filter?.kind && row.kind !== filter.kind) continue;
+      if (filter?.metadata) {
+        // ObservationRow stores metadata as a JSON string. Parse lazily so
+        // the no-filter path stays free of JSON cost.
+        let parsedMeta: Record<string, unknown> | null = null;
+        if (row.metadata) {
+          try {
+            parsedMeta = JSON.parse(row.metadata) as Record<string, unknown>;
+          } catch {
+            parsedMeta = null;
+          }
+        }
+        let mismatch = false;
+        for (const [k, want] of Object.entries(filter.metadata)) {
+          const got = parsedMeta?.[k];
+          if (typeof got !== 'string' || got !== want) {
+            mismatch = true;
+            break;
+          }
+        }
+        if (mismatch) continue;
+      }
+      out.push({
+        id: s.id,
+        session_id: row.session_id,
+        kind: row.kind,
+        snippet: row.content.slice(0, 120),
+        score: s.score,
+        ts: row.ts,
+        task_id: row.task_id,
+      });
+    }
+    return out;
+  }
+
   private async keywordSearch(
     query: string,
     limit: number,
