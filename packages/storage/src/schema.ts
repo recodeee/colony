@@ -103,6 +103,33 @@ CREATE TABLE IF NOT EXISTS task_claims (
 );
 CREATE INDEX IF NOT EXISTS idx_task_claims_session ON task_claims(session_id);
 
+-- Account claims: which Codex account a planner wave is "bound to" so multiple
+-- operators on the same plan see the same dispatch state. Unlike task_claims
+-- (which is keyed by an actual git task/branch), account_claims is keyed by
+-- (plan_slug, wave_id) — a logical planner coordinate — so the binding exists
+-- before any Colony task has been spawned and survives across the agents that
+-- eventually pick the wave up. The partial unique index enforces at most one
+-- active claim per wave; released claims stay in the table as audit history.
+CREATE TABLE IF NOT EXISTS account_claims (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_slug TEXT NOT NULL,
+  wave_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  agent TEXT,
+  claimed_at INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','released')),
+  expires_at INTEGER,
+  released_at INTEGER,
+  released_by_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_account_claims_plan ON account_claims(plan_slug, state);
+CREATE INDEX IF NOT EXISTS idx_account_claims_account ON account_claims(account_id, state);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_claims_active_wave
+  ON account_claims(plan_slug, wave_id)
+  WHERE state = 'active';
+
 CREATE TABLE IF NOT EXISTS lane_states (
   session_id TEXT PRIMARY KEY,
   state TEXT NOT NULL CHECK(state IN ('active','paused')),
@@ -258,7 +285,7 @@ CREATE TABLE IF NOT EXISTS mcp_metrics (
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_op_ts ON mcp_metrics(operation, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_ts ON mcp_metrics(ts DESC);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (10);
+INSERT OR IGNORE INTO schema_version(version) VALUES (11);
 `;
 
 /**

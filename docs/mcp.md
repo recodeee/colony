@@ -64,6 +64,9 @@ workflow guidance.
 | Quota claims | `task_claim_quota_accept` | Adopt quota-pending claim ownership from a handoff or relay. |
 | Quota claims | `task_claim_quota_decline` | Decline a quota-pending claim without cancelling the baton. |
 | Quota claims | `task_claim_quota_release_expired` | Weaken expired quota-pending claims and expire old batons. |
+| Account claims | `task_claim_account` | Bind a Codex account to a planner wave so dispatch is shared across operators. |
+| Account claims | `task_release_account_claim` | Release an active account claim; the row stays as audit history. |
+| Account claims | `task_list_account_claims` | List account claims, filterable by plan_slug, account_id, or state. |
 | Messages | `task_message` | Send directed or broadcast agent-to-agent messages. |
 | Messages | `task_messages` | Read compact unread/direct message entries. |
 | Messages | `task_message_mark_read` | Mark one message read and write a receipt. |
@@ -1089,6 +1092,61 @@ handoffs are marked expired while audit history stays intact.
 
 Omit `handoff_observation_id` and `file_path` to release all expired quota
 claims on the task.
+
+## `task_claim_account`
+
+Bind a Codex account to a planner wave so subsequent agents picking up that
+wave use the bound account. Unlike `task_claim_file` this is keyed by
+`(plan_slug, wave_id)` — a planner-logical coordinate — and exists before any
+Colony task has been spawned. At most one active claim per wave is enforced by
+a partial unique index. Rebinding the same `(plan_slug, wave_id, account_id,
+session_id)` refreshes the row in place; rebinding to a different account
+releases the prior binding and inserts a new active row.
+
+```json
+{
+  "name": "task_claim_account",
+  "input": {
+    "plan_slug": "self-learning-w3",
+    "wave_id": "wave-A",
+    "account_id": "acct-alpha",
+    "session_id": "sess_planner_ui",
+    "agent": "claude",
+    "note": "operator pick from planner sidebar"
+  }
+}
+```
+
+Returns `{ claim: { id, plan_slug, wave_id, account_id, state, claimed_at, ... } }`.
+
+## `task_release_account_claim`
+
+Release an active account claim. Flips state to `released` and stamps
+`released_at` + `released_by_session_id`; the row is preserved as audit
+history. Returns the updated row, or `{ released: false, id }` if the id was
+not found or already released.
+
+```json
+{
+  "name": "task_release_account_claim",
+  "input": { "id": 17, "released_by_session_id": "sess_planner_ui" }
+}
+```
+
+## `task_list_account_claims`
+
+List account claims, optionally filtered by `plan_slug`, `account_id`, or
+`state`. Default state filter is none — both `active` and `released` rows are
+returned for audit visibility. Capped at `limit` (default 200, max 500).
+
+```json
+{
+  "name": "task_list_account_claims",
+  "input": { "plan_slug": "self-learning-w3", "state": "active" }
+}
+```
+
+Returns `{ claims: [{ id, plan_slug, wave_id, account_id, state, ... }] }`.
 
 ## `task_hand_off`
 
