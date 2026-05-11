@@ -2923,7 +2923,7 @@ describe('colony health payload', () => {
       const text = formatColonyHealthOutput(payload, { verbose: true });
       expect(text).toContain('all tools: 3 / 6');
       expect(text).toContain('MCP tools: 3 / 4');
-      expect(text).toContain('sources:   colony obs 2, codex rollouts 4');
+      expect(text).not.toContain('codex rollouts 4');
       expect(text).not.toContain('no mcp__ tool calls in window');
     } finally {
       fs.rmSync(tmpRoot, { recursive: true, force: true });
