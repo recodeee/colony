@@ -401,6 +401,52 @@ Cost is O(N) over stored embeddings matching `(model, dim)`. For ≤ 50k
 observations this stays inside the `search` p95 budget (50 ms); larger
 corpora will move behind an ANN index without changing the tool surface.
 
+## `cluster_observations`
+
+Group near-duplicate observations by semantic similarity. Use after
+collecting `observation_ids` from `attention_inbox`, `search`, or
+`task_messages` to dedupe pending handoffs, repeated reports, or noisy
+lanes before showing the user a list. Same idea as Triton's
+dynamic-batching for queries: cheap upfront, big UX win when the inbox
+has 3 different agents saying the same thing.
+
+```json
+{
+  "name": "cluster_observations",
+  "input": { "ids": [12345, 12346, 12390, 12401], "threshold": 0.85 }
+}
+```
+
+Returns:
+
+```json
+{
+  "clusters": [
+    { "canonical_id": 12345, "member_ids": [12345, 12346, 12390] },
+    { "canonical_id": 12401, "member_ids": [12401] }
+  ],
+  "unembedded": []
+}
+```
+
+- **`canonical_id`** — the earliest-id row in each cluster, the natural
+  representative. Hydrate this one with `get_observations` and discard
+  the rest, or surface "+N similar" in the UI.
+- **`unembedded`** — input IDs whose embedding is missing or whose model
+  /dim does not match the configured provider. Treat them as singleton
+  rows or skip; the caller decides.
+- **`threshold`** — cosine similarity floor. Default `0.85` (rough
+  "same idea, different wording"). Lower for looser grouping, higher
+  for strict near-duplicate detection.
+
+Requires an embedding provider (`settings.embedding.provider` ∈
+`local | ollama | openai | codex-gpu`). When the provider is `none`
+the tool returns `{ "error": "...", "clusters": [], "unembedded": ids }`
+so callers can still surface the items as a flat list.
+
+Capped at 500 input IDs per call; the algorithm is O(N²) cosine so the
+cap keeps worst-case latency inside the `search` p95 budget.
+
 ## `timeline`
 
 Chronological observation identifiers for a given session.
