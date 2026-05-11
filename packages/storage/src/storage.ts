@@ -11,6 +11,8 @@ import {
   FILE_EDIT_TOOLS,
 } from './tool-classes.js';
 import type {
+  AccountClaimRow,
+  AccountClaimState,
   AgentProfileRow,
   AggregateMcpMetricsOptions,
   ExampleRow,
@@ -28,6 +30,7 @@ import type {
   McpMetricsSessionAggregateRow,
   McpMetricsSessionRawRow,
   McpMetricsSessionSummary,
+  NewAccountClaim,
   NewAgentProfile,
   NewExample,
   NewMcpMetric,
@@ -1982,6 +1985,168 @@ export class Storage {
       )
       .all(task_id, since_ts, limit) as Partial<TaskClaimRow>[];
     return rows.map((row) => this.normalizeTaskClaimRow(row)).filter(isTaskClaimRow);
+  }
+
+  // --- account claims ---
+  // Planner-side dispatch bindings (which Codex account a wave is bound to).
+  // Lifecycle is intentionally simpler than task_claims: only `active` and
+  // `released` states, no handoff baton — when an operator unbinds the wave
+  // the active row is flipped to `released` and a new active row may then
+  // take its place. The partial unique index on (plan_slug, wave_id) WHERE
+  // state='active' enforces the at-most-one-active invariant.
+
+  claimAccount(c: NewAccountClaim & { claimed_at?: number }): AccountClaimRow {
+    const now = c.claimed_at ?? Date.now();
+    return this.transaction(() => {
+      const existing = this.getActiveAccountClaim(c.plan_slug, c.wave_id);
+      if (existing) {
+        // If the same account is already bound, refresh the row in place.
+        // Otherwise release the prior binding before inserting the new one,
+        // so the partial unique index never trips.
+        if (existing.account_id === c.account_id && existing.session_id === (c.session_id ?? null)) {
+          this.db
+            .prepare(
+              `UPDATE account_claims
+               SET claimed_at = ?, expires_at = ?, note = ?
+               WHERE id = ?`,
+            )
+            .run(now, c.expires_at ?? null, c.note ?? null, existing.id);
+          const refreshed = this.getAccountClaimById(existing.id);
+          if (!refreshed) {
+            throw new Error(`account_claims row ${existing.id} vanished after refresh`);
+          }
+          return refreshed;
+        }
+        this.db
+          .prepare(
+            `UPDATE account_claims
+             SET state = 'released',
+                 released_at = ?,
+                 released_by_session_id = ?
+             WHERE id = ?`,
+          )
+          .run(now, c.session_id ?? null, existing.id);
+      }
+      const result = this.db
+        .prepare(
+          `INSERT INTO account_claims(
+            plan_slug, wave_id, account_id, session_id, agent,
+            claimed_at, state, expires_at, note
+          ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+        )
+        .run(
+          c.plan_slug,
+          c.wave_id,
+          c.account_id,
+          c.session_id ?? null,
+          c.agent ?? null,
+          now,
+          c.expires_at ?? null,
+          c.note ?? null,
+        );
+      const id = Number(result.lastInsertRowid);
+      const inserted = this.getAccountClaimById(id);
+      if (!inserted) {
+        throw new Error(`account_claims insert ${id} did not surface`);
+      }
+      return inserted;
+    });
+  }
+
+  releaseAccountClaim(c: {
+    id: number;
+    released_by_session_id?: string | null;
+    released_at?: number;
+  }): AccountClaimRow | undefined {
+    const now = c.released_at ?? Date.now();
+    this.db
+      .prepare(
+        `UPDATE account_claims
+         SET state = 'released',
+             released_at = ?,
+             released_by_session_id = ?
+         WHERE id = ? AND state = 'active'`,
+      )
+      .run(now, c.released_by_session_id ?? null, c.id);
+    return this.getAccountClaimById(c.id);
+  }
+
+  getAccountClaimById(id: number): AccountClaimRow | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM account_claims WHERE id = ?')
+      .get(id) as Partial<AccountClaimRow> | undefined;
+    return this.normalizeAccountClaimRow(row);
+  }
+
+  getActiveAccountClaim(plan_slug: string, wave_id: string): AccountClaimRow | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM account_claims
+         WHERE plan_slug = ? AND wave_id = ? AND state = 'active'
+         LIMIT 1`,
+      )
+      .get(plan_slug, wave_id) as Partial<AccountClaimRow> | undefined;
+    return this.normalizeAccountClaimRow(row);
+  }
+
+  listAccountClaims(opts: {
+    plan_slug?: string;
+    account_id?: string;
+    state?: AccountClaimState;
+    limit?: number;
+  } = {}): AccountClaimRow[] {
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (opts.plan_slug) {
+      clauses.push('plan_slug = ?');
+      params.push(opts.plan_slug);
+    }
+    if (opts.account_id) {
+      clauses.push('account_id = ?');
+      params.push(opts.account_id);
+    }
+    if (opts.state) {
+      clauses.push('state = ?');
+      params.push(opts.state);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const limit = Math.max(1, opts.limit ?? 200);
+    params.push(limit);
+    const rows = this.db
+      .prepare(`SELECT * FROM account_claims ${where} ORDER BY claimed_at DESC LIMIT ?`)
+      .all(...params) as Partial<AccountClaimRow>[];
+    return rows
+      .map((row) => this.normalizeAccountClaimRow(row))
+      .filter((row): row is AccountClaimRow => row !== undefined);
+  }
+
+  private normalizeAccountClaimRow(
+    row: Partial<AccountClaimRow> | undefined,
+  ): AccountClaimRow | undefined {
+    if (!row) return undefined;
+    if (
+      typeof row.id !== 'number' ||
+      typeof row.plan_slug !== 'string' ||
+      typeof row.wave_id !== 'string' ||
+      typeof row.account_id !== 'string' ||
+      typeof row.claimed_at !== 'number'
+    ) {
+      return undefined;
+    }
+    return {
+      id: row.id,
+      plan_slug: row.plan_slug,
+      wave_id: row.wave_id,
+      account_id: row.account_id,
+      session_id: row.session_id ?? null,
+      agent: row.agent ?? null,
+      claimed_at: row.claimed_at,
+      state: row.state === 'released' ? 'released' : 'active',
+      expires_at: row.expires_at ?? null,
+      released_at: row.released_at ?? null,
+      released_by_session_id: row.released_by_session_id ?? null,
+      note: row.note ?? null,
+    };
   }
 
   setLaneState(p: {

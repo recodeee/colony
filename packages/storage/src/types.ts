@@ -80,6 +80,33 @@ export interface TaskClaimRow {
   handoff_observation_id: number | null;
 }
 
+export type AccountClaimState = 'active' | 'released';
+
+export interface AccountClaimRow {
+  id: number;
+  plan_slug: string;
+  wave_id: string;
+  account_id: string;
+  session_id: string | null;
+  agent: string | null;
+  claimed_at: number;
+  state: AccountClaimState;
+  expires_at: number | null;
+  released_at: number | null;
+  released_by_session_id: string | null;
+  note: string | null;
+}
+
+export interface NewAccountClaim {
+  plan_slug: string;
+  wave_id: string;
+  account_id: string;
+  session_id?: string | null;
+  agent?: string | null;
+  expires_at?: number | null;
+  note?: string | null;
+}
+
 export type LaneRunState = 'active' | 'paused';
 
 export interface LaneStateRow {
