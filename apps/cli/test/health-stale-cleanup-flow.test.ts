@@ -73,8 +73,23 @@ describe('colony health safe stale cleanup flow', () => {
       expired_claims: 1,
     });
     expect(before.queen_wave_health).toMatchObject({
-      stale_claims_blocking_downstream: 1,
+      stale_claims_blocking_downstream: 0,
     });
+    expect(before.stale_claim_evaporation).toMatchObject({
+      status: 'needs_safe_release',
+      stale_claims: 4,
+      expired_weak_claims: 1,
+      stale_downstream_blockers: 0,
+      dry_run_command: 'colony coordination sweep --json',
+      safe_release_command: 'colony coordination sweep --release-safe-stale-claims --json',
+      downstream_release_command: 'colony coordination sweep --release-stale-blockers --json',
+    });
+    expect(before.stale_claim_evaporation.next_action).toContain('run a dry coordination sweep');
+    const healthText = await readHealthText();
+    expect(healthText).toContain('Stale claim evaporation');
+    expect(healthText).toContain(
+      'safe release:        colony coordination sweep --release-safe-stale-claims --json',
+    );
 
     const dryRun = await readFixPlanJson(['--fix-plan']);
     expect(dryRun.mode).toBe('dry-run');
@@ -82,7 +97,7 @@ describe('colony health safe stale cleanup flow', () => {
     expect(dryRun.current).toMatchObject({
       stale_claims: 4,
       expired_weak_claims: 1,
-      stale_downstream_blockers: 1,
+      stale_downstream_blockers: 0,
     });
     expect(dryRun.safety).toMatchObject({
       mutates_claims: false,
@@ -172,7 +187,7 @@ describe('colony health safe stale cleanup flow', () => {
       evidence: expect.stringContaining('3 stale claim(s)'),
     });
     expect(after.queen_wave_health).toMatchObject({
-      stale_claims_blocking_downstream: 1,
+      stale_claims_blocking_downstream: 0,
     });
   });
 });
@@ -186,12 +201,31 @@ async function readHealthJson(): Promise<{
     expired_claims: number;
   };
   queen_wave_health: { stale_claims_blocking_downstream: number };
+  stale_claim_evaporation: {
+    status: string;
+    stale_claims: number;
+    expired_weak_claims: number;
+    stale_downstream_blockers: number;
+    dry_run_command: string;
+    safe_release_command: string;
+    downstream_release_command: string;
+    next_action: string;
+  };
 }> {
   output = '';
   await createProgram().parseAsync(['node', 'test', 'health', '--json', '--repo-root', repoRoot], {
     from: 'node',
   });
   return JSON.parse(output);
+}
+
+async function readHealthText(): Promise<string> {
+  output = '';
+  await createProgram().parseAsync(
+    ['node', 'test', 'health', '--repo-root', repoRoot, '--verbose'],
+    { from: 'node' },
+  );
+  return output;
 }
 
 async function readFixPlanJson(flags: string[]): Promise<{
