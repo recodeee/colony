@@ -22,6 +22,7 @@ describe('SettingsSchema', () => {
     expect(parsed.foraging.promotionThreshold).toBe(2.5);
     expect(parsed.foraging.sessionStartScanMinIntervalMs).toBe(300_000);
     expect(parsed.runtime.activeSessionReconcileMinIntervalMs).toBe(5_000);
+    expect(parsed.embedding.batchSize).toBe(32);
     expect(parsed.fileHeatHalfLifeMinutes).toBe(30);
     expect(parsed.claimStaleMinutes).toBe(240);
     expect(parsed.protected_files).toEqual([...DEFAULT_PROTECTED_FILES]);
@@ -56,6 +57,7 @@ describe('SettingsSchema', () => {
   it('defaults match exported defaultSettings', () => {
     expect(defaultSettings.workerPort).toBe(37777);
     expect(defaultSettings.embedding.provider).toBe('local');
+    expect(defaultSettings.embedding.batchSize).toBe(32);
     expect(defaultSettings.foraging.proposalHalfLifeMinutes).toBe(60);
     expect(defaultSettings.foraging.proposalNoiseFloor).toBe(0.3);
     expect(defaultSettings.foraging.promotionThreshold).toBe(2.5);
