@@ -888,14 +888,6 @@ export function formatColonyHealthOutput(
     )}`,
   );
 
-  if (payload.colony_mcp_share.source_breakdown.codex_rollouts > 0) {
-    lines.push(
-      kleur.dim(
-        `  sources:   colony obs ${payload.colony_mcp_share.source_breakdown.colony_observations}, codex rollouts ${payload.colony_mcp_share.source_breakdown.codex_rollouts}`,
-      ),
-    );
-  }
-
   lines.push('', healthSubheading('MCP capability map', 'blue'));
   if (payload.mcp_capability_map.summary.length === 0) {
     lines.push(kleur.dim('  none configured'));
