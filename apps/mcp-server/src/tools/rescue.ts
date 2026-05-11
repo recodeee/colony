@@ -78,11 +78,17 @@ async function runRescue(
 ): Promise<RescueStrandedOutcome> {
   const rescue = injected ?? (await loadRescueStrandedSessions());
   const outcome = await runRescueWithDryRunRollback(store, rescue, options);
-  const rescued = Array.isArray(outcome.rescued) ? outcome.rescued : [];
+  const stranded = Array.isArray(outcome.stranded) ? outcome.stranded : [];
+  const rescued =
+    Array.isArray(outcome.rescued) && outcome.rescued.length > 0
+      ? outcome.rescued
+      : options.dry_run
+        ? stranded
+        : [];
   return {
     ...outcome,
     dry_run: typeof outcome.dry_run === 'boolean' ? outcome.dry_run : options.dry_run,
-    stranded: Array.isArray(outcome.stranded) ? outcome.stranded : rescued,
+    stranded: stranded.length > 0 ? stranded : rescued,
     rescued,
   };
 }
@@ -118,9 +124,9 @@ function rollbackDryRun(
 
 async function loadRescueStrandedSessions(): Promise<RescueStrandedSessionsFn> {
   const mod = (await import('@colony/core')) as Record<string, unknown>;
-  const rescue = mod.rescueStrandedSessions;
+  const rescue = mod.bulkRescueStrandedSessions;
   if (typeof rescue !== 'function') {
-    throw new Error('rescueStrandedSessions is unavailable; merge the core substrate first');
+    throw new Error('bulkRescueStrandedSessions is unavailable; merge the core substrate first');
   }
   return rescue as RescueStrandedSessionsFn;
 }

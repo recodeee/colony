@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryStore } from '../src/memory-store.js';
+import { listPlans } from '../src/plan.js';
 import { bulkRescueStrandedSessions, rescueStrandedSessions } from '../src/stranded-rescue.js';
 import { TaskThread } from '../src/task-thread.js';
 
@@ -240,6 +241,37 @@ describe('rescueStrandedSessions', () => {
       task_ids: [thread.task_id],
     });
     expect(store.storage.taskObservationsByKind(thread.task_id, 'relay')).toHaveLength(0);
+  });
+
+  it('bulk apply re-queues claimed plan subtasks after releasing a stranded owner', () => {
+    const session_id = seedSession();
+    const plan = seedOrderedPlan(session_id, { claimed: [0] });
+    configureStorage([candidate(session_id)]);
+
+    const before = listPlans(store, { repo_root: '/repo' }).find(
+      (candidatePlan) => candidatePlan.plan_slug === 'ordered-rescue',
+    );
+    expect(before?.subtasks[0]?.status).toBe('claimed');
+    expect(before?.next_available).toEqual([]);
+
+    const outcome = bulkRescueStrandedSessions(store, { dry_run: false });
+
+    expect(outcome.rescued[0]?.audit_observation_id).toEqual(expect.any(Number));
+    const audit = store.storage.getObservation(outcome.rescued[0]?.audit_observation_id ?? -1);
+    expect(JSON.parse(audit?.metadata ?? '{}')).toMatchObject({
+      requeued_plan_subtasks: [
+        {
+          plan_slug: 'ordered-rescue',
+          subtask_index: 0,
+          task_id: plan.task_ids[0],
+        },
+      ],
+    });
+    const after = listPlans(store, { repo_root: '/repo' }).find(
+      (candidatePlan) => candidatePlan.plan_slug === 'ordered-rescue',
+    );
+    expect(after?.subtasks[0]?.status).toBe('available');
+    expect(after?.next_available.map((subtask) => subtask.subtask_index)).toEqual([0]);
   });
 
   it('stale wave 1 claim outranks a stale leaf claim', () => {
