@@ -167,7 +167,7 @@ describe('SessionStart predictive suggestion preface', () => {
   });
 
   it.each(['codex', 'claude-code'])(
-    'injects the quota-safe Colony operating contract for %s generated instructions',
+    'injects the compact quota-safe contract by default for %s',
     async (ide) => {
       const preface = await sessionStart(
         store,
@@ -176,38 +176,52 @@ describe('SessionStart predictive suggestion preface', () => {
       );
 
       expect(preface).toContain('## Quota-safe Colony operating contract');
-      expect(preface).toContain('RTK command policy:');
-      expect(preface).toContain('Always prefix shell commands with `rtk`');
-      expect(preface).toContain('rtk git status');
-      expect(preface).toContain('rtk proxy <command>');
-      expect(preface).toContain('If `rtk` is unavailable');
-      expect(preface).toContain('Call hivemind_context.');
-      expect(preface).toContain('Call attention_inbox.');
-      expect(preface).toContain('Call task_ready_for_agent.');
-      expect(preface).toContain('Accept a pending handoff with task_accept_handoff');
-      expect(preface).toContain('Claim the subtask with task_plan_claim_subtask');
-      expect(preface).toContain('Claim each touched file with task_claim_file before edits.');
-      expect(preface).toContain('Write task_note_working');
-      expect(preface).toContain('Update task_note_working after meaningful progress.');
-      expect(preface).toContain('Run focused verification for the touched behavior.');
-      expect(preface).toContain('Shutdown / finish contract');
-      expect(preface).toContain('Before stopping, run git status and identify dirty files.');
-      expect(preface).toContain('commit finished work, hand off unfinished work, or clean');
-      expect(preface).toContain('Write task_note_working with branch, task, dirty files');
-      expect(preface).toContain('Release or weaken claims before abandoning work');
-      expect(preface).toContain(
-        'Emit a quota_exhausted handoff with task_hand_off or task_relay, or release owned claims.',
-      );
-      expect(preface).toContain(
-        'claimed files, dirty files from git status, branch, last verification, and next step',
-      );
-      expect(preface).toContain('Mark claims handoff-pending or release them before exit');
-      expect(preface).toContain('When unsure, run coordination sweep guidance first');
-      expect(preface).toContain('Coordination truth lives in Colony.');
-      expect(preface).toContain('Use OMX for runtime memory summaries.');
-      expect(preface).toContain('Use available MCP servers for repo, GitHub, CI, and docs context');
+      expect(preface).toContain('AGENTS.md');
+      expect(preface).toContain('hivemind_context');
+      expect(preface).toContain('attention_inbox');
+      expect(preface).toContain('task_ready_for_agent');
+      expect(preface).toContain('task_claim_file');
+      expect(preface).toContain('task_hand_off');
+      expect(preface).toContain('`rtk`');
+      // Verbose-only paragraphs are absent in compact mode (the win we're shipping).
+      expect(preface).not.toContain('Shutdown / finish contract');
+      expect(preface).not.toContain('Before quota/session stop:');
+      expect(preface).not.toContain('Update task_note_working after meaningful progress.');
+      expect(preface).not.toContain('Coordination truth lives in Colony.');
     },
   );
+
+  it('injects the legacy verbose contract when sessionStart.contractMode is full', async () => {
+    store.settings = {
+      ...store.settings,
+      sessionStart: { contractMode: 'full' },
+    };
+    const preface = await sessionStart(
+      store,
+      { session_id: 'S-full', ide: 'codex', cwd: repo },
+      noSuggestionDeps(),
+    );
+
+    expect(preface).toContain('## Quota-safe Colony operating contract');
+    expect(preface).toContain('Coordination truth lives in Colony.');
+    expect(preface).toContain('Shutdown / finish contract');
+    expect(preface).toContain('Before quota/session stop:');
+    expect(preface).toContain('Update task_note_working after meaningful progress.');
+  });
+
+  it('omits the contract section when sessionStart.contractMode is none', async () => {
+    store.settings = {
+      ...store.settings,
+      sessionStart: { contractMode: 'none' },
+    };
+    const preface = await sessionStart(
+      store,
+      { session_id: 'S-none', ide: 'codex', cwd: repo },
+      noSuggestionDeps(),
+    );
+
+    expect(preface).not.toContain('## Quota-safe Colony operating contract');
+  });
 
   it('includes a suggestion section when similarity, sample, and file-confidence thresholds pass', async () => {
     const similar = similarTasks(4, 0.82);

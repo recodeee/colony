@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { type Settings, quotaSafeOperatingContract, resolveDataDir } from '@colony/config';
+import {
+  type Settings,
+  quotaSafeOperatingContract,
+  quotaSafeOperatingContractCompact,
+  resolveDataDir,
+} from '@colony/config';
 import {
   type AttentionBudgetOutput,
   type AttentionItem,
@@ -98,7 +103,7 @@ export async function sessionStart(
   kickForagingScan(store, input);
 
   const priorPreface = buildPriorPreface(store, input);
-  const quotaSafePreface = buildQuotaSafeOperatingPreface(input);
+  const quotaSafePreface = buildQuotaSafeOperatingPreface(input, store.settings);
   const taskPreface = buildTaskPreface(store, input, { includeAttentionItems: false });
   const suggestionPreface = await buildSuggestionPreface(store, input, deps);
   const proposalPreface = buildProposalPreface(store, input);
@@ -122,10 +127,16 @@ export async function sessionStart(
     .join('\n\n');
 }
 
-export function buildQuotaSafeOperatingPreface(input: Pick<HookInput, 'cwd'>): string {
+export function buildQuotaSafeOperatingPreface(
+  input: Pick<HookInput, 'cwd'>,
+  settings?: Pick<Settings, 'sessionStart'>,
+): string {
   if (!input.cwd) return '';
   if (!detectRepoBranch(input.cwd)) return '';
-  return quotaSafeOperatingContract;
+  const mode = settings?.sessionStart?.contractMode ?? 'compact';
+  if (mode === 'none') return '';
+  if (mode === 'full') return quotaSafeOperatingContract;
+  return quotaSafeOperatingContractCompact;
 }
 
 /**
