@@ -504,11 +504,16 @@ pnpm smoke:codex-omx-pretool             # verify lifecycle bridge
 pnpm smoke:health-repair-loop            # prove bridge + cleanup compose
 ```
 
-Installed Codex and Claude hooks inject the quota-safe operating contract:
-start with `hivemind_context`, then `attention_inbox`, then
-`task_ready_for_agent`; accept or decline handoffs, claim files before edits,
-keep `task_note_working` current, run focused verification, and hand off before
-quota or session stop.
+Installed Codex and Claude hooks inject the quota-safe operating contract.
+By default this is a one-line pointer to `AGENTS.md` naming the three
+pre-work tools (`hivemind_context`, `attention_inbox`,
+`task_ready_for_agent`) — ~350 tokens cheaper per SessionStart than the
+legacy verbose block. Set `sessionStart.contractMode: 'full'` to restore
+the verbose contract, or `'none'` to suppress it entirely. The protocol
+is the same either way: start with `hivemind_context`, then
+`attention_inbox`, then `task_ready_for_agent`; accept or decline
+handoffs, claim files before edits, keep `task_note_working` current,
+run focused verification, and hand off before quota or session stop.
 
 ---
 
@@ -840,7 +845,7 @@ yourself. **This is the foundation everything else builds on.**
 - ✅ Installers for Claude Code, Codex, Cursor, Gemini CLI, OpenCode (5 runtimes)
 - ✅ Lifecycle hooks: `PreToolUse`, `PostToolUse`, prompt events, session heartbeat
 - ✅ stdio-based MCP server registered as `mcp__colony__*`
-- ✅ Quota-safe operating contract injected into agent system prompts
+- ✅ Quota-safe operating contract injected into agent system prompts (compact by default; `sessionStart.contractMode` setting)
 - ✅ `colony status` — installed runtimes, worker state, memory counts, embedding status
 
 **Health and diagnostics**

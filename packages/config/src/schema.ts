@@ -79,6 +79,17 @@ export const SettingsSchema = z
       .describe(
         'If true, MCP task_claim_file rejects claims targeting tasks bound to protected branches (main/master/dev). Override per-call with the COLONY_ALLOW_PROTECTED_CLAIM=1 env var. Set to false to restore the historical soft-warning behavior.',
       ),
+    sessionStart: z
+      .object({
+        contractMode: z
+          .enum(['compact', 'full', 'none'])
+          .default('compact')
+          .describe(
+            'How much of the quota-safe operating contract the SessionStart hook injects. compact = one-line pointer to AGENTS.md plus pre-work tool names (default; ~350 tokens cheaper). full = legacy verbose block. none = suppress entirely.',
+          ),
+      })
+      .default({ contractMode: 'compact' })
+      .describe('SessionStart preface budget controls.'),
     protected_files: z
       .array(z.string().min(1))
       .default([...DEFAULT_PROTECTED_FILES])

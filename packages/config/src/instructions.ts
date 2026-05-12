@@ -12,3 +12,11 @@ export const quotaSafeOperatingContract = [
   '',
   'Before quota/session stop: Emit a quota_exhausted handoff with task_hand_off or task_relay, or release owned claims. Include claimed files, dirty files from git status, branch, last verification, and next step. Mark claims handoff-pending or release them before exit (no strong claims without a handoff or TTL). When unsure, run coordination sweep guidance first and follow its release/handoff recommendation.',
 ].join('\n');
+
+// Compact form: a single-line pointer to AGENTS.md plus the three pre-work
+// tool names. Default since this trims ~350 tokens per SessionStart vs the
+// verbose contract, and AGENTS.md/CLAUDE.md already carry the full protocol.
+export const quotaSafeOperatingContractCompact = [
+  '## Quota-safe Colony operating contract',
+  'Full contract: AGENTS.md §Colony Coordination Loop. Pre-work tools: hivemind_context, attention_inbox, task_ready_for_agent. Claim each touched file with task_claim_file before edits; hand off via task_hand_off before quota/session stop. RTK command policy: prefix shell commands with `rtk` (e.g. `rtk git status`).',
+].join('\n');
