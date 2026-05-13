@@ -272,7 +272,7 @@ describe('queen_plan_goal', () => {
 
     const listed = await call<
       Array<{ plan_slug: string; next_available: unknown[]; subtasks: unknown[] }>
-    >('task_plan_list', { repo_root: repoRoot });
+    >('task_plan_list', { repo_root: repoRoot, detail: 'full' });
     const publishedPlan = listed.find((plan) => plan.plan_slug === result.plan_slug);
     expect(publishedPlan?.subtasks).toHaveLength(2);
     expect(publishedPlan?.next_available).toHaveLength(1);
@@ -334,7 +334,7 @@ describe('queen_plan_goal', () => {
         next_available: Array<{ title: string }>;
         subtasks: Array<{ title: string; depends_on: number[] }>;
       }>
-    >('task_plan_list', { repo_root: repoRoot });
+    >('task_plan_list', { repo_root: repoRoot, detail: 'full' });
     const publishedPlan = listed.find((plan) => plan.plan_slug === result.plan_slug);
 
     expect(publishedPlan?.subtasks.map((subtask) => subtask.title)).toEqual([

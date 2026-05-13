@@ -943,6 +943,42 @@ describe('task threads — handoff lifecycle', () => {
     expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_FALLBACK');
   });
 
+  it('task_note_working returns nearby_tasks when ACTIVE_TASK_NOT_FOUND and a task exists on the branch', async () => {
+    const repoRoot = join(dir, 'repo-nearby-tasks');
+    // Existing task on the requested branch, but the caller's session never
+    // joined it. Without widening, this error mode hides a recoverable
+    // candidate; with widening, the caller learns the task_id to bind to.
+    const seeded = seedTwoSessionTask(repoRoot);
+
+    const err = await callError<{
+      code: string;
+      error: string;
+      candidates: unknown[];
+      nearby_tasks: Array<{
+        task_id: number;
+        repo_root: string;
+        branch: string;
+        match_kind: string;
+      }>;
+      hint: string;
+    }>('task_note_working', {
+      session_id: 'fresh-unjoined-session',
+      repo_root: repoRoot,
+      branch: 'feat/handoff',
+      content: 'working state: just started, has not joined the active task yet',
+    });
+
+    expect(err.code).toBe('ACTIVE_TASK_NOT_FOUND');
+    expect(err.candidates).toEqual([]);
+    expect(err.nearby_tasks.length).toBeGreaterThan(0);
+    expect(err.nearby_tasks[0]).toMatchObject({
+      task_id: seeded.task_id,
+      branch: 'feat/handoff',
+      match_kind: 'branch_and_repo',
+    });
+    expect(err.hint).toMatch(/task_post|task_accept_handoff/);
+  });
+
   it('task_list includes a ready-queue warning and next tool', async () => {
     const { sessionA } = seedTwoSessionTask();
 

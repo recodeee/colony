@@ -485,7 +485,10 @@ describe('task_plan_publish', () => {
       ready_when: 'dependencies_completed',
     });
 
-    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const plans = await call<PlanRollup[]>('task_plan_list', {
+      repo_root: repoRoot,
+      detail: 'full',
+    });
     const plan = plans.find((candidate) => candidate.plan_slug === 'mcp-wave-plan');
     expect(plan?.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [], [0, 1]]);
     expect(plan?.next_available.map((subtask) => subtask.subtask_index)).toEqual([0, 1]);
@@ -537,7 +540,10 @@ describe('task_plan_publish', () => {
       { name: 'Verify', subtask_indexes: [2] },
     ]);
 
-    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const plans = await call<PlanRollup[]>('task_plan_list', {
+      repo_root: repoRoot,
+      detail: 'full',
+    });
     const plan = plans.find((candidate) => candidate.plan_slug === 'mcp-wave-reorder');
     expect(plan?.subtasks.map((subtask) => subtask.depends_on)).toEqual([[], [0], [1]]);
   });
@@ -596,7 +602,7 @@ describe('task_plan_list', () => {
 
   it('adds compact wave metadata to plan list output', async () => {
     await call<PublishResult>('task_plan_publish', basicPublishArgs());
-    const plans = await call<PlanRollup[]>('task_plan_list', {});
+    const plans = await call<PlanRollup[]>('task_plan_list', { detail: 'full' });
     expect(plans[0]?.subtasks.map((s) => s.subtask_index)).toEqual([0, 1]);
     expect(plans[0]?.subtasks[0]).toMatchObject({
       subtask_index: 0,
@@ -646,6 +652,52 @@ describe('task_plan_list', () => {
     // sub-1 (ui_work) is not in next_available because its dep is unmet
     expect(uiPlans).toHaveLength(0);
   });
+
+  it('returns a compact rollup by default that omits description and file_scope', async () => {
+    await call<PublishResult>('task_plan_publish', basicPublishArgs());
+
+    const compactPlans = await call<
+      Array<{
+        plan_slug: string;
+        subtask_counts: Record<string, number>;
+        subtask_count: number;
+        subtask_indexes: number[];
+        next_available_count: number;
+        next_available: Array<{
+          subtask_index: number;
+          title: string;
+          status: string;
+          capability_hint: string | null;
+          wave_index: number;
+        }>;
+      }>
+    >('task_plan_list', {});
+    const fullPlans = await call<PlanRollup[]>('task_plan_list', { detail: 'full' });
+
+    const compact = compactPlans[0];
+    const full = fullPlans[0];
+    expect(compact?.plan_slug).toBe('add-widget-page');
+    expect(compact?.subtask_count).toBe(2);
+    expect(compact?.subtask_indexes).toEqual([0, 1]);
+    expect(compact?.next_available_count).toBe(1);
+    expect(compact?.next_available[0]).toMatchObject({
+      subtask_index: 0,
+      capability_hint: 'api_work',
+      status: 'available',
+      wave_index: 0,
+    });
+    expect(compact as Record<string, unknown>).not.toHaveProperty('subtasks');
+    expect((compact?.next_available[0] as Record<string, unknown>) ?? {}).not.toHaveProperty(
+      'description',
+    );
+    expect((compact?.next_available[0] as Record<string, unknown>) ?? {}).not.toHaveProperty(
+      'file_scope',
+    );
+
+    // Compact serialization must be materially smaller than the full shape;
+    // the gain telemetry shows full bodies running ~12.9k tokens per call.
+    expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(full).length / 2);
+  });
 });
 
 describe('task_plan_claim_subtask', () => {
@@ -661,7 +713,7 @@ describe('task_plan_claim_subtask', () => {
     expect(claim.file_scope).toEqual(['apps/api/src/widgets.ts']);
 
     // List should show sub-0 as claimed
-    const plans = await call<PlanRollup[]>('task_plan_list', {});
+    const plans = await call<PlanRollup[]>('task_plan_list', { detail: 'full' });
     const sub0 = plans[0]?.subtasks.find((s) => s.subtask_index === 0);
     expect(sub0?.status).toBe('claimed');
     expect(sub0?.claimed_by_session_id).toBe('B');
@@ -754,6 +806,69 @@ describe('task_plan_claim_subtask', () => {
     // Second claim must fail.
     const err = await callError('task_plan_claim_subtask', args('C', 'claude'));
     expect(err.code).toBe('PLAN_SUBTASK_NOT_AVAILABLE');
+  });
+
+  it('returns next_available_subtask_index on PLAN_SUBTASK_NOT_AVAILABLE so callers skip a re-list', async () => {
+    // Publish a 3-subtask plan with no inter-dependencies so two sub-tasks
+    // remain available after the loser races and loses on sub-0.
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'claim-recovery',
+        subtasks: [
+          {
+            title: 'Build widget API',
+            description: 'Add GET /api/widgets.',
+            file_scope: ['apps/api/src/widgets.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Build widget page',
+            description: 'Render the widget list.',
+            file_scope: ['apps/frontend/src/pages/widgets.tsx'],
+            capability_hint: 'ui_work',
+          },
+          {
+            title: 'Cover widget flow',
+            description: 'Add an integration test.',
+            file_scope: ['apps/api/test/widgets.test.ts'],
+            capability_hint: 'test_work',
+          },
+        ],
+      }),
+    );
+
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'claim-recovery',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+
+    const res = await client.callTool({
+      name: 'task_plan_claim_subtask',
+      arguments: {
+        plan_slug: 'claim-recovery',
+        subtask_index: 0,
+        session_id: 'C',
+        agent: 'claude',
+      },
+    });
+    expect(res.isError).toBe(true);
+    const payload = JSON.parse(
+      (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}',
+    ) as {
+      code: string;
+      plan_slug: string;
+      next_available_subtask_index: number | null;
+      next_available_count: number;
+      next_available: Array<{ subtask_index: number; capability_hint: string | null }>;
+    };
+    expect(payload.code).toBe('PLAN_SUBTASK_NOT_AVAILABLE');
+    expect(payload.plan_slug).toBe('claim-recovery');
+    expect(payload.next_available_count).toBe(2);
+    expect(payload.next_available_subtask_index).toBe(1);
+    expect(payload.next_available.map((s) => s.subtask_index)).toEqual([1, 2]);
   });
 
   it('reports a claimed sub-task by bound spec row id', async () => {
