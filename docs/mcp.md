@@ -1060,7 +1060,7 @@ Filtered when one session participates in multiple active tasks:
 }
 ```
 
-`repo_root` and `branch` are optional filters. The tool scans active task participation for the session, posts `kind:"note"` when exactly one task matches, and returns `{ observation_id, id, task_id }`. If `bridge.writeOmxNotepadPointer=true`, a successful write appends only a tiny pointer to `.omx/notepad.md`: `branch`, `task`, `blocker`, `next`, `evidence`, `colony_observation_id`. The full `content` is never duplicated into OMX notepad after a Colony note succeeds. If multiple tasks match, it returns `AMBIGUOUS_ACTIVE_TASK` plus compact candidates (`task_id`, `repo_root`, `branch`, `status`, `updated_at`, `agent`) instead of guessing. If none match, it returns `ACTIVE_TASK_NOT_FOUND`; with `allow_omx_notepad_fallback:true`, it may write the same tiny pointer to OMX notepad so legacy resume still has a breadcrumb.
+`repo_root` and `branch` are optional filters. The tool scans active task participation for the session, posts `kind:"note"` when exactly one task matches, and returns `{ observation_id, id, task_id }`. If `bridge.writeOmxNotepadPointer=true`, a successful write appends only a tiny pointer to `.omx/notepad.md`: `branch`, `task`, `blocker`, `next`, `evidence`, `colony_observation_id`. The full `content` is never duplicated into OMX notepad after a Colony note succeeds. If multiple tasks match, it returns `AMBIGUOUS_ACTIVE_TASK` plus compact candidates (`task_id`, `repo_root`, `branch`, `status`, `updated_at`, `agent`) instead of guessing. If none match, it returns `ACTIVE_TASK_NOT_FOUND`; when `repo_root` or `branch` was supplied, the error payload also includes `nearby_tasks` (ranked `branch_and_repo` > `branch_only` > `repo_only`) plus a `hint` pointing at `task_post(task_id=...)` / `task_accept_handoff` so a session that has not yet joined the active task can recover without re-listing. With `allow_omx_notepad_fallback:true`, the handler may also write the tiny pointer to OMX notepad so legacy resume still has a breadcrumb.
 
 `task_note_working` is the first write path for working state. On success it
 keeps the full note in Colony and skips `.omx/notepad.md` unless
@@ -1943,12 +1943,13 @@ List published plans with a sub-task rollup.
     "repo_root": "/abs/repo",
     "only_with_available_subtasks": true,
     "capability_match": "ui_work",
-    "limit": 25
+    "limit": 25,
+    "detail": "compact"
   }
 }
 ```
 
-Returns `[{ plan_slug, repo_root, spec_task_id, registry_status, title, created_at, subtask_counts: { available, claimed, completed, blocked }, subtasks: [...], next_available: [...] }]`. `registry_status` is `registered` when the plan root task exists and `subtask-only` when the rollup was recovered from live sub-task rows after the root registry row went missing. `next_available` is the list of sub-tasks whose status is `available` **and** whose `depends_on` chain is fully `completed`. `capability_match` filters plans where at least one sub-task in `next_available` has the matching `capability_hint`.
+`detail` defaults to `"compact"`. Compact returns `[{ plan_slug, repo_root, spec_task_id, registry_status, title, created_at, subtask_counts: { available, claimed, completed, blocked }, subtask_count, subtask_indexes, next_available_count, next_available: [{ subtask_index, title, status, capability_hint, wave_index, blocked_by_count, claimed_by_session_id }] }]` — enough for ready-work selection without paying for sub-task descriptions or file-scope arrays. Pass `detail: "full"` to receive the legacy shape with `subtasks: [...]` (full `SubtaskInfo` bodies) and `next_available: [...]` (full `SubtaskInfo` bodies). `registry_status` is `registered` when the plan root task exists and `subtask-only` when the rollup was recovered from live sub-task rows after the root registry row went missing. `next_available` is the list of sub-tasks whose status is `available` **and** whose `depends_on` chain is fully `completed`. `capability_match` filters plans where at least one sub-task in `next_available` has the matching `capability_hint`.
 
 ## `task_ready_for_agent`
 
@@ -2050,6 +2051,8 @@ Claim an available sub-task. The handler runs scan-before-stamp inside a SQLite 
 ```
 
 On success: joins the caller to the sub-task thread and activates file claims for every entry in the sub-task `file_scope`. Returns `{ task_id, branch, file_scope }`. Errors: `PLAN_SUBTASK_NOT_FOUND`, `PLAN_SUBTASK_DEPS_UNMET`, `PLAN_SUBTASK_NOT_AVAILABLE`.
+
+When the failure is `PLAN_SUBTASK_NOT_AVAILABLE` (lost a claim race or the sub-task is already claimed/completed), the error payload also includes `plan_slug`, `subtask_counts`, `next_available_count`, `next_available_subtask_index` (the first claimable sub-task on the same plan, or `null` when nothing remains), and a compact `next_available: [{ subtask_index, title, status, capability_hint, wave_index, blocked_by_count, claimed_by_session_id }]`. Use it to retry directly instead of issuing a follow-up `task_plan_list` round trip.
 
 ## `task_plan_complete_subtask`
 

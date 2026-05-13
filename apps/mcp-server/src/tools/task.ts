@@ -244,6 +244,23 @@ export function register(server: McpServer, ctx: ToolContext): void {
             }
           }
 
+          // ACTIVE_TASK_NOT_FOUND is the dominant error mode for this tool
+          // (8 of 23 errors in 7d telemetry). The caller is usually a fresh
+          // agent session that has not yet joined the active task on its
+          // branch — so a zero-result narrow lookup hides candidates that
+          // already exist on disk. Surface those as `nearby_tasks` with a
+          // `match_kind` annotation so the caller can recover via an
+          // explicit `task_post(task_id=...)` or `task_accept_handoff`
+          // without re-listing the whole task table.
+          const nearbyTasks =
+            code === 'ACTIVE_TASK_NOT_FOUND'
+              ? nearbyTaskMatches(store, {
+                  ...(repo_root !== undefined ? { repo_root } : {}),
+                  ...(branch !== undefined ? { branch } : {}),
+                  limit: candidate_limit ?? 10,
+                })
+              : [];
+
           return {
             content: [
               {
@@ -255,6 +272,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
                       ? 'no active Colony task matched session/repo/branch'
                       : 'multiple active Colony tasks matched session/repo/branch',
                   candidates: visibleCandidates,
+                  ...(code === 'ACTIVE_TASK_NOT_FOUND' && nearbyTasks.length > 0
+                    ? {
+                        nearby_tasks: nearbyTasks,
+                        hint: 'Your session has not joined a task on this branch. Pass task_id=<id> to task_post directly, or call task_accept_handoff to bind your session before retrying task_note_working.',
+                      }
+                    : {}),
                   ...(code === 'ACTIVE_TASK_NOT_FOUND' && allow_omx_notepad_fallback === true
                     ? {
                         omx_notepad_pointer: {
@@ -776,6 +799,64 @@ interface ActiveTaskCandidate {
   status: string;
   updated_at: number;
   agent: string;
+}
+
+interface NearbyTaskMatch {
+  task_id: number;
+  title: string;
+  repo_root: string;
+  branch: string;
+  status: string;
+  updated_at: number;
+  match_kind: 'branch_and_repo' | 'branch_only' | 'repo_only';
+}
+
+/**
+ * Wider lookup used by `task_note_working` when the strict session/
+ * repo/branch filter returns zero candidates. Excludes any task the
+ * caller's session already participates in (those would already appear
+ * in the narrow result) and ranks branch-exact matches above repo-only
+ * matches. Returns at most `limit` rows so callers can render the
+ * shortlist without paging.
+ */
+function nearbyTaskMatches(
+  store: ToolContext['store'],
+  opts: { repo_root?: string; branch?: string; limit: number },
+): NearbyTaskMatch[] {
+  if (opts.repo_root === undefined && opts.branch === undefined) return [];
+  const matches: NearbyTaskMatch[] = [];
+  const normalizedRepo = opts.repo_root !== undefined ? resolve(opts.repo_root) : null;
+  for (const task of store.storage.listTasks(2000)) {
+    const repoMatch = normalizedRepo !== null && resolve(task.repo_root) === normalizedRepo;
+    const branchMatch = opts.branch !== undefined && task.branch === opts.branch;
+    if (!repoMatch && !branchMatch) continue;
+    const matchKind: NearbyTaskMatch['match_kind'] = repoMatch
+      ? branchMatch
+        ? 'branch_and_repo'
+        : 'repo_only'
+      : 'branch_only';
+    matches.push({
+      task_id: task.id,
+      title: task.title,
+      repo_root: task.repo_root,
+      branch: task.branch,
+      status: task.status,
+      updated_at: task.updated_at,
+      match_kind: matchKind,
+    });
+  }
+  const rank: Record<NearbyTaskMatch['match_kind'], number> = {
+    branch_and_repo: 0,
+    branch_only: 1,
+    repo_only: 2,
+  };
+  return matches
+    .sort((a, b) => {
+      const byRank = rank[a.match_kind] - rank[b.match_kind];
+      if (byRank !== 0) return byRank;
+      return b.updated_at - a.updated_at;
+    })
+    .slice(0, opts.limit);
 }
 
 function activeTaskCandidates(

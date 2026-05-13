@@ -9,6 +9,7 @@ import {
 import { dirname, join } from 'node:path';
 import {
   type MemoryStore,
+  type PlanInfo,
   type SubtaskInfo,
   type SubtaskLookup,
   TaskThread,
@@ -82,6 +83,107 @@ type WaveInput = z.infer<typeof WaveInputSchema>;
 
 interface CodedError extends Error {
   __code?: string;
+}
+
+interface CompactSubtask {
+  subtask_index: number;
+  title: string;
+  status: SubtaskInfo['status'];
+  capability_hint: string | null;
+  wave_index: number;
+  blocked_by_count: number;
+  claimed_by_session_id: string | null;
+}
+
+interface CompactPlan {
+  plan_slug: string;
+  repo_root: string;
+  spec_task_id: number;
+  registry_status: PlanInfo['registry_status'];
+  title: string;
+  created_at: number;
+  subtask_counts: PlanInfo['subtask_counts'];
+  subtask_count: number;
+  next_available_count: number;
+  next_available: CompactSubtask[];
+  subtask_indexes: number[];
+}
+
+/**
+ * Compact projection of a `PlanInfo` for the `task_plan_list` MCP wire
+ * shape. Drops `subtasks[].description` and `subtasks[].file_scope` —
+ * the two heavy fields driving the per-call token spend — and reduces
+ * `next_available` to its routing essentials. Callers needing the full
+ * sub-task bodies must pass `detail: 'full'` to recover the legacy
+ * shape. Internal callers continue to use `listPlans()` directly and
+ * are unaffected.
+ */
+function toCompactSubtask(subtask: SubtaskInfo): CompactSubtask {
+  return {
+    subtask_index: subtask.subtask_index,
+    title: subtask.title,
+    status: subtask.status,
+    capability_hint: subtask.capability_hint,
+    wave_index: subtask.wave_index,
+    blocked_by_count: subtask.blocked_by_count,
+    claimed_by_session_id: subtask.claimed_by_session_id,
+  };
+}
+
+/**
+ * Build recovery hints attached to a `task_plan_claim_subtask` error.
+ * Adds the next claimable sub-task index for the same plan when the
+ * caller raced and the requested sub-task is no longer available, so
+ * the caller can retry without a follow-up `task_plan_list` round
+ * trip. Returns an empty record when the failure code does not benefit
+ * from a recovery hint (caller already knows what to do).
+ */
+function recoveryDetailsForClaimFailure(
+  store: MemoryStore,
+  code:
+    | 'PLAN_SUBTASK_NOT_FOUND'
+    | 'PLAN_SUBTASK_DEPS_UNMET'
+    | 'PLAN_SUBTASK_NOT_AVAILABLE'
+    | 'CLAIM_TAKEOVER_RECOMMENDED'
+    | 'CLAIM_HELD_BY_ACTIVE_OWNER',
+  args: { plan_slug: string; subtask_index: number; repo_root?: string },
+): Record<string, unknown> {
+  if (code !== 'PLAN_SUBTASK_NOT_AVAILABLE') return {};
+  try {
+    const plan = listPlans(store, {
+      ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
+      limit: 200,
+    }).find((candidate) => candidate.plan_slug === args.plan_slug);
+    if (!plan) return {};
+    const candidates = plan.next_available
+      .filter((subtask) => subtask.subtask_index !== args.subtask_index)
+      .map(toCompactSubtask);
+    return {
+      plan_slug: args.plan_slug,
+      subtask_counts: plan.subtask_counts,
+      next_available_count: candidates.length,
+      next_available_subtask_index: candidates[0]?.subtask_index ?? null,
+      next_available: candidates,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function toCompactPlan(plan: PlanInfo): CompactPlan {
+  return {
+    plan_slug: plan.plan_slug,
+    repo_root: plan.repo_root,
+    spec_task_id: plan.spec_task_id,
+    registry_status: plan.registry_status,
+    title: plan.title,
+    created_at: plan.created_at,
+    subtask_counts: plan.subtask_counts,
+    subtask_count: plan.subtasks.length,
+    next_available_count: plan.next_available.length,
+    next_available: plan.next_available.map(toCompactSubtask),
+    subtask_indexes: plan.subtasks.map((s) => s.subtask_index),
+  };
 }
 
 export function register(server: McpServer, ctx: ToolContext): void {
@@ -189,7 +291,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_list',
-    'Find available plan sub-tasks, rollups, or next work. Lists published plans with status counts, next_available work, capability_match, and unclaimed routing.',
+    'Find available plan sub-tasks, rollups, or next work. Lists published plans with status counts, next_available work, capability_match, and unclaimed routing. Defaults to a compact rollup shape (subtask_index + title + capability_hint + status); pass detail="full" to receive descriptions, file_scope, and the legacy sub-task array.',
     {
       repo_root: z.string().min(1).optional(),
       only_with_available_subtasks: z.boolean().optional(),
@@ -197,6 +299,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .enum(['ui_work', 'api_work', 'test_work', 'infra_work', 'doc_work'])
         .optional(),
       limit: z.number().int().positive().max(50).optional(),
+      detail: z
+        .enum(['compact', 'full'])
+        .optional()
+        .describe(
+          'compact (default): one rollup row + next_available indexes/titles. full: legacy shape with subtasks[] descriptions and file_scope. Use compact for ready-work selection; full when you need to render every sub-task body.',
+        ),
     },
     wrapHandler('task_plan_list', async (args) => {
       // Opportunistic auto-archive sweep: completed plans whose grace
@@ -213,7 +321,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(args.capability_match !== undefined ? { capability_match: args.capability_match } : {}),
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
       });
-      return { content: [{ type: 'text', text: JSON.stringify(plans) }] };
+      const detail = args.detail ?? 'compact';
+      const payload = detail === 'full' ? plans : plans.map(toCompactPlan);
+      return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
     }),
   );
 
@@ -232,7 +342,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const result = attemptClaimPlanSubtask(store, args);
       if (!result.ok) {
         if (result.code === 'CLAIM_INTERNAL_ERROR') return mcpError(result.exception);
-        return mcpErrorResponse(result.code, result.message);
+        const details = recoveryDetailsForClaimFailure(store, result.code, {
+          plan_slug: args.plan_slug,
+          subtask_index: args.subtask_index,
+          ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
+        });
+        return mcpErrorResponse(result.code, result.message, details);
       }
       return {
         content: [
