@@ -75,17 +75,33 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_list',
-    'Browse task threads; use task_ready_for_agent when choosing work to claim. Lists shared coordination lanes by repo_root, branch, participants, status, and recent activity.',
+    'Browse task threads; use task_ready_for_agent when choosing work to claim. Lists shared coordination lanes by repo_root, branch, participants, status, and recent activity. Defaults to a compact rollup (id, title, branch, status, updated_at) — pass detail="full" to also receive repo_root, created_by, and created_at.',
     {
       limit: z.number().int().positive().max(200).optional(),
       session_id: z.string().min(1).optional(),
+      detail: z
+        .enum(['compact', 'full'])
+        .optional()
+        .describe(
+          'compact (default): id + title + branch + status + updated_at per task. full: legacy shape with repo_root, created_by, created_at. Use compact for browsing; full when you need the long-form audit fields.',
+        ),
     },
-    wrapHandler('task_list', async ({ limit, session_id }) => {
+    wrapHandler('task_list', async ({ limit, session_id, detail }) => {
       const tasks = store.storage.listTasks(limit ?? 50);
       const callerSessionId = session_id ?? detectMcpClientIdentity().sessionId;
       const routing = taskListRoutingForSession(store, callerSessionId);
+      const projection =
+        (detail ?? 'compact') === 'full'
+          ? tasks
+          : tasks.map((task) => ({
+              id: task.id,
+              title: task.title,
+              branch: task.branch,
+              status: task.status,
+              updated_at: task.updated_at,
+            }));
       return jsonReply({
-        tasks,
+        tasks: projection,
         hint: routing.hint,
         coordination_warning: routing.coordination_warning,
         next_tool: 'task_ready_for_agent',
