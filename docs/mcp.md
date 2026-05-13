@@ -912,10 +912,10 @@ Browse task threads; use `task_ready_for_agent` when choosing work to claim. Eac
 Use `task_list` when you need to inspect existing task threads by repo or branch for browsing/debugging. Do not use it as the main work picker; call `task_ready_for_agent` when the question is "what should I work on next?"
 
 ```json
-{ "name": "task_list", "input": { "limit": 50, "session_id": "sess_abc" } }
+{ "name": "task_list", "input": { "limit": 50, "session_id": "sess_abc", "detail": "compact" } }
 ```
 
-Returns: `{ tasks, hint, coordination_warning, next_tool }`. Before a session calls `task_ready_for_agent`, `coordination_warning` is `task_list is inventory; use task_ready_for_agent to choose work.` and `next_tool` is `task_ready_for_agent`. Repeated `task_list` calls without `task_ready_for_agent` return `Stop browsing. Call task_ready_for_agent before selecting work.` as the stronger warning. After `task_ready_for_agent`, `coordination_warning` is omitted and `task_list` stays a browsing/debugging surface. The legacy `hint` field remains for backward compatibility.
+`detail` defaults to `"compact"`. Compact returns `tasks: [{ id, title, branch, status, updated_at }]` — enough for browsing without paying for the long-form audit fields. Pass `detail: "full"` to receive the legacy shape with `repo_root`, `created_by`, and `created_at` per row. Returns: `{ tasks, hint, coordination_warning, next_tool }`. Before a session calls `task_ready_for_agent`, `coordination_warning` is `task_list is inventory; use task_ready_for_agent to choose work.` and `next_tool` is `task_ready_for_agent`. Repeated `task_list` calls without `task_ready_for_agent` return `Stop browsing. Call task_ready_for_agent before selecting work.` as the stronger warning. After `task_ready_for_agent`, `coordination_warning` is omitted and `task_list` stays a browsing/debugging surface. The legacy `hint` field remains for backward compatibility.
 
 ## `task_timeline`
 

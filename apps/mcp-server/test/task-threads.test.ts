@@ -1000,6 +1000,33 @@ describe('task threads — handoff lifecycle', () => {
     expect(first.next_tool).toBe('task_ready_for_agent');
   });
 
+  it('task_list returns a compact rollup by default and a full shape via detail:"full"', async () => {
+    const { sessionA } = seedTwoSessionTask();
+
+    const compact = await call<{ tasks: Array<Record<string, unknown>> }>('task_list', {
+      session_id: sessionA,
+    });
+    const full = await call<{ tasks: Array<Record<string, unknown>> }>('task_list', {
+      session_id: sessionA,
+      detail: 'full',
+    });
+
+    expect(compact.tasks).toHaveLength(1);
+    const compactRow = compact.tasks[0] as Record<string, unknown>;
+    expect(Object.keys(compactRow).sort()).toEqual(
+      ['branch', 'id', 'status', 'title', 'updated_at'].sort(),
+    );
+    expect(compactRow).not.toHaveProperty('repo_root');
+    expect(compactRow).not.toHaveProperty('created_by');
+    expect(compactRow).not.toHaveProperty('created_at');
+
+    const fullRow = full.tasks[0] as Record<string, unknown>;
+    expect(fullRow).toHaveProperty('repo_root');
+    expect(fullRow).toHaveProperty('created_by');
+    expect(fullRow).toHaveProperty('created_at');
+    expect(JSON.stringify(compact.tasks).length).toBeLessThan(JSON.stringify(full.tasks).length);
+  });
+
   it('task_list strengthens the warning after repeated inventory reads', async () => {
     const { sessionA } = seedTwoSessionTask();
 
