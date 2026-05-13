@@ -289,6 +289,85 @@ export interface NewTaskEmbedding {
   computed_at?: number;
 }
 
+export type RunAttemptStatus =
+  | 'PreparingWorkspace'
+  | 'BuildingPrompt'
+  | 'LaunchingAgentProcess'
+  | 'InitializingSession'
+  | 'StreamingTurn'
+  | 'Finishing'
+  | 'Succeeded'
+  | 'Failed'
+  | 'TimedOut'
+  | 'Stalled'
+  | 'CanceledByReconciliation';
+
+export const RUN_ATTEMPT_TERMINAL_STATUSES = [
+  'Succeeded',
+  'Failed',
+  'TimedOut',
+  'Stalled',
+  'CanceledByReconciliation',
+] as const satisfies ReadonlyArray<RunAttemptStatus>;
+
+export const RUN_ATTEMPT_ACTIVE_STATUSES = [
+  'PreparingWorkspace',
+  'BuildingPrompt',
+  'LaunchingAgentProcess',
+  'InitializingSession',
+  'StreamingTurn',
+  'Finishing',
+] as const satisfies ReadonlyArray<RunAttemptStatus>;
+
+export type RunAttemptTerminalStatus = (typeof RUN_ATTEMPT_TERMINAL_STATUSES)[number];
+
+export interface TaskRunAttemptRow {
+  id: string;
+  task_id: number;
+  agent_id: string;
+  attempt_number: number;
+  workspace_path: string;
+  status: RunAttemptStatus;
+  started_at: number;
+  finished_at: number | null;
+  error: string | null;
+  parent_attempt_id: string | null;
+  input_tokens_total: number;
+  output_tokens_total: number;
+  turn_count: number;
+  last_event: string | null;
+  last_event_at: number | null;
+  last_event_message: string | null;
+  proof_json: string | null;
+}
+
+export interface NewTaskRunAttempt {
+  id?: string;
+  task_id: number;
+  agent_id: string;
+  workspace_path: string;
+  parent_attempt_id?: string | null;
+  status?: RunAttemptStatus;
+  started_at?: number;
+}
+
+export interface TaskRunAttemptEventUpdate {
+  input_tokens_delta?: number;
+  output_tokens_delta?: number;
+  turn_count_delta?: number;
+  last_event?: string;
+  last_event_message?: string | null;
+  status?: RunAttemptStatus;
+  occurred_at?: number;
+}
+
+export interface TaskRunAttemptFinish {
+  status: RunAttemptTerminalStatus;
+  error?: string | null;
+  finished_at?: number;
+  proof?: unknown;
+}
+
 export interface NewMcpMetric {
   ts: number;
   operation: string;

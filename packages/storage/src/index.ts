@@ -1,5 +1,18 @@
 export { Storage, PROTECTED_BRANCH_NAMES, isProtectedBranch } from './storage.js';
 export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from './claim-path.js';
+export {
+  RunAttemptError,
+  createRunAttempt,
+  finishRunAttempt,
+  getRunAttempt,
+  listRunAttemptsByTask,
+  recordRunAttemptEvent,
+  updateRunAttemptStatus,
+} from './run-attempts.js';
+export {
+  RUN_ATTEMPT_ACTIVE_STATUSES,
+  RUN_ATTEMPT_TERMINAL_STATUSES,
+} from './types.js';
 export type { ClaimPathContext, RepoFilePathContext } from './claim-path.js';
 export {
   COORDINATION_COMMIT_TOOLS,
@@ -65,6 +78,12 @@ export type {
   ExampleManifestKind,
   TaskEmbeddingRow,
   NewTaskEmbedding,
+  RunAttemptStatus,
+  RunAttemptTerminalStatus,
+  TaskRunAttemptRow,
+  NewTaskRunAttempt,
+  TaskRunAttemptEventUpdate,
+  TaskRunAttemptFinish,
   NewMcpMetric,
   AggregateMcpMetricsOptions,
   McpMetricsCostOptions,
