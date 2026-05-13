@@ -5,9 +5,20 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+# One in-flight run per ref. New pushes cancel the previous run so
+# Actions minutes don't pile up across rapid agent-branch updates.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
+    # Draft PRs skip CI to save minutes during in-flight agent work.
+    # The check fires automatically when the PR is marked ready for review
+    # (the `ready_for_review` trigger above), and always on push to main.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -26,6 +37,7 @@ jobs:
       - run: pnpm build
 
   e2e-publish:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 15
