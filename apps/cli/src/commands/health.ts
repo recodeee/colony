@@ -618,6 +618,7 @@ export function buildColonyHealthPayload(
     Storage,
     | 'toolCallsSince'
     | 'claimBeforeEditStats'
+    | 'countMcpMetricsSince'
     | 'listTasks'
     | 'listClaims'
     | 'getSession'
@@ -678,8 +679,16 @@ export function buildColonyHealthPayload(
   );
   const tasks = storage.listTasks(2000);
   const totalToolCalls = calls.length;
-  const mcpToolCalls = calls.filter((call) => isMcpTool(call.tool)).length;
-  const colonyMcpToolCalls = calls.filter((call) => isColonyMcpTool(call.tool)).length;
+  const observedMcpToolCalls = calls.filter((call) => isMcpTool(call.tool)).length;
+  const observedColonyMcpToolCalls = calls.filter((call) => isColonyMcpTool(call.tool)).length;
+  // `tool_calls` only sees MCP traffic from agents whose PostToolUse hook fires
+  // for `mcp__*` tools; `mcp_metrics` is the colony MCP server's own per-call
+  // receipt. Take the max so the share counters reflect real coordination even
+  // when the caller's hook isn't wired (the live data motivating this fix had
+  // 203 mcp_metrics receipts and zero matching tool_calls rows).
+  const colonyMcpMetricsCount = storage.countMcpMetricsSince(options.since, now);
+  const colonyMcpToolCalls = Math.max(observedColonyMcpToolCalls, colonyMcpMetricsCount);
+  const mcpToolCalls = Math.max(observedMcpToolCalls, colonyMcpMetricsCount);
   const conversionEntries = CONVERSIONS.map(([from, to]) => [
     conversionKey(from, to),
     conversion(calls, from, to),
@@ -773,6 +782,7 @@ export function buildColonyHealthPayload(
       source_breakdown: {
         colony_observations: colonyCalls.length,
         codex_rollouts: codexCalls.length,
+        ...(colonyMcpMetricsCount > 0 ? { colony_mcp_metrics: colonyMcpMetricsCount } : {}),
         ...(repoStoreCalls.length > 0 ? { repo_store_observations: repoStoreCalls.length } : {}),
         ...(mergedRepoStores.length > 0 ? { merged_repo_stores: mergedRepoStores } : {}),
       },
@@ -2199,8 +2209,11 @@ function claimBeforeEditPayload(
     edits_missing_claim: editsWithoutClaimBefore,
     auto_claimed_before_edit: autoClaimedBeforeEdit,
     edits_without_claim_before: editsWithoutClaimBefore,
-    claim_before_edit_ratio:
-      status === 'available' ? ratio(stats.edits_claimed_before, stats.edits_with_file_path) : null,
+    // Surface the ratio whenever there are measurable edits, even when some
+    // edits lacked file_path metadata (status='not_available'). The `status`
+    // field already communicates partial measurability; suppressing the ratio
+    // turned a useful 55% signal into a bare `n/a` headline.
+    claim_before_edit_ratio: ratio(stats.edits_claimed_before, stats.edits_with_file_path),
     pre_tool_use_signals: preToolUseSignals,
     old_telemetry_pollution: rootCause?.kind === 'old_telemetry_pollution',
     recent_window_hours: recent.recent_window_hours,

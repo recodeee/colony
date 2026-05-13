@@ -536,9 +536,8 @@ describe('colony health payload', () => {
 
   it('treats stale claim_mismatch buckets as old telemetry when the recent window is clean', () => {
     const recentSince = NOW - 3_600_000;
-    // edit_tool_calls > edits_with_file_path so status='not_available' and
-    // the all-time claim_before_edit_ratio is null — exactly the user
-    // scenario that produces the bare `n/a` headline.
+    // edit_tool_calls > edits_with_file_path so status='not_available' but
+    // the all-time ratio over measurable edits is still surfaced (25/30 = 83%).
     const stalePathMismatchStats: ClaimBeforeEditStats = {
       edit_tool_calls: 35,
       edits_with_file_path: 30,
@@ -586,13 +585,15 @@ describe('colony health payload', () => {
       old_telemetry_pollution: true,
       recent_pre_tool_use_missing: 0,
       recent_claim_before_edit_rate: 1,
+      claim_before_edit_ratio: 25 / 30,
+      status: 'not_available',
     });
     expect(payload.readiness_summary.execution_safety.root_cause).toMatchObject({
       kind: 'old_telemetry_pollution',
       summary: expect.stringContaining('older edit telemetry'),
     });
     expect(payload.readiness_summary.execution_safety.evidence).toBe(
-      'claim-before-edit n/a (recent 1h: 100%; target 50%+); live contentions 0, dirty 0',
+      'claim-before-edit 83% (target 50%+); live contentions 0, dirty 0',
     );
   });
 
@@ -2930,6 +2931,30 @@ describe('colony health payload', () => {
     }
   });
 
+  it('falls back to mcp_metrics receipts when no MCP rows landed in tool_calls', () => {
+    // Reproduces the live bug: calling agent's PostToolUse hook never recorded
+    // mcp__* tool rows, so observed MCP count is 0, but colony's MCP server
+    // wrote 7 receipts into mcp_metrics. share counters take the max of the
+    // two sources so the server's authoritative count shows through.
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'claude-session', 'Bash', NOW - 90_000),
+          call(2, 'claude-session', 'Edit', NOW - 80_000),
+        ],
+        claimBeforeEdit: cleanClaimBeforeEditStats(),
+        mcpMetricsCount: 7,
+      }),
+      { since: SINCE, window_hours: 24, now: NOW, codex_sessions_root: NO_CODEX_ROOT },
+    );
+
+    expect(payload.colony_mcp_share).toMatchObject({
+      mcp_tool_calls: 7,
+      colony_mcp_tool_calls: 7,
+      source_breakdown: { colony_mcp_metrics: 7 },
+    });
+  });
+
   it('reports Codex rollout edits separately from hook-capable claim-before-edit metrics', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'colony-health-codex-edits-'));
     try {
@@ -3824,6 +3849,7 @@ function fakeStorage(args: {
   proposals?: TestProposal[];
   reinforcements?: Record<number, TestReinforcement[]>;
   omxRuntimeStats?: OmxRuntimeSummaryStats;
+  mcpMetricsCount?: number;
 }): never {
   const tasks = args.tasks ?? healthyTasks();
   const observationsByTask = args.observationsByTask ?? healthyObservationsByTask();
@@ -3835,6 +3861,7 @@ function fakeStorage(args: {
     toolCallsSince: () => args.calls,
     claimBeforeEditStats: (since: number) =>
       args.claimBeforeEditStatsBySince?.(since) ?? args.claimBeforeEdit,
+    countMcpMetricsSince: () => args.mcpMetricsCount ?? 0,
     omxRuntimeSummaryStats: () =>
       args.omxRuntimeStats ?? {
         status: 'unavailable',

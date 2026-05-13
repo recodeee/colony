@@ -940,6 +940,7 @@ function fakeStorage(args: {
   return {
     toolCallsSince: () => args.calls,
     claimBeforeEditStats: () => args.claimBeforeEdit,
+    countMcpMetricsSince: () => 0,
     omxRuntimeSummaryStats: () =>
       args.omxRuntimeStats ?? {
         status: 'available',
