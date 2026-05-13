@@ -375,5 +375,10 @@ export const COLUMN_MIGRATIONS: ReadonlyArray<{ table: string; column: string; s
 
 export const POST_MIGRATION_SQL = `
 CREATE INDEX IF NOT EXISTS idx_observations_task ON observations(task_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_kind_ts ON observations(kind, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_session_kind_ts ON observations(session_id, kind, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_task_kind_ts ON observations(task_id, kind, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_reply_to ON observations(reply_to);
+CREATE INDEX IF NOT EXISTS idx_summaries_scope_ts ON summaries(scope, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_error_ts ON mcp_metrics(ok, error_code, ts DESC);
 `;
