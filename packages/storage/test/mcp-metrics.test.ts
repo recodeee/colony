@@ -189,4 +189,16 @@ describe('mcp_metrics storage', () => {
     expect(empty.cost_basis.configured).toBe(false);
     expect(empty.operations).toEqual([]);
   });
+
+  it('countMcpMetricsSince counts rows in the window', () => {
+    record(storage, { ts: 100, operation: 'search' });
+    record(storage, { ts: 500, operation: 'search' });
+    record(storage, { ts: 1_500, operation: 'timeline' });
+    record(storage, { ts: 2_000, operation: 'task_post' });
+
+    expect(storage.countMcpMetricsSince(0, 3_000)).toBe(4);
+    expect(storage.countMcpMetricsSince(1_000, 3_000)).toBe(2);
+    expect(storage.countMcpMetricsSince(0, 400)).toBe(1);
+    expect(storage.countMcpMetricsSince(5_000, 6_000)).toBe(0);
+  });
 });

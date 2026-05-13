@@ -1247,6 +1247,18 @@ export class Storage {
       );
   }
 
+  // Authoritative count of MCP calls hitting colony's server in the window.
+  // `tool_calls` only captures PostToolUse observations from agents that fire
+  // colony's hook; this query reaches the receipt table the MCP wrapper writes
+  // for every call regardless of caller, so health metrics don't read 0 when
+  // the calling agent's hook is missing.
+  countMcpMetricsSince(since: number, until: number = Date.now()): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS calls FROM mcp_metrics WHERE ts >= ? AND ts <= ?')
+      .get(since, until) as { calls: number } | undefined;
+    return row?.calls ?? 0;
+  }
+
   aggregateMcpMetrics(opts: AggregateMcpMetricsOptions = {}): McpMetricsAggregate {
     const since = opts.since ?? 0;
     const until = opts.until ?? Date.now();
