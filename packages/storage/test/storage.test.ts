@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROTECTED_BRANCH_NAMES, Storage, isProtectedBranch } from '../src/index.js';
 
@@ -86,6 +87,28 @@ describe('Storage', () => {
     const rows = storage.getObservations([id]);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.compressed).toBe(1);
+  });
+
+  it('creates memory lookup indexes after schema migrations', () => {
+    const db = new Database(join(dir, 'test.db'), { readonly: true });
+    try {
+      expect(indexNames(db, 'observations')).toEqual(
+        expect.arrayContaining([
+          'idx_observations_kind_ts',
+          'idx_observations_reply_to',
+          'idx_observations_session',
+          'idx_observations_session_kind_ts',
+          'idx_observations_task',
+          'idx_observations_task_kind_ts',
+          'idx_observations_ts',
+        ]),
+      );
+      expect(indexNames(db, 'summaries')).toEqual(
+        expect.arrayContaining(['idx_summaries_scope_ts', 'idx_summaries_session']),
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it('stores lane pause and resume state', () => {
@@ -750,6 +773,12 @@ describe('Storage', () => {
     expect(storage.getObservation(legacyExpiredId)).toBeDefined();
   });
 });
+
+function indexNames(db: Database.Database, table: string): string[] {
+  return (db.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string }>).map(
+    (row) => row.name,
+  );
+}
 
 describe('isProtectedBranch', () => {
   it('returns true for canonical protected base branches', () => {

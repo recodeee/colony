@@ -49,4 +49,28 @@ describe('MemoryStore token receipts', () => {
     expect(JSON.stringify(metadata)).not.toContain(content);
     expect(JSON.stringify(metadata)).not.toContain('secret-token-123');
   });
+
+  it('skips observation writes when redaction leaves no memory content', () => {
+    const id = store.addObservation({
+      session_id: 'private-only-observation',
+      kind: 'note',
+      content: '  <private>secret-token-123</private>  ',
+    });
+
+    expect(id).toBe(-1);
+    expect(store.storage.countObservations()).toBe(0);
+    expect(store.storage.getSession('private-only-observation')).toBeUndefined();
+  });
+
+  it('skips summary writes when redaction leaves no memory content', () => {
+    const id = store.addSummary({
+      session_id: 'private-only-summary',
+      scope: 'turn',
+      content: '\n<private>full private summary</private>\n',
+    });
+
+    expect(id).toBe(-1);
+    expect(store.storage.listSummaries('private-only-summary')).toEqual([]);
+    expect(store.storage.getSession('private-only-summary')).toBeUndefined();
+  });
 });

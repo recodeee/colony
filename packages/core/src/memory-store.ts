@@ -63,19 +63,18 @@ export class MemoryStore {
     task_id?: number | null;
     reply_to?: number | null;
   }): number {
-    const redacted = redactPrivate(p.content);
-    if (!redacted.trim()) return -1;
-    this.ensureSession(p.session_id, p.metadata);
     const intensity = this.settings.compression.intensity;
-    const compressed = compress(redacted, { intensity });
+    const prepared = prepareMemoryText(p.content, intensity);
+    if (!prepared) return -1;
+    this.ensureSession(p.session_id, p.metadata);
     const metadata = {
       ...(p.metadata ?? {}),
-      ...tokenReceiptMetadata(redacted, compressed, intensity),
+      ...tokenReceiptMetadata(prepared.redacted, prepared.compressed, intensity),
     };
     const obs: NewObservation = {
       session_id: p.session_id,
       kind: p.kind,
-      content: compressed,
+      content: prepared.compressed,
       compressed: true,
       intensity,
       metadata,
@@ -86,14 +85,14 @@ export class MemoryStore {
   }
 
   addSummary(p: { session_id: string; scope: 'turn' | 'session'; content: string }): number {
-    const redacted = redactPrivate(p.content);
-    this.ensureSession(p.session_id);
     const intensity = this.settings.compression.intensity;
-    const out = compress(redacted, { intensity });
+    const prepared = prepareMemoryText(p.content, intensity);
+    if (!prepared) return -1;
+    this.ensureSession(p.session_id);
     return this.storage.insertSummary({
       session_id: p.session_id,
       scope: p.scope,
-      content: out,
+      content: prepared.compressed,
       compressed: true,
       intensity,
     });
@@ -419,6 +418,15 @@ function serializeSessionMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): string | null {
   return metadata ? JSON.stringify(metadata) : null;
+}
+
+function prepareMemoryText(
+  content: string,
+  intensity: Settings['compression']['intensity'],
+): { redacted: string; compressed: string } | null {
+  const redacted = redactPrivate(content);
+  if (!redacted.trim()) return null;
+  return { redacted, compressed: compress(redacted, { intensity }) };
 }
 
 function tokenReceiptMetadata(
