@@ -285,7 +285,39 @@ CREATE TABLE IF NOT EXISTS mcp_metrics (
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_op_ts ON mcp_metrics(operation, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_ts ON mcp_metrics(ts DESC);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (11);
+-- Run-attempt lifecycle rows (Symphony §4.1.5 / §7.2). One row per launch of an
+-- agent process against a task; status walks the §7.2 lifecycle from
+-- PreparingWorkspace through a terminal state. Rolling event counters
+-- (input_tokens_total / output_tokens_total / turn_count / last_event) are
+-- updated in place by task_run_attempt_event (Agent 210). Terminal rows are
+-- kept for audit — never deleted. parent_attempt_id chains retries.
+CREATE TABLE IF NOT EXISTS task_run_attempts (
+  id TEXT PRIMARY KEY,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  workspace_path TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  error TEXT,
+  parent_attempt_id TEXT REFERENCES task_run_attempts(id) ON DELETE SET NULL,
+  input_tokens_total INTEGER NOT NULL DEFAULT 0,
+  output_tokens_total INTEGER NOT NULL DEFAULT 0,
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  last_event TEXT,
+  last_event_at INTEGER,
+  last_event_message TEXT,
+  proof_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_run_attempts_task_started
+  ON task_run_attempts(task_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_run_attempts_status
+  ON task_run_attempts(status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_run_attempts_parent
+  ON task_run_attempts(parent_attempt_id);
+
+INSERT OR IGNORE INTO schema_version(version) VALUES (12);
 `;
 
 /**
