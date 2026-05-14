@@ -445,12 +445,21 @@ function writeLiveOverview(
   }
   const topSpend = findTopTokenSpend(rows);
   if (topSpend !== null) {
+    const share = totals.total_tokens > 0 ? topSpend.total_tokens / totals.total_tokens : 0;
+    const shareLabel = formatShare(share);
     w.write(
       `${kleur.dim('Top spend:')} ${topSpend.operation} ${formatTokens(
         topSpend.total_tokens,
-      )} tokens across ${topSpend.calls} call${topSpend.calls === 1 ? '' : 's'} ` +
-        `(avg ${formatTokens(avgTokens(topSpend))}/call)\n`,
+      )} tokens (${shareLabel} of total) across ${topSpend.calls} call${
+        topSpend.calls === 1 ? '' : 's'
+      } (avg ${formatTokens(avgTokens(topSpend))}/call)\n`,
     );
+    if (share >= 0.7 && topSpend.calls >= 100) {
+      w.write(
+        `${kleur.yellow('Hot loop:')} ${topSpend.operation} dominates token spend ` +
+          `(${shareLabel}); narrow filters, raise compact mode, or cache the result.\n`,
+      );
+    }
   }
 }
 
@@ -464,11 +473,14 @@ function writeLiveSessionSection(
   w.write('\n');
   w.write(`${kleur.bold('Live sessions')}\n`);
   const truncation = summary.sessions_truncated ? `; showing ${sessions.length}` : '';
+  const costSuffix = costBasis.configured
+    ? `, ${formatUsdConfigured(summary.avg_total_cost_usd)}`
+    : '';
   w.write(
     kleur.dim(
       `Sessions with receipts: ${summary.session_count}${truncation}; avg/session: ${summary.avg_calls} calls, ${formatTokens(
         summary.avg_total_tokens,
-      )} tokens, ${formatUsd(summary.avg_total_cost_usd, costBasis)}.\n`,
+      )} tokens${costSuffix}.\n`,
     ),
   );
   const head = padRow(
@@ -585,7 +597,7 @@ function writeGainFocus(
         matchedCalls,
         totalCalls,
       )})`,
-      `${kleur.dim('Saved:')} ${formatTokenDelta(savedTokens)}`,
+      `${kleur.dim('Net:')} ${formatTokenDelta(savedTokens)}`,
       `${kleur.dim('Next:')} ${next}`,
     ].join('  '),
   );
@@ -600,7 +612,7 @@ function writeGainFocus(
   if (comparisonCost !== null && comparisonCost.totals.calls > 0) {
     process.stdout.write(
       [
-        `${kleur.dim('USD saved:')} ${formatUsdDelta(comparisonCost.totals.saved_cost_usd)}`,
+        `${kleur.dim('Net USD:')} ${formatUsdDelta(comparisonCost.totals.saved_cost_usd)}`,
         `${kleur.dim('Colony spent:')} ${formatUsdConfigured(
           comparisonCost.totals.colony_cost_usd,
         )}`,
@@ -735,6 +747,13 @@ function formatPercent(part: number, whole: number): string {
   const value = (part / whole) * 100;
   if (Number.isInteger(value)) return `${value}%`;
   return `${value.toFixed(1)}%`;
+}
+
+function formatShare(ratio: number): string {
+  if (!Number.isFinite(ratio) || ratio <= 0) return '0%';
+  const pct = ratio * 100;
+  if (pct >= 10) return `${Math.round(pct)}%`;
+  return `${pct.toFixed(1)}%`;
 }
 
 function avgTokens(row: Pick<McpMetricsAggregateRow, 'calls' | 'total_tokens'>): number {
