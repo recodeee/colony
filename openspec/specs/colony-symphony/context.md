@@ -30,6 +30,36 @@ Normative requirements, behavior deltas, and change proposals are intentionally
 out of scope here. Agent 202 owns the change proposal that will decide which
 Symphony patterns become Colony requirements.
 
+## Reference Import Summary
+
+Symphony's source spec defines a long-running scheduler/runner service that
+polls an issue tracker, prepares isolated per-issue workspaces, and starts a
+coding-agent session for each eligible issue. The service is intentionally not a
+tracker writer: issue comments, PR links, and state transitions remain workflow
+or agent-tool responsibilities unless a later Colony change explicitly adds a
+write contract.
+
+The first three source sections import into Colony as orientation, not as
+requirements:
+
+- Section 1 frames the operational problems: repeatable daemon execution,
+  per-issue workspace isolation, repo-owned workflow policy in `WORKFLOW.md`,
+  and enough observability to debug concurrent agent runs.
+- Section 2 defines the high-level goals: bounded-concurrency polling, a single
+  authoritative orchestrator state, deterministic workspaces, state-change stop
+  behavior, retry recovery, workflow loading, structured visibility, and restart
+  recovery from tracker/filesystem state.
+- Section 2 also keeps rich UI, a general workflow engine, built-in ticket edit
+  policy, and a universal sandbox posture out of core scope.
+- Section 3 decomposes the system into workflow loading, typed config, issue
+  intake, orchestration, workspace management, agent running, optional status
+  display, and structured logging.
+
+The supporting README positions Symphony as an engineering preview for trusted
+environments and points implementers to the SPEC as the source of truth. Colony
+adoption should therefore cite the SPEC for behavior and keep the README as
+non-normative product orientation.
+
 ## Mapping Anchors
 
 | Adoption phase | Symphony SPEC anchor |
