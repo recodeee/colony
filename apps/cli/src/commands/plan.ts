@@ -26,6 +26,10 @@ interface PlanCreateOptions {
   acceptance: string[];
   task: string[];
   force?: boolean;
+  publish?: boolean;
+  publishSession?: string;
+  publishAgent?: string;
+  publishAutoArchive?: boolean;
 }
 
 interface PlanPublishOptions {
@@ -60,7 +64,17 @@ export function registerPlanCommand(program: Command): void {
     .option('--acceptance <text>', 'Acceptance criterion; repeatable', collect, [])
     .option('--task <json>', 'Task JSON; repeatable', collect, [])
     .option('--force', 'Overwrite an existing plan workspace')
-    .action((slug: string, opts: PlanCreateOptions) => {
+    .option(
+      '--publish',
+      'Also register the plan in Colony immediately (chains into `plan publish`). Requires ≥2 --task entries.',
+    )
+    .option('--publish-session <id>', 'Session id for audit trail when --publish is set')
+    .option('--publish-agent <name>', 'Agent name for audit trail when --publish is set')
+    .option(
+      '--publish-auto-archive',
+      'Pass --auto-archive through to the chained publish step',
+    )
+    .action(async (slug: string, opts: PlanCreateOptions) => {
       const repoRoot = resolve(opts.cwd ?? process.cwd());
       const tasks = parseTaskOptions(opts.task);
       const workspace = createPlanWorkspace({
@@ -73,6 +87,50 @@ export function registerPlanCommand(program: Command): void {
         force: opts.force ?? false,
       });
       process.stdout.write(`${kleur.green('✓')} plan ${slug} created at ${workspace.dir}\n`);
+
+      if (opts.publish === true) {
+        if (workspace.manifest.tasks.length < 2) {
+          throw new Error(
+            '--publish needs at least two --task entries; rerun without --publish or add more tasks',
+          );
+        }
+        const session = opts.publishSession ?? 'colony-plan-cli';
+        const agent = opts.publishAgent ?? 'colony';
+        const settings = loadSettings();
+        await withStore(settings, (store) => {
+          store.startSession({ id: session, ide: agent, cwd: repoRoot });
+          try {
+            const result = publishPlan({
+              store,
+              repo_root: repoRoot,
+              slug,
+              session_id: session,
+              agent,
+              title: workspace.manifest.title,
+              problem: workspace.manifest.problem,
+              acceptance_criteria: workspace.manifest.acceptance_criteria,
+              subtasks: workspace.manifest.tasks.map((task) => ({
+                title: task.title,
+                description: task.description,
+                file_scope: task.file_scope,
+                depends_on: task.depends_on,
+                spec_row_id: task.spec_row_id ?? undefined,
+                capability_hint: task.capability_hint ?? undefined,
+              })),
+              auto_archive: opts.publishAutoArchive ?? workspace.manifest.published.auto_archive,
+            });
+            process.stdout.write(`${kleur.green('✓')} published ${slug}\n`);
+            process.stdout.write(`  spec: ${result.spec_change_path}\n`);
+            process.stdout.write(`  plan: ${result.plan_workspace_path}\n`);
+            process.stdout.write(`  subtasks: ${result.subtasks.length}\n`);
+          } catch (err) {
+            if (err instanceof PublishPlanError) {
+              throw new Error(`${err.code}: ${err.message}`);
+            }
+            throw err;
+          }
+        });
+      }
     });
 
   group

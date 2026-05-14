@@ -36,7 +36,7 @@ export interface PlanInfo {
   plan_slug: string;
   repo_root: string;
   spec_task_id: number;
-  registry_status: 'registered' | 'subtask-only';
+  registry_status: 'registered' | 'subtask-only' | 'unpublished';
   title: string;
   created_at: number;
   subtask_counts: Record<SubtaskStatus, number>;
