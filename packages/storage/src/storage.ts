@@ -315,6 +315,18 @@ export class Storage {
     // MCP server, CLI hooks) hit the same WAL file; without this they trip
     // SQLITE_BUSY immediately on contention. 5s lets the kernel retry.
     this.db.pragma('busy_timeout = 5000');
+    // WAL mode lets readers and a single writer coexist without blocking,
+    // which matters because the worker daemon, MCP server, and CLI hooks
+    // all hit the same DB file concurrently. Without WAL the default
+    // DELETE journal serialises every reader behind every writer, which
+    // is what the "database is locked" error on
+    // task_claim_quota_release_expired in the 168h gain window came from.
+    // Skip on readonly connections — WAL still works against a WAL file
+    // someone else created, and trying to set it on a strict-readonly
+    // handle raises.
+    if (!opts.readonly) {
+      this.db.pragma('journal_mode = WAL');
+    }
     if (opts.readonly) {
       this.db.pragma('foreign_keys = ON');
     } else {

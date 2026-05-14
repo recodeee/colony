@@ -1,4 +1,6 @@
 export { Storage, PROTECTED_BRANCH_NAMES, isProtectedBranch } from './storage.js';
+export { withBusyRetry } from './busy-retry.js';
+export type { BusyRetryOptions } from './busy-retry.js';
 export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from './claim-path.js';
 export {
   RunAttemptError,
