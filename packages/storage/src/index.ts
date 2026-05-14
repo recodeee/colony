@@ -1,7 +1,16 @@
 export { Storage, PROTECTED_BRANCH_NAMES, isProtectedBranch } from './storage.js';
 export { withBusyRetry } from './busy-retry.js';
 export type { BusyRetryOptions } from './busy-retry.js';
-export { isPseudoClaimPath, normalizeClaimPath, normalizeRepoFilePath } from './claim-path.js';
+export {
+  claimPathRejectionMessage,
+  classifyClaimPathRejection,
+  isPseudoClaimPath,
+  normalizeClaimPath,
+  normalizeRepoFilePath,
+  type ClaimPathContext,
+  type ClaimPathRejectionReason,
+  type RepoFilePathContext,
+} from './claim-path.js';
 export {
   RunAttemptError,
   createRunAttempt,
@@ -15,7 +24,6 @@ export {
   RUN_ATTEMPT_ACTIVE_STATUSES,
   RUN_ATTEMPT_TERMINAL_STATUSES,
 } from './types.js';
-export type { ClaimPathContext, RepoFilePathContext } from './claim-path.js';
 export {
   COORDINATION_COMMIT_TOOLS,
   COORDINATION_READ_TOOLS,

@@ -1,10 +1,11 @@
-import type {
-  LinkedTask,
-  ObservationRow,
-  TaskClaimRow,
-  TaskLinkRow,
-  TaskParticipantRow,
-  TaskRow,
+import {
+  type LinkedTask,
+  type ObservationRow,
+  type TaskClaimRow,
+  type TaskLinkRow,
+  type TaskParticipantRow,
+  type TaskRow,
+  claimPathRejectionMessage,
 } from '@colony/storage';
 import { classifyClaimAge, isStrongClaimAge } from './claim-age.js';
 import type { MemoryStore } from './memory-store.js';
@@ -617,8 +618,13 @@ export class TaskThread {
     metadata?: Record<string, unknown>;
   }): number {
     const filePath = this.store.storage.normalizeTaskFilePath(this.task_id, p.file_path);
-    if (filePath === null)
-      throw taskError(TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH, 'claim path is not claimable');
+    if (filePath === null) {
+      const reason = this.store.storage.classifyTaskFilePathRejection(this.task_id, p.file_path);
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH,
+        claimPathRejectionMessage(reason, p.file_path),
+      );
+    }
     return this.store.storage.transaction(() => {
       this.store.storage.claimFile({
         task_id: this.task_id,
@@ -1870,7 +1876,11 @@ export class TaskThread {
     if (file_path === undefined) return null;
     const normalized = this.store.storage.normalizeTaskFilePath(this.task_id, file_path);
     if (normalized === null) {
-      throw taskError(TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH, 'claim path is not claimable');
+      const reason = this.store.storage.classifyTaskFilePathRejection(this.task_id, file_path);
+      throw taskError(
+        TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH,
+        claimPathRejectionMessage(reason, file_path),
+      );
     }
     return normalized;
   }

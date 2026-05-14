@@ -97,7 +97,7 @@ describe('task threads — file claims', () => {
     expect(claim?.metadata).toContain('"file_path":"src/viewer.tsx"');
   });
 
-  it('rejects pseudo task_claim_file paths', async () => {
+  it('rejects pseudo task_claim_file paths with a pseudo-specific message', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 
     const result = await callError('task_claim_file', {
@@ -107,6 +107,28 @@ describe('task threads — file claims', () => {
     });
 
     expect(result.code).toBe('INVALID_CLAIM_PATH');
+    expect(result.error).toBe(
+      'claim path "/dev/null" is a pseudo path (e.g. /dev/null) and cannot be claimed.',
+    );
+    expect(store.storage.listClaims(task_id)).toEqual([]);
+  });
+
+  it('rejects directory task_claim_file paths with a directory-specific recovery hint', async () => {
+    const { task_id, sessionA } = seedTwoSessionTask();
+
+    // Trailing-slash form: classified as a directory without needing the
+    // path to exist on disk, so the assertion stays portable across CI
+    // working directories.
+    const result = await callError('task_claim_file', {
+      task_id,
+      session_id: sessionA,
+      file_path: 'packages/core/test/',
+    });
+
+    expect(result.code).toBe('INVALID_CLAIM_PATH');
+    expect(result.error).toBe(
+      'claim path "packages/core/test/" is a directory; claim individual files inside it instead.',
+    );
     expect(store.storage.listClaims(task_id)).toEqual([]);
   });
 

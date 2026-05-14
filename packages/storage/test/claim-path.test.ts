@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { normalizeClaimPath, normalizeRepoFilePath } from '../src/index.js';
+import {
+  claimPathRejectionMessage,
+  classifyClaimPathRejection,
+  normalizeClaimPath,
+  normalizeRepoFilePath,
+} from '../src/index.js';
 
 let dir: string;
 
@@ -147,5 +152,90 @@ describe('normalizeRepoFilePath', () => {
     const { repoRoot } = repoFixture();
 
     expect(normalizeClaimPath(repoRoot, repoRoot, './src/x.ts')).toBe('src/x.ts');
+  });
+});
+
+describe('classifyClaimPathRejection', () => {
+  it('returns "directory" for an existing directory the repo path resolves to', () => {
+    const { repoRoot } = repoFixture();
+    // `src` exists as a directory inside the fixture repo.
+    expect(
+      classifyClaimPathRejection({
+        repo_root: repoRoot,
+        cwd: repoRoot,
+        file_path: 'src',
+      }),
+    ).toBe('directory');
+  });
+
+  it('returns "directory" for a trailing-slash path even if it does not exist', () => {
+    expect(
+      classifyClaimPathRejection({
+        repo_root: dir,
+        cwd: dir,
+        file_path: 'never-created/',
+      }),
+    ).toBe('directory');
+  });
+
+  it('returns "pseudo" for /dev/null and friends', () => {
+    expect(classifyClaimPathRejection({ repo_root: dir, cwd: dir, file_path: '/dev/null' })).toBe(
+      'pseudo',
+    );
+  });
+
+  it('returns "empty" for blank input', () => {
+    expect(classifyClaimPathRejection({ repo_root: dir, cwd: dir, file_path: '   ' })).toBe(
+      'empty',
+    );
+  });
+
+  it('returns "outside_repo" for an absolute path outside repo_root and no shared git common dir', () => {
+    const { repoRoot } = repoFixture();
+    const outsideRoot = join(dir, 'outside');
+    mkdirSync(outsideRoot, { recursive: true });
+    const outsideFile = join(outsideRoot, 'lib.ts');
+    writeFileSync(outsideFile, 'export const x = 1;\n');
+
+    expect(
+      classifyClaimPathRejection({
+        repo_root: repoRoot,
+        cwd: repoRoot,
+        file_path: outsideFile,
+      }),
+    ).toBe('outside_repo');
+  });
+});
+
+describe('claimPathRejectionMessage', () => {
+  it('renders a directory-specific recovery hint', () => {
+    expect(claimPathRejectionMessage('directory', 'packages/core/test')).toBe(
+      'claim path "packages/core/test" is a directory; claim individual files inside it instead.',
+    );
+  });
+
+  it('renders a pseudo-path-specific message', () => {
+    expect(claimPathRejectionMessage('pseudo', '/dev/null')).toBe(
+      'claim path "/dev/null" is a pseudo path (e.g. /dev/null) and cannot be claimed.',
+    );
+  });
+
+  it('renders an outside-repo message', () => {
+    expect(claimPathRejectionMessage('outside_repo', '/tmp/foreign.ts')).toBe(
+      'claim path "/tmp/foreign.ts" resolves outside this task\'s repo_root and cannot be claimed.',
+    );
+  });
+
+  it('renders an empty-input message', () => {
+    expect(claimPathRejectionMessage('empty', '')).toBe('claim path is empty.');
+  });
+
+  it('falls back to the legacy generic message when the reason is unknown / null', () => {
+    expect(claimPathRejectionMessage(null, 'weird/thing.ts')).toBe(
+      'claim path is not claimable: weird/thing.ts',
+    );
+    expect(claimPathRejectionMessage('unknown', 'weird/thing.ts')).toBe(
+      'claim path is not claimable: weird/thing.ts',
+    );
   });
 });

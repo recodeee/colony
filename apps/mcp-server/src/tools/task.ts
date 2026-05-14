@@ -7,6 +7,7 @@ import {
   listPlans,
   liveFileContentionsForClaim,
 } from '@colony/core';
+import { claimPathRejectionMessage } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
@@ -364,7 +365,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
     wrapHandler('task_claim_file', async ({ task_id, session_id, file_path, note }) => {
       const normalizedFilePath = store.storage.normalizeTaskFilePath(task_id, file_path);
       if (normalizedFilePath === null) {
-        return mcpErrorResponse('INVALID_CLAIM_PATH', `file path is not claimable: ${file_path}`);
+        const reason = store.storage.classifyTaskFilePathRejection(task_id, file_path);
+        return mcpErrorResponse('INVALID_CLAIM_PATH', claimPathRejectionMessage(reason, file_path));
       }
       const previous = store.storage.getClaim(task_id, normalizedFilePath);
       const liveContentions = liveFileContentionsForClaim(store, {
