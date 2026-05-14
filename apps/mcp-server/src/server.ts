@@ -13,6 +13,7 @@ import * as bridge from './tools/bridge.js';
 import type { ToolContext } from './tools/context.js';
 import * as drift from './tools/drift.js';
 import * as foraging from './tools/foraging.js';
+import { registerTaskForagingReport } from './tools/foraging.js';
 import * as handoff from './tools/handoff.js';
 import { createHeartbeatWrapper, installActiveSessionHeartbeat } from './tools/heartbeat.js';
 import * as hivemind from './tools/hivemind.js';
@@ -103,6 +104,10 @@ export function buildServer(
   proposal.register(server, ctx);
   profile.register(server, ctx);
   attention.register(server, ctx);
+  // task_foraging_report lives in foraging.ts (foraging surface) but stays in
+  // the slot it occupied when it was bundled inside attention.ts, so the
+  // listTools ordering above does not shift.
+  registerTaskForagingReport(server, ctx);
   bridge.register(server, ctx);
   message.register(server, ctx);
   relay.register(server, ctx);

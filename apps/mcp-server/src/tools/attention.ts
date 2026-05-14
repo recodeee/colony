@@ -1,4 +1,4 @@
-import { type AttentionInboxOptions, ProposalSystem, buildAttentionInbox } from '@colony/core';
+import { type AttentionInboxOptions, buildAttentionInbox } from '@colony/core';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
@@ -87,20 +87,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
         hint: 'Hydrate items with get_observations(ids); call again with format="full" only when you need every body inline.',
       };
       return { content: [{ type: 'text', text: JSON.stringify(compact) }] };
-    }),
-  );
-
-  server.tool(
-    'task_foraging_report',
-    'Find proposed work on this repo branch before picking tasks. Lists pending proposals, promoted work, strength, and expired weak signals omitted.',
-    {
-      repo_root: z.string().min(1),
-      branch: z.string().min(1),
-    },
-    wrapHandler('task_foraging_report', async ({ repo_root, branch }) => {
-      const proposals = new ProposalSystem(store);
-      const report = proposals.foragingReport(repo_root, branch);
-      return { content: [{ type: 'text', text: JSON.stringify(report) }] };
     }),
   );
 }
