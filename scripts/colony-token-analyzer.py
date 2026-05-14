@@ -551,12 +551,18 @@ def detect_patterns(windows: list[TaskWindow], all_turns: list[Turn]) -> list[di
             }
         )
 
-    # 3. task_list overuse (should use task_ready_for_agent)
+    # 3. Broad task selectors overuse (should use task_ready_for_agent or compact reads)
     task_list_calls = sum(
         1
         for turn in all_turns
         for name, _ in turn.tool_calls
         if name.endswith("task_list")
+    )
+    task_plan_list_calls = sum(
+        1
+        for turn in all_turns
+        for name, _ in turn.tool_calls
+        if name.endswith("task_plan_list")
     )
     task_ready_calls = sum(
         1
@@ -572,6 +578,16 @@ def detect_patterns(windows: list[TaskWindow], all_turns: list[Turn]) -> list[di
                 "task": "session-wide",
                 "detail": f"task_list ×{task_list_calls} vs task_ready_for_agent ×{task_ready_calls}",
                 "fix": "task_list is an inventory tool. Use task_ready_for_agent to pick claimable work.",
+            }
+        )
+    if task_plan_list_calls >= 3:
+        suggestions.append(
+            {
+                "kind": "task_plan_list-overuse",
+                "severity": "med",
+                "task": "session-wide",
+                "detail": f"task_plan_list ×{task_plan_list_calls} vs task_ready_for_agent ×{task_ready_calls}",
+                "fix": "Use task_ready_for_agent to pick work. For plan browsing, call task_plan_list with compact:true or limit<=20.",
             }
         )
 

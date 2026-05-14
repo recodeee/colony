@@ -203,6 +203,7 @@ describe('colony health payload', () => {
     });
     expect(payload.task_list_vs_task_ready_for_agent).toMatchObject({
       task_list_calls: 2,
+      task_plan_list_calls: 0,
       task_ready_for_agent_calls: 1,
       task_list_first_sessions: 2,
       task_ready_share: 1 / 3,
@@ -422,6 +423,47 @@ describe('colony health payload', () => {
     expect(verboseText).toContain('Adoption thresholds');
     expect(verboseText).toContain('task_list > task_ready_for_agent');
     expect(verboseText).toContain('task_list-first sessions: 2');
+  });
+
+  it('flags repeated task_plan_list browsing in health action hints', () => {
+    const payload = buildColonyHealthPayload(
+      fakeStorage({
+        calls: [
+          call(1, 'codex-plan-session', 'mcp__colony__task_plan_list', NOW - 4_000),
+          call(2, 'codex-plan-session', 'mcp__colony__task_plan_list', NOW - 3_000),
+          call(3, 'codex-plan-session', 'mcp__colony__task_plan_list', NOW - 2_000),
+        ],
+        claimBeforeEdit: {
+          edit_tool_calls: 0,
+          edits_with_file_path: 0,
+          edits_claimed_before: 0,
+        },
+      }),
+      {
+        since: SINCE,
+        window_hours: 24,
+        now: NOW,
+        codex_sessions_root: NO_CODEX_ROOT,
+      },
+    );
+
+    expect(payload.task_list_vs_task_ready_for_agent).toMatchObject({
+      task_plan_list_calls: 3,
+    });
+    expect(payload.action_hints).toContainEqual(
+      expect.objectContaining({
+        metric: 'task_plan_list broad browsing',
+        action: expect.stringContaining('compact:true'),
+        tool_call: expect.stringContaining('task_plan_list'),
+      }),
+    );
+    expect(payload.adoption_thresholds.bad).toContainEqual(
+      expect.objectContaining({
+        name: 'task_plan_list broad browsing',
+        status: 'bad',
+        value: 3,
+      }),
+    );
   });
 
   it('renders claim miss reason diagnostics in text and JSON payloads', () => {

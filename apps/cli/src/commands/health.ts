@@ -62,6 +62,8 @@ const TARGET_READY_TO_CLAIM = 0.3;
 const TARGET_CLAIM_BEFORE_EDIT = 0.5;
 const TARGET_COLONY_NOTE_SHARE = 0.7;
 const TARGET_TASK_MESSAGE_SHARE = 0.2;
+const TASK_PLAN_LIST_OVERUSE_CALL_THRESHOLD = 3;
+const TASK_PLAN_LIST_BROAD_LIMIT = 20;
 const TASK_MESSAGE_ADOPTION_DIRECTED_CALL =
   'mcp__colony__task_message({ agent: "codex", session_id: "<session_id>", task_id: <task_id>, to_agent: "codex", urgency: "needs_reply", content: "<short directed request>" })';
 const TASK_MESSAGE_ADOPTION_SHARED_NOTE_CALL =
@@ -155,6 +157,7 @@ interface TaskPostMessagePayload {
 
 interface TaskSelectionPayload {
   task_list_calls: number;
+  task_plan_list_calls: number;
   task_ready_for_agent_calls: number;
   task_list_first_sessions: number;
   task_ready_share: number | null;
@@ -951,6 +954,7 @@ export function formatColonyHealthOutput(
     '',
     healthSubheading('task_list vs task_ready_for_agent', 'cyan'),
     `  task_list:            ${payload.task_list_vs_task_ready_for_agent.task_list_calls}`,
+    `  task_plan_list:       ${payload.task_list_vs_task_ready_for_agent.task_plan_list_calls}`,
     `  task_ready_for_agent: ${payload.task_list_vs_task_ready_for_agent.task_ready_for_agent_calls}`,
     `  task_list-first sessions: ${payload.task_list_vs_task_ready_for_agent.task_list_first_sessions}`,
     `  ready share:          ${formatPercent(payload.task_list_vs_task_ready_for_agent.task_ready_share)}`,
@@ -1913,9 +1917,11 @@ function searchCallsPerSession(calls: ToolCallRow[]): SearchCallsPayload {
 
 function taskSelectionPayload(calls: ToolCallRow[]): TaskSelectionPayload {
   const taskListCalls = countTool(calls, 'task_list');
+  const taskPlanListCalls = countTool(calls, 'task_plan_list');
   const taskReadyCalls = countTool(calls, 'task_ready_for_agent');
   return {
     task_list_calls: taskListCalls,
+    task_plan_list_calls: taskPlanListCalls,
     task_ready_for_agent_calls: taskReadyCalls,
     task_list_first_sessions: taskListFirstSessions(calls),
     task_ready_share: ratio(taskReadyCalls, taskListCalls + taskReadyCalls),
@@ -3398,6 +3404,29 @@ function healthActionHints(payload: ColonyHealthPayloadWithoutHints): ActionHint
     });
   }
 
+  const taskPlanListCalls = payload.task_list_vs_task_ready_for_agent.task_plan_list_calls;
+  if (taskPlanListCalls >= TASK_PLAN_LIST_OVERUSE_CALL_THRESHOLD) {
+    hints.push({
+      metric: 'task_plan_list broad browsing',
+      status: 'bad',
+      current: `${taskPlanListCalls} call${taskPlanListCalls === 1 ? '' : 's'}`,
+      target: `compact:true or limit <= ${TASK_PLAN_LIST_BROAD_LIMIT}; task_ready_for_agent for work picking`,
+      action:
+        'Use task_ready_for_agent to choose work; when browsing plans, call task_plan_list with compact:true or an explicit small limit.',
+      readiness_scope: 'coordination_readiness',
+      priority: 62,
+      tool_call:
+        'mcp__colony__task_plan_list({ repo_root: "<repo_root>", compact: true, limit: 10 })',
+      prompt: codexPrompt({
+        goal: 'route repeated task_plan_list browsing through compact plan reads or task_ready_for_agent',
+        current: `task_plan_list calls ${taskPlanListCalls}`,
+        inspect: 'mcp__colony__task_plan_list, mcp__colony__task_ready_for_agent, docs/mcp.md',
+        acceptance:
+          'agents use task_ready_for_agent for work selection and compact/small-limit task_plan_list only for browsing',
+      }),
+    });
+  }
+
   const readyToClaim = payload.conversions.task_ready_for_agent_to_task_plan_claim_subtask;
   const queenReadyWithoutClaims =
     payload.ready_to_claim_vs_claimed.ready_to_claim > 0 &&
@@ -4005,6 +4034,7 @@ function adoptionThresholds(
 ): AdoptionThresholdsPayload {
   const hivemindContextCalls = countTool(calls, 'hivemind_context');
   const taskListCalls = countTool(calls, 'task_list');
+  const taskPlanListCalls = countTool(calls, 'task_plan_list');
   const taskReadyCalls = countTool(calls, 'task_ready_for_agent');
   const attentionInboxCalls = countTool(calls, 'attention_inbox');
   const colonyWorkingNoteCalls = metrics.task_post_calls + metrics.task_note_working_calls;
@@ -4052,6 +4082,13 @@ function adoptionThresholds(
         value: taskListCalls - taskReadyCalls,
         target: TARGET_TASK_LIST_TO_READY,
         hint: 'Use task_ready_for_agent to choose claimable work; task_list is inventory.',
+      },
+      {
+        name: 'task_plan_list broad browsing',
+        status: taskPlanListCalls >= TASK_PLAN_LIST_OVERUSE_CALL_THRESHOLD ? 'bad' : 'ok',
+        value: taskPlanListCalls,
+        target: null,
+        hint: `Use compact:true or limit <= ${TASK_PLAN_LIST_BROAD_LIMIT} for plan browsing; use task_ready_for_agent for work selection.`,
       },
       {
         name: 'notepad_write_working > task_post/task_note_working',
