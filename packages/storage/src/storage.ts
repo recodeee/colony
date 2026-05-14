@@ -1420,7 +1420,7 @@ export class Storage {
            FROM mcp_metrics
            ${where}
             AND ok = 0
-          GROUP BY operation, error_code, error_message
+          GROUP BY operation, error_code
           ORDER BY operation ASC, count DESC, last_ts DESC`,
       )
       .all(...args) as McpMetricsErrorReasonRawRow[];
@@ -1429,7 +1429,7 @@ export class Storage {
       const operation = row.operation;
       if (!operation) continue;
       const reasons = byOperation.get(operation) ?? [];
-      if (reasons.length >= 3) continue;
+      if (reasons.length >= 8) continue;
       reasons.push(normalizeMcpErrorReason(row));
       byOperation.set(operation, reasons);
     }
@@ -1449,9 +1449,9 @@ export class Storage {
            FROM mcp_metrics
            ${where}
             AND ok = 0
-          GROUP BY error_code, error_message
+          GROUP BY error_code
           ORDER BY count DESC, last_ts DESC
-          LIMIT 3`,
+          LIMIT 8`,
       )
       .all(...args) as McpMetricsErrorReasonRawRow[];
     return rows.map((row) => normalizeMcpErrorReason(row));
