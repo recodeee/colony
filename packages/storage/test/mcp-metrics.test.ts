@@ -190,6 +190,46 @@ describe('mcp_metrics storage', () => {
     expect(empty.operations).toEqual([]);
   });
 
+  it('groups error_reasons by code so per-error-row counts sum to error_count', () => {
+    for (let i = 0; i < 25; i += 1) {
+      record(storage, {
+        ts: 1_000 + i,
+        operation: 'task_plan_claim_subtask',
+        ok: false,
+        error_code: 'PLAN_SUBTASK_NOT_AVAILABLE',
+        error_message: `sub-task is claimed by codex-session-${i}`,
+      });
+    }
+    record(storage, {
+      ts: 1_100,
+      operation: 'task_plan_claim_subtask',
+      ok: false,
+      error_code: 'PLAN_SUBTASK_NOT_FOUND',
+      error_message: 'no sub-task at spec/x/sub-0',
+    });
+    record(storage, {
+      ts: 1_200,
+      operation: 'task_plan_claim_subtask',
+      ok: false,
+      error_code: 'PLAN_SUBTASK_NOT_FOUND',
+      error_message: 'no sub-task at spec/y/sub-1',
+    });
+
+    const agg = storage.aggregateMcpMetrics({ since: 0 });
+    const claim = agg.operations.find((row) => row.operation === 'task_plan_claim_subtask');
+    if (!claim) throw new Error('expected task_plan_claim_subtask row');
+    expect(claim.error_count).toBe(27);
+    const sum = claim.error_reasons.reduce((acc, r) => acc + r.count, 0);
+    expect(sum).toBe(27);
+    const codes = claim.error_reasons.map((r) => r.error_code).sort();
+    expect(codes).toEqual(['PLAN_SUBTASK_NOT_AVAILABLE', 'PLAN_SUBTASK_NOT_FOUND']);
+    const notAvailable = claim.error_reasons.find(
+      (r) => r.error_code === 'PLAN_SUBTASK_NOT_AVAILABLE',
+    );
+    expect(notAvailable?.count).toBe(25);
+    expect(notAvailable?.error_message).toContain('sub-task is claimed by codex-session-');
+  });
+
   it('countMcpMetricsSince counts rows in the window', () => {
     record(storage, { ts: 100, operation: 'search' });
     record(storage, { ts: 500, operation: 'search' });
