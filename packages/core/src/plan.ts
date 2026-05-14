@@ -178,7 +178,11 @@ export function areDepsMet(subtask: SubtaskInfo, all: SubtaskInfo[]): boolean {
 }
 
 export function listPlans(store: MemoryStore, opts: ListPlansOptions = {}): PlanInfo[] {
-  const limit = opts.limit ?? 50;
+  // Default trimmed from 50 → 10 after `colony gain` showed task_plan_list was
+  // 95%+ of MCP token spend even with compact-default. Explicit callers can
+  // still ask for up to 50 via the MCP schema's .max(50) ceiling
+  // (apps/mcp-server/src/tools/plan.ts).
+  const limit = opts.limit ?? 10;
   // listTasks default is 50; the plan registry may grow past that, so reach
   // for a generous bound. A schema-level branch-prefix index is the proper
   // long-term fix once the lane proves out.
