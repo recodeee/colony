@@ -1,3 +1,4 @@
+import { ProposalSystem } from '@colony/core';
 import { buildIntegrationPlan, expandForagingConceptQuery } from '@colony/foraging';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -72,6 +73,28 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(target_hint !== undefined ? { target_hint } : {}),
       });
       return { content: [{ type: 'text', text: JSON.stringify(plan) }] };
+    }),
+  );
+}
+
+// Registered separately from the examples_* surface so server.ts can keep
+// task_foraging_report in the slot it occupied before the attention.ts split,
+// preserving the MCP inspector / snapshot ordering noted in server.ts.
+export function registerTaskForagingReport(server: McpServer, ctx: ToolContext): void {
+  const wrapHandler = ctx.wrapHandler ?? defaultWrapHandler;
+  const { store } = ctx;
+
+  server.tool(
+    'task_foraging_report',
+    'Find proposed work on this repo branch before picking tasks. Lists pending proposals, promoted work, strength, and expired weak signals omitted.',
+    {
+      repo_root: z.string().min(1),
+      branch: z.string().min(1),
+    },
+    wrapHandler('task_foraging_report', async ({ repo_root, branch }) => {
+      const proposals = new ProposalSystem(store);
+      const report = proposals.foragingReport(repo_root, branch);
+      return { content: [{ type: 'text', text: JSON.stringify(report) }] };
     }),
   );
 }
