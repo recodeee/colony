@@ -107,7 +107,7 @@ describe('gain command output', () => {
     expect(output).toContain('Errors: 1 (50%)');
     expect(output).toContain('Cost total: $0.000125');
     expect(output).toContain('Needs attention: 1x search TASK_NOT_FOUND - task 6 not found');
-    expect(output).toContain('Top spend: search 75 tokens across 2 calls');
+    expect(output).toContain('Top spend: search 75 tokens (100% of total) across 2 calls');
     expect(output).toContain('Operations');
     expect(output).toContain('OK');
     expect(output).toContain('Tok total');
@@ -252,6 +252,104 @@ describe('gain command output', () => {
     );
   });
 
+  it('flags a hot loop when one operation dominates token spend at high call volume', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    const dominantRow: McpMetricsAggregateRow = {
+      operation: 'task_plan_list',
+      calls: 7597,
+      ok_count: 7597,
+      error_count: 0,
+      error_reasons: [],
+      ...METRIC_DETAIL,
+      input_bytes: 0,
+      output_bytes: 0,
+      total_bytes: 0,
+      input_tokens: 92_800,
+      output_tokens: 34_480_000,
+      total_tokens: 34_580_000,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      total_cost_usd: 0,
+      avg_cost_usd: 0,
+      avg_input_tokens: 12,
+      avg_output_tokens: 4_500,
+      total_duration_ms: 7597 * 55,
+      avg_duration_ms: 55,
+      last_ts: Date.now(),
+    };
+    const totals: McpMetricsAggregateRow = {
+      ...dominantRow,
+      operation: '',
+      total_tokens: 35_260_000,
+      input_tokens: 171_500,
+      output_tokens: 35_080_000,
+    };
+
+    writeLiveSection(
+      [dominantRow],
+      totals,
+      SESSION_SUMMARY,
+      [SESSION_ROW],
+      { input_usd_per_1m_tokens: 0, output_usd_per_1m_tokens: 0, configured: false },
+      168,
+      undefined,
+    );
+
+    expect(output).toContain('Top spend: task_plan_list 34.58M tokens (98% of total)');
+    expect(output).toContain('Hot loop:');
+    expect(output).toContain('task_plan_list dominates token spend');
+  });
+
+  it('omits cost suffix from live sessions header when cost is not configured', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    const row: McpMetricsAggregateRow = {
+      operation: 'search',
+      calls: 1,
+      ok_count: 1,
+      error_count: 0,
+      error_reasons: [],
+      ...METRIC_DETAIL,
+      input_bytes: 0,
+      output_bytes: 0,
+      total_bytes: 0,
+      input_tokens: 25,
+      output_tokens: 50,
+      total_tokens: 75,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      total_cost_usd: 0,
+      avg_cost_usd: 0,
+      avg_input_tokens: 25,
+      avg_output_tokens: 50,
+      total_duration_ms: 40,
+      avg_duration_ms: 40,
+      last_ts: Date.now(),
+    };
+
+    writeLiveSection(
+      [row],
+      row,
+      SESSION_SUMMARY,
+      [SESSION_ROW],
+      { input_usd_per_1m_tokens: 0, output_usd_per_1m_tokens: 0, configured: false },
+      168,
+      undefined,
+    );
+
+    expect(output).toContain('Sessions with receipts: 1');
+    expect(output).not.toContain('tokens, -.');
+  });
+
   it('prints live metrics before the live comparison model', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
@@ -315,9 +413,9 @@ describe('gain command output', () => {
     expect(output).toContain('Search result shape');
     expect(output).toContain('Gain focus');
     expect(output).toContain('Coverage: 1 / 1 live calls (100%)');
-    expect(output).toContain('Saved: 4.9k saved');
+    expect(output).toContain('Net: 4.9k saved');
     expect(output).toContain('Top saving: Search result shape 4.9k saved across 1 call');
-    expect(output).toContain('USD saved: $0.008208 saved');
+    expect(output).toContain('Net USD: $0.008208 saved');
     expect(output).toContain('Colony spent: $0.000125');
     expect(output).toContain('Standard est: $0.008333');
     expect(output).toContain('Live matched total');
