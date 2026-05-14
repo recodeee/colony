@@ -29,6 +29,37 @@ interface GainOptions {
   outputCostPer1m?: string;
   reference?: boolean;
   honest?: boolean;
+  recentHours?: string;
+  movers?: boolean;
+}
+
+export interface MoverRow {
+  operation: string;
+  recent_calls: number;
+  prior_calls: number;
+  recent_tokens: number;
+  prior_tokens: number;
+  recent_errors: number;
+  prior_errors: number;
+  recent_rate: number;
+  prior_rate: number;
+  calls_delta_pct: number | null;
+  tokens_delta_pct: number | null;
+  errors_delta_abs: number;
+  state: 'new' | 'gone' | 'changed';
+}
+
+export interface MoversReport {
+  recent_hours: number;
+  prior_hours: number;
+  recent_since: number;
+  prior_since: number;
+  total_recent_calls: number;
+  total_prior_calls: number;
+  risers: MoverRow[];
+  fallers: MoverRow[];
+  error_risers: MoverRow[];
+  skipped_reason: string | null;
 }
 
 interface TopErrorReason {
@@ -51,6 +82,11 @@ export function registerGainCommand(program: Command): void {
     .option('--reference', 'also print the static per-session reference catalog')
     .option('--honest', 'show only live mcp_metrics receipts; omit reference/comparison models')
     .option(
+      '--recent-hours <n>',
+      'trailing window in hours for the Movers section (default: window / 7)',
+    )
+    .option('--no-movers', 'hide the Movers (last vs prior) regression section')
+    .option(
       '--input-cost-per-1m <usd>',
       'USD rate per 1M input tokens; env COLONY_MCP_INPUT_USD_PER_1M',
     )
@@ -70,20 +106,46 @@ export function registerGainCommand(program: Command): void {
           ? sinceArg
           : now - windowHours * 60 * 60_000;
 
-      const live = await withStorage(
+      const moversEnabled = opts.movers !== false;
+      const recentHours = resolveRecentHours(opts.recentHours, windowHours);
+      const recentSince = recentHours !== null ? now - recentHours * 60 * 60_000 : null;
+
+      const { live, recent } = await withStorage(
         settings,
         (storage) => {
           const sessionLimit = parseSessionLimit(opts.sessionLimit);
-          return storage.aggregateMcpMetrics({
+          const fullAgg = storage.aggregateMcpMetrics({
             since,
             until: now,
             ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
             ...(sessionLimit !== undefined ? { sessionLimit } : {}),
             cost: costOptionsFromCli(opts),
           });
+          const recentAgg =
+            moversEnabled && recentSince !== null && recentSince > since
+              ? storage.aggregateMcpMetrics({
+                  since: recentSince,
+                  until: now,
+                  ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
+                  cost: costOptionsFromCli(opts),
+                })
+              : null;
+          return { live: fullAgg, recent: recentAgg };
         },
         { readonly: true },
       );
+
+      const movers =
+        moversEnabled && recent !== null && recentHours !== null && recentSince !== null
+          ? buildMoversReport({
+              full: live.operations,
+              recent: recent.operations,
+              recentHours,
+              priorHours: windowHours - recentHours,
+              recentSince,
+              priorSince: since,
+            })
+          : null;
 
       const referenceTotals = savingsReferenceTotals();
       const comparison = savingsLiveComparison(live.operations);
@@ -99,6 +161,7 @@ export function registerGainCommand(program: Command): void {
           operations: live.operations,
           session_summary: live.session_summary,
           sessions: live.sessions,
+          ...(movers !== null ? { movers } : {}),
         },
       };
       const payload =
@@ -136,6 +199,7 @@ export function registerGainCommand(program: Command): void {
         opts.operation,
         opts.reference === true,
         opts.honest === true,
+        movers,
       );
     });
 }
@@ -152,6 +216,7 @@ export function writeGainReport(
   operationFilter: string | undefined,
   includeReference = false,
   honest = false,
+  movers: MoversReport | null = null,
 ): void {
   const comparison = savingsLiveComparison(liveRows, referenceRows);
   const comparisonCost = costBasis.configured
@@ -165,6 +230,7 @@ export function writeGainReport(
     costBasis,
     hours,
     operationFilter,
+    movers,
   );
   if (honest) return;
   process.stdout.write('\n');
@@ -280,6 +346,7 @@ export function writeLiveSection(
   costBasis: McpMetricsCostBasis,
   hours: number,
   operationFilter: string | undefined,
+  movers: MoversReport | null = null,
 ): void {
   const w = process.stdout;
   const filter = operationFilter ? ` (op=${operationFilter})` : '';
@@ -300,6 +367,9 @@ export function writeLiveSection(
     ),
   );
   writeLiveOverview(rows, totals, sessionSummary, costBasis);
+  if (movers !== null) {
+    writeMoversSection(movers);
+  }
   w.write('\n');
   w.write(`${kleur.bold('Operations')}\n`);
   const head = padRow(
@@ -649,6 +719,234 @@ function findTopTokenSpend(
     if (top === null || row.total_tokens > top.total_tokens) top = row;
   }
   return top;
+}
+
+const MOVER_MIN_HOURS = 4;
+const MOVER_MIN_CALLS = 5;
+const MOVER_RATE_THRESHOLD = 2;
+const MOVER_ERROR_MIN = 3;
+const MOVER_ERROR_THRESHOLD = 3;
+const MOVER_DISPLAY_LIMIT = 3;
+
+function resolveRecentHours(raw: string | undefined, windowHours: number): number | null {
+  if (windowHours < MOVER_MIN_HOURS) return null;
+  if (raw !== undefined && raw.trim() !== '') {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed >= windowHours) return null;
+    return parsed;
+  }
+  return Math.max(windowHours / 7, 1);
+}
+
+export function buildMoversReport(args: {
+  full: ReadonlyArray<McpMetricsAggregateRow>;
+  recent: ReadonlyArray<McpMetricsAggregateRow>;
+  recentHours: number;
+  priorHours: number;
+  recentSince: number;
+  priorSince: number;
+}): MoversReport {
+  const { full, recent, recentHours, priorHours, recentSince, priorSince } = args;
+  const recentByOp = new Map<string, McpMetricsAggregateRow>();
+  for (const row of recent) recentByOp.set(row.operation, row);
+  const rows: MoverRow[] = [];
+  let totalRecentCalls = 0;
+  let totalPriorCalls = 0;
+
+  for (const fullRow of full) {
+    const recentRow = recentByOp.get(fullRow.operation);
+    const recentCalls = recentRow?.calls ?? 0;
+    const priorCalls = Math.max(0, fullRow.calls - recentCalls);
+    const recentTokens = recentRow?.total_tokens ?? 0;
+    const priorTokens = Math.max(0, fullRow.total_tokens - recentTokens);
+    const recentErrors = recentRow?.error_count ?? 0;
+    const priorErrors = Math.max(0, fullRow.error_count - recentErrors);
+    totalRecentCalls += recentCalls;
+    totalPriorCalls += priorCalls;
+
+    const recentRate = recentHours > 0 ? recentCalls / recentHours : 0;
+    const priorRate = priorHours > 0 ? priorCalls / priorHours : 0;
+    const state: MoverRow['state'] =
+      priorCalls === 0 && recentCalls > 0
+        ? 'new'
+        : recentCalls === 0 && priorCalls > 0
+          ? 'gone'
+          : 'changed';
+
+    rows.push({
+      operation: fullRow.operation,
+      recent_calls: recentCalls,
+      prior_calls: priorCalls,
+      recent_tokens: recentTokens,
+      prior_tokens: priorTokens,
+      recent_errors: recentErrors,
+      prior_errors: priorErrors,
+      recent_rate: recentRate,
+      prior_rate: priorRate,
+      calls_delta_pct: rateDeltaPct(recentRate, priorRate),
+      tokens_delta_pct: rateDeltaPct(
+        recentHours > 0 ? recentTokens / recentHours : 0,
+        priorHours > 0 ? priorTokens / priorHours : 0,
+      ),
+      errors_delta_abs: recentErrors - priorErrors,
+      state,
+    });
+  }
+
+  const skippedReason =
+    totalRecentCalls + totalPriorCalls === 0
+      ? 'no calls in either window'
+      : recentHours <= 0 || priorHours <= 0
+        ? 'window cannot be split'
+        : null;
+
+  if (skippedReason !== null) {
+    return {
+      recent_hours: recentHours,
+      prior_hours: priorHours,
+      recent_since: recentSince,
+      prior_since: priorSince,
+      total_recent_calls: totalRecentCalls,
+      total_prior_calls: totalPriorCalls,
+      risers: [],
+      fallers: [],
+      error_risers: [],
+      skipped_reason: skippedReason,
+    };
+  }
+
+  const risers = rows
+    .filter(
+      (row) =>
+        row.recent_calls >= MOVER_MIN_CALLS &&
+        (row.state === 'new' ||
+          (row.prior_rate > 0 && row.recent_rate >= row.prior_rate * MOVER_RATE_THRESHOLD)),
+    )
+    .sort((a, b) => moverScore(b, 'rise') - moverScore(a, 'rise'))
+    .slice(0, MOVER_DISPLAY_LIMIT);
+
+  const fallers = rows
+    .filter(
+      (row) =>
+        row.prior_calls >= MOVER_MIN_CALLS &&
+        (row.state === 'gone' ||
+          (row.recent_rate > 0 && row.prior_rate >= row.recent_rate * MOVER_RATE_THRESHOLD)),
+    )
+    .sort((a, b) => moverScore(b, 'fall') - moverScore(a, 'fall'))
+    .slice(0, MOVER_DISPLAY_LIMIT);
+
+  const errorRisers = rows
+    .filter(
+      (row) =>
+        row.recent_errors >= MOVER_ERROR_MIN &&
+        row.recent_errors >= Math.max(row.prior_errors, 1) * MOVER_ERROR_THRESHOLD,
+    )
+    .sort((a, b) => b.recent_errors - b.prior_errors - (a.recent_errors - a.prior_errors))
+    .slice(0, MOVER_DISPLAY_LIMIT);
+
+  return {
+    recent_hours: recentHours,
+    prior_hours: priorHours,
+    recent_since: recentSince,
+    prior_since: priorSince,
+    total_recent_calls: totalRecentCalls,
+    total_prior_calls: totalPriorCalls,
+    risers,
+    fallers,
+    error_risers: errorRisers,
+    skipped_reason: null,
+  };
+}
+
+function rateDeltaPct(recentRate: number, priorRate: number): number | null {
+  if (priorRate <= 0) return null;
+  return ((recentRate - priorRate) / priorRate) * 100;
+}
+
+function moverScore(row: MoverRow, direction: 'rise' | 'fall'): number {
+  if (direction === 'rise') {
+    if (row.state === 'new') return Number.MAX_SAFE_INTEGER - 1 + row.recent_calls;
+    return row.calls_delta_pct ?? row.tokens_delta_pct ?? 0;
+  }
+  if (row.state === 'gone') return Number.MAX_SAFE_INTEGER - 1 + row.prior_calls;
+  const fallByCalls = row.calls_delta_pct !== null ? -row.calls_delta_pct : 0;
+  const fallByTokens = row.tokens_delta_pct !== null ? -row.tokens_delta_pct : 0;
+  return Math.max(fallByCalls, fallByTokens);
+}
+
+export function writeMoversSection(movers: MoversReport): void {
+  const w = process.stdout;
+  if (movers.risers.length === 0 && movers.fallers.length === 0 && movers.error_risers.length === 0)
+    return;
+  const recentLabel = formatHoursLabel(movers.recent_hours);
+  const priorLabel = formatHoursLabel(movers.prior_hours);
+  w.write(`${kleur.bold('Movers')} ${kleur.dim(`(last ${recentLabel} vs prior ${priorLabel})`)}\n`);
+  for (const row of movers.risers) {
+    w.write(`  ${kleur.green('▲')} ${formatMoverLine(row)}\n`);
+  }
+  for (const row of movers.fallers) {
+    w.write(`  ${kleur.cyan('▼')} ${formatMoverLine(row)}\n`);
+  }
+  for (const row of movers.error_risers) {
+    w.write(
+      `  ${kleur.red('!')} ${row.operation} errors ${row.prior_errors} -> ${row.recent_errors}` +
+        ` (${formatTokenDeltaAbs(row.errors_delta_abs)})\n`,
+    );
+  }
+}
+
+function formatMoverLine(row: MoverRow): string {
+  if (row.state === 'new') {
+    return `${row.operation} (new) ${row.recent_calls} call${
+      row.recent_calls === 1 ? '' : 's'
+    }, ${formatTokens(row.recent_tokens)} tokens`;
+  }
+  if (row.state === 'gone') {
+    return `${row.operation} (gone) was ${row.prior_calls} call${
+      row.prior_calls === 1 ? '' : 's'
+    }, ${formatTokens(row.prior_tokens)} tokens`;
+  }
+  const callsPart =
+    row.calls_delta_pct !== null
+      ? `calls ${formatSignedPct(row.calls_delta_pct)} (${formatHourlyRate(row.recent_rate)}/h vs ${formatHourlyRate(row.prior_rate)}/h)`
+      : `calls ${row.recent_calls} vs ${row.prior_calls}`;
+  const tokensPart =
+    row.tokens_delta_pct !== null
+      ? `tokens ${formatSignedPct(row.tokens_delta_pct)}`
+      : `tokens ${formatTokens(row.recent_tokens)} vs ${formatTokens(row.prior_tokens)}`;
+  return `${row.operation} ${callsPart}  ${tokensPart}`;
+}
+
+function formatHourlyRate(rate: number): string {
+  if (rate >= 10) return `${Math.round(rate)}`;
+  if (rate >= 1) return rate.toFixed(1);
+  return rate.toFixed(2);
+}
+
+function formatSignedPct(value: number): string {
+  const rounded = Math.abs(value) >= 10 ? Math.round(value) : Number(value.toFixed(1));
+  const prefix = value > 0 ? '+' : '';
+  const text = `${prefix}${rounded}%`;
+  return value >= 0 ? kleur.green(text) : kleur.red(text);
+}
+
+function formatTokenDeltaAbs(value: number): string {
+  const prefix = value > 0 ? '+' : value < 0 ? '-' : '';
+  const text = `${prefix}${Math.abs(value)}`;
+  return value >= 0 ? kleur.red(text) : kleur.green(text);
+}
+
+function formatHoursLabel(hours: number): string {
+  if (hours >= 24) {
+    const days = hours / 24;
+    if (Number.isInteger(days)) return `${days}d`;
+    return `${days.toFixed(1)}d`;
+  }
+  if (hours >= 1) {
+    if (Number.isInteger(hours)) return `${hours}h`;
+    return `${hours.toFixed(1)}h`;
+  }
+  return `${Math.round(hours * 60)}m`;
 }
 
 function writeUnmatchedComparisonSummary(comparison: SavingsLiveComparison): void {
