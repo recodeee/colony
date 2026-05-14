@@ -427,6 +427,102 @@ export function bulkRescueStrandedSessions(
   return outcome;
 }
 
+/**
+ * Default age at which an unattended plan-subtask claim is considered stale
+ * enough to auto-release. Matches `STALE_BLOCKER_WINDOW_MS` in the MCP ready-
+ * queue tool so both surfaces share one definition of "dead claim".
+ */
+export const STALE_PLAN_SUBTASK_CLAIM_MS = 60 * 60_000;
+
+export interface AutoReleaseStaleClaimsOptions {
+  stale_after_ms?: number;
+  now?: number;
+}
+
+export interface AutoReleasedStalePlanSubtask {
+  plan_slug: string;
+  subtask_index: number;
+  task_id: number;
+  age_minutes: number;
+  owner_session_id: string | null;
+  owner_agent: string | null;
+}
+
+export interface AutoReleaseStaleClaimsOutcome {
+  released: AutoReleasedStalePlanSubtask[];
+}
+
+/**
+ * Sweep plan subtasks whose `claimed` state has been held longer than
+ * `stale_after_ms` (default 1h) and write a `plan-subtask-claim` observation
+ * flipping them back to `available`. This is the server-side replacement for
+ * having an agent call `rescue_stranded_scan` — when the worker fleet is
+ * policy-prohibited from rescuing other agents' claims, the queue itself
+ * has to be the one to release them or the wave deadlocks.
+ *
+ * The release is idempotent at the observation level: writing a second
+ * `status: 'available'` observation for an already-released subtask is a
+ * no-op for status (latest-wins) and only adds a row to the audit log.
+ * Callers pass already-loaded plans rather than re-reading from storage so
+ * the hot ready-queue path doesn't pay for an extra listPlans on every call.
+ */
+export function autoReleaseStalePlanSubtaskClaims(
+  store: MemoryStore,
+  plans: PlanInfo[],
+  options: AutoReleaseStaleClaimsOptions = {},
+): AutoReleaseStaleClaimsOutcome {
+  const staleAfterMs = options.stale_after_ms ?? STALE_PLAN_SUBTASK_CLAIM_MS;
+  const now = options.now ?? Date.now();
+  const released: AutoReleasedStalePlanSubtask[] = [];
+
+  for (const plan of plans) {
+    for (const subtask of plan.subtasks) {
+      if (subtask.status !== 'claimed') continue;
+      if (subtask.claimed_at === null) continue;
+      const ageMs = now - subtask.claimed_at;
+      if (ageMs < staleAfterMs) continue;
+
+      const located = readSubtaskByBranch(
+        store,
+        `spec/${plan.plan_slug}/sub-${subtask.subtask_index}`,
+      );
+      if (!located || located.info.status !== 'claimed') continue;
+
+      const owner_session_id = located.info.claimed_by_session_id ?? null;
+      const owner_agent = located.info.claimed_by_agent ?? null;
+      const ageMinutes = Math.floor(ageMs / 60_000);
+
+      store.addObservation({
+        session_id: owner_session_id ?? 'system',
+        kind: 'plan-subtask-claim',
+        task_id: located.task_id,
+        content: `Auto-released ${plan.plan_slug}/sub-${subtask.subtask_index} after ${ageMinutes}m stale (held by ${owner_agent ?? 'unknown agent'}); the ready-queue surfaces it to the next eligible worker on the same tick.`,
+        metadata: {
+          kind: 'plan-subtask-claim',
+          status: 'available',
+          session_id: owner_session_id ?? '',
+          agent: owner_agent ?? '',
+          plan_slug: plan.plan_slug,
+          subtask_index: subtask.subtask_index,
+          rescue_reason: 'auto-released-stale-claim',
+          stale_age_ms: ageMs,
+        },
+      });
+
+      released.push({
+        plan_slug: plan.plan_slug,
+        subtask_index: subtask.subtask_index,
+        task_id: located.task_id,
+        age_minutes: ageMinutes,
+        owner_session_id,
+        owner_agent,
+      });
+    }
+  }
+
+  return { released };
+}
+
 function requeueReleasedPlanSubtasks(
   store: MemoryStore,
   args: { session_id: string; claims: ParsedHeldClaim[]; agent: string },

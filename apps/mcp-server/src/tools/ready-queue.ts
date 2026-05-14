@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 import {
   type AgentProfile,
+  type AutoReleasedStalePlanSubtask,
   type ClaimHolder,
   type McpCapabilityMap,
   type MemoryStore,
   type PlanInfo,
   type SubtaskInfo,
+  autoReleaseStalePlanSubtaskClaims,
   claimsForPaths,
   discoverMcpCapabilities,
   listMessagesForAgent,
@@ -189,6 +191,12 @@ export interface ReadyForAgentResult {
    * recommendation).
    */
   auto_claimed?: AutoClaimOutcome;
+  /**
+   * Populated when the same call auto-released stale plan-subtask claims
+   * before computing `available` — so callers can see whether the work they
+   * got was newly released by this very tick. Empty when nothing was stale.
+   */
+  auto_released_stale_claims?: AutoReleasedStalePlanSubtask[];
 }
 
 export type AutoClaimOutcome =
@@ -251,16 +259,32 @@ export function register(server: McpServer, ctx: ToolContext): void {
       limit: z.number().int().positive().max(20).optional(),
       include_capability_map: z.boolean().optional(),
       auto_claim: z.boolean().optional().default(true),
+      // When true (the default), the server auto-releases plan-subtask claims
+      // that have been held longer than STALE_PLAN_SUBTASK_CLAIM_MS before
+      // computing the available set. Pass false to preserve the legacy
+      // "surface rescue_candidate and ask the agent to call
+      // rescue_stranded_scan" behavior — only useful for telemetry queries or
+      // admin tooling that wants to observe stale state without mutating it.
+      auto_release_stale_claims: z.boolean().optional().default(true),
     },
     wrapHandler(
       'task_ready_for_agent',
-      async ({ session_id, agent, repo_root, limit, include_capability_map, auto_claim }) => {
+      async ({
+        session_id,
+        agent,
+        repo_root,
+        limit,
+        include_capability_map,
+        auto_claim,
+        auto_release_stale_claims,
+      }) => {
         const result = await buildReadyForAgent(store, {
           session_id,
           agent,
           ...(repo_root !== undefined ? { repo_root } : {}),
           ...(limit !== undefined ? { limit } : {}),
           ...(include_capability_map !== undefined ? { include_capability_map } : {}),
+          auto_release_stale_claims,
         });
         if (auto_claim) {
           const enriched = await maybeAutoClaim(store, result, { session_id, agent });
@@ -361,13 +385,31 @@ export async function buildReadyForAgent(
     repo_root?: string;
     limit?: number;
     include_capability_map?: boolean;
+    auto_release_stale_claims?: boolean;
   },
 ): Promise<ReadyForAgentResult> {
   const allTasks = store.storage.listTasks(2000);
-  const plans = listPlans(store, {
+  const planListOpts = {
     ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
     limit: 2000,
-  });
+  };
+  let plans = listPlans(store, planListOpts);
+  // Stale-claim auto-release runs BEFORE the available computation so any
+  // claim older than STALE_PLAN_SUBTASK_CLAIM_MS flips to `available` on the
+  // very call that surfaces it. Without this, the queue used to dead-end on
+  // `staleBlockerRescueCandidate` and tell the caller to run
+  // `rescue_stranded_scan` — but the codex worker fleet is policy-prohibited
+  // from rescuing other agents' claims, so the wave would deadlock forever.
+  const auto_release_stale_claims = args.auto_release_stale_claims ?? true;
+  let autoReleased: AutoReleasedStalePlanSubtask[] = [];
+  if (auto_release_stale_claims) {
+    const outcome = autoReleaseStalePlanSubtaskClaims(store, plans);
+    if (outcome.released.length > 0) {
+      autoReleased = outcome.released;
+      // Refresh plans so the just-released subtasks appear in next_available.
+      plans = listPlans(store, planListOpts);
+    }
+  }
   const profile = loadProfile(store.storage, args.agent);
   const tasksById = new Map(
     allTasks.map((t) => [t.id, { created_at: t.created_at, created_by: t.created_by }]),
@@ -464,6 +506,7 @@ export async function buildReadyForAgent(
       total_available: available.length + quotaRelays.length,
       ...(args.include_capability_map ? { mcp_capability_map: discoverMcpCapabilities() } : {}),
       ready_scope_overlap_warnings: readyScopeOverlapWarnings(store, plans),
+      ...(autoReleased.length > 0 ? { auto_released_stale_claims: autoReleased } : {}),
     },
     claimable,
     args,
@@ -476,7 +519,11 @@ export async function buildReadyForAgent(
 function buildReadyResult(
   base: Pick<
     ReadyForAgentResult,
-    'ready' | 'total_available' | 'mcp_capability_map' | 'ready_scope_overlap_warnings'
+    | 'ready'
+    | 'total_available'
+    | 'mcp_capability_map'
+    | 'ready_scope_overlap_warnings'
+    | 'auto_released_stale_claims'
   >,
   claimable: ClaimableReadyEntry | null,
   args: { session_id: string; agent: string },

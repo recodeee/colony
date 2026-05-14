@@ -18,8 +18,13 @@ export {
   type SavingsReferenceTotals,
 } from './savings-reference.js';
 export {
+  autoReleaseStalePlanSubtaskClaims,
   bulkRescueStrandedSessions,
   rescueStrandedSessions,
+  STALE_PLAN_SUBTASK_CLAIM_MS,
+  type AutoReleasedStalePlanSubtask,
+  type AutoReleaseStaleClaimsOptions,
+  type AutoReleaseStaleClaimsOutcome,
   type BulkStrandedClaim,
   type BulkStrandedRescueOptions,
   type BulkStrandedRescueOutcome,
