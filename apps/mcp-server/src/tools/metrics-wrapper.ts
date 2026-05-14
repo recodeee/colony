@@ -1,6 +1,7 @@
 import { countTokens } from '@colony/compress';
 import type { MemoryStore } from '@colony/core';
 import type { ToolHandlerWrapper } from './context.js';
+import { detectMcpClientIdentity } from './heartbeat.js';
 
 const TEXT_DECODER = new TextEncoder();
 
@@ -95,11 +96,22 @@ function isPromiseLike(value: unknown): value is Promise<unknown> {
 }
 
 function metricContextOf(value: unknown): Pick<MetricRecord, 'session_id' | 'repo_root'> {
-  if (!isRecord(value)) return {};
-  const sessionId = stringField(value.session_id) ?? stringField(value.current_session_id);
-  const repoRoot = stringField(value.repo_root);
+  const record = isRecord(value) ? value : undefined;
+  const sessionFromArgs = record
+    ? (stringField(record.session_id) ?? stringField(record.current_session_id))
+    : undefined;
+  // High-volume read-only tools (task_plan_list, get_observations, search,
+  // task_timeline, list_sessions, examples_list, …) carry no session_id in
+  // their schema, which used to land every call in the `<unknown>` bucket of
+  // the savings report — masking ~9k calls/day in 2026-05-14 telemetry. Fall
+  // back to the same detectMcpClientIdentity heuristic the heartbeat wrapper
+  // already uses so receipts bucket per actual MCP client connection (codex
+  // sessions via CODEX_SESSION_ID env, claude via CLAUDECODE_SESSION_ID, etc.)
+  // instead of collapsing into one giant anonymous row.
+  const sessionId = sessionFromArgs ?? detectMcpClientIdentity(process.env, value).sessionId;
+  const repoRoot = record ? stringField(record.repo_root) : undefined;
   const context: Pick<MetricRecord, 'session_id' | 'repo_root'> = {};
-  if (sessionId !== undefined) context.session_id = sessionId;
+  if (sessionId) context.session_id = sessionId;
   if (repoRoot !== undefined) context.repo_root = repoRoot;
   return context;
 }

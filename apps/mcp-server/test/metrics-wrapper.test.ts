@@ -101,4 +101,70 @@ describe('metrics wrapper', () => {
     const handler = wrap('search', async (_args: Record<string, never>) => 'still-ok');
     await expect(handler({})).resolves.toBe('still-ok');
   });
+
+  it('attributes the explicit args.session_id when the tool carries one', async () => {
+    const wrap = createMetricsWrapper(store);
+    const handler = wrap(
+      'task_ready_for_agent',
+      async (_args: { session_id: string; agent: string }) => 'ok',
+    );
+    await handler({ session_id: 'explicit-session-1', agent: 'codex' });
+
+    const agg = store.storage.aggregateMcpMetrics({ since: 0 });
+    const sessions = agg.sessions.map((row) => row.session_id);
+    expect(sessions).toContain('explicit-session-1');
+    expect(sessions).not.toContain('<unknown>');
+  });
+
+  it('falls back to the MCP client identity when the tool schema has no session_id', async () => {
+    // CODEX_SESSION_ID is the highest-confidence signal in
+    // detectMcpClientIdentity. Setting it on process.env simulates a real
+    // codex MCP client invoking a session-less tool like task_plan_list.
+    const previous = process.env.CODEX_SESSION_ID;
+    process.env.CODEX_SESSION_ID = 'codex-fallback-session';
+    try {
+      const wrap = createMetricsWrapper(store);
+      const handler = wrap('task_plan_list', async (_args: { repo_root?: string }) => 'ok');
+      // No session_id in args — old behaviour bucketed this as <unknown>.
+      await handler({ repo_root: '/tmp/repo' });
+
+      const agg = store.storage.aggregateMcpMetrics({ since: 0 });
+      const sessions = agg.sessions.map((row) => row.session_id);
+      expect(sessions).toContain('codex-fallback-session');
+      expect(sessions).not.toContain('<unknown>');
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_SESSION_ID;
+      else process.env.CODEX_SESSION_ID = previous;
+    }
+  });
+
+  it('falls back to a stable mcp-<ppid> bucket when no env signal is available', async () => {
+    // Clear every env signal detectMcpClientIdentity reads so it can only
+    // produce the parent-pid fallback. Two calls with no signal should land
+    // in the SAME bucket (not <unknown>), which is what makes the savings
+    // report attributable across a session even when nothing else is set.
+    const restore: Record<string, string | undefined> = {
+      CODEX_SESSION_ID: process.env.CODEX_SESSION_ID,
+      CLAUDECODE_SESSION_ID: process.env.CLAUDECODE_SESSION_ID,
+      CLAUDE_SESSION_ID: process.env.CLAUDE_SESSION_ID,
+      COLONY_CLIENT_SESSION_ID: process.env.COLONY_CLIENT_SESSION_ID,
+    };
+    for (const k of Object.keys(restore)) delete process.env[k];
+    try {
+      const wrap = createMetricsWrapper(store);
+      const handler = wrap('task_plan_list', async (_args: { repo_root?: string }) => 'ok');
+      await handler({ repo_root: '/tmp/repo' });
+      await handler({ repo_root: '/tmp/repo' });
+
+      const agg = store.storage.aggregateMcpMetrics({ since: 0 });
+      const fallback = agg.sessions.find((row) => row.session_id === `mcp-${process.ppid}`);
+      expect(fallback?.calls).toBe(2);
+      expect(agg.sessions.map((row) => row.session_id)).not.toContain('<unknown>');
+    } finally {
+      for (const [k, v] of Object.entries(restore)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
 });
