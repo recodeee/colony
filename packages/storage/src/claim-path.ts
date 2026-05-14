@@ -76,6 +76,79 @@ export function normalizeClaimPath(
   return normalizeRepoFilePath(context);
 }
 
+/**
+ * Discriminated reason for a claim-path rejection, used by callers that want
+ * to surface a specific error to the agent instead of the generic "claim path
+ * is not claimable". Kept parallel to `normalizeRepoFilePath` so any future
+ * rejection branch added there should also be classified here.
+ */
+export type ClaimPathRejectionReason =
+  | 'empty'
+  | 'pseudo'
+  | 'directory'
+  | 'outside_repo'
+  | 'unknown';
+
+/**
+ * Renders a specific user-facing message for a claim-path rejection so agents
+ * see why their input was rejected (directory vs pseudo vs outside-repo vs
+ * empty) instead of the generic "not claimable". Lives next to the classifier
+ * so any reason added to the enum is forced to grow a message branch too.
+ */
+export function claimPathRejectionMessage(
+  reason: ClaimPathRejectionReason | null,
+  file_path: string,
+): string {
+  switch (reason) {
+    case 'directory':
+      return `claim path "${file_path}" is a directory; claim individual files inside it instead.`;
+    case 'pseudo':
+      return `claim path "${file_path}" is a pseudo path (e.g. /dev/null) and cannot be claimed.`;
+    case 'outside_repo':
+      return `claim path "${file_path}" resolves outside this task's repo_root and cannot be claimed.`;
+    case 'empty':
+      return 'claim path is empty.';
+    default:
+      return `claim path is not claimable: ${file_path}`;
+  }
+}
+
+export function classifyClaimPathRejection(
+  context: ClaimPathContext,
+): ClaimPathRejectionReason | null {
+  const rawPath = context.file_path.trim();
+  if (!rawPath) return 'empty';
+  if (isPseudoClaimPath(rawPath)) return 'pseudo';
+  if (looksLikeDirectoryPath(rawPath)) return 'directory';
+
+  const repoRoot = context.repo_root
+    ? realpathWithMissingTail(context.repo_root)
+    : context.cwd
+      ? realpathWithMissingTail(context.cwd)
+      : undefined;
+  const cwdRoot = context.cwd ? realpathWithMissingTail(context.cwd) : repoRoot;
+  const absolutePath = path.isAbsolute(rawPath)
+    ? realpathWithMissingTail(rawPath)
+    : cwdRoot
+      ? realpathWithMissingTail(path.resolve(relativePathBase(repoRoot, cwdRoot, rawPath), rawPath))
+      : undefined;
+  if (absolutePath && isExistingDirectoryPath(absolutePath)) return 'directory';
+
+  // The non-null happy path of normalizeRepoFilePath ends at this comment.
+  // If we reach here without one of the explicit short-circuits, it means
+  // normalize would have either returned a value (so the caller wouldn't be
+  // here classifying a rejection) or fallen through. The remaining
+  // null-return is "absolutePath was inside repoRoot's filesystem chain but
+  // not strictly inside repoRoot itself", which only happens when the path
+  // resolves to a sibling worktree/repo — i.e. outside this task's repo_root.
+  if (absolutePath && repoRoot) {
+    const relativePath = repoRelativePath({ absolutePath, repoRoot });
+    if (relativePath === null) return 'outside_repo';
+  }
+
+  return 'unknown';
+}
+
 function relativePathBase(repoRoot: string | undefined, cwdRoot: string, rawPath: string): string {
   if (!repoRoot) return cwdRoot;
   const cwdRelative = normalizeRelativePath(path.relative(repoRoot, cwdRoot));

@@ -3,7 +3,11 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
 import Database from 'better-sqlite3';
-import { normalizeClaimPath } from './claim-path.js';
+import {
+  type ClaimPathRejectionReason,
+  classifyClaimPathRejection,
+  normalizeClaimPath,
+} from './claim-path.js';
 import { COLUMN_MIGRATIONS, POST_MIGRATION_SQL, SCHEMA_SQL } from './schema.js';
 import {
   COORDINATION_COMMIT_TOOLS,
@@ -1977,6 +1981,25 @@ export class Storage {
   normalizeTaskFilePath(task_id: number, file_path: string, cwd?: string): string | null {
     const task = this.getTask(task_id);
     return normalizeClaimPath({
+      repo_root: task?.repo_root,
+      cwd,
+      file_path,
+    });
+  }
+
+  /**
+   * Companion to `normalizeTaskFilePath` for the error path: when normalize
+   * returned null, this tells the caller *why* (directory, pseudo path,
+   * outside repo, empty, or unknown) using the same task→repo_root lookup.
+   * Cheap to call only on the rejection branch.
+   */
+  classifyTaskFilePathRejection(
+    task_id: number,
+    file_path: string,
+    cwd?: string,
+  ): ClaimPathRejectionReason | null {
+    const task = this.getTask(task_id);
+    return classifyClaimPathRejection({
       repo_root: task?.repo_root,
       cwd,
       file_path,
