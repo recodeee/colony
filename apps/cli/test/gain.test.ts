@@ -5,7 +5,13 @@ import type {
   McpMetricsSessionSummary,
 } from '@colony/storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { writeGainReport, writeLiveSection, writeReferenceSection } from '../src/commands/gain.js';
+import {
+  buildMoversReport,
+  writeGainReport,
+  writeLiveSection,
+  writeMoversSection,
+  writeReferenceSection,
+} from '../src/commands/gain.js';
 
 const COST_BASIS = {
   input_usd_per_1m_tokens: 1,
@@ -548,5 +554,208 @@ describe('gain command output', () => {
 
     expect(readySelection?.mcp_operations).toContain('task_list');
     expect(healthDiagnosis?.mcp_operations).toContain('savings_report');
+  });
+});
+
+function moverFixture(
+  overrides: Partial<McpMetricsAggregateRow> & { operation: string },
+): McpMetricsAggregateRow {
+  return {
+    calls: 0,
+    ok_count: 0,
+    error_count: 0,
+    error_reasons: [],
+    success_tokens: 0,
+    error_tokens: 0,
+    avg_success_tokens: 0,
+    avg_error_tokens: 0,
+    max_input_tokens: 0,
+    max_output_tokens: 0,
+    max_total_tokens: 0,
+    max_duration_ms: 0,
+    input_bytes: 0,
+    output_bytes: 0,
+    total_bytes: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    input_cost_usd: 0,
+    output_cost_usd: 0,
+    total_cost_usd: 0,
+    avg_cost_usd: 0,
+    avg_input_tokens: 0,
+    avg_output_tokens: 0,
+    total_duration_ms: 0,
+    avg_duration_ms: 0,
+    last_ts: null,
+    ...overrides,
+  };
+}
+
+describe('buildMoversReport', () => {
+  it('flags a regression where recent rate is far above prior rate', () => {
+    const report = buildMoversReport({
+      full: [moverFixture({ operation: 'task_plan_list', calls: 7716, total_tokens: 34_930_000 })],
+      recent: [
+        moverFixture({ operation: 'task_plan_list', calls: 2400, total_tokens: 11_000_000 }),
+      ],
+      recentHours: 24,
+      priorHours: 144,
+      recentSince: 100_000_000,
+      priorSince: 0,
+    });
+
+    expect(report.risers).toHaveLength(1);
+    const row = report.risers[0];
+    expect(row?.operation).toBe('task_plan_list');
+    expect(row?.state).toBe('changed');
+    expect(row?.recent_calls).toBe(2400);
+    expect(row?.prior_calls).toBe(5316);
+    expect(row?.calls_delta_pct).not.toBeNull();
+    expect(row?.calls_delta_pct ?? 0).toBeGreaterThan(150);
+  });
+
+  it('classifies a new operation that only appears in the recent window', () => {
+    const report = buildMoversReport({
+      full: [moverFixture({ operation: 'new_op', calls: 40, total_tokens: 8000 })],
+      recent: [moverFixture({ operation: 'new_op', calls: 40, total_tokens: 8000 })],
+      recentHours: 12,
+      priorHours: 156,
+      recentSince: 100_000_000,
+      priorSince: 0,
+    });
+
+    expect(report.risers).toHaveLength(1);
+    expect(report.risers[0]?.state).toBe('new');
+    expect(report.risers[0]?.prior_calls).toBe(0);
+  });
+
+  it('classifies a gone operation that only had prior activity', () => {
+    const report = buildMoversReport({
+      full: [moverFixture({ operation: 'old_op', calls: 80, total_tokens: 20_000 })],
+      recent: [],
+      recentHours: 24,
+      priorHours: 144,
+      recentSince: 100_000_000,
+      priorSince: 0,
+    });
+
+    expect(report.fallers).toHaveLength(1);
+    expect(report.fallers[0]?.state).toBe('gone');
+    expect(report.fallers[0]?.recent_calls).toBe(0);
+  });
+
+  it('surfaces error risers separately when error count triples', () => {
+    const report = buildMoversReport({
+      full: [
+        moverFixture({
+          operation: 'task_note_working',
+          calls: 28,
+          error_count: 14,
+        }),
+      ],
+      recent: [
+        moverFixture({
+          operation: 'task_note_working',
+          calls: 12,
+          error_count: 12,
+        }),
+      ],
+      recentHours: 24,
+      priorHours: 144,
+      recentSince: 100_000_000,
+      priorSince: 0,
+    });
+
+    expect(report.error_risers).toHaveLength(1);
+    expect(report.error_risers[0]?.recent_errors).toBe(12);
+    expect(report.error_risers[0]?.prior_errors).toBe(2);
+  });
+
+  it('filters out low-volume noise below the minimum call threshold', () => {
+    const report = buildMoversReport({
+      full: [moverFixture({ operation: 'tiny_op', calls: 4, total_tokens: 100 })],
+      recent: [moverFixture({ operation: 'tiny_op', calls: 4, total_tokens: 100 })],
+      recentHours: 24,
+      priorHours: 144,
+      recentSince: 100_000_000,
+      priorSince: 0,
+    });
+
+    expect(report.risers).toHaveLength(0);
+    expect(report.fallers).toHaveLength(0);
+    expect(report.error_risers).toHaveLength(0);
+  });
+});
+
+describe('writeMoversSection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders Movers header with recent and prior labels plus a riser row', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    writeMoversSection({
+      recent_hours: 24,
+      prior_hours: 144,
+      recent_since: 100_000_000,
+      prior_since: 0,
+      total_recent_calls: 2400,
+      total_prior_calls: 5316,
+      risers: [
+        {
+          operation: 'task_plan_list',
+          recent_calls: 2400,
+          prior_calls: 5316,
+          recent_tokens: 11_000_000,
+          prior_tokens: 23_930_000,
+          recent_errors: 0,
+          prior_errors: 0,
+          recent_rate: 100,
+          prior_rate: 36.9,
+          calls_delta_pct: 170,
+          tokens_delta_pct: 180,
+          errors_delta_abs: 0,
+          state: 'changed',
+        },
+      ],
+      fallers: [],
+      error_risers: [],
+      skipped_reason: null,
+    });
+
+    expect(output).toContain('Movers');
+    expect(output).toContain('(last 1d vs prior 6d)');
+    expect(output).toContain('task_plan_list');
+    expect(output).toContain('+170%');
+    expect(output).toContain('+180%');
+  });
+
+  it('emits nothing when the report has no risers, fallers, or error risers', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    writeMoversSection({
+      recent_hours: 24,
+      prior_hours: 144,
+      recent_since: 100_000_000,
+      prior_since: 0,
+      total_recent_calls: 10,
+      total_prior_calls: 100,
+      risers: [],
+      fallers: [],
+      error_risers: [],
+      skipped_reason: null,
+    });
+
+    expect(output).toBe('');
   });
 });
