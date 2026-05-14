@@ -171,6 +171,14 @@ interface ReadyResult {
     } | null;
   };
   rescue_args?: { stranded_after_minutes: number };
+  auto_released_stale_claims?: Array<{
+    plan_slug: string;
+    subtask_index: number;
+    task_id: number;
+    age_minutes: number;
+    owner_session_id: string | null;
+    owner_agent: string | null;
+  }>;
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
@@ -803,11 +811,15 @@ describe('task_ready_for_agent', () => {
     const staleClaim = await claimSubtask('stale-release-plan', 0, 'stale-session');
 
     vi.setSystemTime(t0 + 5 * 60 * 60_000);
+    // Opt out of server-side auto-release so we can still cover the legacy
+    // rescue_candidate surface; the auto-release happy path lives in the
+    // sibling test "auto-releases stale plan-subtask claims …" below.
     let result = await call<ReadyResult>('task_ready_for_agent', {
       session_id: 'agent-session',
       agent: 'codex',
       repo_root: repoRoot,
       limit: 10,
+      auto_release_stale_claims: false,
     });
 
     expect(result.ready).toEqual([]);
@@ -891,6 +903,113 @@ describe('task_ready_for_agent', () => {
         file_scope: ['apps/api/wave-two.ts'],
       },
     });
+  });
+
+  it('auto-releases stale plan-subtask claims so a fresh agent can claim on the same tick', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    store.startSession({ id: 'stale-session', ide: 'codex', cwd: repoRoot });
+
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Stale claimed blocker',
+            description: 'This stale claim used to deadlock the wave forever.',
+            file_scope: ['apps/api/auto-release-blocker.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Wave two API',
+            description: 'Unlocks after the stale blocker completes.',
+            file_scope: ['apps/api/auto-release-wave-two.ts'],
+            depends_on: [0],
+            capability_hint: 'api_work',
+          },
+        ],
+        { slug: 'auto-release-plan', session_id: 'queen', agent: 'queen' },
+      ),
+    });
+    const staleClaim = await claimSubtask('auto-release-plan', 0, 'stale-session');
+
+    // Advance well past STALE_PLAN_SUBTASK_CLAIM_MS (1h). The original
+    // stale-session never makes progress — no further observations, no
+    // completion — so the queue must release it on a downstream agent's
+    // poll instead of stalling on a rescue_candidate suggestion.
+    vi.setSystemTime(t0 + 5 * 60 * 60_000);
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'fresh-agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+    });
+
+    // The stale sub-task should now look claimable in the same response.
+    expect(result.ready.map((entry) => entry.subtask_index)).toEqual([0]);
+    expect(result.next_tool).toBe('task_plan_claim_subtask');
+    expect(result.rescue_candidate).toBeUndefined();
+    expect(result.claim_args).toEqual({
+      repo_root: repoRoot,
+      plan_slug: 'auto-release-plan',
+      subtask_index: 0,
+      session_id: 'fresh-agent-session',
+      agent: 'codex',
+      file_scope: ['apps/api/auto-release-blocker.ts'],
+    });
+
+    // The result reports which claims were auto-released so callers /
+    // telemetry can audit the action.
+    expect(result.auto_released_stale_claims).toHaveLength(1);
+    expect(result.auto_released_stale_claims?.[0]).toMatchObject({
+      plan_slug: 'auto-release-plan',
+      subtask_index: 0,
+      task_id: staleClaim.task_id,
+      owner_session_id: 'stale-session',
+      owner_agent: 'codex',
+    });
+    expect(result.auto_released_stale_claims?.[0]?.age_minutes).toBeGreaterThanOrEqual(60);
+  });
+
+  it('leaves stale claims alone when auto_release_stale_claims is false', async () => {
+    const t0 = Date.parse('2026-04-28T12:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(t0);
+    store.startSession({ id: 'stale-session', ide: 'codex', cwd: repoRoot });
+
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Stale claimed blocker',
+            description: 'Telemetry observer must see the stale state untouched.',
+            file_scope: ['apps/api/no-release-blocker.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Downstream blocked work',
+            description: 'Surfaces only after the blocker completes; never claimed here.',
+            file_scope: ['apps/api/no-release-downstream.ts'],
+            depends_on: [0],
+            capability_hint: 'api_work',
+          },
+        ],
+        { slug: 'no-auto-release-plan', session_id: 'queen', agent: 'queen' },
+      ),
+    });
+    await claimSubtask('no-auto-release-plan', 0, 'stale-session');
+
+    vi.setSystemTime(t0 + 5 * 60 * 60_000);
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'observer-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      limit: 10,
+      auto_release_stale_claims: false,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.auto_released_stale_claims).toBeUndefined();
   });
 
   it('surfaces quota-pending claims as replacement work with exact accept args', async () => {
