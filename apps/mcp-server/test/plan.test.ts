@@ -120,11 +120,11 @@ async function call<T>(name: string, args: Record<string, unknown>): Promise<T> 
 async function callError(
   name: string,
   args: Record<string, unknown>,
-): Promise<{ code: string; error: string }> {
+): Promise<{ code: string; error: string; [key: string]: unknown }> {
   const res = await client.callTool({ name, arguments: args });
   expect(res.isError).toBe(true);
   const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
-  return JSON.parse(text) as { code: string; error: string };
+  return JSON.parse(text) as { code: string; error: string; [key: string]: unknown };
 }
 
 function basicPublishArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -157,6 +157,14 @@ function basicPublishArgs(overrides: Record<string, unknown> = {}): Record<strin
 
 function readChangeText(slug: string): string {
   return readFileSync(join(repoRoot, 'openspec/changes', slug, 'CHANGE.md'), 'utf8');
+}
+
+function storageDb(): { prepare(sql: string): { run(...args: unknown[]): void } } {
+  return (
+    store.storage as unknown as {
+      db: { prepare(sql: string): { run(...args: unknown[]): void } };
+    }
+  ).db;
 }
 
 const MINIMAL_SPEC = `# SPEC
@@ -931,6 +939,56 @@ describe('task_plan_claim_subtask', () => {
     expect(payload.next_available_count).toBe(2);
     expect(payload.next_available_subtask_index).toBe(1);
     expect(payload.next_available.map((s) => s.subtask_index)).toEqual([1, 2]);
+  });
+
+  it('returns PLAN_ARCHIVED once for stale sub-task refs whose parent plan is archived', async () => {
+    await call<PublishResult>('task_plan_publish', basicPublishArgs());
+    store.storage.archiveQueenPlan({ repo_root: repoRoot, plan_slug: 'add-widget-page' });
+    storageDb()
+      .prepare('UPDATE tasks SET branch = ? WHERE repo_root = ? AND branch = ?')
+      .run('archive/spec/add-widget-page/sub-0', repoRoot, 'spec/add-widget-page/sub-0');
+
+    const claimErr = await callError('task_plan_claim_subtask', {
+      plan_slug: 'add-widget-page',
+      subtask_index: 0,
+      session_id: 'B',
+      agent: 'codex',
+    });
+
+    expect(claimErr).toMatchObject({
+      code: 'PLAN_ARCHIVED',
+      plan_slug: 'add-widget-page',
+      subtask_index: 0,
+      suggested_replacement: {
+        action: 'publish-new-plan',
+        repo_root: repoRoot,
+      },
+    });
+    expect(claimErr.error).toContain('stale sub-task spec/add-widget-page/sub-0');
+
+    const parent = store.storage.findTaskByBranch(repoRoot, 'spec/add-widget-page');
+    expect(parent?.status).toBe('archived');
+    const archivedWarnings = () =>
+      store.storage
+        .taskObservationsByKind(parent?.id ?? -1, 'blocker', 10)
+        .filter((row) => row.content.startsWith('PLAN_ARCHIVED:'));
+
+    expect(archivedWarnings()).toHaveLength(1);
+
+    const completeErr = await callError('task_plan_complete_subtask', {
+      plan_slug: 'add-widget-page',
+      subtask_index: 0,
+      session_id: 'B',
+      summary: 'stale completion retry',
+    });
+
+    expect(completeErr).toMatchObject({
+      code: 'PLAN_ARCHIVED',
+      suggested_replacement: {
+        action: 'publish-new-plan',
+      },
+    });
+    expect(archivedWarnings()).toHaveLength(1);
   });
 
   it('reports a claimed sub-task by bound spec row id', async () => {

@@ -88,6 +88,10 @@ interface CodedError extends Error {
   __code?: string;
 }
 
+const PLAN_ROOT_BRANCH_RE = /^spec\/([a-z0-9-]+)$/;
+const PLAN_ARCHIVED_WARNING_KIND = 'blocker';
+const PLAN_ARCHIVED_WARNING_CODE = 'PLAN_ARCHIVED';
+
 interface CompactSubtask {
   subtask_index: number;
   title: string;
@@ -110,6 +114,28 @@ interface CompactPlan {
   next_available_count: number;
   next_available: CompactSubtask[];
   subtask_indexes: number[];
+}
+
+interface PlanArchivedSuggestedReplacement {
+  action: 'publish-new-plan';
+  summary: string;
+  repo_root: string;
+  plan_slug: string;
+  command: string;
+  tool_call: string;
+}
+
+interface PlanArchivedFallback {
+  code: 'PLAN_ARCHIVED';
+  message: string;
+  details: {
+    plan_slug: string;
+    subtask_index: number;
+    archived_plan_task_id: number;
+    repo_root: string;
+    suggested_replacement: PlanArchivedSuggestedReplacement;
+    warning_observation_id: number | null;
+  };
 }
 
 /**
@@ -147,6 +173,7 @@ function recoveryDetailsForClaimFailure(
     | 'PLAN_SUBTASK_NOT_FOUND'
     | 'PLAN_SUBTASK_DEPS_UNMET'
     | 'PLAN_SUBTASK_NOT_AVAILABLE'
+    | 'PLAN_ARCHIVED'
     | 'CLAIM_TAKEOVER_RECOMMENDED'
     | 'CLAIM_HELD_BY_ACTIVE_OWNER',
   args: { plan_slug: string; subtask_index: number; repo_root?: string },
@@ -207,9 +234,7 @@ function diskWorkspaceToPlanInfo(
     parent_plan_title: m.title,
     parent_spec_task_id: null,
   }));
-  const nextAvailable = subtasks.filter(
-    (s) => s.status === 'available' && areDepsMet(s, subtasks),
-  );
+  const nextAvailable = subtasks.filter((s) => s.status === 'available' && areDepsMet(s, subtasks));
   return {
     plan_slug: m.plan_slug,
     repo_root: repoRoot,
@@ -405,9 +430,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
       });
       const includeUnpublished = args.include_unpublished ?? true;
-      const merged = includeUnpublished
-        ? mergeUnpublishedDiskPlans(plans, args.repo_root)
-        : plans;
+      const merged = includeUnpublished ? mergeUnpublishedDiskPlans(plans, args.repo_root) : plans;
       const detail = args.detail ?? 'compact';
       const payload = detail === 'full' ? merged : merged.map(toCompactPlan);
       return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
@@ -429,6 +452,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const result = attemptClaimPlanSubtask(store, args);
       if (!result.ok) {
         if (result.code === 'CLAIM_INTERNAL_ERROR') return mcpError(result.exception);
+        if (result.code === 'PLAN_ARCHIVED') {
+          return mcpErrorResponse(result.code, result.message, result.details);
+        }
         const details = recoveryDetailsForClaimFailure(store, result.code, {
           plan_slug: args.plan_slug,
           subtask_index: args.subtask_index,
@@ -464,6 +490,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
       const located = readSubtaskByBranch(store, branch);
       if (!located) {
+        const archived = planArchivedFallback(store, {
+          plan_slug: args.plan_slug,
+          subtask_index: args.subtask_index,
+          session_id: args.session_id,
+        });
+        if (archived) return mcpErrorResponse(archived.code, archived.message, archived.details);
         return mcpErrorResponse('PLAN_SUBTASK_NOT_FOUND', `no sub-task at ${branch}`);
       }
       if (located.info.status !== 'claimed') {
@@ -620,6 +652,7 @@ export type ClaimPlanSubtaskArgs = {
 
 export type ClaimPlanSubtaskResult =
   | { ok: true; task_id: number; branch: string; file_scope: string[] }
+  | ({ ok: false } & PlanArchivedFallback)
   | {
       ok: false;
       code:
@@ -647,6 +680,12 @@ export function attemptClaimPlanSubtask(
   const branch = `spec/${args.plan_slug}/sub-${args.subtask_index}`;
   const located = readSubtaskByBranch(store, branch);
   if (!located) {
+    const archived = planArchivedFallback(store, {
+      plan_slug: args.plan_slug,
+      subtask_index: args.subtask_index,
+      session_id: args.session_id,
+    });
+    if (archived) return { ok: false, ...archived };
     return { ok: false, code: 'PLAN_SUBTASK_NOT_FOUND', message: `no sub-task at ${branch}` };
   }
 
@@ -782,6 +821,99 @@ export function attemptClaimPlanSubtask(
     branch,
     file_scope: located.info.file_scope,
   };
+}
+
+function planArchivedFallback(
+  store: MemoryStore,
+  args: { plan_slug: string; subtask_index: number; session_id: string },
+): PlanArchivedFallback | null {
+  const parent = findArchivedPlanRootBySlug(store, args.plan_slug);
+  if (!parent) return null;
+
+  const warningObservationId = postPlanArchivedWarningOnce(store, {
+    parent_task_id: parent.id,
+    session_id: args.session_id,
+    plan_slug: args.plan_slug,
+    subtask_index: args.subtask_index,
+    repo_root: parent.repo_root,
+  });
+  const suggestedReplacement = suggestedArchivedPlanReplacement(parent.repo_root, args.plan_slug);
+  return {
+    code: PLAN_ARCHIVED_WARNING_CODE,
+    message: `plan ${args.plan_slug} is archived; stale sub-task spec/${args.plan_slug}/sub-${args.subtask_index} cannot be claimed or completed`,
+    details: {
+      plan_slug: args.plan_slug,
+      subtask_index: args.subtask_index,
+      archived_plan_task_id: parent.id,
+      repo_root: parent.repo_root,
+      suggested_replacement: suggestedReplacement,
+      warning_observation_id: warningObservationId,
+    },
+  };
+}
+
+function findArchivedPlanRootBySlug(
+  store: MemoryStore,
+  planSlug: string,
+): { id: number; repo_root: string; status: string } | null {
+  const branch = `spec/${planSlug}`;
+  const candidates = store.storage
+    .listTasks(2000)
+    .filter((task) => task.branch === branch && PLAN_ROOT_BRANCH_RE.test(task.branch));
+  return (
+    candidates.find((task) => task.status === 'archived' || task.status === 'auto-archived') ?? null
+  );
+}
+
+function suggestedArchivedPlanReplacement(
+  repoRoot: string,
+  planSlug: string,
+): PlanArchivedSuggestedReplacement {
+  return {
+    action: 'publish-new-plan',
+    summary: 'Archived plan references are stale; publish a replacement plan for remaining work.',
+    repo_root: repoRoot,
+    plan_slug: planSlug,
+    command: `colony queen plan --repo-root ${JSON.stringify(repoRoot)} "<goal>"`,
+    tool_call:
+      'mcp__colony__queen_plan_goal({ session_id: "<session_id>", repo_root: "<repo_root>", goal_title: "<goal>", problem: "<problem>", acceptance_criteria: ["<done>"] })',
+  };
+}
+
+function postPlanArchivedWarningOnce(
+  store: MemoryStore,
+  args: {
+    parent_task_id: number;
+    session_id: string;
+    plan_slug: string;
+    subtask_index: number;
+    repo_root: string;
+  },
+): number | null {
+  const existing = store.storage
+    .taskObservationsByKind(args.parent_task_id, PLAN_ARCHIVED_WARNING_KIND, 100)
+    .some((row) => {
+      const metadata = parseMeta(row.metadata);
+      return (
+        metadata.code === PLAN_ARCHIVED_WARNING_CODE &&
+        metadata.plan_slug === args.plan_slug &&
+        metadata.subtask_index === args.subtask_index
+      );
+    });
+  if (existing) return null;
+
+  return new TaskThread(store, args.parent_task_id).post({
+    session_id: args.session_id,
+    kind: PLAN_ARCHIVED_WARNING_KIND,
+    content: `PLAN_ARCHIVED: stale sub-task spec/${args.plan_slug}/sub-${args.subtask_index} targets archived plan ${args.plan_slug}; publish replacement work instead of retrying.`,
+    metadata: {
+      code: PLAN_ARCHIVED_WARNING_CODE,
+      plan_slug: args.plan_slug,
+      subtask_index: args.subtask_index,
+      repo_root: args.repo_root,
+      suggested_replacement: suggestedArchivedPlanReplacement(args.repo_root, args.plan_slug),
+    },
+  });
 }
 
 function applyOrderedWaveHints(
