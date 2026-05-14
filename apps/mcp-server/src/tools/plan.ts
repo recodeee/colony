@@ -22,13 +22,16 @@ import {
   resolveManagedRepoRoot,
 } from '@colony/core';
 import {
+  type PlanWorkspaceManifest,
   type PlanWorkspaceTaskInput,
   PublishPlanError,
   type PublishPlanSubtaskInput,
   type Spec,
   SpecRepository,
   SyncEngine,
+  listPlanWorkspaces,
   parseSpec,
+  planTaskCounts,
   publishPlan,
   serializeChange,
   serializeSpec,
@@ -170,6 +173,80 @@ function recoveryDetailsForClaimFailure(
   }
 }
 
+/**
+ * Build a synthetic `PlanInfo` for an on-disk plan workspace that has
+ * not yet been published into Colony. Workers cannot claim from these
+ * (no task threads exist), but surfacing them lets callers warn the
+ * operator that `colony plan publish <slug>` is required before the
+ * fleet can pick the work up.
+ */
+function diskWorkspaceToPlanInfo(
+  workspace: { dir: string; manifest: PlanWorkspaceManifest },
+  repoRoot: string,
+): PlanInfo {
+  const m = workspace.manifest;
+  const counts = planTaskCounts(m.tasks);
+  const subtasks: SubtaskInfo[] = m.tasks.map((task) => ({
+    task_id: 0,
+    subtask_index: task.subtask_index,
+    title: task.title,
+    description: task.description,
+    status: task.status,
+    claimed_at: null,
+    file_scope: task.file_scope,
+    depends_on: task.depends_on,
+    wave_index: 0,
+    wave_name: 'unpublished',
+    blocked_by_count: 0,
+    blocked_by: [],
+    spec_row_id: task.spec_row_id,
+    capability_hint: task.capability_hint,
+    claimed_by_session_id: task.claimed_by_session_id,
+    claimed_by_agent: task.claimed_by_agent,
+    parent_plan_slug: m.plan_slug,
+    parent_plan_title: m.title,
+    parent_spec_task_id: null,
+  }));
+  const nextAvailable = subtasks.filter(
+    (s) => s.status === 'available' && areDepsMet(s, subtasks),
+  );
+  return {
+    plan_slug: m.plan_slug,
+    repo_root: repoRoot,
+    spec_task_id: 0,
+    registry_status: 'unpublished',
+    title: m.title,
+    created_at: Date.parse(m.created_at) || 0,
+    subtask_counts: counts as Record<SubtaskInfo['status'], number>,
+    subtasks,
+    next_available: nextAvailable,
+  };
+}
+
+/**
+ * Merge unpublished disk plan workspaces into a registered-plans list.
+ * Skips any workspace whose slug is already represented (registered or
+ * subtask-only) so the same plan never appears twice.
+ */
+function mergeUnpublishedDiskPlans(
+  registered: PlanInfo[],
+  repoRoot: string | undefined,
+): PlanInfo[] {
+  if (!repoRoot) return registered;
+  let workspaces: ReturnType<typeof listPlanWorkspaces>;
+  try {
+    workspaces = listPlanWorkspaces(repoRoot);
+  } catch {
+    return registered;
+  }
+  if (workspaces.length === 0) return registered;
+  const known = new Set(registered.map((p) => p.plan_slug));
+  const unpublished = workspaces
+    .filter((w) => !known.has(w.manifest.plan_slug))
+    .map((w) => diskWorkspaceToPlanInfo(w, repoRoot));
+  return [...registered, ...unpublished];
+}
+
 function toCompactPlan(plan: PlanInfo): CompactPlan {
   return {
     plan_slug: plan.plan_slug,
@@ -291,7 +368,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
 
   server.tool(
     'task_plan_list',
-    'Find available plan sub-tasks, rollups, or next work. Lists published plans with status counts, next_available work, capability_match, and unclaimed routing. Defaults to a compact rollup shape (subtask_index + title + capability_hint + status); pass detail="full" to receive descriptions, file_scope, and the legacy sub-task array.',
+    'Find available plan sub-tasks, rollups, or next work. Lists registered plans (and, by default, surfaces on-disk plan workspaces that have not been published yet, marked with registry_status="unpublished") with status counts, next_available work, capability_match, and unclaimed routing. Workers cannot claim from unpublished plans — surface them so the orchestrator notices and runs `colony plan publish <slug>`. Defaults to a compact rollup shape; pass detail="full" for descriptions and file_scope.',
     {
       repo_root: z.string().min(1).optional(),
       only_with_available_subtasks: z.boolean().optional(),
@@ -304,6 +381,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         .optional()
         .describe(
           'compact (default): one rollup row + next_available indexes/titles. full: legacy shape with subtasks[] descriptions and file_scope. Use compact for ready-work selection; full when you need to render every sub-task body.',
+        ),
+      include_unpublished: z
+        .boolean()
+        .optional()
+        .describe(
+          'Default true. When true, scans openspec/plans/* and includes any disk workspace whose slug is not yet registered, marked registry_status="unpublished". Pass false to mirror the legacy registered-only behavior.',
         ),
     },
     wrapHandler('task_plan_list', async (args) => {
@@ -321,8 +404,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         ...(args.capability_match !== undefined ? { capability_match: args.capability_match } : {}),
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
       });
+      const includeUnpublished = args.include_unpublished ?? true;
+      const merged = includeUnpublished
+        ? mergeUnpublishedDiskPlans(plans, args.repo_root)
+        : plans;
       const detail = args.detail ?? 'compact';
-      const payload = detail === 'full' ? plans : plans.map(toCompactPlan);
+      const payload = detail === 'full' ? merged : merged.map(toCompactPlan);
       return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
     }),
   );

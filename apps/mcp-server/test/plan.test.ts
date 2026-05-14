@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { MemoryStore, TaskThread, type WorktreeContentionReport } from '@colony/core';
+import { createPlanWorkspace } from '@colony/spec';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -56,7 +57,7 @@ interface PublishResult {
 interface PlanRollup {
   plan_slug: string;
   title: string;
-  registry_status: 'registered' | 'subtask-only';
+  registry_status: 'registered' | 'subtask-only' | 'unpublished';
   subtask_counts: Record<string, number>;
   next_available: Array<PlanSubtaskSummary>;
   subtasks: PlanSubtaskSummary[];
@@ -559,6 +560,67 @@ describe('task_plan_list', () => {
     expect(plans[0]?.subtask_counts.available).toBe(2);
     // sub-1 depends on sub-0, so only sub-0 is in next_available initially
     expect(plans[0]?.next_available.map((s) => s.subtask_index)).toEqual([0]);
+  });
+
+  it('surfaces on-disk plan workspaces as registry_status="unpublished" by default', async () => {
+    createPlanWorkspace({
+      repoRoot,
+      slug: 'disk-only-plan',
+      title: 'Disk-only plan',
+      problem: 'Plan workspace exists on disk but has not been published into Colony',
+      acceptanceCriteria: ['Surfaced by task_plan_list with registry_status="unpublished"'],
+      tasks: [
+        {
+          title: 'first task',
+          description: 'first task description',
+          file_scope: ['apps/api/first.ts'],
+          depends_on: [],
+        },
+        {
+          title: 'second task',
+          description: 'second task description',
+          file_scope: ['apps/api/second.ts'],
+          depends_on: [0],
+        },
+      ],
+    });
+
+    const plans = await call<PlanRollup[]>('task_plan_list', { repo_root: repoRoot });
+    const diskPlan = plans.find((plan) => plan.plan_slug === 'disk-only-plan');
+    expect(diskPlan).toBeDefined();
+    expect(diskPlan?.registry_status).toBe('unpublished');
+    expect(diskPlan?.subtask_counts.available).toBe(2);
+    expect(diskPlan?.next_available.map((s) => s.subtask_index)).toEqual([0]);
+  });
+
+  it('hides unpublished disk workspaces when include_unpublished=false', async () => {
+    createPlanWorkspace({
+      repoRoot,
+      slug: 'disk-hidden-plan',
+      title: 'Disk plan to hide',
+      problem: 'present on disk',
+      acceptanceCriteria: ['hidden by include_unpublished=false'],
+      tasks: [
+        {
+          title: 'a',
+          description: 'a description',
+          file_scope: ['apps/api/a.ts'],
+          depends_on: [],
+        },
+        {
+          title: 'b',
+          description: 'b description',
+          file_scope: ['apps/api/b.ts'],
+          depends_on: [],
+        },
+      ],
+    });
+
+    const plans = await call<PlanRollup[]>('task_plan_list', {
+      repo_root: repoRoot,
+      include_unpublished: false,
+    });
+    expect(plans.find((plan) => plan.plan_slug === 'disk-hidden-plan')).toBeUndefined();
   });
 
   it('lists subtask-only plans when the root registry task is missing', async () => {
