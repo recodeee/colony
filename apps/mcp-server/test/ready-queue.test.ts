@@ -593,6 +593,68 @@ describe('task_ready_for_agent', () => {
     expect(result.empty_state).toBeUndefined();
   });
 
+  it('rejects repeated ready reads until the required sub-task claim happens', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Build repeated ready API',
+            description: 'Expose the repeated ready endpoint.',
+            file_scope: ['apps/api/repeated-ready.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Document repeated ready API',
+            description: 'Document the repeated ready endpoint.',
+            file_scope: ['docs/repeated-ready.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'repeated-ready-plan' },
+      ),
+    });
+
+    const first = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+    expect(first.claim_required).toBe(true);
+
+    const repeated = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+    expect(repeated.next_action).toContain(
+      'Previous task_ready_for_agent call still requires task_plan_claim_subtask',
+    );
+    expect(repeated.claim_required).toBe(true);
+    expect(repeated.claim_args).toEqual(first.claim_args);
+
+    await call<ClaimResult>('task_plan_claim_subtask', {
+      plan_slug: 'repeated-ready-plan',
+      subtask_index: 0,
+      repo_root: repoRoot,
+      session_id: 'agent-session',
+      agent: 'codex',
+    });
+    const claimed = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+    expect(claimed.ready[0]).toMatchObject({
+      plan_slug: 'repeated-ready-plan',
+      subtask_index: 0,
+      reason: 'continue_current_task',
+    });
+  });
+
   it('hides proposed task rows from executors until approval', async () => {
     await call('task_plan_publish', {
       ...publishArgs(

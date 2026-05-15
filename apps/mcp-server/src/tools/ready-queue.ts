@@ -45,6 +45,7 @@ const QUOTA_READY_FILE_PREVIEW_LIMIT = 3;
 const QUOTA_READY_TEXT_LIMIT = 240;
 const PLAN_SUBTASK_KIND = 'plan-subtask';
 const PLAN_SUBTASK_CLAIM_KIND = 'plan-subtask-claim';
+const READY_CLAIM_REQUIRED_KIND = 'ready-claim-required';
 const QUOTA_RELAY_READY_KIND = 'quota_relay_ready';
 export const NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE =
   'No claimable plan subtasks. Publish a Queen/task plan for multi-agent work, reinforce a proposal with task_propose/task_reinforce, or use task_list only for browsing.';
@@ -502,9 +503,12 @@ export async function buildReadyForAgent(
     ),
     currentClaims,
   ).map((task) => applyRuntimeRouting(store, task, args.agent, args.repo_root));
+  const pendingReadyClaim = pendingReadyClaimObligation(store, args, planRanked);
   const ranked = rankReadyEntries(quotaRelays, planRanked);
-  const selected = ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
-  const claimable = ranked.find(isClaimableEntry) ?? null;
+  const selected = pendingReadyClaim
+    ? [pendingReadyClaim]
+    : ranked.slice(0, args.limit ?? DEFAULT_LIMIT);
+  const claimable = pendingReadyClaim ?? ranked.find(isClaimableEntry) ?? null;
   const setupIssue = specRootSetupIssue(args.repo_root);
   const ready = await Promise.all(
     selected.map(async (entry, index) => {
@@ -539,7 +543,7 @@ export async function buildReadyForAgent(
     }),
   );
 
-  return buildReadyResult(
+  const result = buildReadyResult(
     {
       ready,
       total_available: available.length + quotaRelays.length,
@@ -554,6 +558,94 @@ export async function buildReadyForAgent(
     available.length === 0 && quotaRelays.length === 0 ? staleBlockerRescueCandidate(plans) : null,
     planClaimHintForEmptyState(plans, liveSubtaskBranches, args),
   );
+  if (pendingReadyClaim) return applyPendingReadyClaimObligation(result, pendingReadyClaim);
+  recordReadyClaimObligation(store, result);
+  return result;
+}
+
+function pendingReadyClaimObligation(
+  store: MemoryStore,
+  args: { session_id: string; repo_root?: string },
+  ranked: RankedSubtask[],
+): RankedSubtask | null {
+  const rows = store.storage.timeline(args.session_id, undefined, 100);
+  for (const row of rows.slice().reverse()) {
+    if (row.kind !== READY_CLAIM_REQUIRED_KIND) continue;
+    const meta = parseMeta(row.metadata);
+    if (meta.kind !== READY_CLAIM_REQUIRED_KIND) continue;
+    if (args.repo_root !== undefined && meta.repo_root !== args.repo_root) continue;
+    const planSlug = readMetaString(meta.plan_slug);
+    const subtaskIndex = readMetaInteger(meta.subtask_index);
+    if (!planSlug || subtaskIndex === null) continue;
+    const match = ranked.find(
+      (entry) => entry.plan_slug === planSlug && entry.subtask_index === subtaskIndex,
+    );
+    if (match && match.current_claim === false) return match;
+    return null;
+  }
+  return null;
+}
+
+function applyPendingReadyClaimObligation(
+  result: ReadyForAgentResult,
+  pending: RankedSubtask,
+): ReadyForAgentResult {
+  const nextAction =
+    `Previous task_ready_for_agent call still requires task_plan_claim_subtask for ${pending.plan_slug}/sub-${pending.subtask_index}; claim it before reading the ready queue again.`;
+  return {
+    ...result,
+    ready: result.ready.filter(
+      (entry) =>
+        !isQuotaRelayReady(entry) &&
+        entry.plan_slug === pending.plan_slug &&
+        entry.subtask_index === pending.subtask_index,
+    ),
+    next_action: nextAction,
+    next_action_reason: nextAction,
+    next_tool: 'task_plan_claim_subtask',
+    claim_required: true,
+    plan_slug: pending.plan_slug,
+    subtask_index: pending.subtask_index,
+    reason: pending.reason,
+    assigned_agent: pending.assigned_agent,
+    routing_reason: pending.routing_reason,
+    claim_args: pending.claim_args,
+    codex_mcp_call: codexMcpCall(pending.claim_args),
+  };
+}
+
+function recordReadyClaimObligation(store: MemoryStore, result: ReadyForAgentResult): void {
+  if (!result.claim_required) return;
+  if (result.next_tool !== 'task_plan_claim_subtask') return;
+  const claimArgs = result.claim_args;
+  if (!claimArgs || !('plan_slug' in claimArgs)) return;
+  const task = store.storage.findTaskByBranch(
+    claimArgs.repo_root,
+    `spec/${claimArgs.plan_slug}/sub-${claimArgs.subtask_index}`,
+  );
+  store.addObservation({
+    session_id: claimArgs.session_id,
+    task_id: task?.id ?? null,
+    kind: READY_CLAIM_REQUIRED_KIND,
+    content: `ready claim required ${claimArgs.plan_slug}/sub-${claimArgs.subtask_index}`,
+    metadata: {
+      kind: READY_CLAIM_REQUIRED_KIND,
+      repo_root: claimArgs.repo_root,
+      plan_slug: claimArgs.plan_slug,
+      subtask_index: claimArgs.subtask_index,
+      agent: claimArgs.agent,
+      file_scope: claimArgs.file_scope,
+      next_tool: 'task_plan_claim_subtask',
+    },
+  });
+}
+
+function readMetaString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readMetaInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null;
 }
 
 function buildReadyResult(

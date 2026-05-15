@@ -384,7 +384,7 @@ describe('SessionStart predictive suggestion preface', () => {
 });
 
 describe('SessionStart ready-claim nudge', () => {
-  function seedAvailableSubtask(slug: string): void {
+  function seedAvailableSubtask(slug: string): number {
     fakeGitCheckout(repo, 'main');
     store.startSession({ id: 'publisher', ide: 'codex', cwd: repo });
     const parent = TaskThread.open(store, {
@@ -416,6 +416,7 @@ describe('SessionStart ready-claim nudge', () => {
         parent_spec_task_id: parent.task_id,
       },
     });
+    return sub.task_id;
   }
 
   it('returns empty when no plans exist in the repo', () => {
@@ -429,6 +430,32 @@ describe('SessionStart ready-claim nudge', () => {
     expect(preface).toContain('## Ready Queen sub-tasks');
     expect(preface).toContain('1 ready sub-task');
     expect(preface).toContain('task_plan_claim_subtask');
+  });
+
+  it('surfaces a pending ready-claim obligation for the same session', () => {
+    const taskId = seedAvailableSubtask('pending-ready-claim');
+    store.addObservation({
+      session_id: 'agent-session',
+      task_id: taskId,
+      kind: 'ready-claim-required',
+      content: 'ready claim required pending-ready-claim/sub-0',
+      metadata: {
+        kind: 'ready-claim-required',
+        repo_root: repo,
+        plan_slug: 'pending-ready-claim',
+        subtask_index: 0,
+        next_tool: 'task_plan_claim_subtask',
+      },
+    });
+
+    const preface = buildReadyClaimNudgePreface(store, {
+      cwd: repo,
+      session_id: 'agent-session',
+    });
+    expect(preface).toContain(
+      'Previous task_ready_for_agent call still requires task_plan_claim_subtask',
+    );
+    expect(preface).toContain('pending-ready-claim/sub-0');
   });
 
   it('does not nudge when no cwd is provided', () => {
