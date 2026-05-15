@@ -1,15 +1,18 @@
 import { SAVINGS_REFERENCE_ROWS, savingsLiveComparison, savingsReferenceTotals } from '@colony/core';
 import type {
   McpMetricsAggregateRow,
+  McpMetricsCostBasis,
   McpMetricsDailyRow,
   McpMetricsSessionAggregateRow,
   McpMetricsSessionSummary,
 } from '@colony/storage';
+import { Command } from 'commander';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildMoversReport,
   fillDailyWindow,
   formatDurationMs,
+  registerGainCommand,
   renderImpactBar,
   writeGainReport,
   writeLiveSection,
@@ -29,7 +32,13 @@ const COST_BASIS = {
   input_usd_per_1m_tokens: 1,
   output_usd_per_1m_tokens: 2,
   configured: true,
-};
+} satisfies McpMetricsCostBasis;
+
+const DISABLED_COST_BASIS = {
+  input_usd_per_1m_tokens: 0,
+  output_usd_per_1m_tokens: 0,
+  configured: false,
+} satisfies McpMetricsCostBasis;
 
 const SESSION_SUMMARY: McpMetricsSessionSummary = {
   session_count: 1,
@@ -540,6 +549,15 @@ describe('gain command output', () => {
     expect(output).not.toContain('Cuts:    re-reading PR threads + scrollback');
   });
 
+  it('registers the --no-cost escape hatch', () => {
+    const program = new Command();
+
+    registerGainCommand(program);
+
+    const gain = program.commands.find((command) => command.name() === 'gain');
+    expect(gain?.helpInformation()).toContain('--no-cost');
+  });
+
   it('includes the expanded reference operation catalog', () => {
     const operations = SAVINGS_REFERENCE_ROWS.map((row) => row.operation);
     expect(operations).toEqual(
@@ -873,6 +891,10 @@ describe('rtk-style summary helpers', () => {
         input_tokens: 80,
         output_tokens: 400,
         total_tokens: 480,
+        input_cost_usd: 0.00008,
+        output_cost_usd: 0.0008,
+        total_cost_usd: 0.00088,
+        avg_cost_usd: 0.00022,
         avg_input_tokens: 20,
         avg_output_tokens: 100,
         total_duration_ms: 800,
@@ -887,6 +909,10 @@ describe('rtk-style summary helpers', () => {
         input_tokens: 60,
         output_tokens: 60,
         total_tokens: 120,
+        input_cost_usd: 0.00006,
+        output_cost_usd: 0.00012,
+        total_cost_usd: 0.00018,
+        avg_cost_usd: 0.00009,
         avg_input_tokens: 30,
         avg_output_tokens: 30,
         total_duration_ms: 400,
@@ -902,6 +928,10 @@ describe('rtk-style summary helpers', () => {
       input_tokens: 140,
       output_tokens: 460,
       total_tokens: 600,
+      input_cost_usd: 0.00014,
+      output_cost_usd: 0.00092,
+      total_cost_usd: 0.00106,
+      avg_cost_usd: 0.000177,
       total_duration_ms: 1_200,
       avg_duration_ms: 200,
       last_ts: recentTs,
@@ -925,6 +955,7 @@ describe('rtk-style summary helpers', () => {
       comparison,
       windowHours: 24,
       operationFilter: undefined,
+      costBasis: COST_BASIS,
       days: 3,
       topOps: 10,
       showGraph: true,
@@ -937,9 +968,13 @@ describe('rtk-style summary helpers', () => {
     expect(output).toContain('6');
     expect(output).toContain('Input tokens:');
     expect(output).toContain('Output tokens:');
+    expect(output).toContain('Total cost:');
+    expect(output).toContain('Avg cost/call:');
+    expect(output).toContain('$0.001060');
     expect(output).toContain('Total exec time:');
     expect(output).toContain('Efficiency meter:');
     expect(output).toContain('By Operation');
+    expect(output).toContain('Cost');
     expect(output).toContain('search');
     expect(output).toContain('Daily Activity (last 3 days)');
     expect(output).toContain('Daily Breakdown');
@@ -991,6 +1026,7 @@ describe('rtk-style summary helpers', () => {
       comparison: savingsLiveComparison([], SAVINGS_REFERENCE_ROWS),
       windowHours: 168,
       operationFilter: undefined,
+      costBasis: DISABLED_COST_BASIS,
       days: 2,
       topOps: 10,
       showGraph: true,
@@ -1048,6 +1084,7 @@ describe('rtk-style summary helpers', () => {
       comparison: savingsLiveComparison([], SAVINGS_REFERENCE_ROWS),
       windowHours: 24,
       operationFilter: undefined,
+      costBasis: DISABLED_COST_BASIS,
       days: 7,
       topOps: 10,
       showGraph: true,
@@ -1056,5 +1093,7 @@ describe('rtk-style summary helpers', () => {
     });
 
     expect(output).toContain('No mcp_metrics receipts in window');
+    expect(output).not.toContain('Total cost:');
+    expect(output).not.toContain('Avg cost/call:');
   });
 });
