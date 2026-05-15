@@ -1,0 +1,2 @@
+-- No seed needed: the lifecycle session_start + task_bind events drive
+-- session creation and task binding by themselves.

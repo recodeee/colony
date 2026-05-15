@@ -1,0 +1,7 @@
+# Scenario 01 — claim-before-edit
+# A codex session starts, binds to a task, then claims src/target.ts
+# before issuing a pre_tool_use + post_tool_use Edit on it.
+{"kind":"lifecycle","at_ms":10,"payload":{"event_id":"evt_01_session","event_name":"session_start","session_id":"codex@scenario-01","agent":"codex","branch":"agent/scenario/default"}}
+{"kind":"lifecycle","at_ms":20,"payload":{"event_id":"evt_01_bind","event_name":"task_bind","session_id":"codex@scenario-01","agent":"codex","branch":"agent/scenario/default"}}
+{"kind":"lifecycle","at_ms":40,"payload":{"event_id":"evt_01_pre","event_name":"pre_tool_use","session_id":"codex@scenario-01","agent":"codex","branch":"agent/scenario/default","tool_name":"Edit","tool_input":{"operation":"replace","paths":[{"path":"<REPO_ROOT>/src/target.ts","role":"target","kind":"file"}]}}}
+{"kind":"lifecycle","at_ms":60,"payload":{"event_id":"evt_01_post","event_name":"post_tool_use","parent_event_id":"evt_01_pre","session_id":"codex@scenario-01","agent":"codex","branch":"agent/scenario/default","tool_name":"Edit","tool_input":{"operation":"replace","paths":[{"path":"<REPO_ROOT>/src/target.ts","role":"target","kind":"file"}]},"tool_response":{"success":true}}}

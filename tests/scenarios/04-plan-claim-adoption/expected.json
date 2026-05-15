@@ -1,0 +1,75 @@
+{
+  "observations": [
+    {
+      "kind": "plan-subtask-claim",
+      "metadata_subset": {
+        "kind": "plan-subtask-claim",
+        "status": "pending",
+        "plan_slug": "scenario-04-plan",
+        "subtask_index": 0
+      }
+    },
+    {
+      "kind": "lifecycle_event",
+      "metadata_subset": {
+        "session_id": "codex@scenario-04",
+        "agent": "codex",
+        "task_id": 100,
+        "binding_status": "bound_task"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_04_session",
+        "event_type": "session_start"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_04_bind",
+        "event_type": "task_bind"
+      }
+    },
+    {
+      "kind": "claim",
+      "ts_offset": 40,
+      "metadata_subset": {
+        "kind": "claim",
+        "file_path": "src/target.ts"
+      }
+    },
+    {
+      "kind": "plan-subtask-claim",
+      "ts_offset": 50,
+      "metadata_subset": {
+        "kind": "plan-subtask-claim",
+        "status": "claimed",
+        "plan_slug": "scenario-04-plan",
+        "subtask_index": 0,
+        "session_id": "codex@scenario-04",
+        "agent": "codex"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "task_id": 100,
+      "file_path": "src/target.ts",
+      "session_id": "codex@scenario-04",
+      "state": "active"
+    }
+  ],
+  "mcp_metrics": [],
+  "lifecycle_events": [
+    {
+      "event_type": "session_start",
+      "event_id": "evt_04_session"
+    },
+    {
+      "event_type": "task_bind",
+      "event_id": "evt_04_bind"
+    }
+  ]
+}

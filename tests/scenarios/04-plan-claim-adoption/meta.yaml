@@ -1,0 +1,13 @@
+description: |
+  Seeded with a queen-published plan sub-task (task_id=100). A codex
+  agent starts a session on the sub-task branch, joins the task,
+  claims the file scope, and writes the plan-subtask-claim
+  'claimed' observation. Proves adoption of a queen-owned task without
+  needing the full publishPlan side-effect cascade.
+runtimes:
+  - codex
+  - queen
+tags:
+  - plan
+  - subtask
+  - adoption

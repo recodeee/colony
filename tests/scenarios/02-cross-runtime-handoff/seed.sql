@@ -1,0 +1,2 @@
+-- No seed needed: lifecycle session_start + task_bind create the task,
+-- task envelopes drive the relay and adoption.

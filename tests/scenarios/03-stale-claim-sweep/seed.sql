@@ -1,0 +1,2 @@
+-- No seed needed: relay + tick + release_expired_quota drives the
+-- claim through handoff_pending into weak_expired.

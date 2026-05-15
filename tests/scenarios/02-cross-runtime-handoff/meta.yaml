@@ -1,0 +1,13 @@
+description: |
+  Codex binds to a task on agent/scenario/default and claims
+  src/target.ts. Codex then relays out (quota reason). 5 minutes later
+  a claude session starts, joins the task, and accepts the relay.
+  Proves the cross-runtime baton pass and that the claim ends up
+  owned by claude's session.
+runtimes:
+  - codex
+  - claude
+tags:
+  - handoff
+  - relay
+  - cross-runtime

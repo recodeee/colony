@@ -1,0 +1,2 @@
+-- No seed needed: scenario drives all claims through task envelopes
+-- and lifecycle pre_tool_use.

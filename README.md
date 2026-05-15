@@ -1015,7 +1015,7 @@ validate.
 - 🟡 Cursor and Gemini CLI installers exist but have less smoke coverage
 - 🔵 Per-runtime smoke for claim-before-edit emission
 - 🔵 Cross-runtime handoff smoke (Codex hands off to Claude, both run)
-- ⏳ Reproducible test fixture set under `tests/scenarios/`
+- ✅ Reproducible test fixture set under `tests/scenarios/` (5 scenarios, harness self-tests, `pnpm scenarios`)
 
 > **`time-to-healthy`: still hours**, but the time the human spends _deciding what to run_ drops sharply because every signal carries its `cmd:` and `tool:` already.
 

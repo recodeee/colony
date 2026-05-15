@@ -1,0 +1,95 @@
+{
+  "observations": [
+    {
+      "kind": "lifecycle_event",
+      "metadata_subset": {
+        "session_id": "codex@scenario-05",
+        "agent": "codex",
+        "binding_status": "bound_task",
+        "task_id": 1
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_05_session",
+        "event_type": "session_start"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_05_bind",
+        "event_type": "task_bind"
+      }
+    },
+    {
+      "kind": "claim",
+      "ts_offset": 30,
+      "metadata_subset": {
+        "kind": "claim",
+        "file_path": "src/secondary.ts"
+      }
+    },
+    {
+      "kind": "claim",
+      "ts_offset": 50,
+      "metadata_subset": {
+        "kind": "claim",
+        "source": "pre-tool-use",
+        "file_path": "src/target.ts",
+        "auto_claimed_before_edit": true,
+        "tool": "Edit"
+      }
+    },
+    {
+      "kind": "claim-before-edit",
+      "ts_offset": 50,
+      "metadata_subset": {
+        "kind": "claim-before-edit",
+        "source": "pre-tool-use",
+        "outcome": "auto_claimed_before_edit",
+        "file_path": "src/target.ts",
+        "tool": "Edit"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_05_pre",
+        "event_type": "pre_tool_use",
+        "tool_name": "Edit",
+        "extracted_paths": ["src/target.ts"]
+      }
+    }
+  ],
+  "claims": [
+    {
+      "task_id": 1,
+      "file_path": "src/secondary.ts",
+      "session_id": "codex@scenario-05",
+      "state": "active"
+    },
+    {
+      "task_id": 1,
+      "file_path": "src/target.ts",
+      "session_id": "codex@scenario-05",
+      "state": "active"
+    }
+  ],
+  "mcp_metrics": [],
+  "lifecycle_events": [
+    {
+      "event_type": "session_start",
+      "event_id": "evt_05_session"
+    },
+    {
+      "event_type": "task_bind",
+      "event_id": "evt_05_bind"
+    },
+    {
+      "event_type": "pre_tool_use",
+      "event_id": "evt_05_pre"
+    }
+  ]
+}

@@ -33,13 +33,18 @@
     "p": "pnpm run release",
     "publish:cli": "bash scripts/publish-cli.sh",
     "publish:cli:dry-run": "bash scripts/publish-cli.sh --dry-run",
-    "release": "changeset publish"
+    "release": "changeset publish",
+    "scenarios": "vitest run --config tests/scenarios/_harness/vitest.config.ts",
+    "scenarios:filter": "vitest run --config tests/scenarios/_harness/vitest.config.ts -t",
+    "scenarios:explain": "tsx tests/scenarios/_harness/explain.mts",
+    "scenarios:record": "tsx tests/scenarios/_harness/record.mts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@changesets/cli": "^2.27.9",
     "@types/node": "^22.9.0",
     "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^2.1.5"
   }
