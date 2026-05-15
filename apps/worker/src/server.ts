@@ -24,6 +24,10 @@ import {
   startCoordinationSweepLoop,
 } from './coordination-sweep-loop.js';
 import { type EmbedLoopHandle, startEmbedLoop, stateFilePath } from './embed-loop.js';
+import {
+  type ProposalArchiveLoopHandle,
+  startProposalArchiveJobLoop,
+} from './jobs/proposals-archive.js';
 import { type RescueLoopHandle, startRescueLoop } from './rescue-loop.js';
 import {
   type StrandedSessionSummary,
@@ -597,6 +601,7 @@ export async function start(): Promise<void> {
   const handles: {
     rescueLoop?: RescueLoopHandle;
     coordinationSweepLoop?: CoordinationSweepLoopHandle;
+    proposalArchiveLoop?: ProposalArchiveLoopHandle;
   } = {};
   const servers: Array<ReturnType<typeof serve>> = [];
 
@@ -605,6 +610,7 @@ export async function start(): Promise<void> {
     caffeinate?.stop();
     if (handles.rescueLoop) await handles.rescueLoop.stop();
     if (handles.coordinationSweepLoop) await handles.coordinationSweepLoop.stop();
+    if (handles.proposalArchiveLoop) await handles.proposalArchiveLoop.stop();
     if (loop) await loop.stop();
     for (const s of servers) s.close();
     store.close();
@@ -689,6 +695,11 @@ export async function start(): Promise<void> {
   handles.coordinationSweepLoop = startCoordinationSweepLoop({
     store,
     settings,
+    log: (line) => process.stderr.write(`${line}\n`),
+  });
+
+  handles.proposalArchiveLoop = startProposalArchiveJobLoop({
+    store,
     log: (line) => process.stderr.write(`${line}\n`),
   });
 
