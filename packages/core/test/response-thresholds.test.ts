@@ -112,6 +112,8 @@ describe('rankCandidates', () => {
 describe('loadProfile / saveProfile', () => {
   it('loadProfile returns the default capabilities for unknown agents', () => {
     const profile = loadProfile(store.storage, 'unknown');
+    expect(profile.role).toBe('executor');
+    expect(profile.openProposalCount).toBe(0);
     expect(profile.capabilities).toEqual(DEFAULT_CAPABILITIES);
     expect(profile.updated_at).toBe(0);
   });
@@ -120,6 +122,8 @@ describe('loadProfile / saveProfile', () => {
     saveProfile(store.storage, 'claude', { ui_work: 0.9, api_work: 0.4 });
     saveProfile(store.storage, 'claude', { ui_work: 0.95 });
     const profile = loadProfile(store.storage, 'claude');
+    expect(profile.role).toBe('executor');
+    expect(profile.openProposalCount).toBe(0);
     expect(profile.capabilities.ui_work).toBe(0.95);
     // Other values preserved from previous save.
     expect(profile.capabilities.api_work).toBe(0.4);

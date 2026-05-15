@@ -1,3 +1,25 @@
+export type AgentRole = 'scout' | 'executor' | 'queen';
+
+export const MAX_OPEN_PROPOSALS_PER_SCOUT = 3;
+
+export type TaskProposalStatus = 'proposed' | 'approved' | 'archived';
+
+export interface TaskThreadProposalFields {
+  proposalStatus?: TaskProposalStatus | null;
+  approvedBy?: string | null;
+  observationEvidenceIds?: number[];
+}
+
+export const SCOUT_PROPOSAL_ERROR_CODES = {
+  PROPOSAL_MISSING_EVIDENCE: 'PROPOSAL_MISSING_EVIDENCE',
+  PROPOSAL_CAP_EXCEEDED: 'PROPOSAL_CAP_EXCEEDED',
+  EXECUTOR_CANNOT_PROPOSE: 'EXECUTOR_CANNOT_PROPOSE',
+  SCOUT_NO_CLAIM: 'SCOUT_NO_CLAIM',
+} as const;
+
+export type ScoutProposalErrorCode =
+  (typeof SCOUT_PROPOSAL_ERROR_CODES)[keyof typeof SCOUT_PROPOSAL_ERROR_CODES];
+
 export interface Observation {
   id: number;
   session_id: string;

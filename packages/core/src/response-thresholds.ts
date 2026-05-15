@@ -1,4 +1,5 @@
 import type { Storage } from '@colony/storage';
+import type { AgentRole } from './types.js';
 
 /**
  * Named capability dimensions. Intentionally small — five is the upper
@@ -17,8 +18,15 @@ export interface AgentCapabilities {
 
 export interface AgentProfile {
   agent: string;
+  role: AgentRole;
+  openProposalCount: number;
   capabilities: AgentCapabilities;
   updated_at: number;
+}
+
+interface AgentProfileStorageExtras {
+  role?: AgentRole | null;
+  open_proposal_count?: number | null;
 }
 
 /**
@@ -121,6 +129,8 @@ export function loadProfile(storage: Storage, agent: string): AgentProfile {
   if (!row) {
     return {
       agent,
+      role: 'executor',
+      openProposalCount: 0,
       capabilities: { ...DEFAULT_CAPABILITIES },
       updated_at: 0,
     };
@@ -132,7 +142,14 @@ export function loadProfile(storage: Storage, agent: string): AgentProfile {
   } catch {
     caps = { ...DEFAULT_CAPABILITIES };
   }
-  return { agent, capabilities: caps, updated_at: row.updated_at };
+  const extras = row as typeof row & AgentProfileStorageExtras;
+  return {
+    agent,
+    role: extras.role ?? 'executor',
+    openProposalCount: extras.open_proposal_count ?? 0,
+    capabilities: caps,
+    updated_at: row.updated_at,
+  };
 }
 
 /** Write a full or partial capability profile for an agent. */
@@ -148,5 +165,11 @@ export function saveProfile(
     capabilities: JSON.stringify(merged),
     updated_at: Date.now(),
   });
-  return { agent, capabilities: merged, updated_at: Date.now() };
+  return {
+    agent,
+    role: current.role,
+    openProposalCount: current.openProposalCount,
+    capabilities: merged,
+    updated_at: Date.now(),
+  };
 }
