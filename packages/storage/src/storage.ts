@@ -1419,6 +1419,98 @@ export class Storage {
       }));
   }
 
+  // Earliest ts recorded in mcp_metrics. Used by the drift detector to warn
+  // when the requested baseline window starts before the first recorded
+  // receipt — drift signals are noisy when the baseline lacks history.
+  mcpMetricsMinTs(): number | null {
+    const row = this.db
+      .prepare('SELECT MIN(ts) AS min_ts FROM mcp_metrics')
+      .get() as { min_ts: number | null } | undefined;
+    return row?.min_ts ?? null;
+  }
+
+  // Per-operation median tokens-per-call across two non-overlapping windows.
+  // Reads from the existing mcp_metrics table — no schema change. SQLite has
+  // no PERCENTILE_CONT, so the median is computed via correlated subquery
+  // with LIMIT 1 OFFSET (count-1)/2 on ordered rows. Only ok=1 receipts are
+  // considered so retry storms and rejections do not skew the signal. The
+  // FULL OUTER JOIN produces a row for every operation present in either
+  // window, with NULL median+n=0 for the missing side (used to classify
+  // new_tool / gone in the caller). SQLite 3.39+ supports FULL OUTER JOIN
+  // (better-sqlite3 ^11 ships 3.49).
+  mcpTokenDriftPerOperation(opts: {
+    baseline_since: number;
+    baseline_until: number;
+    recent_since: number;
+    recent_until: number;
+  }): Array<{
+    operation: string;
+    baseline_median: number | null;
+    baseline_n: number;
+    recent_median: number | null;
+    recent_n: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        `WITH
+        baseline AS (
+          SELECT operation,
+                 (input_tokens + output_tokens) AS tpc,
+                 ROW_NUMBER() OVER (PARTITION BY operation ORDER BY input_tokens + output_tokens) AS rn,
+                 COUNT(*)    OVER (PARTITION BY operation) AS n
+            FROM mcp_metrics
+           WHERE ok = 1 AND ts >= ? AND ts < ?
+        ),
+        recent AS (
+          SELECT operation,
+                 (input_tokens + output_tokens) AS tpc,
+                 ROW_NUMBER() OVER (PARTITION BY operation ORDER BY input_tokens + output_tokens) AS rn,
+                 COUNT(*)    OVER (PARTITION BY operation) AS n
+            FROM mcp_metrics
+           WHERE ok = 1 AND ts >= ? AND ts <= ?
+        ),
+        baseline_med AS (
+          SELECT operation, tpc AS median, n
+            FROM baseline
+           WHERE rn = (n - 1) / 2 + 1
+        ),
+        recent_med AS (
+          SELECT operation, tpc AS median, n
+            FROM recent
+           WHERE rn = (n - 1) / 2 + 1
+        )
+        SELECT COALESCE(b.operation, r.operation) AS operation,
+               b.median AS baseline_median,
+               b.n      AS baseline_n,
+               r.median AS recent_median,
+               r.n      AS recent_n
+          FROM baseline_med b
+          FULL OUTER JOIN recent_med r ON b.operation = r.operation
+         ORDER BY operation`,
+      )
+      .all(
+        opts.baseline_since,
+        opts.baseline_until,
+        opts.recent_since,
+        opts.recent_until,
+      ) as Array<{
+      operation: string | null;
+      baseline_median: number | null;
+      baseline_n: number | null;
+      recent_median: number | null;
+      recent_n: number | null;
+    }>;
+    return rows
+      .filter((row): row is { operation: string } & typeof row => row.operation !== null)
+      .map((row) => ({
+        operation: row.operation,
+        baseline_median: row.baseline_median ?? null,
+        baseline_n: row.baseline_n ?? 0,
+        recent_median: row.recent_median ?? null,
+        recent_n: row.recent_n ?? 0,
+      }));
+  }
+
   private mcpMetricSessionCount(where: string, args: ReadonlyArray<number | string>): number {
     const row = this.db
       .prepare(

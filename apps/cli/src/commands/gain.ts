@@ -5,6 +5,8 @@ import {
   type SavingsLiveComparisonCost,
   type SavingsReferenceRow,
   type SavingsReferenceTotals,
+  classifyDrift,
+  type DriftReport,
   savingsLiveComparison,
   savingsLiveComparisonCost,
   savingsReferenceTotals,
@@ -38,6 +40,16 @@ interface GainOptions {
   daily?: boolean;
   days?: string;
   topOps?: string;
+}
+
+interface GainDriftOptions {
+  json?: boolean;
+  baselineDays?: string;
+  recentDays?: string;
+  minCalls?: string;
+  threshold?: string;
+  downThreshold?: string;
+  operation?: string;
 }
 
 export interface MoverRow {
@@ -78,7 +90,7 @@ interface TopErrorReason {
 }
 
 export function registerGainCommand(program: Command): void {
-  program
+  const gain = program
     .command('gain')
     .description('Show colony token/cost savings from live mcp_metrics receipts')
     .option('--json', 'emit structured JSON')
@@ -249,6 +261,91 @@ export function registerGainCommand(program: Command): void {
         opts.honest === true,
         movers,
       );
+    });
+
+  gain
+    .command('drift')
+    .description(
+      'Flag tools whose median tokens-per-call has drifted vs a baseline window (no schema change)',
+    )
+    .option('--baseline-days <n>', 'baseline window length in days (default 14)')
+    .option('--recent-days <n>', 'recent window length in days (default 3)')
+    .option('--min-calls <n>', 'minimum sample size per window to trust signal (default 20)')
+    .option('--threshold <ratio>', 'up-drift trigger ratio (default 1.25 = +25%)')
+    .option('--down-threshold <ratio>', 'down-drift trigger ratio (default 0.75 = -25%)')
+    .option('--operation <name>', 'show only this operation row in the table')
+    .option('--json', 'emit structured JSON')
+    .action(async (opts: GainDriftOptions) => {
+      const settings = loadSettings();
+      const baselineDays = parsePositiveFloat(opts.baselineDays) ?? 14;
+      const recentDays = parsePositiveFloat(opts.recentDays) ?? 3;
+      const minCalls = parsePositiveInt(opts.minCalls) ?? 20;
+      const threshold = parsePositiveFloat(opts.threshold) ?? 1.25;
+      const downThreshold = parsePositiveFloat(opts.downThreshold) ?? 0.75;
+
+      const now = Date.now();
+      const recentSince = now - recentDays * 24 * 60 * 60_000;
+      // 3-day gap between recent and baseline so day-of-week noise does not
+      // bleed across — see spec/v0.x roadmap.
+      const baselineUntil = recentSince - 3 * 24 * 60 * 60_000;
+      const baselineSince = baselineUntil - baselineDays * 24 * 60 * 60_000;
+      const recentUntil = now;
+
+      const { rawRows, minTs } = await withStorage(
+        settings,
+        (storage) => {
+          const allRows = storage.mcpTokenDriftPerOperation({
+            baseline_since: baselineSince,
+            baseline_until: baselineUntil,
+            recent_since: recentSince,
+            recent_until: recentUntil,
+          });
+          const filtered =
+            opts.operation !== undefined
+              ? allRows.filter((row) => row.operation === opts.operation)
+              : allRows;
+          return { rawRows: filtered, minTs: storage.mcpMetricsMinTs() };
+        },
+        { readonly: true },
+      );
+
+      const report = classifyDrift(rawRows, {
+        threshold,
+        down_threshold: downThreshold,
+        min_calls: minCalls,
+      });
+
+      const baselineWarning =
+        minTs !== null && minTs > baselineSince
+          ? `baseline window starts before first recorded metric — drift detection needs ~${
+              Math.ceil((recentDays + baselineDays + 3) - (now - minTs) / (24 * 60 * 60_000))
+            } more day${baselineDays > 1 ? 's' : ''} of history`
+          : null;
+
+      if (opts.json === true) {
+        const payload = {
+          window: {
+            baseline_since: baselineSince,
+            baseline_until: baselineUntil,
+            recent_since: recentSince,
+            recent_until: recentUntil,
+          },
+          threshold: report.threshold,
+          rows: report.rows,
+          new_tools: report.new_tools,
+          gone_tools: report.gone_tools,
+          insufficient_data: report.insufficient_data,
+          ...(baselineWarning !== null ? { warning: baselineWarning } : {}),
+        };
+        process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+        return;
+      }
+
+      writeDriftReport(report, {
+        recentDays,
+        baselineDays,
+        baselineWarning,
+      });
     });
 }
 
@@ -1175,6 +1272,12 @@ function parsePositiveInt(raw: string | undefined): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
 }
 
+function parsePositiveFloat(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 // rtk-style proportional bar. The row whose value equals `max` gets a full
 // bar; smaller rows scale linearly. Empty when max <= 0.
 export function renderImpactBar(value: number, max: number, width: number): string {
@@ -1585,4 +1688,133 @@ function colorByEfficiency(pct: number, text: string): string {
   if (pct >= 70) return kleur.green().bold(text);
   if (pct >= 40) return kleur.yellow().bold(text);
   return kleur.red().bold(text);
+}
+
+export interface DriftReportInput {
+  recentDays: number;
+  baselineDays: number;
+  baselineWarning: string | null;
+}
+
+// Plaintext rendering for `colony gain drift`. Mirrors the gain layout
+// (kleur-colored, padded columns). Drift-classified rows print first;
+// new/gone/insufficient sets get one-line summaries underneath so a
+// quick scan answers "is anything regressing?" without re-running.
+export function writeDriftReport(report: DriftReport, input: DriftReportInput): void {
+  const w = process.stdout;
+  const { recentDays, baselineDays, baselineWarning } = input;
+  w.write(
+    `${kleur.bold(
+      `colony gain drift (recent ${formatDaysLabel(recentDays)} vs baseline ${formatDaysLabel(
+        baselineDays,
+      )})`,
+    )}\n`,
+  );
+  w.write(
+    kleur.dim(
+      `Thresholds: up >= ${report.threshold.up.toFixed(2)}x, down <= ${report.threshold.down.toFixed(
+        2,
+      )}x, min ${report.threshold.min_calls} calls per window.\n`,
+    ),
+  );
+  if (baselineWarning !== null) {
+    w.write(`${kleur.yellow('[warn] ')}${baselineWarning}\n`);
+  }
+  const tableRows = report.rows.filter(
+    (row) =>
+      row.classification === 'up_drift' ||
+      row.classification === 'down_drift' ||
+      row.classification === 'stable',
+  );
+  if (tableRows.length === 0 && report.new_tools.length === 0 && report.gone_tools.length === 0) {
+    w.write(kleur.dim('No operations had enough samples in both windows.\n'));
+    if (report.insufficient_data.length > 0) {
+      writeDriftInsufficient(report);
+    }
+    return;
+  }
+  if (tableRows.length > 0) {
+    const widths = [24, 13, 11, 8, 7, 7, 18];
+    const head = padRow(
+      ['Operation', 'Baseline med', 'Recent med', 'Ratio', 'n_base', 'n_rec', 'Class'],
+      widths,
+    );
+    w.write(`${kleur.dim(head)}\n`);
+    // Up-drift first (most urgent), then down, then stable. Within each
+    // bucket keep the storage-emitted alphabetical order so output is
+    // deterministic for tests.
+    const ordered = [
+      ...tableRows.filter((row) => row.classification === 'up_drift'),
+      ...tableRows.filter((row) => row.classification === 'down_drift'),
+      ...tableRows.filter((row) => row.classification === 'stable'),
+    ];
+    for (const row of ordered) {
+      const cells = [
+        truncate(row.operation, widths[0] ?? 24),
+        formatTokens(row.baseline_median ?? 0),
+        formatTokens(row.recent_median ?? 0),
+        formatDriftRatio(row.ratio, row.classification),
+        formatInt(row.baseline_n),
+        formatInt(row.recent_n),
+        formatDriftClass(row.classification),
+      ];
+      w.write(`${padRow(cells, widths)}\n`);
+    }
+  }
+  if (report.insufficient_data.length > 0) {
+    writeDriftInsufficient(report);
+  }
+  if (report.new_tools.length > 0) {
+    w.write(
+      `${kleur.dim('New tools (no baseline):')} ${report.new_tools.join(', ')}\n`,
+    );
+  }
+  if (report.gone_tools.length > 0) {
+    w.write(
+      `${kleur.dim('Gone tools (no recent calls):')} ${report.gone_tools.join(', ')}\n`,
+    );
+  }
+}
+
+function writeDriftInsufficient(report: DriftReport): void {
+  const names = report.insufficient_data
+    .map((row) => row.operation)
+    .slice(0, 12)
+    .join(', ');
+  const more = report.insufficient_data.length > 12
+    ? `, +${report.insufficient_data.length - 12} more`
+    : '';
+  process.stdout.write(
+    `${kleur.dim(`Insufficient data (n<${report.threshold.min_calls}):`)} ${names}${more}\n`,
+  );
+}
+
+function formatDriftRatio(ratio: number | null, classification: DriftReport['rows'][number]['classification']): string {
+  if (ratio === null) return '-';
+  const rounded = ratio >= 10 ? ratio.toFixed(1) : ratio.toFixed(2);
+  if (classification === 'up_drift') return kleur.red(`▲${rounded}x`);
+  if (classification === 'down_drift') return kleur.green(`▼${rounded}x`);
+  return `${rounded}x`;
+}
+
+function formatDriftClass(classification: DriftReport['rows'][number]['classification']): string {
+  switch (classification) {
+    case 'up_drift':
+      return kleur.red('up_drift');
+    case 'down_drift':
+      return kleur.green('down_drift');
+    case 'stable':
+      return kleur.dim('stable');
+    case 'new_tool':
+      return kleur.cyan('new_tool');
+    case 'gone':
+      return kleur.dim('gone');
+    case 'insufficient_data':
+      return kleur.dim('insufficient');
+  }
+}
+
+function formatDaysLabel(days: number): string {
+  if (Number.isInteger(days)) return `${days}d`;
+  return `${days.toFixed(1)}d`;
 }

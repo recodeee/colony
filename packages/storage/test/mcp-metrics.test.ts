@@ -292,4 +292,134 @@ describe('mcp_metrics storage', () => {
   it('aggregateMcpMetricsDaily returns empty array when no rows in window', () => {
     expect(storage.aggregateMcpMetricsDaily({ since: 0 })).toEqual([]);
   });
+
+  describe('mcpTokenDriftPerOperation', () => {
+    // Helper: build a row at ts with explicit tokens-per-call sum. Each row
+    // is one mcp_metrics receipt; tpc is the (input + output) total.
+    function recordTpc(
+      storage: Storage,
+      ts: number,
+      operation: string,
+      tpc: number,
+      ok = true,
+    ): void {
+      // Split the tpc as 1/3 input, 2/3 output to keep the receipts realistic.
+      const input = Math.round(tpc / 3);
+      const output = tpc - input;
+      record(storage, { ts, operation, input_tokens: input, output_tokens: output, ok });
+    }
+
+    it('returns no rows when both windows are empty', () => {
+      const rows = storage.mcpTokenDriftPerOperation({
+        baseline_since: 0,
+        baseline_until: 1_000,
+        recent_since: 2_000,
+        recent_until: 3_000,
+      });
+      expect(rows).toEqual([]);
+    });
+
+    it('reports stable median when baseline and recent overlap closely', () => {
+      // Baseline: 5 calls @ 100 tpc, baseline window [0, 1000).
+      for (let i = 0; i < 5; i += 1) recordTpc(storage, 100 + i, 'search', 100);
+      // Recent: 5 calls @ 105 tpc, recent window [2000, 3000].
+      for (let i = 0; i < 5; i += 1) recordTpc(storage, 2_000 + i, 'search', 105);
+
+      const rows = storage.mcpTokenDriftPerOperation({
+        baseline_since: 0,
+        baseline_until: 1_000,
+        recent_since: 2_000,
+        recent_until: 3_000,
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        operation: 'search',
+        baseline_median: 100,
+        baseline_n: 5,
+        recent_median: 105,
+        recent_n: 5,
+      });
+    });
+
+    it('captures clear up-drift when recent median is much higher than baseline', () => {
+      // Baseline: 21 calls @ ~100 tpc; recent: 21 calls @ ~200 tpc.
+      for (let i = 0; i < 21; i += 1) recordTpc(storage, 100 + i, 'search', 100);
+      for (let i = 0; i < 21; i += 1) recordTpc(storage, 2_000 + i, 'search', 200);
+
+      const rows = storage.mcpTokenDriftPerOperation({
+        baseline_since: 0,
+        baseline_until: 1_000,
+        recent_since: 2_000,
+        recent_until: 3_000,
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.baseline_median).toBe(100);
+      expect(rows[0]?.recent_median).toBe(200);
+      expect(rows[0]?.baseline_n).toBe(21);
+      expect(rows[0]?.recent_n).toBe(21);
+    });
+
+    it('captures down-drift when recent median is much lower than baseline', () => {
+      for (let i = 0; i < 25; i += 1) recordTpc(storage, 100 + i, 'task_post', 600);
+      for (let i = 0; i < 25; i += 1) recordTpc(storage, 2_000 + i, 'task_post', 300);
+
+      const rows = storage.mcpTokenDriftPerOperation({
+        baseline_since: 0,
+        baseline_until: 1_000,
+        recent_since: 2_000,
+        recent_until: 3_000,
+      });
+      const tp = rows.find((r) => r.operation === 'task_post');
+      expect(tp?.baseline_median).toBe(600);
+      expect(tp?.recent_median).toBe(300);
+    });
+
+    it('reports new tools with baseline_n=0 and recent_n>0', () => {
+      // Only recent window has the operation.
+      for (let i = 0; i < 20; i += 1) recordTpc(storage, 2_000 + i, 'savings_drift_report', 150);
+
+      const rows = storage.mcpTokenDriftPerOperation({
+        baseline_since: 0,
+        baseline_until: 1_000,
+        recent_since: 2_000,
+        recent_until: 3_000,
+      });
+      const newOp = rows.find((r) => r.operation === 'savings_drift_report');
+      expect(newOp?.baseline_n).toBe(0);
+      expect(newOp?.baseline_median).toBeNull();
+      expect(newOp?.recent_n).toBe(20);
+      expect(newOp?.recent_median).toBe(150);
+    });
+
+    it('honors ok=0 filter so retry storms do not skew the median', () => {
+      // 10 ok=1 receipts and 10 ok=0 receipts in recent; only ok=1 should
+      // contribute to recent_median + recent_n.
+      for (let i = 0; i < 10; i += 1) recordTpc(storage, 100 + i, 'search', 100);
+      for (let i = 0; i < 10; i += 1) recordTpc(storage, 2_000 + i, 'search', 200, true);
+      for (let i = 0; i < 10; i += 1) recordTpc(storage, 2_500 + i, 'search', 5_000, false);
+
+      const rows = storage.mcpTokenDriftPerOperation({
+        baseline_since: 0,
+        baseline_until: 1_000,
+        recent_since: 2_000,
+        recent_until: 3_000,
+      });
+      const search = rows.find((r) => r.operation === 'search');
+      expect(search?.recent_n).toBe(10);
+      expect(search?.recent_median).toBe(200);
+    });
+  });
+
+  describe('mcpMetricsMinTs', () => {
+    it('returns null on empty table', () => {
+      expect(storage.mcpMetricsMinTs()).toBeNull();
+    });
+
+    it('returns the earliest ts when receipts exist', () => {
+      record(storage, { ts: 500, operation: 'search' });
+      record(storage, { ts: 200, operation: 'search' });
+      record(storage, { ts: 900, operation: 'task_post' });
+      expect(storage.mcpMetricsMinTs()).toBe(200);
+    });
+  });
 });

@@ -101,6 +101,7 @@ workflow guidance.
 | Rescue | `rescue_stranded_scan` | Dry-run stranded lane/claim rescue candidates. |
 | Rescue | `rescue_stranded_run` | Emit rescue relays and release abandoned claims. |
 | Metrics | `savings_report` | Report live MCP token receipts and reference savings model. |
+| Metrics | `savings_drift_report` | Flag tools whose median tokens-per-call drifted vs a baseline window. |
 
 ## Ruflo sidecar boundary
 
@@ -2234,6 +2235,36 @@ Response shape:
 ```
 
 Live tokens are counted with `@colony/compress#countTokens` — the same primitive that produces observation token receipts, so values line up across surfaces. Estimated USD cost is computed at report time from the live token totals and caller-provided USD-per-1M rates; unset rates keep `cost_basis.configured=false` and report zero cost fields. New failure rows record `error_code` / `error_message`; older failure rows may have unknown reason fields. The reference table is static and sourced from `packages/core/src/savings-reference.ts`; the CLI command `colony gain` and the worker's `/savings` page render the same payload.
+
+## `savings_drift_report`
+
+Flags tools whose median tokens-per-call has drifted up or down over a recent window vs. a baseline window. Pure read path over `mcp_metrics` — no schema change. Mirrors the `colony gain drift` CLI subcommand.
+
+Args:
+
+- `baseline_days?` — baseline window length in days. Defaults to 14, max 180.
+- `recent_days?` — recent window length in days. Defaults to 3, max 60.
+- `min_calls?` — minimum sample size per window before flagging drift. Defaults to 20.
+- `threshold?` — up-drift trigger ratio (`recent_median / baseline_median`). Defaults to 1.25 (+25%).
+- `down_threshold?` — down-drift trigger ratio. Defaults to 0.75 (-25%).
+- `operation?` — filter rows by exact operation name (e.g. `"search"`).
+
+Windows are non-overlapping with a 3-day gap (`baseline` ends 3 days before `recent` begins) so day-of-week noise does not bleed across. Only `ok=1` receipts are considered — retry storms and rejections never inflate the signal. The median is exact (no interpolation) and computed with `ROW_NUMBER()` window aggregation in SQLite.
+
+Response shape:
+
+```json
+{
+  "window": { "baseline_since": 1729000000000, "baseline_until": 1730000000000, "recent_since": 1730259200000, "recent_until": 1730518400000 },
+  "threshold": { "up": 1.25, "down": 0.75, "min_calls": 20 },
+  "rows": [{ "operation": "search", "baseline_median": 412, "baseline_n": 2140, "recent_median": 587, "recent_n": 412, "ratio": 1.42, "classification": "up_drift" }],
+  "new_tools": ["savings_drift_report"],
+  "gone_tools": [],
+  "insufficient_data": [{ "operation": "suggest", "baseline_n": 3, "recent_n": 18 }]
+}
+```
+
+Classifications: `up_drift`, `down_drift`, `new_tool` (no baseline data), `gone` (no recent calls), `insufficient_data` (either window below `min_calls`), or `stable`. When the baseline window starts before the earliest `mcp_metrics` receipt the response adds a `warning` field nudging callers to wait for more history before trusting signals.
 
 ## Plan observation kinds
 
