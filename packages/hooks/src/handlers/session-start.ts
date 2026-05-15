@@ -244,7 +244,7 @@ export function buildForagingPreface(store: MemoryStore, input: Pick<HookInput, 
  */
 export function buildReadyClaimNudgePreface(
   store: MemoryStore,
-  input: Pick<HookInput, 'cwd'>,
+  input: Pick<HookInput, 'cwd'> & Partial<Pick<HookInput, 'session_id'>>,
 ): string {
   if (!input.cwd) return '';
   const detected = detectRepoBranch(input.cwd);
@@ -255,6 +255,14 @@ export function buildReadyClaimNudgePreface(
   } catch (err) {
     console.error(`[colony] buildReadyClaimNudgePreface: ${(err as Error)?.message ?? err}`);
     return '';
+  }
+  const pendingClaim = pendingReadyClaimNudge(store, input.session_id, detected.repo_root, plans);
+  if (pendingClaim) {
+    return [
+      '## Ready Queen sub-tasks',
+      `Previous task_ready_for_agent call still requires task_plan_claim_subtask for ${pendingClaim.plan_slug}/sub-${pendingClaim.subtask_index}.`,
+      `Call task_plan_claim_subtask with plan_slug="${pendingClaim.plan_slug}" and subtask_index=${pendingClaim.subtask_index} before reading the ready queue again.`,
+    ].join('\n');
   }
   let unclaimed = 0;
   let claimed = 0;
@@ -273,6 +281,52 @@ export function buildReadyClaimNudgePreface(
     `${unclaimed} ready ${noun} (${claimedNote}).`,
     'Call task_ready_for_agent then task_plan_claim_subtask before editing — reading the ready queue without claiming leaves the lane stalled.',
   ].join('\n');
+}
+
+function pendingReadyClaimNudge(
+  store: MemoryStore,
+  sessionId: string | undefined,
+  repoRoot: string,
+  plans: ReturnType<typeof listPlans>,
+): { plan_slug: string; subtask_index: number } | null {
+  if (!sessionId) return null;
+  const rows = store.storage.timeline(sessionId, undefined, 100);
+  for (const row of rows.slice().reverse()) {
+    if (row.kind !== 'ready-claim-required') continue;
+    const meta = parseJsonRecord(row.metadata);
+    if (!meta || meta.kind !== 'ready-claim-required') continue;
+    if (meta.repo_root !== repoRoot) continue;
+    const planSlug = readMetadataString(meta.plan_slug);
+    const subtaskIndex = readMetadataInteger(meta.subtask_index);
+    if (!planSlug || subtaskIndex === null) continue;
+    const plan = plans.find((candidate) => candidate.plan_slug === planSlug);
+    const subtask = plan?.subtasks.find((candidate) => candidate.subtask_index === subtaskIndex);
+    if (subtask?.status === 'available') {
+      return { plan_slug: planSlug, subtask_index: subtaskIndex };
+    }
+    return null;
+  }
+  return null;
+}
+
+function parseJsonRecord(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readMetadataString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function readMetadataInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null;
 }
 
 export function buildAttentionBudgetSection(
