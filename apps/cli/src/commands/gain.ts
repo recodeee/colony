@@ -20,7 +20,16 @@ import type {
 } from '@colony/storage';
 import type { Command } from 'commander';
 import kleur from 'kleur';
-import { withStorage } from '../util/store.js';
+import { withStorage, withStore } from '../util/store.js';
+
+/**
+ * Observation kind written by `colony gain` to mark a savings-review
+ * invocation. `colony health --coach` reads this kind to detect step 7 of
+ * the first-week ladder ("review your savings"). Kept in sync with
+ * `apps/cli/src/commands/health-coach.ts::GAIN_REVIEW_OBSERVATION_KIND`.
+ */
+const COACH_GAIN_REVIEW_KIND = 'coach_gain_review';
+const COACH_GAIN_REVIEW_SESSION_ID = 'observer';
 
 interface GainOptions {
   json?: boolean;
@@ -135,8 +144,7 @@ export function registerGainCommand(program: Command): void {
       const recentHours = resolveRecentHours(opts.recentHours, windowHours);
       const recentSince = recentHours !== null ? now - recentHours * 60 * 60_000 : null;
 
-      const summaryRequested =
-        opts.summary === true || opts.graph === true || opts.daily === true;
+      const summaryRequested = opts.summary === true || opts.graph === true || opts.daily === true;
       const dailyDays = parsePositiveInt(opts.days) ?? 30;
       const topOpsLimit = parsePositiveInt(opts.topOps) ?? 10;
       const dailySince = summaryRequested
@@ -223,6 +231,16 @@ export function registerGainCommand(program: Command): void {
               comparison_cost: comparisonCost,
               ...livePayload,
             };
+
+      // Record a lightweight `coach_gain_review` observation so the coach
+      // walkthrough can detect step 7 ("review savings") on the next
+      // `colony health --coach`. Best-effort: a failure here must never
+      // mask the gain output the user came for.
+      try {
+        await recordCoachGainReview(opts);
+      } catch {
+        // Swallow — see comment above.
+      }
 
       if (opts.json === true) {
         process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
@@ -347,6 +365,27 @@ export function registerGainCommand(program: Command): void {
         baselineWarning,
       });
     });
+}
+
+async function recordCoachGainReview(opts: GainOptions): Promise<void> {
+  const settings = loadSettings();
+  await withStore(settings, (store) => {
+    store.startSession({
+      id: COACH_GAIN_REVIEW_SESSION_ID,
+      ide: 'observer',
+      cwd: process.cwd(),
+    });
+    store.addObservation({
+      session_id: COACH_GAIN_REVIEW_SESSION_ID,
+      kind: COACH_GAIN_REVIEW_KIND,
+      content: 'colony gain invocation recorded by the coach walkthrough',
+      metadata: {
+        summary: opts.summary === true,
+        json: opts.json === true,
+        operation: opts.operation ?? null,
+      },
+    });
+  });
 }
 
 export function writeGainReport(
@@ -1284,10 +1323,7 @@ export function renderImpactBar(value: number, max: number, width: number): stri
   if (!Number.isFinite(value) || !Number.isFinite(max) || max <= 0 || width <= 0) {
     return '░'.repeat(Math.max(0, width));
   }
-  const filled = Math.min(
-    width,
-    Math.max(0, Math.round((Math.max(0, value) / max) * width)),
-  );
+  const filled = Math.min(width, Math.max(0, Math.round((Math.max(0, value) / max) * width)));
   return '█'.repeat(filled) + '░'.repeat(Math.max(0, width - filled));
 }
 
@@ -1394,7 +1430,9 @@ export function writeSummaryReport(input: SummaryReportInput): void {
 
   if (showHeadline) {
     const filter = operationFilter ? ` (op=${operationFilter})` : '';
-    w.write(`${kleur.bold(`Colony Token Savings (last ${formatHoursLabel(windowHours)}${filter})`)}\n`);
+    w.write(
+      `${kleur.bold(`Colony Token Savings (last ${formatHoursLabel(windowHours)}${filter})`)}\n`,
+    );
     w.write(`${HEAVY_RULE}\n`);
     writeSummaryHeadline(totals, comparison, costBasis);
 
@@ -1461,20 +1499,15 @@ function writeSummaryHeadline(
     );
   }
   if (savingsPct !== null) {
-    const savedLabel = savedTokens >= 0
-      ? `${formatTokens(savedTokens)} (${formatPctSigned(savingsPct)})`
-      : `${formatTokens(Math.abs(savedTokens))} over (${formatPctSigned(savingsPct)})`;
+    const savedLabel =
+      savedTokens >= 0
+        ? `${formatTokens(savedTokens)} (${formatPctSigned(savingsPct)})`
+        : `${formatTokens(Math.abs(savedTokens))} over (${formatPctSigned(savingsPct)})`;
     lines.push(['Tokens saved:', savedLabel]);
   } else {
-    lines.push([
-      'Tokens saved:',
-      kleur.dim('— (no reference baseline matched in this window)'),
-    ]);
+    lines.push(['Tokens saved:', kleur.dim('— (no reference baseline matched in this window)')]);
   }
-  lines.push([
-    'Total exec time:',
-    `${formatDurationMs(totalMs)} (avg ${formatDurationMs(avgMs)})`,
-  ]);
+  lines.push(['Total exec time:', `${formatDurationMs(totalMs)} (avg ${formatDurationMs(avgMs)})`]);
 
   for (const [label, value] of lines) {
     w.write(`${padVisible(kleur.dim(label), labelWidth)}${value}\n`);
@@ -1489,9 +1522,7 @@ function writeSummaryHeadline(
     const colored = colorByEfficiency(meterPct, `${meter} ${pctLabel}`);
     w.write(`${padVisible(kleur.dim('Efficiency meter:'), labelWidth)}${colored}\n`);
   } else {
-    w.write(
-      `${padVisible(kleur.dim('Efficiency meter:'), labelWidth)}${kleur.dim('—')}\n`,
-    );
+    w.write(`${padVisible(kleur.dim('Efficiency meter:'), labelWidth)}${kleur.dim('—')}\n`);
   }
 }
 
@@ -1530,8 +1561,8 @@ function writeSummaryByOperation(
   }
 
   const sorted = [...operations].sort((a, b) => {
-    const savedA = savedByOp.get(a.operation) ?? -Infinity;
-    const savedB = savedByOp.get(b.operation) ?? -Infinity;
+    const savedA = savedByOp.get(a.operation) ?? Number.NEGATIVE_INFINITY;
+    const savedB = savedByOp.get(b.operation) ?? Number.NEGATIVE_INFINITY;
     if (savedA !== savedB) return savedB - savedA;
     return b.total_tokens - a.total_tokens;
   });
@@ -1584,15 +1615,14 @@ function writeSummaryByOperation(
   w.write(`${kleur.dim('-'.repeat(SUMMARY_TABLE_WIDTH))}\n`);
 }
 
-function writeSummaryDailyGraph(
-  daily: ReadonlyArray<McpMetricsDailyRow>,
-  days: number,
-): void {
+function writeSummaryDailyGraph(daily: ReadonlyArray<McpMetricsDailyRow>, days: number): void {
   const w = process.stdout;
   const window = fillDailyWindow(daily, days);
   const maxTokens = window.reduce((m, row) => Math.max(m, row.total_tokens), 0);
   w.write(`${kleur.bold(`Daily Activity (last ${days} days)`)}\n`);
-  w.write(`${kleur.dim('-'.repeat(SUMMARY_GRAPH_LABEL_WIDTH + 3 + SUMMARY_GRAPH_BAR_WIDTH + 1 + SUMMARY_GRAPH_VALUE_WIDTH))}\n`);
+  w.write(
+    `${kleur.dim('-'.repeat(SUMMARY_GRAPH_LABEL_WIDTH + 3 + SUMMARY_GRAPH_BAR_WIDTH + 1 + SUMMARY_GRAPH_VALUE_WIDTH))}\n`,
+  );
   if (maxTokens === 0) {
     w.write(kleur.dim('  (no token activity in window)\n'));
     return;
@@ -1607,10 +1637,7 @@ function writeSummaryDailyGraph(
   }
 }
 
-function writeSummaryDailyBreakdown(
-  daily: ReadonlyArray<McpMetricsDailyRow>,
-  days: number,
-): void {
+function writeSummaryDailyBreakdown(daily: ReadonlyArray<McpMetricsDailyRow>, days: number): void {
   const w = process.stdout;
   const window = fillDailyWindow(daily, days).slice(-SUMMARY_BREAKDOWN_LIMIT);
   const totals = window.reduce(
@@ -1625,7 +1652,9 @@ function writeSummaryDailyBreakdown(
     { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, total_duration_ms: 0 },
   );
 
-  w.write(`${kleur.bold(`Daily Breakdown (${window.length} day${window.length === 1 ? '' : 's'})`)}\n`);
+  w.write(
+    `${kleur.bold(`Daily Breakdown (${window.length} day${window.length === 1 ? '' : 's'})`)}\n`,
+  );
   const ruleWidth = 74;
   w.write(`${kleur.dim('='.repeat(ruleWidth))}\n`);
   const head = [

@@ -1615,6 +1615,10 @@ export function registerHealthCommand(program: Command): void {
       '--merge-repo-store',
       'merge claim-before-edit signals from <repo_root>/.omx/colony-home/data.db when present (covers per-repo COLONY_HOME redirects)',
     )
+    .option(
+      '--coach',
+      'first-week walkthrough: detect new vs returning repos and surface the next habit to adopt',
+    )
     .action(
       async (opts: {
         hours: string;
@@ -1627,6 +1631,7 @@ export function registerHealthCommand(program: Command): void {
         apply?: boolean;
         releaseSafeStaleClaims?: boolean;
         mergeRepoStore?: boolean;
+        coach?: boolean;
       }) => {
         const hours = parseHours(opts.hours);
         const recentWindowHours = parseHours(opts.recentWindowHours);
@@ -1636,6 +1641,24 @@ export function registerHealthCommand(program: Command): void {
           opts.mergeRepoStore === true ? join(repoRoot, '.omx', 'colony-home', 'data.db') : null;
         const repoStorePathToMerge =
           repoStorePath !== null && existsSync(repoStorePath) ? repoStorePath : null;
+
+        if (opts.coach === true) {
+          if (opts.fixPlan === true) {
+            // `--coach` and `--fix-plan` are mutually exclusive surfaces;
+            // surface the override on stderr so it's visible in scripts and
+            // let `--coach` win (the friendlier of the two).
+            process.stderr.write('--coach and --fix-plan are mutually exclusive; --coach wins\n');
+          }
+          const { withStorage } = await import('../util/store.js');
+          const { buildCoachPayload, formatCoachOutput } = await import('./health-coach.js');
+          // Writable store: coach needs to persist `coach_progress` rows
+          // when a `done_when` predicate fires for the first time.
+          await withStorage(settings, (storage) => {
+            const payload = buildCoachPayload(storage, settings);
+            process.stdout.write(`${formatCoachOutput(payload, { json: opts.json === true })}\n`);
+          });
+          return;
+        }
 
         if (opts.fixPlan === true) {
           const { withStore } = await import('../util/store.js');
@@ -1908,9 +1931,7 @@ function buildCoordinationSweepDiffPayload(
   const skippedClaims = result.skipped_dirty_claims ?? [];
   const staleClaims = result.stale_claims ?? [];
   const skippedKeys = new Set(skippedClaims.map(staleClaimDiffKey));
-  const releasable = staleClaims.filter(
-    (claim) => !skippedKeys.has(staleClaimDiffKey(claim)),
-  );
+  const releasable = staleClaims.filter((claim) => !skippedKeys.has(staleClaimDiffKey(claim)));
   const projectedReleased = releasable.filter(
     (claim) => claim.cleanup_action === 'expire_weak_claim',
   ).length;
@@ -1918,9 +1939,7 @@ function buildCoordinationSweepDiffPayload(
   const releasedClaims =
     opts.mode === 'actual' ? safe.released_claims : safe.released_claims + projectedReleased;
   const downgradedClaims =
-    opts.mode === 'actual'
-      ? safe.downgraded_claims
-      : safe.downgraded_claims + projectedDowngraded;
+    opts.mode === 'actual' ? safe.downgraded_claims : safe.downgraded_claims + projectedDowngraded;
   const releasedQuotaPendingClaims = safe.released_quota_pending_claims;
 
   return {

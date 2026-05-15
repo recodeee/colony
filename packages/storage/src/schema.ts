@@ -322,7 +322,16 @@ CREATE INDEX IF NOT EXISTS idx_task_run_attempts_status
 CREATE INDEX IF NOT EXISTS idx_task_run_attempts_parent
   ON task_run_attempts(parent_attempt_id);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (13);
+-- First-week coach progress (colony health --coach walkthrough).
+-- One row per completed ladder step. Rows are written the first time an
+-- event-observed done_when predicate fires; the CLI never asks for clicks.
+CREATE TABLE IF NOT EXISTS coach_progress (
+  step_id TEXT PRIMARY KEY,
+  completed_at INTEGER NOT NULL,
+  evidence TEXT
+);
+
+INSERT OR IGNORE INTO schema_version(version) VALUES (14);
 `;
 
 /**
