@@ -582,6 +582,12 @@ export function register(server: McpServer, ctx: ToolContext): void {
         parent_spec_task_id: located.info.parent_spec_task_id,
         session_id: args.session_id,
       });
+      scheduleAutoArchiveRetryIfNeeded(store, {
+        plan_slug: args.plan_slug,
+        parent_spec_task_id: located.info.parent_spec_task_id,
+        session_id: args.session_id,
+        outcome: autoArchive,
+      });
 
       return {
         content: [
@@ -1237,6 +1243,7 @@ function completedSpecRowCells(spec: Spec, specRowId: string): string[] {
 interface AutoArchiveOutcome {
   status: 'archived' | 'blocked' | 'error' | 'skipped';
   reason?: string;
+  retry_after_ms?: number;
   archived_path?: string;
   merged_root_hash?: string;
   applied?: number;
@@ -1251,6 +1258,7 @@ interface AutoArchiveOutcome {
  * can land first if the lane wants explicit archival.
  */
 const AUTO_ARCHIVE_GRACE_PERIOD_MS = 60_000;
+const pendingAutoArchiveRetries = new Set<string>();
 
 function runAutoArchiveIfReady(
   store: MemoryStore,
@@ -1301,6 +1309,7 @@ function runAutoArchiveIfReady(
       return {
         status: 'skipped',
         reason: 'auto_archive grace period pending',
+        retry_after_ms: AUTO_ARCHIVE_GRACE_PERIOD_MS - (now - latest),
       };
     }
   }
@@ -1429,6 +1438,42 @@ function runAutoArchiveIfReady(
   }
 }
 
+function scheduleAutoArchiveRetryIfNeeded(
+  store: MemoryStore,
+  args: {
+    plan_slug: string;
+    parent_spec_task_id: number | null;
+    session_id: string;
+    outcome: AutoArchiveOutcome;
+  },
+): void {
+  if (args.parent_spec_task_id == null) return;
+  if (
+    args.outcome.status !== 'skipped' ||
+    args.outcome.reason !== 'auto_archive grace period pending'
+  ) {
+    return;
+  }
+  const key = `${store.dbPath}:${args.parent_spec_task_id}:${args.plan_slug}`;
+  if (pendingAutoArchiveRetries.has(key)) return;
+  pendingAutoArchiveRetries.add(key);
+  const delay = Math.max(0, args.outcome.retry_after_ms ?? AUTO_ARCHIVE_GRACE_PERIOD_MS);
+  const timer = setTimeout(() => {
+    pendingAutoArchiveRetries.delete(key);
+    try {
+      ensurePlanAutoArchiveSweepSession(store);
+      runAutoArchiveIfReady(store, {
+        plan_slug: args.plan_slug,
+        parent_spec_task_id: args.parent_spec_task_id,
+        session_id: PLAN_AUTO_ARCHIVE_SWEEP_SESSION,
+      });
+    } catch {
+      // Best-effort: explicit task_plan_list / completion paths can retry.
+    }
+  }, delay);
+  timer.unref?.();
+}
+
 /**
  * Resolve the parent spec task's `repo_root` to a directory that still
  * exists on disk. When the task was created inside an agent worktree
@@ -1486,14 +1531,7 @@ function sweepCompletedPlansForAutoArchive(store: MemoryStore, repo_root?: strin
       const total = counts.available + counts.claimed + counts.completed + counts.blocked;
       if (total === 0 || counts.completed !== total) continue;
       if (!sessionEnsured) {
-        if (!store.storage.getSession(PLAN_AUTO_ARCHIVE_SWEEP_SESSION)) {
-          store.startSession({
-            id: PLAN_AUTO_ARCHIVE_SWEEP_SESSION,
-            ide: 'plan-system',
-            cwd: null,
-            metadata: { source: 'plan-auto-archive-sweep' },
-          });
-        }
+        ensurePlanAutoArchiveSweepSession(store);
         sessionEnsured = true;
       }
       runAutoArchiveIfReady(store, {
@@ -1505,6 +1543,16 @@ function sweepCompletedPlansForAutoArchive(store: MemoryStore, repo_root?: strin
   } catch {
     // Best-effort. The next list call will retry the sweep.
   }
+}
+
+function ensurePlanAutoArchiveSweepSession(store: MemoryStore): void {
+  if (store.storage.getSession(PLAN_AUTO_ARCHIVE_SWEEP_SESSION)) return;
+  store.startSession({
+    id: PLAN_AUTO_ARCHIVE_SWEEP_SESSION,
+    ide: 'plan-system',
+    cwd: null,
+    metadata: { source: 'plan-auto-archive-sweep' },
+  });
 }
 
 function latestSubtaskCompletedAt(
