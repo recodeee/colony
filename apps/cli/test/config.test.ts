@@ -1,6 +1,10 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SettingsSchema } from '@colony/config';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { coerceForPath, leafSchema } from '../src/commands/config.js';
+import { createProgram } from '../src/index.js';
 
 describe('coerceForPath (schema-directed)', () => {
   it('parses numeric settings as numbers even when the string looks like a version', () => {
@@ -53,5 +57,47 @@ describe('leafSchema', () => {
 
   it('returns undefined for unknown paths', () => {
     expect(leafSchema(SettingsSchema, 'bogus.path')).toBeUndefined();
+  });
+});
+
+describe('config ttl command', () => {
+  it('prints effective TTL config with per-repo .colony/ttl.yaml overrides', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'colony-cli-ttl-'));
+    const repo = join(dir, 'repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    mkdirSync(join(repo, '.colony'), { recursive: true });
+    writeFileSync(
+      join(repo, '.colony', 'ttl.yaml'),
+      ['claimStaleMinutes: 77', 'coordinationSweepIntervalMinutes: 0'].join('\n'),
+    );
+    let output = '';
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += String(chunk);
+      return true;
+    });
+
+    try {
+      await createProgram().parseAsync(
+        ['node', 'test', 'config', 'ttl', '--cwd', repo, '--json'],
+        { from: 'node' },
+      );
+    } finally {
+      write.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    const payload = JSON.parse(output) as {
+      values: { claimStaleMinutes: number; coordinationSweepIntervalMinutes: number };
+      source: { present: boolean; path: string };
+      overriddenKeys: string[];
+    };
+    expect(payload.source.present).toBe(true);
+    expect(payload.source.path).toBe(join(repo, '.colony', 'ttl.yaml'));
+    expect(payload.values.claimStaleMinutes).toBe(77);
+    expect(payload.values.coordinationSweepIntervalMinutes).toBe(0);
+    expect(payload.overriddenKeys).toEqual([
+      'claimStaleMinutes',
+      'coordinationSweepIntervalMinutes',
+    ]);
   });
 });
