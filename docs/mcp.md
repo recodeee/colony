@@ -72,10 +72,11 @@ workflow guidance.
 | Messages | `task_message_mark_read` | Mark one message read and write a receipt. |
 | Messages | `task_message_claim` | Claim a broadcast before replying. |
 | Messages | `task_message_retract` | Retract your unreplied sent message. |
-| Proposals | `task_propose` | Create weak future-work candidate for reinforcement. |
+| Proposals | `task_propose` | Create observation-backed scout task proposals. |
+| Proposals | `task_approve_proposal` | Approve scout proposals for executor pickup. |
 | Proposals | `task_reinforce` | Reinforce or promote a proposal. |
 | Proposals | `task_foraging_report` | Browse pending/promoted proposals for a branch. |
-| Profiles | `agent_upsert_profile` | Set capability weights for an agent type. |
+| Profiles | `agent_upsert_profile` | Set capability weights and optional scout/executor/queen role. |
 | Profiles | `agent_get_profile` | Read capability weights for an agent type. |
 | Planning | `queen_plan_goal` | Decompose a high-level goal into a published claimable plan. |
 | Planning | `task_plan_validate` | Preflight a multi-agent plan for overlaps, claims, and wave errors. |
@@ -1090,6 +1091,8 @@ Claim a file before editing so other agents see ownership and overlap warnings. 
 
 Claims are warnings, not locks. They never block writes. They arm the conflict preface for the next turn.
 
+Scouts cannot claim files. `task_claim_file` returns `SCOUT_NO_CLAIM` for agents whose profile role is `scout`; use `task_propose` with observation evidence instead.
+
 Existing claims are age-classified before they are treated as ownership. Fresh claims can produce active overlap warnings; stale or expired/weak claims remain in audit history and may be returned as `weak_stale` details, but they are not active ownership and are not inherited by `task_relay`.
 
 ```json
@@ -1098,6 +1101,7 @@ Existing claims are age-classified before they are treated as ownership. Fresh c
   "input": {
     "task_id": 17,
     "session_id": "sess_abc",
+    "agent": "codex",
     "file_path": "packages/storage/src/storage.ts",
     "note": "extending searchFts with a filter arg"
   }
@@ -1594,7 +1598,7 @@ unavailable or no similar tasks clear the floor. Use returned IDs with
 
 ## `task_propose`
 
-Propose a potential improvement scoped to `(repo_root, branch)`. The proposal becomes a real task only after collective reinforcement crosses the promotion threshold.
+Create an observation-backed scout proposal as a task thread scoped to `(repo_root, branch)`. Scouts must provide at least one `observation_evidence_ids` entry. The new task row starts with `proposal_status="proposed"` and is hidden from executor ready-work until a queen approves it with `task_approve_proposal`.
 
 ```json
 {
@@ -1602,31 +1606,47 @@ Propose a potential improvement scoped to `(repo_root, branch)`. The proposal be
   "input": {
     "repo_root": "/abs/repo",
     "branch": "main",
-    "summary": "Extract a shared ExamplesIndex helper",
-    "rationale": "Three call sites reimplement the walk; diverging filter lists now.",
-    "touches_files": ["apps/cli/src/commands/foraging.ts", "apps/mcp-server/src/tools/foraging.ts"],
-    "session_id": "sess_abc"
+    "summary": "Fix flaky example indexing",
+    "rationale": "Search observations show three failures in the same path.",
+    "touches_files": ["apps/mcp-server/src/tools/foraging.ts"],
+    "observation_evidence_ids": [401, 402],
+    "session_id": "sess_abc",
+    "agent": "scout-a"
   }
 }
 ```
 
-Returns `{ proposal_id, strength, promotion_threshold }`.
+Returns `{ task_id, proposal_status, open_proposal_count }`.
 
-Example weak candidate:
+Errors:
+
+- `PROPOSAL_MISSING_EVIDENCE`: no observation evidence IDs were provided.
+- `PROPOSAL_CAP_EXCEEDED`: the scout already has too many open proposals.
+- `EXECUTOR_CANNOT_PROPOSE`: the actor profile role is `executor`.
+- `PROPOSAL_SCHEMA_MISSING`: the proposal columns are not present.
+
+## `task_approve_proposal`
+
+Approve an observation-backed scout proposal. The approving agent must have role `queen` or `operator`; successful approval flips `proposal_status` to `approved`, writes `approved_by`, and decrements the proposing scout's open-proposal count.
 
 ```json
 {
-  "name": "task_propose",
+  "name": "task_approve_proposal",
   "input": {
-    "repo_root": "/repo",
-    "branch": "main",
-    "summary": "Show promoted proposals in colony health",
-    "rationale": "Agents keep leaving follow-up notes, but health reports show task_propose stayed at 0.",
-    "touches_files": ["apps/cli/src/commands/health.ts", "apps/cli/test/health.test.ts"],
-    "session_id": "sess_forager"
+    "task_id": 42,
+    "session_id": "queen-session",
+    "agent": "queen-a"
   }
 }
 ```
+
+Returns `{ task_id, approved, approved_by }`. `approved=false` means the task existed but was no longer in `proposal_status="proposed"`.
+
+Errors:
+
+- `APPROVAL_FORBIDDEN`: the actor profile role is not `queen` or `operator`.
+- `TASK_NOT_FOUND`: the target task does not exist.
+- `PROPOSAL_SCHEMA_MISSING`: the proposal columns are not present.
 
 ## `task_reinforce`
 
@@ -1676,13 +1696,14 @@ Use pending rows to decide whether to call `task_reinforce`; use promoted rows t
 
 ## `agent_upsert_profile`
 
-Set or update an agent's capability profile. Weights ∈ `[0, 1]`; missing weights keep their current value (or the `0.5` default for first-time profiles). Used by the handoff router to rank candidates for `to_agent: 'any'` broadcasts.
+Set or update an agent's capability profile and optional role. Weights ∈ `[0, 1]`; missing weights keep their current value (or the `0.5` default for first-time profiles). `role` may be `scout`, `executor`, or `queen`; missing role keeps the current role and defaults to `executor` for first-time profiles.
 
 ```json
 {
   "name": "agent_upsert_profile",
   "input": {
     "agent": "claude",
+    "role": "queen",
     "capabilities": { "ui_work": 0.8, "api_work": 0.7, "test_work": 0.6 }
   }
 }

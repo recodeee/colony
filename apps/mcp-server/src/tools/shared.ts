@@ -296,7 +296,8 @@ export function mcpErrorResponse(
     | 'RESCUE_CONFIRM_REQUIRED'
     | 'SESSION_NOT_FOUND'
     | 'SPEC_ARCHIVE_CONFLICT'
-    | 'TASK_LINK_SELF',
+    | 'TASK_LINK_SELF'
+    | 'SCOUT_NO_CLAIM',
   error: string,
   details: Record<string, unknown> = {},
 ): {
