@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { loadSettings } from '@colony/config';
 import {
   type IngestOmxRuntimeSummaryResult,
@@ -77,6 +77,14 @@ interface BridgeLifecycleOptions {
   cwd?: string;
   replay?: string;
   dryRun?: boolean;
+}
+
+interface BridgeReplayOptions {
+  json?: boolean;
+  ide?: string;
+  cwd?: string;
+  apply?: boolean;
+  rewriteRoot?: string[];
 }
 
 interface BridgeRuntimeSummaryOptions {
@@ -213,6 +221,67 @@ export function registerBridgeCommand(program: Command, deps: BridgeCommandDeps 
     });
 
   bridge
+    .command('replay <file>')
+    .description(
+      'Replay a saved colony-omx-lifecycle-v1 envelope from disk (dry-run by default; pass --apply to write to the live store)',
+    )
+    .option('--json', 'emit the routing result as JSON')
+    .option('--ide <name>', 'IDE/agent hint used when the envelope omits one')
+    .option('--cwd <path>', 'cwd hint used when the envelope uses relative paths')
+    .option(
+      '--apply',
+      'apply the envelope against the live SQLite store; default is dry-run against an ephemeral DB',
+    )
+    .option(
+      '--rewrite-root <pair>',
+      'rewrite absolute paths in the envelope as <from>=<to> (repeatable; useful when replaying a capture from another machine)',
+      (value: string, previous: string[] | undefined) => (previous ?? []).concat([value]),
+    )
+    .action(async (file: string, opts: BridgeReplayOptions) => {
+      const inputPath = resolvePath(process.cwd(), file);
+      const raw = (deps.readReplayFile ?? defaultReadReplayFile)(inputPath);
+      let payload = raw.trim() ? safeJson(raw) : {};
+
+      const rewriteRules = parseRewriteRootPairs(opts.rewriteRoot);
+      if (rewriteRules.length > 0) {
+        payload = rewriteEnvelopePaths(payload, rewriteRules);
+      }
+
+      const applied = opts.apply === true;
+      if (applied && !opts.json) {
+        process.stderr.write(`${kleur.yellow('applying to live store')}\n`);
+      }
+
+      const runLifecycle =
+        deps.runOmxLifecycleEnvelope ?? (await import('@colony/hooks')).runOmxLifecycleEnvelope;
+      const dryRun = applied ? null : (deps.createDryRunStore ?? defaultCreateDryRunStore)();
+      try {
+        const result = await runLifecycle(payload, {
+          defaultCwd: opts.cwd?.trim() || process.cwd(),
+          ...(opts.ide?.trim() ? { ide: opts.ide.trim() } : {}),
+          ...(dryRun ? { store: dryRun.store } : {}),
+        });
+
+        const augmented = { ...result, replay: true, applied, input_path: inputPath };
+
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(augmented, null, 2)}\n`);
+        } else if (result.ok) {
+          const duplicate = result.duplicate === true ? ' duplicate=true' : '';
+          process.stdout.write(
+            `${kleur.green('ok')} event=${result.event_type ?? '-'} route=${result.route ?? '-'}${duplicate} replay=true applied=${applied}\n`,
+          );
+        } else {
+          process.stderr.write(`${kleur.red('error')} ${result.error ?? 'lifecycle failed'}\n`);
+        }
+
+        if (!result.ok) process.exitCode = 1;
+      } finally {
+        dryRun?.cleanup();
+      }
+    });
+
+  bridge
     .command('runtime-summary')
     .description('Receive a compact OMX runtime summary from stdin')
     .option('--json', 'emit the ingestion result as JSON')
@@ -290,4 +359,62 @@ function defaultCreateDryRunStore(): { store: MemoryStore; cleanup: () => void }
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+interface RewriteRule {
+  from: string;
+  to: string;
+}
+
+function parseRewriteRootPairs(values: string[] | undefined): RewriteRule[] {
+  if (!values || values.length === 0) return [];
+  const rules: RewriteRule[] = [];
+  for (const value of values) {
+    const idx = value.indexOf('=');
+    if (idx <= 0 || idx === value.length - 1) {
+      process.stderr.write(
+        `${kleur.yellow('warn')} ignoring malformed --rewrite-root pair: ${value}\n`,
+      );
+      continue;
+    }
+    const from = value.slice(0, idx);
+    const to = value.slice(idx + 1);
+    if (!isAbsolute(from)) {
+      process.stderr.write(
+        `${kleur.yellow('warn')} --rewrite-root <from> must be absolute: ${from}\n`,
+      );
+      continue;
+    }
+    rules.push({ from, to });
+  }
+  return rules;
+}
+
+function rewriteEnvelopePaths(value: unknown, rules: RewriteRule[]): Record<string, unknown> {
+  const rewritten = rewriteValue(value, rules);
+  return rewritten && typeof rewritten === 'object' && !Array.isArray(rewritten)
+    ? (rewritten as Record<string, unknown>)
+    : {};
+}
+
+function rewriteValue(value: unknown, rules: RewriteRule[]): unknown {
+  if (typeof value === 'string') return rewriteString(value, rules);
+  if (Array.isArray(value)) return value.map((entry) => rewriteValue(entry, rules));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = rewriteValue(entry, rules);
+    }
+    return out;
+  }
+  return value;
+}
+
+function rewriteString(value: string, rules: RewriteRule[]): string {
+  for (const rule of rules) {
+    if (value === rule.from) return rule.to;
+    const prefix = rule.from.endsWith('/') ? rule.from : `${rule.from}/`;
+    if (value.startsWith(prefix)) return `${rule.to}${value.slice(rule.from.length)}`;
+  }
+  return value;
 }
