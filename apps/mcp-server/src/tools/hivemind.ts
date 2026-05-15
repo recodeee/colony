@@ -118,6 +118,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
               files: files ?? [],
             })
           : null;
+        const explicitQuery = query?.trim() ?? '';
         const contextQuery = localMode
           ? buildLocalContextQuery({
               query,
@@ -129,7 +130,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
         let memoryHits: SearchResult[] = [];
         let negativeWarnings: CompactNegativeWarning[] = [];
 
-        if (contextQuery) {
+        if (shouldSearchContext({ explicitQuery, localMode }) && contextQuery) {
           const e = (await resolveEmbedder()) ?? undefined;
           memoryHits = localMode
             ? await searchLocalMemoryHits(
@@ -229,7 +230,9 @@ export function register(server: McpServer, ctx: ToolContext): void {
             })
           : undefined;
         const readyWorkCount = countReadyWork(store, { repo_root, repo_roots });
-        const adoptionNudges = buildAdoptionNudges(store);
+        const adoptionNudges = shouldBuildAdoptionNudges({ explicitQuery, localMode })
+          ? buildAdoptionNudges(store)
+          : [];
         const mustCheckAttention = !hasRecentAttentionInboxCall(
           store,
           attentionIdentity.session_id,
@@ -280,6 +283,13 @@ function countReadyWork(
   store: MemoryStore,
   input: { repo_root: string | undefined; repo_roots: string[] | undefined },
 ): number {
+  if (input.repo_root !== undefined && (input.repo_roots?.length ?? 0) === 0) {
+    return listPlans(store, { repo_root: input.repo_root, limit: 2000 }).reduce(
+      (total, plan) => total + plan.next_available.length,
+      0,
+    );
+  }
+
   const roots = new Set(
     [input.repo_root, ...(input.repo_roots ?? [])]
       .filter((root): root is string => typeof root === 'string' && root.trim().length > 0)
@@ -288,6 +298,17 @@ function countReadyWork(
   return listPlans(store, { limit: 2000 })
     .filter((plan) => roots.size === 0 || roots.has(resolve(plan.repo_root)))
     .reduce((total, plan) => total + plan.next_available.length, 0);
+}
+
+function shouldSearchContext(input: { explicitQuery: string; localMode: boolean }): boolean {
+  return input.localMode || input.explicitQuery.length > 0;
+}
+
+function shouldBuildAdoptionNudges(input: {
+  explicitQuery: string;
+  localMode: boolean;
+}): boolean {
+  return input.localMode || input.explicitQuery.length > 0;
 }
 
 function buildAdoptionNudges(store: MemoryStore, now = Date.now()): HivemindAdoptionNudge[] {
