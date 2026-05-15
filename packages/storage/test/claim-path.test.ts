@@ -238,4 +238,34 @@ describe('claimPathRejectionMessage', () => {
       'claim path is not claimable: weird/thing.ts',
     );
   });
+
+  it('includes the task repo_root in the outside-repo message when supplied', () => {
+    expect(
+      claimPathRejectionMessage('outside_repo', '/tmp/foreign.ts', {
+        repo_root: '/home/u/repos/myrepo',
+      }),
+    ).toBe(
+      'claim path "/tmp/foreign.ts" resolves outside this task\'s repo_root "/home/u/repos/myrepo" and cannot be claimed.',
+    );
+  });
+
+  it('renders an actionable recovery hint for the unknown fallback when repo_root is supplied', () => {
+    const msg = claimPathRejectionMessage('unknown', '/abs/path.ts', {
+      repo_root: '/home/u/repos/myrepo',
+    });
+    expect(msg).toContain('/abs/path.ts');
+    expect(msg).toContain('/home/u/repos/myrepo');
+    expect(msg).toContain('retarget a task');
+  });
+
+  it('ignores empty-string repo_root and keeps the legacy message', () => {
+    expect(
+      claimPathRejectionMessage('outside_repo', '/tmp/foreign.ts', { repo_root: '' }),
+    ).toBe(
+      'claim path "/tmp/foreign.ts" resolves outside this task\'s repo_root and cannot be claimed.',
+    );
+    expect(claimPathRejectionMessage(null, 'weird.ts', { repo_root: '' })).toBe(
+      'claim path is not claimable: weird.ts',
+    );
+  });
 });

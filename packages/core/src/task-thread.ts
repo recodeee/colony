@@ -622,9 +622,10 @@ export class TaskThread {
     const filePath = this.store.storage.normalizeTaskFilePath(this.task_id, p.file_path);
     if (filePath === null) {
       const reason = this.store.storage.classifyTaskFilePathRejection(this.task_id, p.file_path);
+      const task = this.store.storage.getTask(this.task_id);
       throw taskError(
         TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH,
-        claimPathRejectionMessage(reason, p.file_path),
+        claimPathRejectionMessage(reason, p.file_path, { repo_root: task?.repo_root }),
       );
     }
     return this.store.storage.transaction(() => {
@@ -1879,9 +1880,10 @@ export class TaskThread {
     const normalized = this.store.storage.normalizeTaskFilePath(this.task_id, file_path);
     if (normalized === null) {
       const reason = this.store.storage.classifyTaskFilePathRejection(this.task_id, file_path);
+      const task = this.store.storage.getTask(this.task_id);
       throw taskError(
         TASK_THREAD_ERROR_CODES.INVALID_CLAIM_PATH,
-        claimPathRejectionMessage(reason, file_path),
+        claimPathRejectionMessage(reason, file_path, { repo_root: task?.repo_root }),
       );
     }
     return normalized;

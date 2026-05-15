@@ -94,22 +94,34 @@ export type ClaimPathRejectionReason =
  * see why their input was rejected (directory vs pseudo vs outside-repo vs
  * empty) instead of the generic "not claimable". Lives next to the classifier
  * so any reason added to the enum is forced to grow a message branch too.
+ *
+ * `context.repo_root`, when supplied, is folded into every reason that
+ * depends on the task's repo_root anchor so the agent sees the exact anchor
+ * it failed to resolve against and can either re-target a task whose
+ * `repo_root` matches the path being edited, or rewrite the claim path to
+ * one that lives under the existing anchor.
  */
 export function claimPathRejectionMessage(
   reason: ClaimPathRejectionReason | null,
   file_path: string,
+  context?: { repo_root?: string | undefined } | undefined,
 ): string {
+  const repoRoot = context?.repo_root && context.repo_root.trim() !== '' ? context.repo_root : null;
   switch (reason) {
     case 'directory':
       return `claim path "${file_path}" is a directory; claim individual files inside it instead.`;
     case 'pseudo':
       return `claim path "${file_path}" is a pseudo path (e.g. /dev/null) and cannot be claimed.`;
     case 'outside_repo':
-      return `claim path "${file_path}" resolves outside this task's repo_root and cannot be claimed.`;
+      return repoRoot
+        ? `claim path "${file_path}" resolves outside this task's repo_root "${repoRoot}" and cannot be claimed.`
+        : `claim path "${file_path}" resolves outside this task's repo_root and cannot be claimed.`;
     case 'empty':
       return 'claim path is empty.';
     default:
-      return `claim path is not claimable: ${file_path}`;
+      return repoRoot
+        ? `claim path "${file_path}" could not be resolved relative to this task's repo_root "${repoRoot}". Either retarget a task whose repo_root matches the path being claimed, or pass a path that resolves inside that anchor.`
+        : `claim path is not claimable: ${file_path}`;
   }
 }
 
