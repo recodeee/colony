@@ -81,9 +81,6 @@ CREATE TABLE IF NOT EXISTS tasks (
   observation_evidence_ids TEXT,
   UNIQUE(repo_root, branch)
 );
-CREATE INDEX IF NOT EXISTS idx_task_threads_proposal_status
-  ON tasks(proposal_status)
-  WHERE proposal_status IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_participants (
   task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
