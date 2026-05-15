@@ -331,6 +331,94 @@ describe('MCP server', () => {
     expect(payload.reference).toBeUndefined();
   });
 
+  it('savings_report returns an additive error_breakdown grouped by error code', async () => {
+    const now = Date.now();
+    store.storage.recordMcpMetric({
+      ts: now - 30_000,
+      operation: 'task_post',
+      input_bytes: 100,
+      output_bytes: 200,
+      input_tokens: 10,
+      output_tokens: 20,
+      duration_ms: 12,
+      ok: false,
+      error_code: 'TASK_NOT_FOUND',
+      error_message: 'task 999 not found',
+    });
+    store.storage.recordMcpMetric({
+      ts: now - 20_000,
+      operation: 'task_claim_file',
+      input_bytes: 100,
+      output_bytes: 200,
+      input_tokens: 15,
+      output_tokens: 25,
+      duration_ms: 10,
+      ok: false,
+      error_code: 'TASK_NOT_FOUND',
+      error_message: 'task 1000 not found',
+    });
+    store.storage.recordMcpMetric({
+      ts: now - 10_000,
+      operation: 'task_claim_file',
+      input_bytes: 100,
+      output_bytes: 200,
+      input_tokens: 5,
+      output_tokens: 10,
+      duration_ms: 9,
+      ok: false,
+      error_code: 'SCOUT_NO_CLAIM',
+      error_message: 'scout cannot claim files',
+    });
+
+    const res = await client.callTool({
+      name: 'savings_report',
+      arguments: { hours: 1 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      live: {
+        error_breakdown: Array<{
+          error_code: string | null;
+          count: number;
+          last_ts: number | null;
+          operations_truncated: boolean;
+          operations: Array<{
+            operation: string;
+            count: number;
+            last_ts: number | null;
+            error_message: string | null;
+          }>;
+        }>;
+      };
+    };
+
+    expect(payload.live.error_breakdown).toHaveLength(2);
+    expect(payload.live.error_breakdown[0]).toMatchObject({
+      error_code: 'TASK_NOT_FOUND',
+      count: 2,
+      last_ts: now - 20_000,
+      operations_truncated: false,
+    });
+    expect(payload.live.error_breakdown[0]?.operations).toEqual([
+      {
+        operation: 'task_claim_file',
+        count: 1,
+        last_ts: now - 20_000,
+        error_message: 'task 1000 not found',
+      },
+      {
+        operation: 'task_post',
+        count: 1,
+        last_ts: now - 30_000,
+        error_message: 'task 999 not found',
+      },
+    ]);
+    expect(payload.live.error_breakdown[1]).toMatchObject({
+      error_code: 'SCOUT_NO_CLAIM',
+      count: 1,
+    });
+  });
+
   it('task_post reports a structured error for stale task ids', async () => {
     store.startSession({ id: 's-post', ide: 'test', cwd: '/tmp' });
 
