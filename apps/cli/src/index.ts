@@ -37,6 +37,7 @@ import { registerReindexCommand } from './commands/reindex.js';
 import { registerRescueCommand } from './commands/rescue.js';
 import { registerResumeCommand } from './commands/resume.js';
 import { registerSearchCommand } from './commands/search.js';
+import { registerScoutCommand } from './commands/scout.js';
 import { registerSidecarCommand } from './commands/sidecar.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerSuggestCommand } from './commands/suggest.js';
@@ -77,6 +78,7 @@ export function createProgram(): Command {
   registerMcpCommand(program);
   registerBridgeCommand(program);
   registerSearchCommand(program);
+  registerScoutCommand(program);
   registerSidecarCommand(program);
   registerSuggestCommand(program);
   registerTaskCommand(program);
