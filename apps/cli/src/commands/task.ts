@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { loadSettings } from '@colony/config';
-import { TaskThread, inferIdeFromSessionId } from '@colony/core';
+import { TaskThread, buildCoordinationSweep, inferIdeFromSessionId } from '@colony/core';
 import type { Command } from 'commander';
 import kleur from 'kleur';
 import {
@@ -25,9 +25,11 @@ interface QuotaClaimOptions {
   taskId?: string;
   session?: string;
   agent?: string;
+  repoRoot?: string;
   file?: string;
   handoffObservationId?: string;
   reason?: string;
+  allSafe?: boolean;
   json?: boolean;
 }
 
@@ -129,13 +131,18 @@ export function registerTaskCommand(program: Command): void {
   group
     .command('quota-release-expired')
     .description('Release expired quota-pending claims into weak audit-only ownership')
-    .requiredOption('--task-id <id>', 'task id that owns the quota-pending claim')
+    .option('--task-id <id>', 'task id that owns the quota-pending claim')
     .option(
       '--session <id>',
       'your session_id (defaults to CODEX_SESSION_ID/CLAUDECODE_SESSION_ID)',
     )
+    .option('--repo-root <path>', 'repo root for --all-safe batch sweep (defaults to cwd)')
     .option('--file <path>', 'specific expired quota-pending file to release')
     .option('--handoff-observation-id <id>', 'linked handoff/relay observation id')
+    .option(
+      '--all-safe',
+      'release every expired quota-pending claim in the repo via coordination sweep',
+    )
     .option('--json', 'emit the result as JSON')
     .action(async (opts: QuotaClaimOptions) => {
       await resolveQuotaClaim(opts, 'release-expired');
@@ -200,6 +207,15 @@ async function resolveQuotaClaim(
   opts: QuotaClaimOptions,
   action: 'accept' | 'decline' | 'release-expired',
 ): Promise<void> {
+  if (action === 'release-expired' && opts.allSafe === true) {
+    await releaseAllSafeExpiredQuotaClaims(opts);
+    return;
+  }
+  if (opts.taskId === undefined) {
+    process.stderr.write(`${kleur.red('missing task')} - pass --task-id or --all-safe\n`);
+    process.exitCode = 1;
+    return;
+  }
   const taskId = parsePositiveInt(opts.taskId, '--task-id');
   const handoffObservationId =
     opts.handoffObservationId === undefined
@@ -247,6 +263,60 @@ async function resolveQuotaClaim(
       `${opts.json === true ? JSON.stringify(result, null, 2) : formatQuotaClaimResult(result)}\n`,
     );
   });
+}
+
+async function releaseAllSafeExpiredQuotaClaims(opts: QuotaClaimOptions): Promise<void> {
+  if (
+    opts.taskId !== undefined ||
+    opts.file !== undefined ||
+    opts.handoffObservationId !== undefined ||
+    opts.reason !== undefined
+  ) {
+    process.stderr.write(
+      `${kleur.red('invalid options')} - --all-safe cannot be combined with task-specific quota release options\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const repoRoot = resolve(opts.repoRoot ?? process.cwd());
+  const settings = loadSettings();
+  await withStore(settings, (store) => {
+    const result = buildCoordinationSweep(store, {
+      repo_root: repoRoot,
+      release_expired_quota_claims: true,
+    });
+    process.stdout.write(
+      `${
+        opts.json === true
+          ? JSON.stringify(formatAllSafeQuotaJson(result), null, 2)
+          : formatAllSafeQuotaResult(result)
+      }\n`,
+    );
+  });
+}
+
+function formatAllSafeQuotaJson(result: ReturnType<typeof buildCoordinationSweep>): unknown {
+  return {
+    status: 'released_expired',
+    mode: 'all_safe',
+    summary: {
+      released_expired_quota_pending_claim_count:
+        result.summary.released_expired_quota_pending_claim_count,
+      quota_pending_claims: result.summary.quota_pending_claims,
+      skipped_active_claims: result.summary.skipped_active_claims,
+      skipped_dirty_claims: result.summary.skipped_dirty_claims,
+    },
+    released_claims: result.released_expired_quota_pending_claims,
+  };
+}
+
+function formatAllSafeQuotaResult(result: ReturnType<typeof buildCoordinationSweep>): string {
+  const released = result.released_expired_quota_pending_claims.length;
+  const files = result.released_expired_quota_pending_claims
+    .map((claim) => claim.file_path)
+    .join(', ');
+  const suffix = files.length > 0 ? ` files=${files}` : '';
+  return `quota released_expired mode=all_safe released=${released} quota_pending=${result.summary.quota_pending_claims}${suffix}`;
 }
 
 function formatQuotaClaimResult(result: unknown): string {

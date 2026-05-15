@@ -136,6 +136,48 @@ describe('colony task ready', () => {
     });
   });
 
+  it('batch releases expired quota-pending claims with --all-safe', async () => {
+    const settings = loadSettings();
+    let taskId = 0;
+    await withStore(settings, (store) => {
+      const seeded = seedQuotaRelay(store, -1);
+      taskId = seeded.taskId;
+    });
+
+    await createProgram().parseAsync(
+      [
+        'node',
+        'test',
+        'task',
+        'quota-release-expired',
+        '--all-safe',
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      { from: 'node' },
+    );
+
+    const payload = JSON.parse(output) as {
+      status: string;
+      mode: string;
+      summary: { released_expired_quota_pending_claim_count: number };
+      released_claims: Array<{ file_path: string }>;
+    };
+    expect(payload).toMatchObject({
+      status: 'released_expired',
+      mode: 'all_safe',
+      summary: { released_expired_quota_pending_claim_count: 1 },
+      released_claims: [{ file_path: 'apps/cli/src/commands/task.ts' }],
+    });
+    await withStore(settings, (store) => {
+      expect(store.storage.getClaim(taskId, 'apps/cli/src/commands/task.ts')).toMatchObject({
+        session_id: 'quota-session',
+        state: 'weak_expired',
+      });
+    });
+  });
+
   it('prints empty state with proposal and Queen recovery path', async () => {
     await createProgram().parseAsync(
       [
@@ -202,7 +244,10 @@ function seedReadyPlan(store: MemoryStore, slug: string): void {
   });
 }
 
-function seedQuotaRelay(store: MemoryStore): { taskId: number; relayId: number } {
+function seedQuotaRelay(
+  store: MemoryStore,
+  expiresInMs = 60 * 60_000,
+): { taskId: number; relayId: number } {
   store.startSession({ id: 'quota-session', ide: 'codex', cwd: repoRoot });
   store.startSession({ id: 'agent-session', ide: 'codex', cwd: repoRoot });
   const thread = TaskThread.open(store, {
@@ -223,7 +268,7 @@ function seedQuotaRelay(store: MemoryStore): { taskId: number; relayId: number }
     reason: 'quota',
     one_line: 'finish task CLI quota relay command',
     base_branch: 'dev',
-    expires_in_ms: 60 * 60_000,
+    expires_in_ms: expiresInMs,
   });
   return { taskId: thread.task_id, relayId };
 }
