@@ -379,7 +379,11 @@ export function register(server: McpServer, ctx: ToolContext): void {
       const normalizedFilePath = store.storage.normalizeTaskFilePath(task_id, file_path);
       if (normalizedFilePath === null) {
         const reason = store.storage.classifyTaskFilePathRejection(task_id, file_path);
-        return mcpErrorResponse('INVALID_CLAIM_PATH', claimPathRejectionMessage(reason, file_path));
+        const task = store.storage.getTask(task_id);
+        return mcpErrorResponse(
+          'INVALID_CLAIM_PATH',
+          claimPathRejectionMessage(reason, file_path, { repo_root: task?.repo_root }),
+        );
       }
       const previous = store.storage.getClaim(task_id, normalizedFilePath);
       const liveContentions = liveFileContentionsForClaim(store, {
