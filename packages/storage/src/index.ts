@@ -83,6 +83,7 @@ export type {
   ReinforcementKind,
   AgentProfileRow,
   NewAgentProfile,
+  CoachStepRow,
   ExampleRow,
   NewExample,
   ExampleManifestKind,

@@ -42,6 +42,18 @@ export interface NewObservation {
   reply_to?: number | null;
 }
 
+/**
+ * One row per completed `colony health --coach` step. Step completion is
+ * event-observed; the CLI writes this row the first time the matching
+ * `done_when` predicate fires. `evidence` is an opaque short string that
+ * the coach renderer can surface as proof (tool name, observation id, etc.).
+ */
+export interface CoachStepRow {
+  step_id: string;
+  completed_at: number;
+  evidence: string | null;
+}
+
 export interface TaskRow {
   id: number;
   title: string;

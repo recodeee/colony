@@ -20,6 +20,7 @@ import type {
   AgentProfileRow,
   AggregateMcpMetricsDailyOptions,
   AggregateMcpMetricsOptions,
+  CoachStepRow,
   ExampleRow,
   LaneRunState,
   LaneStateRow,
@@ -1240,6 +1241,59 @@ export class Storage {
   countObservations(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS n FROM observations').get() as { n: number };
     return row.n;
+  }
+
+  /**
+   * Earliest observation timestamp recorded by any session, or null if the
+   * observations table is empty. Used by the coach walkthrough to compute
+   * "days since first session" without paying for a full sessions scan.
+   */
+  firstObservationTs(): number | null {
+    const row = this.db.prepare('SELECT MIN(ts) AS first_ts FROM observations').get() as
+      | { first_ts: number | null }
+      | undefined;
+    return row?.first_ts ?? null;
+  }
+
+  /**
+   * Idempotently record completion of a `colony health --coach` ladder step.
+   * `INSERT OR IGNORE` means the first observation of a step wins; later
+   * calls with the same `step_id` are no-ops, so we never overwrite the
+   * original completion timestamp.
+   */
+  markCoachStep(stepId: string, evidence: string | null = null): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO coach_progress(step_id, completed_at, evidence)
+         VALUES (?, ?, ?)`,
+      )
+      .run(stepId, Date.now(), evidence);
+  }
+
+  /**
+   * Every coach step the user has completed, ordered by completion time.
+   * Returns an empty array when the table is fresh — the coach renderer
+   * treats that as "step 1 is next".
+   */
+  listCoachSteps(): CoachStepRow[] {
+    return this.db
+      .prepare(
+        `SELECT step_id, completed_at, evidence
+           FROM coach_progress
+          ORDER BY completed_at ASC`,
+      )
+      .all() as CoachStepRow[];
+  }
+
+  /**
+   * Count observations matching a kind since a timestamp. Used by the coach
+   * walkthrough to detect first-time invocations (e.g. `coach_gain_review`).
+   */
+  countObservationsByKindSince(kind: string, since: number): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM observations WHERE kind = ? AND ts >= ?')
+      .get(kind, since) as { n: number } | undefined;
+    return row?.n ?? 0;
   }
 
   recordMcpMetric(metric: NewMcpMetric): void {

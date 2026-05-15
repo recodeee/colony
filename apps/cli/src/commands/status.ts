@@ -10,6 +10,7 @@ import {
   formatGitGuardexLanesOutput,
   readGitGuardexLanes,
 } from '../lib/gitguardex.js';
+import { listInstalledIdes } from '../lib/installed-ides.js';
 import { dataDbPath, withStorage } from '../util/store.js';
 
 interface WorkerState {
@@ -115,9 +116,7 @@ export function registerStatusCommand(program: Command): void {
         process.exitCode = 1;
       }
 
-      const enabled = Object.entries(settings.ides)
-        .filter(([, v]) => v)
-        .map(([k]) => k);
+      const enabled = listInstalledIdes(settings);
       const state = readWorkerState(dir);
       const provider = settings.embedding.provider;
       const model = settings.embedding.model;
