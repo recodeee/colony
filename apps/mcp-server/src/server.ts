@@ -29,6 +29,7 @@ import * as recall from './tools/recall.js';
 import * as relay from './tools/relay.js';
 import * as rescue from './tools/rescue.js';
 import * as savings from './tools/savings.js';
+import * as savingsDrift from './tools/savings-drift.js';
 import * as search from './tools/search.js';
 import * as spec from './tools/spec.js';
 import * as startupPanel from './tools/startup-panel.js';
@@ -120,6 +121,7 @@ export function buildServer(
   suggest.register(server, ctx);
   rescue.register(server, ctx);
   savings.register(server, ctx);
+  savingsDrift.register(server, ctx);
 
   // Autopilot lane (tick advisor + drift checker). Cheap compositions of
   // existing primitives; registered after the core surface so the heartbeat

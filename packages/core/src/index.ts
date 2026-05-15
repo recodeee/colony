@@ -18,6 +18,14 @@ export {
   type SavingsReferenceTotals,
 } from './savings-reference.js';
 export {
+  classifyDrift,
+  type DriftClassification,
+  type DriftClassifyOptions,
+  type DriftRawRow,
+  type DriftReport,
+  type DriftRow,
+} from './drift.js';
+export {
   autoReleaseStalePlanSubtaskClaims,
   bulkRescueStrandedSessions,
   rescueStrandedSessions,

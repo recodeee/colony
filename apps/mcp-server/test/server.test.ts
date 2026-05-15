@@ -65,6 +65,7 @@ describe('MCP server', () => {
       'recall_session',
       'rescue_stranded_run',
       'rescue_stranded_scan',
+      'savings_drift_report',
       'savings_report',
       'search',
       'semantic_search',
@@ -417,6 +418,82 @@ describe('MCP server', () => {
       error_code: 'SCOUT_NO_CLAIM',
       count: 1,
     });
+  });
+
+  it('savings_drift_report classifies up-drift from mcp_metrics receipts', async () => {
+    const DAY_MS = 24 * 60 * 60_000;
+    const now = Date.now();
+    // Recent window (last 3 days): 25 search receipts @ ~200 tpc.
+    for (let i = 0; i < 25; i += 1) {
+      store.storage.recordMcpMetric({
+        ts: now - i * 1_000,
+        operation: 'search',
+        input_bytes: 100,
+        output_bytes: 200,
+        input_tokens: 60,
+        output_tokens: 140,
+        duration_ms: 5,
+        ok: true,
+      });
+    }
+    // Baseline window: starts after recent + 3-day gap. With default
+    // recent_days=3 and baseline_days=14, baseline is [now - 20d, now - 3d).
+    // Plant baseline at now - 10d so both windows have data with no overlap.
+    const baselineTs = now - 10 * DAY_MS;
+    for (let i = 0; i < 25; i += 1) {
+      store.storage.recordMcpMetric({
+        ts: baselineTs + i * 1_000,
+        operation: 'search',
+        input_bytes: 100,
+        output_bytes: 200,
+        input_tokens: 30,
+        output_tokens: 70,
+        duration_ms: 5,
+        ok: true,
+      });
+    }
+
+    const res = await client.callTool({
+      name: 'savings_drift_report',
+      arguments: { baseline_days: 14, recent_days: 3, min_calls: 20 },
+    });
+    const text = (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const payload = JSON.parse(text) as {
+      window: {
+        baseline_since: number;
+        baseline_until: number;
+        recent_since: number;
+        recent_until: number;
+      };
+      threshold: { up: number; down: number; min_calls: number };
+      rows: Array<{
+        operation: string;
+        baseline_median: number | null;
+        recent_median: number | null;
+        baseline_n: number;
+        recent_n: number;
+        ratio: number | null;
+        classification: string;
+      }>;
+      new_tools: string[];
+      gone_tools: string[];
+      insufficient_data: Array<{ operation: string; baseline_n: number; recent_n: number }>;
+    };
+
+    expect(payload.window.recent_until).toBeGreaterThan(payload.window.recent_since);
+    expect(payload.window.baseline_until).toBeLessThan(payload.window.recent_since);
+    expect(payload.threshold).toEqual({ up: 1.25, down: 0.75, min_calls: 20 });
+
+    const search = payload.rows.find((row) => row.operation === 'search');
+    expect(search).toBeDefined();
+    expect(search?.baseline_median).toBe(100);
+    expect(search?.recent_median).toBe(200);
+    expect(search?.baseline_n).toBe(25);
+    expect(search?.recent_n).toBe(25);
+    expect(search?.classification).toBe('up_drift');
+    expect(search?.ratio).toBeCloseTo(2, 6);
+    expect(payload.new_tools).toEqual([]);
+    expect(payload.gone_tools).toEqual([]);
   });
 
   it('task_post reports a structured error for stale task ids', async () => {
