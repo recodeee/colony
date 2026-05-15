@@ -5,7 +5,6 @@ import {
   classifyClaimAge,
   guardedClaimFile,
   listPlans,
-  liveFileContentionsForClaim,
 } from '@colony/core';
 import { claimPathRejectionMessage } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -396,12 +395,6 @@ export function register(server: McpServer, ctx: ToolContext): void {
         );
       }
       const previous = store.storage.getClaim(task_id, normalizedFilePath);
-      const liveContentions = liveFileContentionsForClaim(store, {
-        task_id,
-        session_id,
-        file_path: normalizedFilePath,
-        assume_requester_live: true,
-      });
       const guarded = guardedClaimFile(store, {
         task_id,
         session_id,
@@ -453,8 +446,8 @@ export function register(server: McpServer, ctx: ToolContext): void {
         file_path: normalizedFilePath,
         claim_status: guarded.status,
         claim_task_id: guarded.claim_task_id ?? task_id,
-        warning: liveContentions[0] ?? null,
-        live_file_contentions: liveContentions,
+        warning: null,
+        live_file_contentions: [],
         overlap: previousClaim?.overlap ?? 'none',
         previous_claim: previousClaim,
       });
