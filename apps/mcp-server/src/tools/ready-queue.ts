@@ -157,6 +157,19 @@ export interface SpecRootSetupIssue extends SpecRootMissingDetails {
   message: string;
 }
 
+export interface ReadyPlanClaimHint {
+  kind: 'plan_claim_subtask';
+  message: string;
+  plan_slug: string;
+  subtask_index: number;
+  title: string;
+  blocked_by_count: number;
+  blocked_by: number[];
+  next_tool: 'task_plan_claim_subtask';
+  claim_args: TaskPlanClaimArgs;
+  codex_mcp_call: string;
+}
+
 export interface ReadyForAgentResult {
   ready: ReadyQueueEntry[];
   total_available: number;
@@ -183,6 +196,7 @@ export interface ReadyForAgentResult {
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
+  hint?: ReadyPlanClaimHint;
   setup_issue?: SpecRootSetupIssue;
   /**
    * Populated when the caller passed `auto_claim: true` and the server
@@ -538,6 +552,7 @@ export async function buildReadyForAgent(
     plans.length > 0,
     setupIssue,
     available.length === 0 && quotaRelays.length === 0 ? staleBlockerRescueCandidate(plans) : null,
+    planClaimHintForEmptyState(plans, liveSubtaskBranches, args),
   );
 }
 
@@ -555,6 +570,7 @@ function buildReadyResult(
   hasPlans: boolean,
   setupIssue: SpecRootSetupIssue | null,
   rescueCandidate: StaleBlockerRescueCandidate | null,
+  emptyStateHint: ReadyPlanClaimHint | null,
 ): ReadyForAgentResult {
   if (claimable === null) {
     if (base.ready.length > 0) {
@@ -586,6 +602,7 @@ function buildReadyResult(
       ...base,
       next_action: hasPlans ? NO_READY_SUBTASKS_NEXT_ACTION : NO_PLAN_NEXT_ACTION,
       empty_state: NO_CLAIMABLE_PLAN_SUBTASKS_EMPTY_STATE,
+      ...(emptyStateHint ? { hint: emptyStateHint } : {}),
     };
   }
 
@@ -650,6 +667,53 @@ function hasLiveSubtaskBranch(
 
 function subtaskBranchKey(repoRoot: string, branch: string): string {
   return `${repoRoot}\0${branch}`;
+}
+
+function planClaimHintForEmptyState(
+  plans: PlanInfo[],
+  liveSubtaskBranches: Set<string>,
+  args: { session_id: string; agent: string },
+): ReadyPlanClaimHint | null {
+  const candidates = plans
+    .flatMap((plan) =>
+      plan.subtasks
+        .filter((subtask) => subtask.status === 'available')
+        .filter((subtask) => hasLiveSubtaskBranch(liveSubtaskBranches, plan, subtask))
+        .map((subtask) => ({ plan, subtask })),
+    )
+    .sort(
+      (left, right) =>
+        left.subtask.blocked_by_count - right.subtask.blocked_by_count ||
+        left.plan.created_at - right.plan.created_at ||
+        left.plan.plan_slug.localeCompare(right.plan.plan_slug) ||
+        left.subtask.subtask_index - right.subtask.subtask_index,
+    );
+  const candidate = candidates[0];
+  if (!candidate) return null;
+  const claim_args = {
+    repo_root: candidate.plan.repo_root,
+    plan_slug: candidate.plan.plan_slug,
+    subtask_index: candidate.subtask.subtask_index,
+    session_id: args.session_id,
+    agent: args.agent,
+    file_scope: candidate.subtask.file_scope,
+  };
+  const blocked =
+    candidate.subtask.blocked_by_count > 0
+      ? `; blocked by sub-task(s) ${candidate.subtask.blocked_by.join(', ')}`
+      : '';
+  return {
+    kind: 'plan_claim_subtask',
+    message: `Unclaimed plan work exists for ${candidate.plan.plan_slug}/sub-${candidate.subtask.subtask_index}${blocked}.`,
+    plan_slug: candidate.plan.plan_slug,
+    subtask_index: candidate.subtask.subtask_index,
+    title: candidate.subtask.title,
+    blocked_by_count: candidate.subtask.blocked_by_count,
+    blocked_by: candidate.subtask.blocked_by,
+    next_tool: 'task_plan_claim_subtask',
+    claim_args,
+    codex_mcp_call: codexMcpCall(claim_args),
+  };
 }
 
 function codexMcpCall(args: TaskPlanClaimArgs): string {
