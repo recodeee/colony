@@ -14,7 +14,7 @@ import { MemoryStore, TaskThread, type WorktreeContentionReport } from '@colony/
 import { createPlanWorkspace } from '@colony/spec';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildServer } from '../src/server.js';
 
 let dataDir: string;
@@ -1387,6 +1387,39 @@ describe('task_plan auto-archive', () => {
       expect(store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10)).toHaveLength(
         1,
       );
+    }
+  });
+
+  it('archives automatically after the grace window without a list call', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-15T12:00:00Z'));
+    try {
+      await call<PublishResult>(
+        'task_plan_publish',
+        basicPublishArgs({ slug: 'auto-archive-grace-timer' }),
+      );
+      await claimAndComplete('auto-archive-grace-timer', 0, 'B', 'codex');
+      const last = await claimAndComplete('auto-archive-grace-timer', 1, 'C', 'claude');
+      expect(last.auto_archive.status).toBe('skipped');
+      expect(last.auto_archive.reason).toMatch(/grace/);
+      expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-grace-timer/CHANGE.md')))
+        .toBe(true);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(existsSync(join(repoRoot, 'openspec/changes/auto-archive-grace-timer/CHANGE.md')))
+        .toBe(false);
+      const parentTask = store.storage
+        .listTasks(2000)
+        .find((t) => t.branch === 'spec/auto-archive-grace-timer');
+      expect(parentTask).toBeDefined();
+      if (parentTask) {
+        const archived = store.storage.taskObservationsByKind(parentTask.id, 'plan-archived', 10);
+        expect(archived).toHaveLength(1);
+        expect(archived[0]?.session_id).toBe('plan-auto-archive-sweep');
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
