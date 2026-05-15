@@ -76,8 +76,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  proposal_status TEXT CHECK(proposal_status IN ('proposed','approved','archived')),
+  approved_by TEXT,
+  observation_evidence_ids TEXT,
   UNIQUE(repo_root, branch)
 );
+CREATE INDEX IF NOT EXISTS idx_task_threads_proposal_status
+  ON tasks(proposal_status)
+  WHERE proposal_status IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_participants (
   task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -200,6 +206,8 @@ CREATE INDEX IF NOT EXISTS idx_reinforcements_proposal ON proposal_reinforcement
 CREATE TABLE IF NOT EXISTS agent_profiles (
   agent TEXT PRIMARY KEY,
   capabilities TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'executor',
+  open_proposal_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
 
@@ -317,7 +325,7 @@ CREATE INDEX IF NOT EXISTS idx_task_run_attempts_status
 CREATE INDEX IF NOT EXISTS idx_task_run_attempts_parent
   ON task_run_attempts(parent_attempt_id);
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (12);
+INSERT OR IGNORE INTO schema_version(version) VALUES (13);
 `;
 
 /**
@@ -371,6 +379,31 @@ export const COLUMN_MIGRATIONS: ReadonlyArray<{ table: string; column: string; s
     column: 'error_message',
     sql: 'ALTER TABLE mcp_metrics ADD COLUMN error_message TEXT',
   },
+  {
+    table: 'tasks',
+    column: 'proposal_status',
+    sql: "ALTER TABLE tasks ADD COLUMN proposal_status TEXT CHECK(proposal_status IN ('proposed','approved','archived'))",
+  },
+  {
+    table: 'tasks',
+    column: 'approved_by',
+    sql: 'ALTER TABLE tasks ADD COLUMN approved_by TEXT',
+  },
+  {
+    table: 'tasks',
+    column: 'observation_evidence_ids',
+    sql: 'ALTER TABLE tasks ADD COLUMN observation_evidence_ids TEXT',
+  },
+  {
+    table: 'agent_profiles',
+    column: 'role',
+    sql: "ALTER TABLE agent_profiles ADD COLUMN role TEXT NOT NULL DEFAULT 'executor'",
+  },
+  {
+    table: 'agent_profiles',
+    column: 'open_proposal_count',
+    sql: 'ALTER TABLE agent_profiles ADD COLUMN open_proposal_count INTEGER NOT NULL DEFAULT 0',
+  },
 ];
 
 export const POST_MIGRATION_SQL = `
@@ -381,4 +414,7 @@ CREATE INDEX IF NOT EXISTS idx_observations_task_kind_ts ON observations(task_id
 CREATE INDEX IF NOT EXISTS idx_observations_reply_to ON observations(reply_to);
 CREATE INDEX IF NOT EXISTS idx_summaries_scope_ts ON summaries(scope, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_mcp_metrics_error_ts ON mcp_metrics(ok, error_code, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_task_threads_proposal_status
+  ON tasks(proposal_status)
+  WHERE proposal_status IS NOT NULL;
 `;
