@@ -171,6 +171,7 @@ function recoveryDetailsForClaimFailure(
   store: MemoryStore,
   code:
     | 'PLAN_SUBTASK_NOT_FOUND'
+    | 'PLAN_SUBTASK_STALE'
     | 'PLAN_SUBTASK_DEPS_UNMET'
     | 'PLAN_SUBTASK_NOT_AVAILABLE'
     | 'PLAN_ARCHIVED'
@@ -178,11 +179,11 @@ function recoveryDetailsForClaimFailure(
     | 'CLAIM_HELD_BY_ACTIVE_OWNER',
   args: { plan_slug: string; subtask_index: number; repo_root?: string },
 ): Record<string, unknown> {
-  if (code !== 'PLAN_SUBTASK_NOT_AVAILABLE') return {};
+  if (code !== 'PLAN_SUBTASK_NOT_AVAILABLE' && code !== 'PLAN_SUBTASK_STALE') return {};
   try {
     const plan = listPlans(store, {
       ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
-      limit: 200,
+      limit: 2000,
     }).find((candidate) => candidate.plan_slug === args.plan_slug);
     if (!plan) return {};
     const candidates = plan.next_available
@@ -421,18 +422,20 @@ export function register(server: McpServer, ctx: ToolContext): void {
       // bad to good without requiring an operator to call colony plan
       // close manually.
       sweepCompletedPlansForAutoArchive(store, args.repo_root);
+      const limit = args.limit ?? 10;
       const plans = listPlans(store, {
         ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
         ...(args.only_with_available_subtasks !== undefined
           ? { only_with_available_subtasks: args.only_with_available_subtasks }
           : {}),
         ...(args.capability_match !== undefined ? { capability_match: args.capability_match } : {}),
-        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        limit: 2000,
       });
       const includeUnpublished = args.include_unpublished ?? true;
       const merged = includeUnpublished ? mergeUnpublishedDiskPlans(plans, args.repo_root) : plans;
       const detail = args.detail ?? 'compact';
-      const payload = detail === 'full' ? merged : merged.map(toCompactPlan);
+      const limited = merged.slice(0, limit);
+      const payload = detail === 'full' ? limited : limited.map(toCompactPlan);
       return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
     }),
   );
@@ -648,6 +651,7 @@ export type ClaimPlanSubtaskArgs = {
   subtask_index: number;
   session_id: string;
   agent: string;
+  repo_root?: string | undefined;
 };
 
 export type ClaimPlanSubtaskResult =
@@ -657,6 +661,7 @@ export type ClaimPlanSubtaskResult =
       ok: false;
       code:
         | 'PLAN_SUBTASK_NOT_FOUND'
+        | 'PLAN_SUBTASK_STALE'
         | 'PLAN_SUBTASK_DEPS_UNMET'
         | 'PLAN_SUBTASK_NOT_AVAILABLE'
         | 'CLAIM_TAKEOVER_RECOMMENDED'
@@ -686,7 +691,22 @@ export function attemptClaimPlanSubtask(
       session_id: args.session_id,
     });
     if (archived) return { ok: false, ...archived };
-    return { ok: false, code: 'PLAN_SUBTASK_NOT_FOUND', message: `no sub-task at ${branch}` };
+    const planExists = listPlans(store, {
+      ...(args.repo_root !== undefined ? { repo_root: args.repo_root } : {}),
+      limit: 2000,
+    }).some((candidate) => candidate.plan_slug === args.plan_slug);
+    if (planExists) {
+      return {
+        ok: false,
+        code: 'PLAN_SUBTASK_STALE',
+        message: `stale sub-task pointer: no sub-task at ${branch}`,
+      };
+    }
+    return {
+      ok: false,
+      code: 'PLAN_SUBTASK_NOT_FOUND',
+      message: `unknown plan or sub-task: no sub-task at ${branch}`,
+    };
   }
 
   const allTasks = store.storage.listTasks(2000);
@@ -720,7 +740,7 @@ export function attemptClaimPlanSubtask(
         const fresh = readSubtaskByBranch(store, branch);
         if (!fresh) {
           const err: CodedError = new Error(`no sub-task at ${branch}`);
-          err.__code = 'PLAN_SUBTASK_NOT_AVAILABLE';
+          err.__code = 'PLAN_SUBTASK_STALE';
           throw err;
         }
         if (fresh.info.status !== 'available') {
@@ -802,6 +822,7 @@ export function attemptClaimPlanSubtask(
     const code = (err as CodedError).__code;
     if (
       code === 'PLAN_SUBTASK_NOT_AVAILABLE' ||
+      code === 'PLAN_SUBTASK_STALE' ||
       code === 'CLAIM_TAKEOVER_RECOMMENDED' ||
       code === 'CLAIM_HELD_BY_ACTIVE_OWNER'
     ) {

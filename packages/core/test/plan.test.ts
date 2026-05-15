@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MemoryStore } from '../src/memory-store.js';
-import { findSubtaskBySpecRow } from '../src/plan.js';
+import { findSubtaskBySpecRow, listPlans } from '../src/plan.js';
 import { TaskThread } from '../src/task-thread.js';
 
 let dir: string;
@@ -66,5 +66,38 @@ describe('findSubtaskBySpecRow', () => {
     expect(found?.info.subtask_index).toBe(0);
     expect(found?.info.status).toBe('claimed');
     expect(found?.info.spec_row_id).toBe('T5');
+  });
+});
+
+describe('listPlans', () => {
+  it('defaults to 10 plans and honors explicit larger limits', () => {
+    for (let index = 0; index < 12; index += 1) {
+      const slug = `limit-plan-${index}`;
+      const thread = TaskThread.open(store, {
+        repo_root: '/repo',
+        branch: `spec/${slug}/sub-0`,
+        session_id: 'A',
+      });
+      store.addObservation({
+        session_id: 'A',
+        task_id: thread.task_id,
+        kind: 'plan-subtask',
+        content: `Subtask for ${slug}`,
+        metadata: {
+          parent_plan_slug: slug,
+          parent_plan_title: `Plan ${index}`,
+          parent_spec_task_id: thread.task_id,
+          subtask_index: 0,
+          file_scope: ['README.md'],
+          depends_on: [],
+          spec_row_id: null,
+          capability_hint: null,
+          status: 'available',
+        },
+      });
+    }
+
+    expect(listPlans(store)).toHaveLength(10);
+    expect(listPlans(store, { limit: 12 })).toHaveLength(12);
   });
 });
