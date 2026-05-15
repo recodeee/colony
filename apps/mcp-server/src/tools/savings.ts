@@ -4,12 +4,29 @@ import {
   savingsLiveComparisonCost,
   savingsReferenceTotals,
 } from '@colony/core';
+import type { McpMetricsAggregateRow } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 
 const DEFAULT_WINDOW_HOURS = 24;
 const HOUR_MS = 60 * 60_000;
+const ERROR_BREAKDOWN_OPERATION_LIMIT = 8;
+
+interface SavingsErrorBreakdownOperation {
+  operation: string;
+  count: number;
+  last_ts: number | null;
+  error_message: string | null;
+}
+
+interface SavingsErrorBreakdownRow {
+  error_code: string | null;
+  count: number;
+  last_ts: number | null;
+  operations: SavingsErrorBreakdownOperation[];
+  operations_truncated: boolean;
+}
 
 /**
  * Reports live per-operation token usage recorded by the metrics wrapper plus
@@ -108,6 +125,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           ...(operation !== undefined ? { operation } : {}),
           cost_basis: live.cost_basis,
           totals: live.totals,
+          error_breakdown: buildErrorBreakdown(live.operations),
           operations: live.operations,
           session_summary: live.session_summary,
           sessions: live.sessions,
@@ -158,4 +176,74 @@ function parseCostRate(
   if (fallback === undefined || fallback.trim() === '') return undefined;
   const parsed = Number(fallback);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function buildErrorBreakdown(
+  rows: ReadonlyArray<McpMetricsAggregateRow>,
+): SavingsErrorBreakdownRow[] {
+  const byCode = new Map<
+    string,
+    {
+      error_code: string | null;
+      count: number;
+      last_ts: number | null;
+      operations: Map<string, SavingsErrorBreakdownOperation>;
+    }
+  >();
+
+  for (const row of rows) {
+    for (const reason of row.error_reasons) {
+      if (reason.count <= 0) continue;
+      const key = reason.error_code ?? '<null>';
+      let bucket = byCode.get(key);
+      if (bucket === undefined) {
+        bucket = {
+          error_code: reason.error_code,
+          count: 0,
+          last_ts: null,
+          operations: new Map(),
+        };
+        byCode.set(key, bucket);
+      }
+      bucket.count += reason.count;
+      bucket.last_ts = maxTs(bucket.last_ts, reason.last_ts);
+
+      const operation = bucket.operations.get(row.operation) ?? {
+        operation: row.operation,
+        count: 0,
+        last_ts: null,
+        error_message: null,
+      };
+      operation.count += reason.count;
+      if ((reason.last_ts ?? 0) >= (operation.last_ts ?? 0)) {
+        operation.last_ts = reason.last_ts;
+        operation.error_message = reason.error_message;
+      }
+      bucket.operations.set(row.operation, operation);
+    }
+  }
+
+  return [...byCode.values()]
+    .sort((a, b) => b.count - a.count || (b.last_ts ?? 0) - (a.last_ts ?? 0))
+    .map((bucket) => {
+      const operations = [...bucket.operations.values()].sort(
+        (a, b) =>
+          b.count - a.count ||
+          (b.last_ts ?? 0) - (a.last_ts ?? 0) ||
+          a.operation.localeCompare(b.operation),
+      );
+      return {
+        error_code: bucket.error_code,
+        count: bucket.count,
+        last_ts: bucket.last_ts,
+        operations: operations.slice(0, ERROR_BREAKDOWN_OPERATION_LIMIT),
+        operations_truncated: operations.length > ERROR_BREAKDOWN_OPERATION_LIMIT,
+      };
+    });
+}
+
+function maxTs(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.max(a, b);
 }
