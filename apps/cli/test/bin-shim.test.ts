@@ -160,4 +160,17 @@ describe('bin/colony.sh', () => {
     expect(result.log).toContain('lifecycle');
     expect(result.log).not.toContain('--json');
   });
+
+  it('passes through `bridge replay <file>` unchanged (no fast-path, Node owns it)', () => {
+    const result = runShim(['bridge', 'replay', 'foo.pre.json'], {
+      env: { COLONY_WORKER_PORT: freeUnusedPort() },
+      nodeStub: stubNode,
+      logFile: stubLog,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.log).toContain('bridge');
+    expect(result.log).toContain('replay');
+    expect(result.log).toContain('foo.pre.json');
+  });
 });
