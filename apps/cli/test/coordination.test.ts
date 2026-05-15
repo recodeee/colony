@@ -596,7 +596,57 @@ describe('colony coordination CLI', () => {
       }
     });
   });
+
+  it('prints a compact quota release audit summary', async () => {
+    let taskId = 0;
+    const settings = loadSettings();
+    await withStore(settings, (store) => {
+      taskId = seedExpiredQuotaPendingClaims(store);
+    });
+
+    await createProgram().parseAsync(
+      [
+        'node',
+        'test',
+        'coordination',
+        'sweep',
+        '--repo-root',
+        repoRoot,
+        '--release-expired-quota',
+      ],
+      { from: 'node' },
+    );
+
+    expect(output).toContain('released expired quota-pending: 2');
+    expect(output).toContain(
+      `quota release summary: released=2 oldest=300m top_tasks=#${taskId} agent/codex/quota-sweep released=2 oldest=300m`,
+    );
+  });
 });
+
+function seedExpiredQuotaPendingClaims(store: MemoryStore): number {
+  setMinutesAgo(300);
+  store.startSession({ id: 'codex@quota-sweep', ide: 'codex', cwd: repoRoot });
+  const thread = TaskThread.open(store, {
+    repo_root: repoRoot,
+    branch: 'agent/codex/quota-sweep',
+    title: 'quota sweep task',
+    session_id: 'codex@quota-sweep',
+  });
+  thread.join('codex@quota-sweep', 'codex');
+  thread.claimFile({ session_id: 'codex@quota-sweep', file_path: 'src/quota-a.ts' });
+  thread.claimFile({ session_id: 'codex@quota-sweep', file_path: 'src/quota-b.ts' });
+  thread.relay({
+    from_session_id: 'codex@quota-sweep',
+    from_agent: 'codex',
+    reason: 'quota',
+    one_line: 'quota stopped before sweep',
+    base_branch: 'main',
+    expires_in_ms: 5 * MINUTE_MS,
+  });
+  vi.setSystemTime(NOW);
+  return thread.task_id;
+}
 
 async function seedSameBranchDuplicateClaims(): Promise<void> {
   const settings = loadSettings();

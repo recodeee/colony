@@ -175,6 +175,9 @@ function renderCoordinationSweep(
   lines.push(
     `  quota-pending claims: ${result.summary.quota_pending_claims}  released expired quota-pending: ${result.summary.released_expired_quota_pending_claim_count}`,
   );
+  if (result.released_quota_pending_summary.released_count > 0) {
+    lines.push(`  ${renderReleasedQuotaPendingSummary(result)}`);
+  }
 
   renderSection(
     lines,
@@ -331,6 +334,19 @@ function parseAgedQuotaMinutes(value: string | undefined): number | null | 'inva
 function renderSweepMode(appliedModes: string[]): string {
   if (appliedModes.length === 0) return 'dry-run, read-only';
   return `${appliedModes.join(', ')}, audit-retaining`;
+}
+
+function renderReleasedQuotaPendingSummary(result: CoordinationSweepResult): string {
+  const summary = result.released_quota_pending_summary;
+  const oldest =
+    summary.oldest_age_minutes === null ? 'n/a' : `${Math.round(summary.oldest_age_minutes)}m`;
+  const topTasks = summary.top_tasks
+    .map(
+      (task) =>
+        `#${task.task_id} ${task.branch} released=${task.released_count} oldest=${Math.round(task.oldest_age_minutes)}m`,
+    )
+    .join('; ');
+  return `quota release summary: released=${summary.released_count} oldest=${oldest} top_tasks=${topTasks}`;
 }
 
 function staleSignalCount(result: CoordinationSweepResult): number {

@@ -127,6 +127,7 @@ export interface CoordinationSweepResult {
   released_stale_downstream_blockers: ReleasedStaleDownstreamBlocker[];
   released_same_branch_duplicate_claims: ReleasedSameBranchDuplicateClaim[];
   released_expired_quota_pending_claims: ReleasedExpiredQuotaPendingClaim[];
+  released_quota_pending_summary: ReleasedQuotaPendingSummary;
   released_stale_claims: ReleasedStaleClaim[];
   downgraded_stale_claims: DowngradedStaleClaim[];
   skipped_dirty_claims: SkippedDirtyClaim[];
@@ -357,6 +358,17 @@ export interface ReleasedExpiredQuotaPendingClaim {
   audit_observation_id: number;
 }
 
+export interface ReleasedQuotaPendingSummary {
+  released_count: number;
+  oldest_age_minutes: number | null;
+  top_tasks: Array<{
+    task_id: number;
+    branch: string;
+    released_count: number;
+    oldest_age_minutes: number;
+  }>;
+}
+
 export interface DowngradedStaleClaim {
   task_id: number;
   file_path: string;
@@ -469,8 +481,14 @@ export function buildCoordinationSweep(
     typeof opts.release_aged_quota_pending_minutes === 'number'
       ? releaseAgedQuotaPendingClaims(store, agedQuotaPendingClaims, now)
       : [];
+  const releasedQuotaPendingClaims = [
+    ...released_expired_quota_pending_claims,
+    ...released_aged_quota_pending_claims,
+  ];
   const releasedQuotaPendingClaimCount =
-    released_expired_quota_pending_claims.length + released_aged_quota_pending_claims.length;
+    releasedQuotaPendingClaims.length;
+  const released_quota_pending_summary =
+    summarizeReleasedQuotaPendingClaims(releasedQuotaPendingClaims);
   const archived_completed_plans =
     opts.archive_completed_plans === true ? archiveCompletedPlans(store, opts) : [];
   const remainingStaleClaims = filterRemainingStaleClaims(staleClaims, staleClaimCleanup);
@@ -562,10 +580,8 @@ export function buildCoordinationSweep(
     same_branch_duplicate_claims: remainingSameBranchDuplicateClaims,
     released_stale_downstream_blockers,
     released_same_branch_duplicate_claims,
-    released_expired_quota_pending_claims: [
-      ...released_expired_quota_pending_claims,
-      ...released_aged_quota_pending_claims,
-    ],
+    released_expired_quota_pending_claims: releasedQuotaPendingClaims,
+    released_quota_pending_summary,
     released_stale_claims: staleClaimCleanup.released_stale_claims,
     downgraded_stale_claims: staleClaimCleanup.downgraded_stale_claims,
     skipped_dirty_claims: staleClaimCleanup.skipped_dirty_claims,
@@ -1357,6 +1373,52 @@ function releaseAgedQuotaPendingClaims(
     });
   }
   return released;
+}
+
+function summarizeReleasedQuotaPendingClaims(
+  claims: ReleasedExpiredQuotaPendingClaim[],
+): ReleasedQuotaPendingSummary {
+  if (claims.length === 0) {
+    return {
+      released_count: 0,
+      oldest_age_minutes: null,
+      top_tasks: [],
+    };
+  }
+
+  const byTask = new Map<
+    number,
+    { task_id: number; branch: string; released_count: number; oldest_age_minutes: number }
+  >();
+  let oldestAgeMinutes = 0;
+  for (const claim of claims) {
+    oldestAgeMinutes = Math.max(oldestAgeMinutes, claim.age_minutes);
+    const existing = byTask.get(claim.task_id);
+    if (existing) {
+      existing.released_count += 1;
+      existing.oldest_age_minutes = Math.max(existing.oldest_age_minutes, claim.age_minutes);
+    } else {
+      byTask.set(claim.task_id, {
+        task_id: claim.task_id,
+        branch: claim.branch,
+        released_count: 1,
+        oldest_age_minutes: claim.age_minutes,
+      });
+    }
+  }
+
+  return {
+    released_count: claims.length,
+    oldest_age_minutes: oldestAgeMinutes,
+    top_tasks: [...byTask.values()]
+      .sort(
+        (left, right) =>
+          right.released_count - left.released_count ||
+          right.oldest_age_minutes - left.oldest_age_minutes ||
+          left.task_id - right.task_id,
+      )
+      .slice(0, 5),
+  };
 }
 
 function expireQuotaBatonObservationIfPending(
