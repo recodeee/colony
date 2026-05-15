@@ -1,6 +1,6 @@
 import path, { join } from 'node:path';
 import { loadSettings, resolveDataDir } from '@colony/config';
-import { MemoryStore, TaskThread, inferIdeFromSessionId } from '@colony/core';
+import { MemoryStore, TaskThread, buildAttentionInbox, inferIdeFromSessionId } from '@colony/core';
 import type { ObservationRow } from '@colony/storage';
 import { extractTouchedFiles, pathExtractionWarningsForToolUse } from './handlers/post-tool-use.js';
 import { runHook } from './runner.js';
@@ -72,6 +72,8 @@ const EVENT_TYPES = new Set<OmxLifecycleEventType>([
   'stop_intent',
   'finish_result',
 ]);
+
+const SESSION_START_STALLED_LANE_LIMIT = 3;
 
 export function isOmxLifecycleEnvelopeLike(value: unknown): boolean {
   const root = asRecord(value);
@@ -260,7 +262,11 @@ async function routeLifecycleEvent(
   }
 
   if (event.event_type === 'session_start') {
-    const result = await runHook('session-start', hookInputFromLifecycle(event), { store });
+    const stalledLaneBanner = sessionStartStalledLaneBanner(store, event);
+    const result = prependContext(
+      await runHook('session-start', hookInputFromLifecycle(event), { store }),
+      stalledLaneBanner,
+    );
     bindTaskFromLifecycle(store, event);
     return hookRouteResult('session-start', result);
   }
@@ -416,6 +422,67 @@ function hookRouteResult(
     ...(result.warnings !== undefined ? { warnings: result.warnings } : {}),
     ...(result.error !== undefined ? { error: result.error } : {}),
   };
+}
+
+function prependContext<T extends { context?: string }>(result: T, prefix: string): T {
+  if (!prefix) return result;
+  return {
+    ...result,
+    context: result.context ? `${prefix}\n\n${result.context}` : prefix,
+  };
+}
+
+function sessionStartStalledLaneBanner(
+  store: MemoryStore,
+  event: NormalizedOmxLifecycleEvent,
+): string {
+  try {
+    const inbox = buildAttentionInbox(store, {
+      session_id: event.session_id,
+      agent: event.agent,
+      repo_root: event.repo_root,
+      stalled_lane_limit: SESSION_START_STALLED_LANE_LIMIT,
+    });
+    const lanes = inbox.stalled_lanes.slice(0, SESSION_START_STALLED_LANE_LIMIT);
+    if (lanes.length === 0) return '';
+
+    const total = inbox.summary.stalled_lane_count;
+    const lines = [`Stalled lanes at SessionStart (${lanes.length} of ${total}):`];
+    for (const lane of lanes) {
+      lines.push(
+        `  -> ${lane.owner} ${lane.activity} on ${lane.branch}: ${compactBannerText(
+          lane.task,
+        )}${bannerTiming(lane.updated_at, inbox.generated_at)}`,
+      );
+    }
+    const collapsed = Math.max(0, total - lanes.length);
+    if (collapsed > 0 || inbox.stalled_lanes_truncated) {
+      lines.push(`  Plus ${collapsed} collapsed. Run attention_inbox to see all.`);
+    }
+    return lines.join('\n');
+  } catch (err) {
+    console.error(`[colony] sessionStartStalledLaneBanner: ${(err as Error)?.message ?? err}`);
+    return '';
+  }
+}
+
+function compactBannerText(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length <= 140 ? compact : `${compact.slice(0, 137)}...`;
+}
+
+function bannerTiming(updatedAt: string, now: number): string {
+  const updated = Date.parse(updatedAt);
+  if (!Number.isFinite(updated)) return '';
+  return ` (${formatDuration(now - updated)} old)`;
+}
+
+function formatDuration(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 function bindTaskFromLifecycle(

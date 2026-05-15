@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultSettings } from '@colony/config';
@@ -291,6 +291,47 @@ describe('OMX lifecycle envelope', () => {
     expect(handoff?.content).toContain('src/git-only.ts');
     expect(handoff?.content).toContain('claimed_files=src/runtime.ts');
   });
+
+  it('keeps a bounded stalled-lane banner when lifecycle SessionStart refreshes telemetry', async () => {
+    const repo = fakeGitRepo('repo-stalled-start', 'agent/codex/stalled-start');
+    const sessionFile = writeActiveSession(repo, {
+      sessionKey: 'codex@stalled',
+      branch: 'agent/codex/stalled-start',
+      taskName: 'stale stalled task',
+      latestTaskPreview: 'stale stalled task',
+      lastHeartbeatAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      state: 'working',
+    });
+
+    const result = await runOmxLifecycleEnvelope(
+      envelope({
+        event_id: 'evt_stalled_session_start',
+        event_name: 'session_start',
+        session_id: 'codex@stalled',
+        cwd: repo,
+        repo_root: repo,
+        branch: 'agent/codex/stalled-start',
+      }),
+      { store },
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      event_id: 'evt_stalled_session_start',
+      route: 'session-start',
+    });
+    expect(result.context).toContain('Stalled lanes at SessionStart (1 of 1):');
+    expect(result.context).toContain('codex/codex dead on agent/codex/stalled-start');
+    expect(result.context).toContain('stale stalled task');
+
+    const refreshedSession = JSON.parse(readFileSync(sessionFile, 'utf8')) as {
+      lastHeartbeatAt?: string;
+    };
+    expect(refreshedSession.lastHeartbeatAt).not.toBeUndefined();
+    expect(Date.parse(refreshedSession.lastHeartbeatAt ?? '')).toBeGreaterThan(
+      Date.now() - 60_000,
+    );
+  });
 });
 
 function envelope(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -313,6 +354,51 @@ function fakeGitRepo(name: string, branch: string): string {
   mkdirSync(repo, { recursive: true });
   execFileSync('git', ['init', '--quiet', '-b', branch, repo], { stdio: 'ignore' });
   return repo;
+}
+
+function writeActiveSession(
+  repo: string,
+  record: {
+    sessionKey: string;
+    branch: string;
+    taskName: string;
+    latestTaskPreview: string;
+    lastHeartbeatAt: string;
+    state: string;
+  },
+): string {
+  const sessionFile = join(
+    repo,
+    '.omx',
+    'state',
+    'active-sessions',
+    `${record.sessionKey.replace(/[^a-zA-Z0-9._-]+/g, '_')}.json`,
+  );
+  mkdirSync(join(repo, '.omx', 'state', 'active-sessions'), { recursive: true });
+  writeFileSync(
+    sessionFile,
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        repoRoot: repo,
+        branch: record.branch,
+        taskName: record.taskName,
+        latestTaskPreview: record.latestTaskPreview,
+        agentName: 'codex',
+        cliName: 'codex',
+        worktreePath: repo,
+        taskRoutingReason: 'test stale hook contract',
+        startedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+        lastHeartbeatAt: record.lastHeartbeatAt,
+        state: record.state,
+        sessionKey: record.sessionKey,
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+  return sessionFile;
 }
 
 function parseMetadata(value: string | null | undefined): Record<string, unknown> | null {
