@@ -96,11 +96,13 @@ export type {
   TaskRunAttemptFinish,
   NewMcpMetric,
   AggregateMcpMetricsOptions,
+  AggregateMcpMetricsDailyOptions,
   McpMetricsCostOptions,
   McpMetricsCostBasis,
   McpMetricsErrorReason,
   McpMetricsAggregate,
   McpMetricsAggregateRow,
+  McpMetricsDailyRow,
   McpMetricsSessionAggregateRow,
   McpMetricsSessionSummary,
 } from './types.js';
