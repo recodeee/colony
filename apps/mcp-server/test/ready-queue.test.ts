@@ -190,6 +190,25 @@ interface ReadyResult {
   codex_mcp_call?: string;
   next_action_reason?: string;
   empty_state?: string;
+  hint?: {
+    kind: 'plan_claim_subtask';
+    message: string;
+    plan_slug: string;
+    subtask_index: number;
+    title: string;
+    blocked_by_count: number;
+    blocked_by: number[];
+    next_tool: 'task_plan_claim_subtask';
+    claim_args: {
+      repo_root: string;
+      plan_slug: string;
+      subtask_index: number;
+      session_id: string;
+      agent: string;
+      file_scope: string[];
+    };
+    codex_mcp_call: string;
+  };
   setup_issue?: {
     code: 'SPEC_ROOT_NOT_FOUND';
     repo_root: string;
@@ -874,6 +893,61 @@ describe('task_ready_for_agent', () => {
     expect(result.codex_mcp_call).toBeUndefined();
     expect(result.next_action).toBe(
       'Complete upstream dependencies or unblock current plan waves before claiming more work.',
+    );
+  });
+
+  it('adds a plan-claim hint when unclaimed plan work exists behind blockers', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Blocked API dependency',
+            description: 'This dependency cannot progress yet.',
+            file_scope: ['apps/api/blocked-hint-dependency.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Hidden follow-up API',
+            description: 'This is unclaimed plan work, but it is not ready yet.',
+            file_scope: ['apps/api/blocked-hint-followup.ts'],
+            depends_on: [0],
+            capability_hint: 'api_work',
+          },
+        ],
+        { slug: 'blocked-hint-plan' },
+      ),
+    });
+    const claim = await claimSubtask('blocked-hint-plan', 0);
+    blockSubtask('blocked-hint-plan', 0, claim.task_id);
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.empty_state).toBe(EMPTY_READY_STATE);
+    expect(result.hint).toMatchObject({
+      kind: 'plan_claim_subtask',
+      plan_slug: 'blocked-hint-plan',
+      subtask_index: 1,
+      title: 'Hidden follow-up API',
+      blocked_by_count: 1,
+      blocked_by: [0],
+      next_tool: 'task_plan_claim_subtask',
+      claim_args: {
+        repo_root: repoRoot,
+        plan_slug: 'blocked-hint-plan',
+        subtask_index: 1,
+        session_id: 'agent-session',
+        agent: 'codex',
+        file_scope: ['apps/api/blocked-hint-followup.ts'],
+      },
+    });
+    expect(result.hint?.codex_mcp_call).toBe(
+      `mcp__colony__task_plan_claim_subtask({ agent: "codex", session_id: "agent-session", repo_root: ${JSON.stringify(repoRoot)}, plan_slug: "blocked-hint-plan", subtask_index: 1, file_scope: ["apps/api/blocked-hint-followup.ts"] })`,
     );
   });
 
