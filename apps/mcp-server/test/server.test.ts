@@ -77,6 +77,7 @@ describe('MCP server', () => {
       'startup_panel',
       'task_accept_handoff',
       'task_accept_relay',
+      'task_approve_proposal',
       'task_autopilot_tick',
       'task_claim_account',
       'task_claim_file',
@@ -354,6 +355,89 @@ describe('MCP server', () => {
       error_code: 'TASK_NOT_FOUND',
       count: 1,
     });
+  });
+
+  it('wires scout proposal tools and role-aware claim blocking', async () => {
+    const scoutProfileRes = await client.callTool({
+      name: 'agent_upsert_profile',
+      arguments: { agent: 'scout-A', role: 'scout', capabilities: { api_work: 0.9 } },
+    });
+    const scoutProfileText =
+      (scoutProfileRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    expect(JSON.parse(scoutProfileText)).toMatchObject({
+      agent: 'scout-A',
+      role: 'scout',
+    });
+    store.storage.upsertAgentProfile({
+      agent: 'queen-A',
+      capabilities: '{}',
+      role: 'queen',
+      updated_at: 1,
+    });
+
+    const proposeRes = await client.callTool({
+      name: 'task_propose',
+      arguments: {
+        repo_root: '/repo',
+        branch: 'proposal/mcp-wire',
+        summary: 'Wire proposal MCP tools',
+        rationale: 'Evidence-backed task proposal.',
+        touches_files: ['apps/mcp-server/src/server.ts'],
+        observation_evidence_ids: [101],
+        session_id: 'scout-session',
+        agent: 'scout-A',
+      },
+    });
+    const proposeText =
+      (proposeRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    const proposed = JSON.parse(proposeText) as {
+      task_id: number;
+      proposal_status: string;
+      open_proposal_count: number;
+    };
+    expect(proposed).toMatchObject({
+      proposal_status: 'proposed',
+      open_proposal_count: 1,
+    });
+    expect(store.storage.getTask(proposed.task_id)).toMatchObject({
+      created_by: 'scout-A',
+      proposal_status: 'proposed',
+      observation_evidence_ids: '[101]',
+    });
+
+    const claimRes = await client.callTool({
+      name: 'task_claim_file',
+      arguments: {
+        task_id: proposed.task_id,
+        session_id: 'scout-session',
+        agent: 'scout-A',
+        file_path: 'apps/mcp-server/src/server.ts',
+      },
+    });
+    const claimText = (claimRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    expect(claimRes.isError).toBe(true);
+    expect(JSON.parse(claimText)).toMatchObject({ code: 'SCOUT_NO_CLAIM' });
+
+    const approveRes = await client.callTool({
+      name: 'task_approve_proposal',
+      arguments: {
+        task_id: proposed.task_id,
+        session_id: 'queen-session',
+        agent: 'queen-A',
+      },
+    });
+    const approveText =
+      (approveRes.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}';
+    expect(JSON.parse(approveText)).toEqual({
+      task_id: proposed.task_id,
+      approved: true,
+      approved_by: 'queen-A',
+    });
+    expect(store.storage.getTask(proposed.task_id)).toMatchObject({
+      proposal_status: 'approved',
+      approved_by: 'queen-A',
+    });
+    expect(store.storage.getAgentProfile('scout-A')?.open_proposal_count).toBe(0);
   });
 
   it('spec_change_open reports a structured error when SPEC.md is missing', async () => {

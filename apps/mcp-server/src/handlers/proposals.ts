@@ -1,9 +1,9 @@
 import {
+  type AgentRole,
   MAX_OPEN_PROPOSALS_PER_SCOUT,
+  type MemoryStore,
   TASK_THREAD_ERROR_CODES,
   TaskThreadError,
-  type AgentRole,
-  type MemoryStore,
 } from '@colony/core';
 
 type ProposalActorRole = AgentRole | 'operator';
@@ -205,6 +205,9 @@ function missingColumns(columns: Set<string>, required: string[]): string[] {
 }
 
 function loadActorProfile(store: MemoryStore, agent: string): ActorProfile {
+  if (agent === 'operator') {
+    return { role: 'operator', openProposalCount: 0 };
+  }
   const row = store.storage.getAgentProfile(agent) as
     | ({ role?: unknown; open_proposal_count?: unknown } & Record<string, unknown>)
     | undefined;

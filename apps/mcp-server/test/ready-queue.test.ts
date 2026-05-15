@@ -86,6 +86,14 @@ interface ClaimResult {
   file_scope: string[];
 }
 
+interface SqlDatabase {
+  prepare(sql: string): { run(...args: unknown[]): unknown };
+}
+
+interface StorageWithDb {
+  db: SqlDatabase;
+}
+
 interface QuotaAcceptResult {
   status: 'accepted';
   task_id: number;
@@ -247,6 +255,11 @@ function taskIdForSubtask(planSlug: string, subtaskIndex: number): number {
     .find((entry) => entry.branch === `spec/${planSlug}/sub-${subtaskIndex}`);
   expect(task).toBeDefined();
   return task?.id ?? -1;
+}
+
+function setTaskProposalStatus(taskId: number, status: 'proposed' | 'approved'): void {
+  const db = (store.storage as unknown as StorageWithDb).db;
+  db.prepare('UPDATE tasks SET proposal_status = ? WHERE id = ?').run(status, taskId);
 }
 
 function blockSubtask(planSlug: string, subtaskIndex: number, taskId: number): void {
@@ -559,6 +572,51 @@ describe('task_ready_for_agent', () => {
     );
     expect(result.claim_required).toBe(true);
     expect(result.empty_state).toBeUndefined();
+  });
+
+  it('hides proposed task rows from executors until approval', async () => {
+    await call('task_plan_publish', {
+      ...publishArgs(
+        [
+          {
+            title: 'Proposal gated work',
+            description: 'Executor needs approval first.',
+            file_scope: ['apps/api/proposed.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Downstream proposal gated docs',
+            description: 'Blocked behind proposal gated work.',
+            file_scope: ['docs/proposed.md'],
+            depends_on: [0],
+            capability_hint: 'doc_work',
+          },
+        ],
+        { slug: 'proposal-gated-plan' },
+      ),
+    });
+    const taskId = taskIdForSubtask('proposal-gated-plan', 0);
+    setTaskProposalStatus(taskId, 'proposed');
+
+    const hidden = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+
+    expect(hidden.ready).toEqual([]);
+    expect(hidden.total_available).toBe(0);
+
+    setTaskProposalStatus(taskId, 'approved');
+    const visible = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+
+    expect(visible.ready.map((entry) => entry.subtask_index)).toEqual([0]);
   });
 
   it('omits claim_required when there is no claimable sub-task', async () => {

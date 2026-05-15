@@ -18,6 +18,7 @@ import {
 import type { ObservationRow, TaskClaimRow, TaskRow } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { type ProposalStatus, actorRole, filterReadyForExecutor } from '../handlers/claims.js';
 import { parseMeta } from './_meta.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { attemptClaimPlanSubtask } from './plan.js';
@@ -219,6 +220,7 @@ export type AutoClaimOutcome =
 interface RankedSubtask extends ReadySubtask {
   task_id: number;
   created_at: number;
+  proposal_status?: ProposalStatus | null;
   claim_ts: number | null;
   current_claim: boolean;
 }
@@ -412,32 +414,20 @@ export async function buildReadyForAgent(
   }
   const profile = loadProfile(store.storage, args.agent);
   const tasksById = new Map(
-    allTasks.map((t) => [t.id, { created_at: t.created_at, created_by: t.created_by }]),
+    allTasks.map((t) => [
+      t.id,
+      {
+        created_at: t.created_at,
+        created_by: t.created_by,
+        proposal_status: t.proposal_status,
+      },
+    ]),
   );
+  const role = actorRole(store, { agent: args.agent, session_id: args.session_id });
   const quotaRelays = quotaRelayReadyItems(store, args, plans, allTasks);
-  const available = plans.flatMap((plan) =>
-    plan.next_available.map((subtask) =>
-      rankSubtask(store, {
-        plan_slug: plan.plan_slug,
-        repo_root: plan.repo_root,
-        subtask,
-        session_id: args.session_id,
-        agent: args.agent,
-        profile,
-        parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
-        created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
-        reason: 'ready_high_score',
-        current_claim: false,
-      }),
-    ),
-  );
-  const currentClaims = plans.flatMap((plan) =>
-    plan.subtasks
-      .filter(
-        (subtask) =>
-          subtask.status === 'claimed' && subtask.claimed_by_session_id === args.session_id,
-      )
-      .map((subtask) =>
+  const available = filterReadyForExecutor(
+    plans.flatMap((plan) =>
+      plan.next_available.map((subtask) =>
         rankSubtask(store, {
           plan_slug: plan.plan_slug,
           repo_root: plan.repo_root,
@@ -447,10 +437,38 @@ export async function buildReadyForAgent(
           profile,
           parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
           created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
-          reason: 'continue_current_task',
-          current_claim: true,
+          proposal_status: tasksById.get(subtask.task_id)?.proposal_status ?? null,
+          reason: 'ready_high_score',
+          current_claim: false,
         }),
       ),
+    ),
+    role,
+  );
+  const currentClaims = filterReadyForExecutor(
+    plans.flatMap((plan) =>
+      plan.subtasks
+        .filter(
+          (subtask) =>
+            subtask.status === 'claimed' && subtask.claimed_by_session_id === args.session_id,
+        )
+        .map((subtask) =>
+          rankSubtask(store, {
+            plan_slug: plan.plan_slug,
+            repo_root: plan.repo_root,
+            subtask,
+            session_id: args.session_id,
+            agent: args.agent,
+            profile,
+            parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
+            created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
+            proposal_status: tasksById.get(subtask.task_id)?.proposal_status ?? null,
+            reason: 'continue_current_task',
+            current_claim: true,
+          }),
+        ),
+    ),
+    role,
   );
   const urgentTaskIds = blockingMessageTaskIds(store, {
     session_id: args.session_id,
@@ -768,6 +786,7 @@ function rankSubtask(
     profile: AgentProfile;
     parent_plan_created_by: string | null;
     created_at: number;
+    proposal_status: ProposalStatus | null;
     reason: ReadyReason;
     current_claim: boolean;
   },
@@ -812,6 +831,7 @@ function rankSubtask(
       file_scope: args.subtask.file_scope,
     },
     created_at: args.created_at,
+    proposal_status: args.proposal_status,
     claim_ts: args.current_claim
       ? currentClaimTimestamp(store, args.subtask.task_id, args.session_id)
       : null,

@@ -10,6 +10,7 @@ import {
 import { claimPathRejectionMessage } from '@colony/storage';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { ClaimsHandlerError, enforceScoutNoClaim } from '../handlers/claims.js';
 import { type ToolContext, defaultWrapHandler } from './context.js';
 import { detectMcpClientIdentity } from './heartbeat.js';
 import { mcpError, mcpErrorResponse } from './shared.js';
@@ -359,10 +360,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
     {
       task_id: z.number().int().positive(),
       session_id: z.string().min(1),
+      agent: z.string().min(1).optional(),
       file_path: z.string().min(1),
       note: z.string().optional(),
     },
-    wrapHandler('task_claim_file', async ({ task_id, session_id, file_path, note }) => {
+    wrapHandler('task_claim_file', async ({ task_id, session_id, agent, file_path, note }) => {
+      try {
+        enforceScoutNoClaim(store, {
+          session_id,
+          ...(agent !== undefined ? { agent } : {}),
+        });
+      } catch (err) {
+        if (err instanceof ClaimsHandlerError) {
+          return mcpErrorResponse(err.code, err.message);
+        }
+        throw err;
+      }
       const normalizedFilePath = store.storage.normalizeTaskFilePath(task_id, file_path);
       if (normalizedFilePath === null) {
         const reason = store.storage.classifyTaskFilePathRejection(task_id, file_path);
