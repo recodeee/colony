@@ -393,6 +393,54 @@ colony gain --session-limit 0     # every live session in the window
 colony gain --input-cost-per-1m 1.25 --output-cost-per-1m 10
 ```
 
+#### `colony gain --summary` — compact rtk-style readout
+
+For an at-a-glance view modelled on `rtk gain`, pass `--summary`. It renders a
+headline KPI stack, a top-N **By Operation** table with proportional impact
+bars, a **Daily Activity** bar graph, and a **Daily Breakdown** table over the
+same `mcp_metrics` receipts that power the default view.
+
+```bash
+colony gain --summary                       # KPIs + top ops + 30-day graph + 12-day table
+colony gain --summary --days 14 --top-ops 5 # narrower graph window, smaller table
+colony gain --graph                         # just the daily activity bar graph
+colony gain --daily --days 7                # just the daily breakdown table
+```
+
+```
+Colony Token Savings (last 7d)
+============================================================
+Total calls:        10,934
+Input tokens:       227.2k
+Output tokens:      40.64M
+Total tokens:       40.87M
+Tokens saved:       59.15M (59%)
+Total exec time:    52m00s (avg 285ms)
+Efficiency meter:   ██████████████░░░░░░░░░░ 59.1%
+
+By Operation
+------------------------------------------------------------------------
+ #   Operation                    Calls     Saved   Share   Avg ms  Impact
+------------------------------------------------------------------------
+1.   task_plan_list               9,354    45.26M     98%       60  ██████████
+2.   task_plan_claim_subtask        215     2.55M    0.1%       44  █░░░░░░░░░
+3.   hivemind_context                65     1.56M    0.3%     7646  ░░░░░░░░░░
+...
+
+Daily Activity (last 7 days)
+05-09 │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    23.6k
+05-13 │██░░░░░░░░░░░░░░░░░░░░░░░░░░░░    2.62M
+05-14 │██████████████████████████████   37.56M
+05-15 │░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   554.2k
+```
+
+Headline `Tokens saved` and the efficiency meter come from the same reference
+comparison model used by the default view, distributed proportionally across
+matched live operations. Unmatched operations show `—` in the per-op `Saved`
+column and fall back to their share of total token spend for the impact bar.
+Pass `--summary --json` to get the same data plus a `live.daily` array of
+per-UTC-day rollups for downstream tooling.
+
 ```json
 { "name": "savings_report", "input": { "hours": 24 } }
 ```

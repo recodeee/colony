@@ -18,6 +18,7 @@ import type {
   AccountClaimRow,
   AccountClaimState,
   AgentProfileRow,
+  AggregateMcpMetricsDailyOptions,
   AggregateMcpMetricsOptions,
   ExampleRow,
   LaneRunState,
@@ -27,6 +28,7 @@ import type {
   McpMetricsAggregate,
   McpMetricsAggregateRow,
   McpMetricsCostBasis,
+  McpMetricsDailyRow,
   McpMetricsErrorReason,
   McpMetricsErrorReasonRawRow,
   McpMetricsOperationRawRow,
@@ -1368,6 +1370,53 @@ export class Storage {
       session_summary: buildSessionSummary(totals, sessionCount, sessions.length < sessionCount),
       sessions,
     };
+  }
+
+  // Per-UTC-day rollup over the same mcp_metrics receipts powering
+  // aggregateMcpMetrics. Powers the rtk-style daily activity graph and the
+  // daily breakdown table in `colony gain --summary`. Rows are returned
+  // newest-day-first so callers can take(N) for the most recent window.
+  aggregateMcpMetricsDaily(opts: AggregateMcpMetricsDailyOptions = {}): McpMetricsDailyRow[] {
+    const since = opts.since ?? 0;
+    const until = opts.until ?? Date.now();
+    const filters: string[] = ['ts >= ?', 'ts <= ?'];
+    const args: Array<number | string> = [since, until];
+    if (opts.operation !== undefined) {
+      filters.push('operation = ?');
+      args.push(opts.operation);
+    }
+    const where = `WHERE ${filters.join(' AND ')}`;
+    const rows = this.db
+      .prepare(
+        `SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
+                COUNT(*) AS calls,
+                SUM(input_tokens) AS input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(input_tokens + output_tokens) AS total_tokens,
+                SUM(duration_ms) AS total_duration_ms
+           FROM mcp_metrics
+           ${where}
+          GROUP BY day
+          ORDER BY day DESC`,
+      )
+      .all(...args) as Array<{
+      day: string | null;
+      calls: number | null;
+      input_tokens: number | null;
+      output_tokens: number | null;
+      total_tokens: number | null;
+      total_duration_ms: number | null;
+    }>;
+    return rows
+      .filter((row): row is { day: string } & typeof row => row.day !== null)
+      .map((row) => ({
+        day: row.day,
+        calls: row.calls ?? 0,
+        input_tokens: row.input_tokens ?? 0,
+        output_tokens: row.output_tokens ?? 0,
+        total_tokens: row.total_tokens ?? 0,
+        total_duration_ms: row.total_duration_ms ?? 0,
+      }));
   }
 
   private mcpMetricSessionCount(where: string, args: ReadonlyArray<number | string>): number {

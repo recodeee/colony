@@ -1,17 +1,29 @@
-import { SAVINGS_REFERENCE_ROWS, savingsReferenceTotals } from '@colony/core';
+import { SAVINGS_REFERENCE_ROWS, savingsLiveComparison, savingsReferenceTotals } from '@colony/core';
 import type {
   McpMetricsAggregateRow,
+  McpMetricsDailyRow,
   McpMetricsSessionAggregateRow,
   McpMetricsSessionSummary,
 } from '@colony/storage';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildMoversReport,
+  fillDailyWindow,
+  formatDurationMs,
+  renderImpactBar,
   writeGainReport,
   writeLiveSection,
   writeMoversSection,
   writeReferenceSection,
+  writeSummaryReport,
 } from '../src/commands/gain.js';
+
+// kleur emits ANSI escapes when stdout is detected as a color-capable TTY
+// (e.g. `COLORTERM=truecolor`); on a plain CI runner it stays off. Strip
+// escapes from captured output so assertions like `toContain('Calls: 2')`
+// hold regardless of the local color mode.
+const ANSI_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+const stripAnsi = (chunk: string | Uint8Array): string => String(chunk).replace(ANSI_RE, '');
 
 const COST_BASIS = {
   input_usd_per_1m_tokens: 1,
@@ -71,7 +83,7 @@ describe('gain command output', () => {
   it('prints expanded live metric columns', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -137,7 +149,7 @@ describe('gain command output', () => {
   it('prints operation detail metrics when filtered to one operation', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -187,7 +199,7 @@ describe('gain command output', () => {
   it('prints the most frequent error reason in the overview', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -261,7 +273,7 @@ describe('gain command output', () => {
   it('flags a hot loop when one operation dominates token spend at high call volume', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -314,7 +326,7 @@ describe('gain command output', () => {
   it('omits cost suffix from live sessions header when cost is not configured', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -359,7 +371,7 @@ describe('gain command output', () => {
   it('prints live metrics before the live comparison model', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -431,7 +443,7 @@ describe('gain command output', () => {
   it('keeps honest mode to live mcp_metrics receipts only', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -498,7 +510,7 @@ describe('gain command output', () => {
   it('keeps reference output compact without the cut explainer', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -696,7 +708,7 @@ describe('writeMoversSection', () => {
   it('renders Movers header with recent and prior labels plus a riser row', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -739,7 +751,7 @@ describe('writeMoversSection', () => {
   it('emits nothing when the report has no risers, fallers, or error risers', () => {
     let output = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-      output += String(chunk);
+      output += stripAnsi(chunk);
       return true;
     });
 
@@ -757,5 +769,292 @@ describe('writeMoversSection', () => {
     });
 
     expect(output).toBe('');
+  });
+});
+
+describe('rtk-style summary helpers', () => {
+  it('renderImpactBar scales proportionally to max, full bar for the max row', () => {
+    expect(renderImpactBar(100, 100, 10)).toBe('██████████');
+    expect(renderImpactBar(50, 100, 10)).toBe('█████░░░░░');
+    expect(renderImpactBar(0, 100, 10)).toBe('░░░░░░░░░░');
+    expect(renderImpactBar(100, 0, 10)).toBe('░░░░░░░░░░');
+    expect(renderImpactBar(200, 100, 10)).toBe('██████████');
+    expect(renderImpactBar(-10, 100, 10)).toBe('░░░░░░░░░░');
+  });
+
+  it('formatDurationMs picks ms / fractional seconds / mm:ss / h:mm', () => {
+    expect(formatDurationMs(0)).toBe('0ms');
+    expect(formatDurationMs(120)).toBe('120ms');
+    expect(formatDurationMs(999)).toBe('999ms');
+    expect(formatDurationMs(3_400)).toBe('3.4s');
+    expect(formatDurationMs(12_000)).toBe('12s');
+    expect(formatDurationMs(125_000)).toBe('2m05s');
+    expect(formatDurationMs(3_725_000)).toBe('1h02m');
+  });
+
+  it('fillDailyWindow pads missing days with zeros, oldest first', () => {
+    const reference = new Date(Date.UTC(2026, 4, 15)); // 2026-05-15
+    const rows: McpMetricsDailyRow[] = [
+      {
+        day: '2026-05-14',
+        calls: 5,
+        input_tokens: 10,
+        output_tokens: 90,
+        total_tokens: 100,
+        total_duration_ms: 1_200,
+      },
+      {
+        day: '2026-05-12',
+        calls: 2,
+        input_tokens: 5,
+        output_tokens: 45,
+        total_tokens: 50,
+        total_duration_ms: 400,
+      },
+    ];
+
+    const window = fillDailyWindow(rows, 5, reference);
+    expect(window.map((r) => r.day)).toEqual([
+      '2026-05-11',
+      '2026-05-12',
+      '2026-05-13',
+      '2026-05-14',
+      '2026-05-15',
+    ]);
+    expect(window[0]?.calls).toBe(0);
+    expect(window[1]?.calls).toBe(2);
+    expect(window[2]?.calls).toBe(0);
+    expect(window[3]?.calls).toBe(5);
+    expect(window[3]?.total_tokens).toBe(100);
+    expect(window[4]?.calls).toBe(0);
+  });
+
+  it('writeSummaryReport prints headline + by-op + graph + breakdown', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += stripAnsi(chunk);
+      return true;
+    });
+
+    const baseRow: Omit<McpMetricsAggregateRow, 'operation' | 'calls' | 'last_ts'> = {
+      ok_count: 0,
+      error_count: 0,
+      error_reasons: [],
+      success_tokens: 0,
+      error_tokens: 0,
+      avg_success_tokens: 0,
+      avg_error_tokens: 0,
+      max_input_tokens: 0,
+      max_output_tokens: 0,
+      max_total_tokens: 0,
+      max_duration_ms: 0,
+      input_bytes: 0,
+      output_bytes: 0,
+      total_bytes: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      total_cost_usd: 0,
+      avg_cost_usd: 0,
+      avg_input_tokens: 0,
+      avg_output_tokens: 0,
+      total_duration_ms: 0,
+      avg_duration_ms: 0,
+    };
+    const recentTs = Date.now() - 5 * 60_000;
+    const operations: McpMetricsAggregateRow[] = [
+      {
+        ...baseRow,
+        operation: 'search',
+        calls: 4,
+        ok_count: 4,
+        input_tokens: 80,
+        output_tokens: 400,
+        total_tokens: 480,
+        avg_input_tokens: 20,
+        avg_output_tokens: 100,
+        total_duration_ms: 800,
+        avg_duration_ms: 200,
+        last_ts: recentTs,
+      },
+      {
+        ...baseRow,
+        operation: 'task_post',
+        calls: 2,
+        ok_count: 2,
+        input_tokens: 60,
+        output_tokens: 60,
+        total_tokens: 120,
+        avg_input_tokens: 30,
+        avg_output_tokens: 30,
+        total_duration_ms: 400,
+        avg_duration_ms: 200,
+        last_ts: recentTs,
+      },
+    ];
+    const totals: McpMetricsAggregateRow = {
+      ...baseRow,
+      operation: '__total__',
+      calls: 6,
+      ok_count: 6,
+      input_tokens: 140,
+      output_tokens: 460,
+      total_tokens: 600,
+      total_duration_ms: 1_200,
+      avg_duration_ms: 200,
+      last_ts: recentTs,
+    };
+    const daily: McpMetricsDailyRow[] = [
+      {
+        day: '2026-05-14',
+        calls: 6,
+        input_tokens: 140,
+        output_tokens: 460,
+        total_tokens: 600,
+        total_duration_ms: 1_200,
+      },
+    ];
+    const comparison = savingsLiveComparison(operations, SAVINGS_REFERENCE_ROWS);
+
+    writeSummaryReport({
+      operations,
+      totals,
+      daily,
+      comparison,
+      windowHours: 24,
+      operationFilter: undefined,
+      days: 3,
+      topOps: 10,
+      showGraph: true,
+      showBreakdown: true,
+      showHeadline: true,
+    });
+
+    expect(output).toContain('Colony Token Savings (last 1d)');
+    expect(output).toContain('Total calls:');
+    expect(output).toContain('6');
+    expect(output).toContain('Input tokens:');
+    expect(output).toContain('Output tokens:');
+    expect(output).toContain('Total exec time:');
+    expect(output).toContain('Efficiency meter:');
+    expect(output).toContain('By Operation');
+    expect(output).toContain('search');
+    expect(output).toContain('Daily Activity (last 3 days)');
+    expect(output).toContain('Daily Breakdown');
+    expect(output).toContain('TOTAL');
+  });
+
+  it('writeSummaryReport graph-only mode skips headline and breakdown', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += stripAnsi(chunk);
+      return true;
+    });
+
+    const totals: McpMetricsAggregateRow = {
+      operation: '__total__',
+      calls: 0,
+      ok_count: 0,
+      error_count: 0,
+      error_reasons: [],
+      success_tokens: 0,
+      error_tokens: 0,
+      avg_success_tokens: 0,
+      avg_error_tokens: 0,
+      max_input_tokens: 0,
+      max_output_tokens: 0,
+      max_total_tokens: 0,
+      max_duration_ms: 0,
+      input_bytes: 0,
+      output_bytes: 0,
+      total_bytes: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      total_cost_usd: 0,
+      avg_cost_usd: 0,
+      avg_input_tokens: 0,
+      avg_output_tokens: 0,
+      total_duration_ms: 0,
+      avg_duration_ms: 0,
+      last_ts: null,
+    };
+
+    writeSummaryReport({
+      operations: [],
+      totals,
+      daily: [],
+      comparison: savingsLiveComparison([], SAVINGS_REFERENCE_ROWS),
+      windowHours: 168,
+      operationFilter: undefined,
+      days: 2,
+      topOps: 10,
+      showGraph: true,
+      showBreakdown: false,
+      showHeadline: false,
+    });
+
+    expect(output).not.toContain('Colony Token Savings');
+    expect(output).toContain('Daily Activity (last 2 days)');
+    expect(output).not.toContain('Daily Breakdown');
+  });
+
+  it('writeSummaryReport empty-window message when no calls', () => {
+    let output = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      output += stripAnsi(chunk);
+      return true;
+    });
+
+    const totals: McpMetricsAggregateRow = {
+      operation: '__total__',
+      calls: 0,
+      ok_count: 0,
+      error_count: 0,
+      error_reasons: [],
+      success_tokens: 0,
+      error_tokens: 0,
+      avg_success_tokens: 0,
+      avg_error_tokens: 0,
+      max_input_tokens: 0,
+      max_output_tokens: 0,
+      max_total_tokens: 0,
+      max_duration_ms: 0,
+      input_bytes: 0,
+      output_bytes: 0,
+      total_bytes: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      input_cost_usd: 0,
+      output_cost_usd: 0,
+      total_cost_usd: 0,
+      avg_cost_usd: 0,
+      avg_input_tokens: 0,
+      avg_output_tokens: 0,
+      total_duration_ms: 0,
+      avg_duration_ms: 0,
+      last_ts: null,
+    };
+
+    writeSummaryReport({
+      operations: [],
+      totals,
+      daily: [],
+      comparison: savingsLiveComparison([], SAVINGS_REFERENCE_ROWS),
+      windowHours: 24,
+      operationFilter: undefined,
+      days: 7,
+      topOps: 10,
+      showGraph: true,
+      showBreakdown: true,
+      showHeadline: true,
+    });
+
+    expect(output).toContain('No mcp_metrics receipts in window');
   });
 });

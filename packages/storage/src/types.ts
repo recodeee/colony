@@ -491,6 +491,24 @@ export interface McpMetricsAggregate {
   sessions: McpMetricsSessionAggregateRow[];
 }
 
+export interface AggregateMcpMetricsDailyOptions {
+  since?: number;
+  until?: number;
+  operation?: string;
+}
+
+// One row per calendar day in UTC. `day` is 'YYYY-MM-DD'. Used by the
+// rtk-style `colony gain --summary` view to render the daily activity
+// bar graph and the daily breakdown table.
+export interface McpMetricsDailyRow {
+  day: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  total_duration_ms: number;
+}
+
 export interface McpMetricsRawRow {
   operation: string;
   calls: number;

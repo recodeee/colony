@@ -241,4 +241,55 @@ describe('mcp_metrics storage', () => {
     expect(storage.countMcpMetricsSince(0, 400)).toBe(1);
     expect(storage.countMcpMetricsSince(5_000, 6_000)).toBe(0);
   });
+
+  it('aggregateMcpMetricsDaily groups receipts by UTC calendar day, newest first', () => {
+    // 2026-05-13 mid-morning UTC + late evening UTC + early next-day UTC.
+    const may13 = Date.UTC(2026, 4, 13, 10, 0, 0); // 2026-05-13 10:00:00 UTC
+    const may13late = Date.UTC(2026, 4, 13, 23, 30, 0);
+    const may14 = Date.UTC(2026, 4, 14, 1, 15, 0);
+
+    record(storage, { ts: may13, operation: 'search', input_tokens: 10, output_tokens: 100, duration_ms: 5 });
+    record(storage, { ts: may13late, operation: 'search', input_tokens: 20, output_tokens: 200, duration_ms: 7 });
+    record(storage, { ts: may14, operation: 'timeline', input_tokens: 5, output_tokens: 50, duration_ms: 3 });
+
+    const rows = storage.aggregateMcpMetricsDaily({ since: 0 });
+    expect(rows.map((r) => r.day)).toEqual(['2026-05-14', '2026-05-13']);
+
+    const day13 = rows.find((r) => r.day === '2026-05-13');
+    if (!day13) throw new Error('expected 2026-05-13 row');
+    expect(day13.calls).toBe(2);
+    expect(day13.input_tokens).toBe(30);
+    expect(day13.output_tokens).toBe(300);
+    expect(day13.total_tokens).toBe(330);
+    expect(day13.total_duration_ms).toBe(12);
+
+    const day14 = rows.find((r) => r.day === '2026-05-14');
+    if (!day14) throw new Error('expected 2026-05-14 row');
+    expect(day14.calls).toBe(1);
+    expect(day14.total_tokens).toBe(55);
+  });
+
+  it('aggregateMcpMetricsDaily respects since/until and operation filter', () => {
+    const day1 = Date.UTC(2026, 4, 10, 12, 0, 0);
+    const day2 = Date.UTC(2026, 4, 11, 12, 0, 0);
+    const day3 = Date.UTC(2026, 4, 12, 12, 0, 0);
+    record(storage, { ts: day1, operation: 'search' });
+    record(storage, { ts: day2, operation: 'search' });
+    record(storage, { ts: day3, operation: 'timeline' });
+    record(storage, { ts: day3, operation: 'search' });
+
+    const allDays = storage.aggregateMcpMetricsDaily({ since: 0 });
+    expect(allDays).toHaveLength(3);
+
+    const windowed = storage.aggregateMcpMetricsDaily({ since: day2, until: day3 });
+    expect(windowed.map((r) => r.day)).toEqual(['2026-05-12', '2026-05-11']);
+
+    const onlySearch = storage.aggregateMcpMetricsDaily({ since: 0, operation: 'search' });
+    expect(onlySearch.map((r) => r.day)).toEqual(['2026-05-12', '2026-05-11', '2026-05-10']);
+    expect(onlySearch.find((r) => r.day === '2026-05-12')?.calls).toBe(1);
+  });
+
+  it('aggregateMcpMetricsDaily returns empty array when no rows in window', () => {
+    expect(storage.aggregateMcpMetricsDaily({ since: 0 })).toEqual([]);
+  });
 });

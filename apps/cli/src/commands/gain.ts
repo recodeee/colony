@@ -12,6 +12,7 @@ import {
 import type {
   McpMetricsAggregateRow,
   McpMetricsCostBasis,
+  McpMetricsDailyRow,
   McpMetricsSessionAggregateRow,
   McpMetricsSessionSummary,
 } from '@colony/storage';
@@ -31,6 +32,11 @@ interface GainOptions {
   honest?: boolean;
   recentHours?: string;
   movers?: boolean;
+  summary?: boolean;
+  graph?: boolean;
+  daily?: boolean;
+  days?: string;
+  topOps?: string;
 }
 
 export interface MoverRow {
@@ -86,6 +92,11 @@ export function registerGainCommand(program: Command): void {
       'trailing window in hours for the Movers section (default: window / 7)',
     )
     .option('--no-movers', 'hide the Movers (last vs prior) regression section')
+    .option('--summary', 'rtk-style compact summary: KPIs, top operations, daily graph + breakdown')
+    .option('--graph', 'render only the daily activity bar graph (implies --summary view)')
+    .option('--daily', 'render only the daily breakdown table (implies --summary view)')
+    .option('--days <n>', 'how many days to include in the daily graph/breakdown (default 30)')
+    .option('--top-ops <n>', 'top-N rows in the summary By Operation table (default 10)')
     .option(
       '--input-cost-per-1m <usd>',
       'USD rate per 1M input tokens; env COLONY_MCP_INPUT_USD_PER_1M',
@@ -110,7 +121,15 @@ export function registerGainCommand(program: Command): void {
       const recentHours = resolveRecentHours(opts.recentHours, windowHours);
       const recentSince = recentHours !== null ? now - recentHours * 60 * 60_000 : null;
 
-      const { live, recent } = await withStorage(
+      const summaryRequested =
+        opts.summary === true || opts.graph === true || opts.daily === true;
+      const dailyDays = parsePositiveInt(opts.days) ?? 30;
+      const topOpsLimit = parsePositiveInt(opts.topOps) ?? 10;
+      const dailySince = summaryRequested
+        ? Math.min(since, now - dailyDays * 24 * 60 * 60_000)
+        : since;
+
+      const { live, recent, daily } = await withStorage(
         settings,
         (storage) => {
           const sessionLimit = parseSessionLimit(opts.sessionLimit);
@@ -130,7 +149,14 @@ export function registerGainCommand(program: Command): void {
                   cost: costOptionsFromCli(opts),
                 })
               : null;
-          return { live: fullAgg, recent: recentAgg };
+          const dailyRows = summaryRequested
+            ? storage.aggregateMcpMetricsDaily({
+                since: dailySince,
+                until: now,
+                ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
+              })
+            : null;
+          return { live: fullAgg, recent: recentAgg, daily: dailyRows };
         },
         { readonly: true },
       );
@@ -162,6 +188,7 @@ export function registerGainCommand(program: Command): void {
           session_summary: live.session_summary,
           sessions: live.sessions,
           ...(movers !== null ? { movers } : {}),
+          ...(daily !== null ? { daily } : {}),
         },
       };
       const payload =
@@ -184,6 +211,23 @@ export function registerGainCommand(program: Command): void {
 
       if (opts.json === true) {
         process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+        return;
+      }
+
+      if (summaryRequested) {
+        writeSummaryReport({
+          operations: live.operations,
+          totals: live.totals,
+          daily: daily ?? [],
+          comparison,
+          windowHours,
+          operationFilter: opts.operation,
+          days: dailyDays,
+          topOps: topOpsLimit,
+          showGraph: opts.daily !== true || opts.graph === true,
+          showBreakdown: opts.graph !== true || opts.daily === true,
+          showHeadline: opts.graph !== true && opts.daily !== true,
+        });
         return;
       }
 
@@ -1112,4 +1156,415 @@ function padVisible(value: string, width: number): string {
   const visibleLen = value.replace(ANSI, '').length;
   if (visibleLen >= width) return value;
   return `${value}${' '.repeat(width - visibleLen)}`;
+}
+
+function padVisibleRight(value: string, width: number): string {
+  const visibleLen = value.replace(ANSI, '').length;
+  if (visibleLen >= width) return value;
+  return `${' '.repeat(width - visibleLen)}${value}`;
+}
+
+function parsePositiveInt(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+// rtk-style proportional bar. The row whose value equals `max` gets a full
+// bar; smaller rows scale linearly. Empty when max <= 0.
+export function renderImpactBar(value: number, max: number, width: number): string {
+  if (!Number.isFinite(value) || !Number.isFinite(max) || max <= 0 || width <= 0) {
+    return '░'.repeat(Math.max(0, width));
+  }
+  const filled = Math.min(
+    width,
+    Math.max(0, Math.round((Math.max(0, value) / max) * width)),
+  );
+  return '█'.repeat(filled) + '░'.repeat(Math.max(0, width - filled));
+}
+
+// "8m22s", "3.4s", "812ms" — compact human duration.
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0ms';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    if (seconds < 10) return `${seconds.toFixed(1)}s`;
+    return `${Math.round(seconds)}s`;
+  }
+  const totalSeconds = Math.round(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remSeconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m${String(remSeconds).padStart(2, '0')}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return `${hours}h${String(remMinutes).padStart(2, '0')}m`;
+}
+
+// Pad a window of daily rows out to `days` entries, oldest-first, filling
+// any missing dates with zeros. Mirrors rtk's behavior so the graph always
+// covers the requested window even on quiet days.
+export function fillDailyWindow(
+  rows: ReadonlyArray<McpMetricsDailyRow>,
+  days: number,
+  reference: Date = new Date(),
+): McpMetricsDailyRow[] {
+  if (days <= 0) return [];
+  const byDay = new Map<string, McpMetricsDailyRow>();
+  for (const row of rows) byDay.set(row.day, row);
+  const result: McpMetricsDailyRow[] = [];
+  const ref = new Date(
+    Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth(), reference.getUTCDate()),
+  );
+  for (let i = days - 1; i >= 0; i -= 1) {
+    const cursor = new Date(ref);
+    cursor.setUTCDate(ref.getUTCDate() - i);
+    const day = cursor.toISOString().slice(0, 10);
+    const existing = byDay.get(day);
+    if (existing) {
+      result.push(existing);
+    } else {
+      result.push({
+        day,
+        calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        total_tokens: 0,
+        total_duration_ms: 0,
+      });
+    }
+  }
+  return result;
+}
+
+export interface SummaryReportInput {
+  operations: ReadonlyArray<McpMetricsAggregateRow>;
+  totals: McpMetricsAggregateRow;
+  daily: ReadonlyArray<McpMetricsDailyRow>;
+  comparison: SavingsLiveComparison;
+  windowHours: number;
+  operationFilter: string | undefined;
+  days: number;
+  topOps: number;
+  showGraph: boolean;
+  showBreakdown: boolean;
+  showHeadline: boolean;
+}
+
+const SUMMARY_RULE_WIDTH = 60;
+const SUMMARY_TABLE_WIDTH = 72;
+const SUMMARY_METER_WIDTH = 24;
+const SUMMARY_GRAPH_BAR_WIDTH = 30;
+const SUMMARY_GRAPH_LABEL_WIDTH = 6;
+const SUMMARY_GRAPH_VALUE_WIDTH = 8;
+const SUMMARY_IMPACT_WIDTH = 10;
+const SUMMARY_BREAKDOWN_LIMIT = 12;
+const HEAVY_RULE = '='.repeat(SUMMARY_RULE_WIDTH);
+
+// Rtk-style compact summary view. Mirrors the rtk gain layout: header, KPI
+// stack, efficiency meter, By Operation table with proportional impact
+// bars, Daily Activity graph, Daily Breakdown table. Each section is
+// independently toggleable via the boolean flags so --graph and --daily
+// can ship single-section output.
+export function writeSummaryReport(input: SummaryReportInput): void {
+  const w = process.stdout;
+  const {
+    operations,
+    totals,
+    daily,
+    comparison,
+    windowHours,
+    operationFilter,
+    days,
+    topOps,
+    showGraph,
+    showBreakdown,
+    showHeadline,
+  } = input;
+
+  if (showHeadline) {
+    const filter = operationFilter ? ` (op=${operationFilter})` : '';
+    w.write(`${kleur.bold(`Colony Token Savings (last ${formatHoursLabel(windowHours)}${filter})`)}\n`);
+    w.write(`${HEAVY_RULE}\n`);
+    writeSummaryHeadline(totals, comparison);
+
+    if (totals.calls === 0) {
+      w.write(
+        kleur.dim(
+          'No mcp_metrics receipts in window. Register the colony MCP server or run agents that call its tools to populate.\n',
+        ),
+      );
+      return;
+    }
+
+    const lastTs = totals.last_ts ?? latestMetricTs(operations);
+    if (lastTs !== null && Date.now() - lastTs > 24 * 60 * 60_000) {
+      w.write(
+        `${kleur.yellow('[warn] No fresh receipts in the last 24h — verify the colony MCP wrapper is loaded.')}\n`,
+      );
+    }
+    w.write('\n');
+    writeSummaryByOperation(operations, comparison, topOps);
+  }
+
+  if (showGraph) {
+    if (showHeadline) w.write('\n');
+    writeSummaryDailyGraph(daily, days);
+  }
+
+  if (showBreakdown) {
+    if (showHeadline || showGraph) w.write('\n');
+    writeSummaryDailyBreakdown(daily, days);
+  }
+}
+
+function writeSummaryHeadline(
+  totals: McpMetricsAggregateRow,
+  comparison: SavingsLiveComparison,
+): void {
+  const w = process.stdout;
+  const calls = totals.calls;
+  const inputTokens = totals.input_tokens;
+  const outputTokens = totals.output_tokens;
+  const totalTokens = totals.total_tokens;
+  const totalMs = totals.total_duration_ms;
+  const avgMs = calls > 0 ? Math.round(totalMs / calls) : 0;
+
+  const baselineTokens = comparison.totals.baseline_tokens;
+  const colonyTokens = comparison.totals.colony_tokens;
+  const savedTokens = baselineTokens - colonyTokens;
+  const savingsPct =
+    baselineTokens > 0 ? Math.max(-100, Math.min(100, (savedTokens / baselineTokens) * 100)) : null;
+
+  const labelWidth = 20;
+  const lines: Array<[string, string]> = [
+    ['Total calls:', formatInt(calls)],
+    ['Input tokens:', formatTokens(inputTokens)],
+    ['Output tokens:', formatTokens(outputTokens)],
+    ['Total tokens:', formatTokens(totalTokens)],
+  ];
+  if (savingsPct !== null) {
+    const savedLabel = savedTokens >= 0
+      ? `${formatTokens(savedTokens)} (${formatPctSigned(savingsPct)})`
+      : `${formatTokens(Math.abs(savedTokens))} over (${formatPctSigned(savingsPct)})`;
+    lines.push(['Tokens saved:', savedLabel]);
+  } else {
+    lines.push([
+      'Tokens saved:',
+      kleur.dim('— (no reference baseline matched in this window)'),
+    ]);
+  }
+  lines.push([
+    'Total exec time:',
+    `${formatDurationMs(totalMs)} (avg ${formatDurationMs(avgMs)})`,
+  ]);
+
+  for (const [label, value] of lines) {
+    w.write(`${padVisible(kleur.dim(label), labelWidth)}${value}\n`);
+  }
+
+  const meterPct = savingsPct ?? null;
+  if (meterPct !== null) {
+    const clamped = Math.max(0, Math.min(100, meterPct));
+    const filled = Math.round((clamped / 100) * SUMMARY_METER_WIDTH);
+    const meter = '█'.repeat(filled) + '░'.repeat(SUMMARY_METER_WIDTH - filled);
+    const pctLabel = `${meterPct.toFixed(1)}%`;
+    const colored = colorByEfficiency(meterPct, `${meter} ${pctLabel}`);
+    w.write(`${padVisible(kleur.dim('Efficiency meter:'), labelWidth)}${colored}\n`);
+  } else {
+    w.write(
+      `${padVisible(kleur.dim('Efficiency meter:'), labelWidth)}${kleur.dim('—')}\n`,
+    );
+  }
+}
+
+function writeSummaryByOperation(
+  operations: ReadonlyArray<McpMetricsAggregateRow>,
+  comparison: SavingsLiveComparison,
+  topOps: number,
+): void {
+  const w = process.stdout;
+  if (operations.length === 0) return;
+
+  // Lookup table from operation -> matched savings_tokens (baseline - colony)
+  // from the comparison model. The comparison rows are keyed by *reference*
+  // operation name (e.g. "search"), while a single reference row can be
+  // populated by multiple matched live operations (e.g. "search" +
+  // "smart_search"). We attribute the row's saved tokens proportionally to
+  // each matched live op based on its share of the row's calls.
+  const savedByOp = new Map<string, number>();
+  for (const row of comparison.rows) {
+    const saved = row.baseline_tokens - row.colony_tokens;
+    if (row.matched_operations.length === 0) {
+      savedByOp.set(row.operation, saved);
+      continue;
+    }
+    const matchedCalls = row.matched_operations.reduce((sum, opName) => {
+      const liveRow = operations.find((r) => r.operation === opName);
+      return sum + (liveRow?.calls ?? 0);
+    }, 0);
+    for (const opName of row.matched_operations) {
+      const liveRow = operations.find((r) => r.operation === opName);
+      const calls = liveRow?.calls ?? 0;
+      const share = matchedCalls > 0 ? calls / matchedCalls : 1 / row.matched_operations.length;
+      savedByOp.set(opName, Math.round(saved * share));
+    }
+  }
+
+  const sorted = [...operations].sort((a, b) => {
+    const savedA = savedByOp.get(a.operation) ?? -Infinity;
+    const savedB = savedByOp.get(b.operation) ?? -Infinity;
+    if (savedA !== savedB) return savedB - savedA;
+    return b.total_tokens - a.total_tokens;
+  });
+  const top = sorted.slice(0, topOps);
+  const maxImpact = top.reduce((m, row) => {
+    const saved = savedByOp.get(row.operation);
+    const weight = saved !== undefined && saved > 0 ? saved : row.total_tokens;
+    return Math.max(m, weight);
+  }, 0);
+
+  w.write(`${kleur.bold('By Operation')}\n`);
+  w.write(`${kleur.dim('-'.repeat(SUMMARY_TABLE_WIDTH))}\n`);
+  const header = [
+    padVisible(' #', 3),
+    padVisible('Operation', 26),
+    padVisibleRight('Calls', 6),
+    padVisibleRight('Saved', 8),
+    padVisibleRight('Share', 6),
+    padVisibleRight('Avg ms', 7),
+    padVisible('Impact', SUMMARY_IMPACT_WIDTH),
+  ].join('  ');
+  w.write(`${kleur.dim(header)}\n`);
+  w.write(`${kleur.dim('-'.repeat(SUMMARY_TABLE_WIDTH))}\n`);
+
+  const totalTokens = operations.reduce((m, row) => m + row.total_tokens, 0);
+  top.forEach((row, idx) => {
+    const saved = savedByOp.get(row.operation);
+    const weight = saved !== undefined && saved > 0 ? saved : row.total_tokens;
+    const sharePct = totalTokens > 0 ? (row.total_tokens / totalTokens) * 100 : 0;
+    const savedCell =
+      saved === undefined
+        ? kleur.dim('—')
+        : saved >= 0
+          ? kleur.green(formatTokens(saved))
+          : kleur.red(`-${formatTokens(Math.abs(saved))}`);
+    const cells = [
+      padVisible(`${idx + 1}.`, 3),
+      padVisible(truncate(row.operation, 26), 26),
+      padVisibleRight(formatInt(row.calls), 6),
+      padVisibleRight(savedCell, 8),
+      padVisibleRight(formatPctValue(sharePct), 6),
+      padVisibleRight(String(row.avg_duration_ms), 7),
+      renderImpactBar(weight, maxImpact, SUMMARY_IMPACT_WIDTH),
+    ];
+    w.write(`${cells.join('  ')}\n`);
+  });
+  w.write(`${kleur.dim('-'.repeat(SUMMARY_TABLE_WIDTH))}\n`);
+}
+
+function writeSummaryDailyGraph(
+  daily: ReadonlyArray<McpMetricsDailyRow>,
+  days: number,
+): void {
+  const w = process.stdout;
+  const window = fillDailyWindow(daily, days);
+  const maxTokens = window.reduce((m, row) => Math.max(m, row.total_tokens), 0);
+  w.write(`${kleur.bold(`Daily Activity (last ${days} days)`)}\n`);
+  w.write(`${kleur.dim('-'.repeat(SUMMARY_GRAPH_LABEL_WIDTH + 3 + SUMMARY_GRAPH_BAR_WIDTH + 1 + SUMMARY_GRAPH_VALUE_WIDTH))}\n`);
+  if (maxTokens === 0) {
+    w.write(kleur.dim('  (no token activity in window)\n'));
+    return;
+  }
+  for (const row of window) {
+    const label = row.day.slice(5); // MM-DD
+    const bar = renderImpactBar(row.total_tokens, maxTokens, SUMMARY_GRAPH_BAR_WIDTH);
+    const value = formatTokens(row.total_tokens);
+    w.write(
+      `${padVisible(label, SUMMARY_GRAPH_LABEL_WIDTH)} │${bar} ${padVisibleRight(value, SUMMARY_GRAPH_VALUE_WIDTH)}\n`,
+    );
+  }
+}
+
+function writeSummaryDailyBreakdown(
+  daily: ReadonlyArray<McpMetricsDailyRow>,
+  days: number,
+): void {
+  const w = process.stdout;
+  const window = fillDailyWindow(daily, days).slice(-SUMMARY_BREAKDOWN_LIMIT);
+  const totals = window.reduce(
+    (acc, row) => {
+      acc.calls += row.calls;
+      acc.input_tokens += row.input_tokens;
+      acc.output_tokens += row.output_tokens;
+      acc.total_tokens += row.total_tokens;
+      acc.total_duration_ms += row.total_duration_ms;
+      return acc;
+    },
+    { calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, total_duration_ms: 0 },
+  );
+
+  w.write(`${kleur.bold(`Daily Breakdown (${window.length} day${window.length === 1 ? '' : 's'})`)}\n`);
+  const ruleWidth = 74;
+  w.write(`${kleur.dim('='.repeat(ruleWidth))}\n`);
+  const head = [
+    padVisible('Date', 12),
+    padVisibleRight('Calls', 7),
+    padVisibleRight('Input', 9),
+    padVisibleRight('Output', 9),
+    padVisibleRight('Tokens', 9),
+    padVisibleRight('Avg ms', 8),
+    padVisibleRight('Time', 9),
+  ].join('  ');
+  w.write(`${kleur.dim(head)}\n`);
+  w.write(`${kleur.dim('-'.repeat(ruleWidth))}\n`);
+  for (const row of window) {
+    const avgMs = row.calls > 0 ? Math.round(row.total_duration_ms / row.calls) : 0;
+    const cells = [
+      padVisible(row.day, 12),
+      padVisibleRight(formatInt(row.calls), 7),
+      padVisibleRight(formatTokens(row.input_tokens), 9),
+      padVisibleRight(formatTokens(row.output_tokens), 9),
+      padVisibleRight(formatTokens(row.total_tokens), 9),
+      padVisibleRight(String(avgMs), 8),
+      padVisibleRight(formatDurationMs(row.total_duration_ms), 9),
+    ];
+    w.write(`${cells.join('  ')}\n`);
+  }
+  w.write(`${kleur.dim('-'.repeat(ruleWidth))}\n`);
+  const totalAvgMs = totals.calls > 0 ? Math.round(totals.total_duration_ms / totals.calls) : 0;
+  const totalCells = [
+    padVisible(kleur.bold('TOTAL'), 12),
+    padVisibleRight(formatInt(totals.calls), 7),
+    padVisibleRight(formatTokens(totals.input_tokens), 9),
+    padVisibleRight(formatTokens(totals.output_tokens), 9),
+    padVisibleRight(formatTokens(totals.total_tokens), 9),
+    padVisibleRight(String(totalAvgMs), 8),
+    padVisibleRight(formatDurationMs(totals.total_duration_ms), 9),
+  ];
+  w.write(`${totalCells.join('  ')}\n`);
+}
+
+function formatInt(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  return Math.round(n).toLocaleString('en-US');
+}
+
+function formatPctValue(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0%';
+  if (value >= 10) return `${Math.round(value)}%`;
+  return `${value.toFixed(1)}%`;
+}
+
+function formatPctSigned(value: number): string {
+  const rounded = Math.abs(value) >= 10 ? `${Math.round(value)}%` : `${value.toFixed(1)}%`;
+  if (value > 0) return kleur.green(rounded);
+  if (value < 0) return kleur.red(rounded);
+  return rounded;
+}
+
+function colorByEfficiency(pct: number, text: string): string {
+  if (pct >= 70) return kleur.green().bold(text);
+  if (pct >= 40) return kleur.yellow().bold(text);
+  return kleur.red().bold(text);
 }
