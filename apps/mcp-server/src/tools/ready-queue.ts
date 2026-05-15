@@ -330,6 +330,7 @@ async function maybeAutoClaim(
   const claimResult = attemptClaimPlanSubtask(store, {
     plan_slug: claim_args.plan_slug,
     subtask_index: claim_args.subtask_index,
+    repo_root: claim_args.repo_root,
     session_id: caller.session_id,
     agent: caller.agent,
   });
@@ -424,24 +425,29 @@ export async function buildReadyForAgent(
     ]),
   );
   const role = actorRole(store, { agent: args.agent, session_id: args.session_id });
+  const liveSubtaskBranches = new Set(
+    allTasks.map((task) => subtaskBranchKey(task.repo_root, task.branch)),
+  );
   const quotaRelays = quotaRelayReadyItems(store, args, plans, allTasks);
   const available = filterReadyForExecutor(
     plans.flatMap((plan) =>
-      plan.next_available.map((subtask) =>
-        rankSubtask(store, {
-          plan_slug: plan.plan_slug,
-          repo_root: plan.repo_root,
-          subtask,
-          session_id: args.session_id,
-          agent: args.agent,
-          profile,
-          parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
-          created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
-          proposal_status: tasksById.get(subtask.task_id)?.proposal_status ?? null,
-          reason: 'ready_high_score',
-          current_claim: false,
-        }),
-      ),
+      plan.next_available
+        .filter((subtask) => hasLiveSubtaskBranch(liveSubtaskBranches, plan, subtask))
+        .map((subtask) =>
+          rankSubtask(store, {
+            plan_slug: plan.plan_slug,
+            repo_root: plan.repo_root,
+            subtask,
+            session_id: args.session_id,
+            agent: args.agent,
+            profile,
+            parent_plan_created_by: tasksById.get(plan.spec_task_id)?.created_by ?? null,
+            created_at: tasksById.get(subtask.task_id)?.created_at ?? plan.created_at,
+            proposal_status: tasksById.get(subtask.task_id)?.proposal_status ?? null,
+            reason: 'ready_high_score',
+            current_claim: false,
+          }),
+        ),
     ),
     role,
   );
@@ -452,6 +458,7 @@ export async function buildReadyForAgent(
           (subtask) =>
             subtask.status === 'claimed' && subtask.claimed_by_session_id === args.session_id,
         )
+        .filter((subtask) => hasLiveSubtaskBranch(liveSubtaskBranches, plan, subtask))
         .map((subtask) =>
           rankSubtask(store, {
             plan_slug: plan.plan_slug,
@@ -629,6 +636,20 @@ function specRootSetupIssue(repoRoot: string | undefined): SpecRootSetupIssue | 
     ...buildSpecRootMissingDetails(repoRoot),
     message: specRootMissingMessage(repoRoot),
   };
+}
+
+function hasLiveSubtaskBranch(
+  liveSubtaskBranches: Set<string>,
+  plan: Pick<PlanInfo, 'repo_root' | 'plan_slug'>,
+  subtask: Pick<SubtaskInfo, 'subtask_index'>,
+): boolean {
+  return liveSubtaskBranches.has(
+    subtaskBranchKey(plan.repo_root, `spec/${plan.plan_slug}/sub-${subtask.subtask_index}`),
+  );
+}
+
+function subtaskBranchKey(repoRoot: string, branch: string): string {
+  return `${repoRoot}\0${branch}`;
 }
 
 function codexMcpCall(args: TaskPlanClaimArgs): string {

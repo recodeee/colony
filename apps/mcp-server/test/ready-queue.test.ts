@@ -792,6 +792,50 @@ describe('task_ready_for_agent', () => {
     });
   });
 
+  it('does not return ready entries whose advertised sub-task index has no branch row', async () => {
+    const parent = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'spec/stale-ready-pointer',
+      session_id: 'planner',
+      title: 'Stale ready pointer',
+    });
+    const subtask = TaskThread.open(store, {
+      repo_root: repoRoot,
+      branch: 'spec/stale-ready-pointer/sub-0',
+      session_id: 'planner',
+      title: 'Stale subtask branch',
+    });
+    store.addObservation({
+      session_id: 'planner',
+      task_id: subtask.task_id,
+      kind: 'plan-subtask',
+      content: 'Stale advertised index\n\nThe metadata points at sub-7, but only sub-0 exists.',
+      metadata: {
+        parent_plan_slug: 'stale-ready-pointer',
+        parent_plan_title: 'Stale ready pointer',
+        parent_spec_task_id: parent.task_id,
+        subtask_index: 7,
+        title: 'Stale advertised index',
+        description: 'The metadata points at sub-7, but only sub-0 exists.',
+        file_scope: ['apps/api/stale-ready.ts'],
+        depends_on: [],
+        spec_row_id: null,
+        capability_hint: 'api_work',
+        status: 'available',
+      },
+    });
+
+    const result = await call<ReadyResult>('task_ready_for_agent', {
+      session_id: 'agent-session',
+      agent: 'codex',
+      repo_root: repoRoot,
+      auto_claim: false,
+    });
+
+    expect(result.ready).toEqual([]);
+    expect(result.total_available).toBe(0);
+  });
+
   it('returns the empty state when all future sub-tasks are blocked', async () => {
     await call('task_plan_publish', {
       ...publishArgs(
@@ -1313,6 +1357,7 @@ describe('task_ready_for_agent', () => {
 
   it('keeps quota relay ready payloads compact for many files and long handoffs', async () => {
     const sessionId = 'quota-session';
+    store.startSession({ id: sessionId, ide: 'codex', cwd: repoRoot });
     const thread = TaskThread.open(store, {
       repo_root: repoRoot,
       branch: 'agent/codex/large-quota-relay',

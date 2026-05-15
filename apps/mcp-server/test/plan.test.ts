@@ -723,6 +723,29 @@ describe('task_plan_list', () => {
     expect(uiPlans).toHaveLength(0);
   });
 
+  it('defaults task_plan_list to 10 plans while honoring explicit limits up to the cap', async () => {
+    for (let index = 0; index < 12; index += 1) {
+      await call<PublishResult>(
+        'task_plan_publish',
+        basicPublishArgs({
+          slug: `limit-plan-${index}`,
+          title: `Limit plan ${index}`,
+        }),
+      );
+    }
+
+    const defaultPlans = await call<PlanRollup[]>('task_plan_list', {
+      repo_root: repoRoot,
+    });
+    const expandedPlans = await call<PlanRollup[]>('task_plan_list', {
+      repo_root: repoRoot,
+      limit: 12,
+    });
+
+    expect(defaultPlans).toHaveLength(10);
+    expect(expandedPlans).toHaveLength(12);
+  });
+
   it('returns a compact rollup by default that omits description and file_scope', async () => {
     await call<PublishResult>('task_plan_publish', basicPublishArgs());
 
@@ -989,6 +1012,56 @@ describe('task_plan_claim_subtask', () => {
       },
     });
     expect(archivedWarnings()).toHaveLength(1);
+  });
+
+  it('returns recovery details for stale sub-task pointers on an existing plan', async () => {
+    await call<PublishResult>(
+      'task_plan_publish',
+      basicPublishArgs({
+        slug: 'stale-claim-recovery',
+        subtasks: [
+          {
+            title: 'Build widget API',
+            description: 'Add GET /api/widgets.',
+            file_scope: ['apps/api/src/widgets.ts'],
+            capability_hint: 'api_work',
+          },
+          {
+            title: 'Build widget page',
+            description: 'Render the widget list.',
+            file_scope: ['apps/frontend/src/pages/widgets.tsx'],
+            capability_hint: 'ui_work',
+          },
+        ],
+      }),
+    );
+
+    const res = await client.callTool({
+      name: 'task_plan_claim_subtask',
+      arguments: {
+        plan_slug: 'stale-claim-recovery',
+        subtask_index: 9,
+        session_id: 'B',
+        agent: 'codex',
+      },
+    });
+    expect(res.isError).toBe(true);
+    const payload = JSON.parse(
+      (res.content as Array<{ type: string; text: string }>)[0]?.text ?? '{}',
+    ) as {
+      code: string;
+      error: string;
+      plan_slug: string;
+      next_available_subtask_index: number | null;
+      next_available_count: number;
+      next_available: Array<{ subtask_index: number; capability_hint: string | null }>;
+    };
+    expect(payload.code).toBe('PLAN_SUBTASK_STALE');
+    expect(payload.error).toContain('spec/stale-claim-recovery/sub-9');
+    expect(payload.plan_slug).toBe('stale-claim-recovery');
+    expect(payload.next_available_count).toBe(2);
+    expect(payload.next_available_subtask_index).toBe(0);
+    expect(payload.next_available.map((s) => s.subtask_index)).toEqual([0, 1]);
   });
 
   it('reports a claimed sub-task by bound spec row id', async () => {
