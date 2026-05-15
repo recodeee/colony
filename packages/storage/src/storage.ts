@@ -1580,6 +1580,9 @@ export class Storage {
       created_by: p.created_by,
       created_at: now,
       updated_at: now,
+      proposal_status: null,
+      approved_by: null,
+      observation_evidence_ids: null,
     };
   }
 
@@ -2579,11 +2582,14 @@ export class Storage {
    */
   upsertAgentProfile(p: NewAgentProfile): void {
     const now = p.updated_at ?? Date.now();
+    const existing = this.getAgentProfile(p.agent);
+    const role = p.role ?? existing?.role ?? 'executor';
+    const openProposalCount = p.open_proposal_count ?? existing?.open_proposal_count ?? 0;
     this.db
       .prepare(
-        'INSERT OR REPLACE INTO agent_profiles(agent, capabilities, updated_at) VALUES (?, ?, ?)',
+        'INSERT OR REPLACE INTO agent_profiles(agent, capabilities, role, open_proposal_count, updated_at) VALUES (?, ?, ?, ?, ?)',
       )
-      .run(p.agent, p.capabilities, now);
+      .run(p.agent, p.capabilities, role, openProposalCount, now);
   }
 
   getAgentProfile(agent: string): AgentProfileRow | undefined {

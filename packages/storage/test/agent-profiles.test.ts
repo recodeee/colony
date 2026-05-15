@@ -28,6 +28,25 @@ describe('agent profiles storage', () => {
     expect(row).toEqual({
       agent: 'claude',
       capabilities: JSON.stringify({ ui_work: 0.9, api_work: 0.3 }),
+      role: 'executor',
+      open_proposal_count: 0,
+      updated_at: 1_000,
+    });
+  });
+
+  it('upsert + get round-trips scout role and open proposal count', () => {
+    storage.upsertAgentProfile({
+      agent: 'scout-a',
+      capabilities: '{}',
+      role: 'scout',
+      open_proposal_count: 2,
+      updated_at: 1_000,
+    });
+    expect(storage.getAgentProfile('scout-a')).toEqual({
+      agent: 'scout-a',
+      capabilities: '{}',
+      role: 'scout',
+      open_proposal_count: 2,
       updated_at: 1_000,
     });
   });
@@ -36,6 +55,8 @@ describe('agent profiles storage', () => {
     storage.upsertAgentProfile({
       agent: 'codex',
       capabilities: JSON.stringify({ api_work: 0.5 }),
+      role: 'scout',
+      open_proposal_count: 1,
       updated_at: 1_000,
     });
     storage.upsertAgentProfile({
@@ -46,6 +67,8 @@ describe('agent profiles storage', () => {
     const row = storage.getAgentProfile('codex');
     if (!row) throw new Error('expected codex profile');
     expect(JSON.parse(row.capabilities)).toEqual({ api_work: 0.9, infra_work: 0.8 });
+    expect(row.role).toBe('scout');
+    expect(row.open_proposal_count).toBe(1);
     expect(row?.updated_at).toBe(2_000);
   });
 

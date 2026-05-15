@@ -51,6 +51,9 @@ export interface TaskRow {
   created_by: string;
   created_at: number;
   updated_at: number;
+  proposal_status: 'proposed' | 'approved' | 'archived' | null;
+  approved_by: string | null;
+  observation_evidence_ids: string | null;
 }
 
 export interface NewTask {
@@ -222,12 +225,16 @@ export interface NewReinforcement {
 export interface AgentProfileRow {
   agent: string;
   capabilities: string;
+  role: 'scout' | 'executor' | 'queen';
+  open_proposal_count: number;
   updated_at: number;
 }
 
 export interface NewAgentProfile {
   agent: string;
   capabilities: string;
+  role?: 'scout' | 'executor' | 'queen';
+  open_proposal_count?: number;
   updated_at?: number;
 }
 
