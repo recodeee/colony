@@ -4,10 +4,12 @@ import {
   type SettingDoc,
   SettingsSchema,
   defaultSettings,
+  effectiveTtlConfig,
   loadSettings,
   saveSettings,
   settingsDocs,
   settingsPath,
+  type TtlOverrideKey,
 } from '@colony/config';
 import type { Command } from 'commander';
 import kleur from 'kleur';
@@ -187,6 +189,12 @@ function printDocs(docs: SettingDoc[]): void {
   }
 }
 
+const TTL_LABELS: Record<TtlOverrideKey, string> = {
+  fileHeatHalfLifeMinutes: 'File heat half-life',
+  claimStaleMinutes: 'Claim stale TTL',
+  coordinationSweepIntervalMinutes: 'Coordination sweep interval',
+};
+
 export function registerConfigCommand(program: Command): void {
   const cfg = program.command('config').description('View or edit colony settings');
 
@@ -203,6 +211,38 @@ export function registerConfigCommand(program: Command): void {
     .description('Print the settings file path')
     .action(() => {
       process.stdout.write(`${settingsPath()}\n`);
+    });
+
+  cfg
+    .command('ttl')
+    .description('Show effective TTL settings, including per-repo .colony/ttl.yaml overrides')
+    .option('--cwd <path>', 'Directory used to discover the repo override file')
+    .option('--json', 'Emit structured JSON')
+    .action((opts: { cwd?: string; json?: boolean }) => {
+      const effective = effectiveTtlConfig(loadSettings(), opts.cwd ?? process.cwd());
+      if (opts.json === true) {
+        process.stdout.write(`${JSON.stringify(effective, null, 2)}\n`);
+        return;
+      }
+
+      process.stdout.write(`${kleur.bold('TTL config')}\n`);
+      const sourceLabel =
+        effective.source.path === null
+          ? 'no git repo found'
+          : effective.source.present
+            ? effective.source.path
+            : `${effective.source.path} (not found)`;
+      process.stdout.write(`${kleur.dim('override file:')} ${sourceLabel}\n\n`);
+      for (const [key, value] of Object.entries(effective.values) as Array<
+        [TtlOverrideKey, number]
+      >) {
+        const source = effective.overriddenKeys.includes(key) ? 'override' : 'settings';
+        process.stdout.write(
+          `${kleur.cyan(key.padEnd(36))} ${String(value).padStart(6)} min  ${kleur.dim(
+            source,
+          )}  ${TTL_LABELS[key]}\n`,
+        );
+      }
     });
 
   cfg
