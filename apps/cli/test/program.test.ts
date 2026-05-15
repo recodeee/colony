@@ -39,6 +39,7 @@ describe('Colony CLI program', () => {
       'reindex',
       'resume',
       'rescue',
+      'scout',
       'search',
       'sidecar',
       'start',
@@ -87,6 +88,7 @@ describe('Colony CLI program', () => {
         mcp                                               Run the MCP stdio server (typically invoked by the IDE)
         bridge                                            OMX/HUD bridge helpers for compact Colony status
         search [options] <query>                          Query memory from the terminal
+        scout                                             Review scout task proposals
         sidecar                                           Manage optional runtime sidecars
         suggest [options] <description...>                Suggest an approach from similar past task history
         task                                              Task scheduling helpers
