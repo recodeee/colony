@@ -234,14 +234,22 @@ export function register(server: McpServer, ctx: ToolContext): void {
         pointer,
         allow_omx_notepad_fallback,
       }) => {
-        const candidates = activeTaskCandidates(store, {
+        let candidates = activeTaskCandidates(store, {
           session_id,
           ...(repo_root !== undefined ? { repo_root } : {}),
           ...(branch !== undefined ? { branch } : {}),
         });
-        const visibleCandidates = candidates.slice(0, candidate_limit ?? 10);
+        let materialized = false;
+        if (candidates.length === 0 && repo_root !== undefined && branch !== undefined) {
+          const candidate = materializeWorkingNoteTask(store, { session_id, repo_root, branch });
+          if (candidate !== null) {
+            candidates = [candidate];
+            materialized = true;
+          }
+        }
 
         if (candidates.length !== 1) {
+          const visibleCandidates = candidates.slice(0, candidate_limit ?? 10);
           const code = candidates.length === 0 ? 'ACTIVE_TASK_NOT_FOUND' : 'AMBIGUOUS_ACTIVE_TASK';
           if (code === 'ACTIVE_TASK_NOT_FOUND' && allow_omx_notepad_fallback === true) {
             const omxPointer = writeOmxNotepadPointer({
@@ -321,6 +329,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
           metadata: {
             working_note: true,
             resolved_by: 'task_note_working',
+            ...(materialized ? { materialized_task: true } : {}),
             ...(repo_root !== undefined ? { requested_repo_root: repo_root } : {}),
             ...(branch !== undefined ? { requested_branch: branch } : {}),
           },
@@ -345,6 +354,7 @@ export function register(server: McpServer, ctx: ToolContext): void {
                 observation_id,
                 id: observation_id,
                 task_id: candidate.task_id,
+                ...(materialized ? { status: 'task_materialized' } : {}),
                 omx_notepad_pointer: omxPointer,
               }),
             },
@@ -844,6 +854,39 @@ interface NearbyTaskMatch {
   status: string;
   updated_at: number;
   match_kind: 'branch_and_repo' | 'branch_only' | 'repo_only';
+}
+
+function materializeWorkingNoteTask(
+  store: ToolContext['store'],
+  opts: { session_id: string; repo_root: string; branch: string },
+): ActiveTaskCandidate | null {
+  try {
+    const thread = TaskThread.open(store, {
+      repo_root: resolve(opts.repo_root),
+      branch: opts.branch,
+      session_id: opts.session_id,
+    });
+    const agent = agentForWorkingNoteParticipant(opts.session_id, opts.branch);
+    thread.join(opts.session_id, agent);
+    const task = thread.task();
+    if (!task) return null;
+    return {
+      task_id: task.id,
+      title: task.title,
+      repo_root: task.repo_root,
+      branch: task.branch,
+      status: task.status,
+      updated_at: task.updated_at,
+      agent,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function agentForWorkingNoteParticipant(session_id: string, branch: string): string {
+  const identity = detectMcpClientIdentity(process.env, { session_id, branch });
+  return identity.inferred_agent === 'unbound' ? 'unknown' : identity.inferred_agent;
 }
 
 /**

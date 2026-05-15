@@ -940,7 +940,6 @@ describe('task threads — handoff lifecycle', () => {
     }>('task_note_working', {
       session_id: 'missing-session',
       repo_root: repoRoot,
-      branch: 'agent/codex/no-active-task',
       content: 'working state: SHOULD_NOT_APPEAR_IN_OMX_FALLBACK',
       allow_omx_notepad_fallback: true,
       pointer: {
@@ -965,40 +964,59 @@ describe('task threads — handoff lifecycle', () => {
     expect(note).not.toContain('SHOULD_NOT_APPEAR_IN_OMX_FALLBACK');
   });
 
-  it('task_note_working returns nearby_tasks when ACTIVE_TASK_NOT_FOUND and a task exists on the branch', async () => {
-    const repoRoot = join(dir, 'repo-nearby-tasks');
-    // Existing task on the requested branch, but the caller's session never
-    // joined it. Without widening, this error mode hides a recoverable
-    // candidate; with widening, the caller learns the task_id to bind to.
+  it('task_note_working materializes a task when repo_root and branch are supplied', async () => {
+    const repoRoot = join(dir, 'repo-materialized-task');
     const seeded = seedTwoSessionTask(repoRoot);
 
-    const err = await callError<{
-      code: string;
-      error: string;
-      candidates: unknown[];
-      nearby_tasks: Array<{
-        task_id: number;
-        repo_root: string;
-        branch: string;
-        match_kind: string;
-      }>;
-      hint: string;
+    const result = await call<{
+      observation_id: number;
+      task_id: number;
+      status: string;
     }>('task_note_working', {
       session_id: 'fresh-unjoined-session',
       repo_root: repoRoot,
       branch: 'feat/handoff',
-      content: 'working state: just started, has not joined the active task yet',
+      content: 'working state: materialized instead of ACTIVE_TASK_NOT_FOUND',
     });
 
-    expect(err.code).toBe('ACTIVE_TASK_NOT_FOUND');
-    expect(err.candidates).toEqual([]);
-    expect(err.nearby_tasks.length).toBeGreaterThan(0);
-    expect(err.nearby_tasks[0]).toMatchObject({
+    expect(result).toMatchObject({
       task_id: seeded.task_id,
-      branch: 'feat/handoff',
-      match_kind: 'branch_and_repo',
+      status: 'task_materialized',
     });
-    expect(err.hint).toMatch(/task_post|task_accept_handoff/);
+    expect(store.storage.listParticipants(seeded.task_id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ session_id: 'fresh-unjoined-session', agent: 'unknown' }),
+      ]),
+    );
+    expect(store.storage.getObservation(result.observation_id)).toMatchObject({
+      task_id: seeded.task_id,
+      kind: 'note',
+    });
+  });
+
+  it('task_note_working creates a branch task instead of failing when no task row exists', async () => {
+    const repoRoot = join(dir, 'repo-materialized-new-task');
+
+    const result = await call<{
+      observation_id: number;
+      task_id: number;
+      status: string;
+    }>('task_note_working', {
+      session_id: 'fresh-new-branch-session',
+      repo_root: repoRoot,
+      branch: 'agent/codex/new-working-note-task',
+      content: 'working state: created task instead of ACTIVE_TASK_NOT_FOUND',
+    });
+
+    expect(result.status).toBe('task_materialized');
+    expect(store.storage.getTask(result.task_id)).toMatchObject({
+      repo_root: repoRoot,
+      branch: 'agent/codex/new-working-note-task',
+    });
+    expect(store.storage.getObservation(result.observation_id)).toMatchObject({
+      task_id: result.task_id,
+      kind: 'note',
+    });
   });
 
   it('task_list includes a ready-queue warning and next tool', async () => {
