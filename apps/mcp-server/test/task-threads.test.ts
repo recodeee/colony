@@ -97,6 +97,27 @@ describe('task threads — file claims', () => {
     expect(claim?.metadata).toContain('"file_path":"src/viewer.tsx"');
   });
 
+  it('keeps uncontended task_claim_file calls under the hot-path budget', async () => {
+    const repoRoot = mkdtempSync(join(dir, 'repo-'));
+    mkdirSync(join(repoRoot, 'src'), { recursive: true });
+    const { task_id, sessionA } = seedTwoSessionTask(repoRoot);
+    const durations: number[] = [];
+
+    for (let i = 0; i < 40; i += 1) {
+      const started = performance.now();
+      const result = await call<{ live_file_contentions: unknown[] }>('task_claim_file', {
+        task_id,
+        session_id: sessionA,
+        file_path: `src/hot-path-${i}.ts`,
+      });
+      durations.push(performance.now() - started);
+      expect(result.live_file_contentions).toEqual([]);
+    }
+
+    const p95 = [...durations].sort((a, b) => a - b)[Math.floor(durations.length * 0.95)] ?? 0;
+    expect(p95).toBeLessThan(100);
+  });
+
   it('rejects pseudo task_claim_file paths with a pseudo-specific message', async () => {
     const { task_id, sessionA } = seedTwoSessionTask();
 
