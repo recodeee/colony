@@ -276,6 +276,18 @@ describe('buildCoordinationSweep stale claim cleanup', () => {
       released_quota_pending_claims: 1,
     });
     expect(applied.safe_cleanup.released_quota_pending_claims).toBe(1);
+    expect(applied.released_quota_pending_summary).toEqual({
+      released_count: 1,
+      oldest_age_minutes: 300,
+      top_tasks: [
+        {
+          task_id: taskId,
+          branch: 'agent/quota-expired',
+          released_count: 1,
+          oldest_age_minutes: 300,
+        },
+      ],
+    });
     expect(applied.released_expired_quota_pending_claims).toEqual([
       expect.objectContaining({
         task_id: taskId,
