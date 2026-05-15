@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultSettings } from '@colony/config';
+import { defaultSettings, type Settings } from '@colony/config';
 import { type Embedder, MemoryStore, TaskThread } from '@colony/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -21,6 +21,7 @@ const THRESHOLDS = {
 let dir: string;
 let repo: string;
 let store: MemoryStore;
+let storeRevision: number;
 
 class FakeEmbedder implements Embedder {
   readonly model = 'fake-model';
@@ -118,6 +119,7 @@ function noSuggestionDeps(): SuggestionPrefaceDeps {
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'colony-session-start-suggestions-'));
   repo = join(dir, 'repo');
+  storeRevision = 0;
   mkdirSync(repo, { recursive: true });
   fakeGitCheckout(repo, 'agent/codex/sessionstart-suggest');
   store = new MemoryStore({
@@ -128,6 +130,15 @@ beforeEach(() => {
     },
   });
 });
+
+function resetStoreWithSettings(settings: Settings): void {
+  store.close();
+  storeRevision += 1;
+  store = new MemoryStore({
+    dbPath: join(dir, `data-${storeRevision}.db`),
+    settings,
+  });
+}
 
 afterEach(() => {
   store.close();
@@ -192,10 +203,10 @@ describe('SessionStart predictive suggestion preface', () => {
   );
 
   it('injects the legacy verbose contract when sessionStart.contractMode is full', async () => {
-    store.settings = {
+    resetStoreWithSettings({
       ...store.settings,
       sessionStart: { contractMode: 'full' },
-    };
+    });
     const preface = await sessionStart(
       store,
       { session_id: 'S-full', ide: 'codex', cwd: repo },
@@ -210,10 +221,10 @@ describe('SessionStart predictive suggestion preface', () => {
   });
 
   it('omits the contract section when sessionStart.contractMode is none', async () => {
-    store.settings = {
+    resetStoreWithSettings({
       ...store.settings,
       sessionStart: { contractMode: 'none' },
-    };
+    });
     const preface = await sessionStart(
       store,
       { session_id: 'S-none', ide: 'codex', cwd: repo },
