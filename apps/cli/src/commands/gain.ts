@@ -28,6 +28,7 @@ interface GainOptions {
   sessionLimit?: string;
   inputCostPer1m?: string;
   outputCostPer1m?: string;
+  cost?: boolean;
   reference?: boolean;
   honest?: boolean;
   recentHours?: string;
@@ -105,6 +106,7 @@ export function registerGainCommand(program: Command): void {
       '--output-cost-per-1m <usd>',
       'USD rate per 1M output tokens; env COLONY_MCP_OUTPUT_USD_PER_1M',
     )
+    .option('--no-cost', 'suppress USD cost output even when cost rates are configured')
     .action(async (opts: GainOptions) => {
       const settings = loadSettings();
       const hoursArg = opts.hours ? Number(opts.hours) : undefined;
@@ -133,12 +135,13 @@ export function registerGainCommand(program: Command): void {
         settings,
         (storage) => {
           const sessionLimit = parseSessionLimit(opts.sessionLimit);
+          const cost = costOptionsFromCli(opts);
           const fullAgg = storage.aggregateMcpMetrics({
             since,
             until: now,
             ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
             ...(sessionLimit !== undefined ? { sessionLimit } : {}),
-            cost: costOptionsFromCli(opts),
+            cost,
           });
           const recentAgg =
             moversEnabled && recentSince !== null && recentSince > since
@@ -146,7 +149,7 @@ export function registerGainCommand(program: Command): void {
                   since: recentSince,
                   until: now,
                   ...(opts.operation !== undefined ? { operation: opts.operation } : {}),
-                  cost: costOptionsFromCli(opts),
+                  cost,
                 })
               : null;
           const dailyRows = summaryRequested
@@ -222,6 +225,7 @@ export function registerGainCommand(program: Command): void {
           comparison,
           windowHours,
           operationFilter: opts.operation,
+          costBasis: live.cost_basis,
           days: dailyDays,
           topOps: topOpsLimit,
           showGraph: opts.daily !== true || opts.graph === true,
@@ -1016,6 +1020,7 @@ function costOptionsFromCli(opts: GainOptions): {
   input_usd_per_1m_tokens?: number;
   output_usd_per_1m_tokens?: number;
 } {
+  if (opts.cost === false) return {};
   const inputRate = parseCostRate(opts.inputCostPer1m, process.env.COLONY_MCP_INPUT_USD_PER_1M);
   const outputRate = parseCostRate(opts.outputCostPer1m, process.env.COLONY_MCP_OUTPUT_USD_PER_1M);
   return {
@@ -1244,6 +1249,7 @@ export interface SummaryReportInput {
   comparison: SavingsLiveComparison;
   windowHours: number;
   operationFilter: string | undefined;
+  costBasis: McpMetricsCostBasis;
   days: number;
   topOps: number;
   showGraph: boolean;
@@ -1275,6 +1281,7 @@ export function writeSummaryReport(input: SummaryReportInput): void {
     comparison,
     windowHours,
     operationFilter,
+    costBasis,
     days,
     topOps,
     showGraph,
@@ -1286,7 +1293,7 @@ export function writeSummaryReport(input: SummaryReportInput): void {
     const filter = operationFilter ? ` (op=${operationFilter})` : '';
     w.write(`${kleur.bold(`Colony Token Savings (last ${formatHoursLabel(windowHours)}${filter})`)}\n`);
     w.write(`${HEAVY_RULE}\n`);
-    writeSummaryHeadline(totals, comparison);
+    writeSummaryHeadline(totals, comparison, costBasis);
 
     if (totals.calls === 0) {
       w.write(
@@ -1304,7 +1311,7 @@ export function writeSummaryReport(input: SummaryReportInput): void {
       );
     }
     w.write('\n');
-    writeSummaryByOperation(operations, comparison, topOps);
+    writeSummaryByOperation(operations, comparison, costBasis, topOps);
   }
 
   if (showGraph) {
@@ -1321,6 +1328,7 @@ export function writeSummaryReport(input: SummaryReportInput): void {
 function writeSummaryHeadline(
   totals: McpMetricsAggregateRow,
   comparison: SavingsLiveComparison,
+  costBasis: McpMetricsCostBasis,
 ): void {
   const w = process.stdout;
   const calls = totals.calls;
@@ -1343,6 +1351,12 @@ function writeSummaryHeadline(
     ['Output tokens:', formatTokens(outputTokens)],
     ['Total tokens:', formatTokens(totalTokens)],
   ];
+  if (costBasis.configured) {
+    lines.push(
+      ['Total cost:', formatUsdConfigured(totals.total_cost_usd)],
+      ['Avg cost/call:', formatUsdConfigured(totals.avg_cost_usd)],
+    );
+  }
   if (savingsPct !== null) {
     const savedLabel = savedTokens >= 0
       ? `${formatTokens(savedTokens)} (${formatPctSigned(savingsPct)})`
@@ -1381,6 +1395,7 @@ function writeSummaryHeadline(
 function writeSummaryByOperation(
   operations: ReadonlyArray<McpMetricsAggregateRow>,
   comparison: SavingsLiveComparison,
+  costBasis: McpMetricsCostBasis,
   topOps: number,
 ): void {
   const w = process.stdout;
@@ -1426,6 +1441,7 @@ function writeSummaryByOperation(
 
   w.write(`${kleur.bold('By Operation')}\n`);
   w.write(`${kleur.dim('-'.repeat(SUMMARY_TABLE_WIDTH))}\n`);
+  const showCost = costBasis.configured;
   const header = [
     padVisible(' #', 3),
     padVisible('Operation', 26),
@@ -1433,6 +1449,7 @@ function writeSummaryByOperation(
     padVisibleRight('Saved', 8),
     padVisibleRight('Share', 6),
     padVisibleRight('Avg ms', 7),
+    ...(showCost ? [padVisibleRight('Cost', 11)] : []),
     padVisible('Impact', SUMMARY_IMPACT_WIDTH),
   ].join('  ');
   w.write(`${kleur.dim(header)}\n`);
@@ -1456,6 +1473,7 @@ function writeSummaryByOperation(
       padVisibleRight(savedCell, 8),
       padVisibleRight(formatPctValue(sharePct), 6),
       padVisibleRight(String(row.avg_duration_ms), 7),
+      ...(showCost ? [padVisibleRight(formatUsdConfigured(row.total_cost_usd), 11)] : []),
       renderImpactBar(weight, maxImpact, SUMMARY_IMPACT_WIDTH),
     ];
     w.write(`${cells.join('  ')}\n`);
