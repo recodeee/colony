@@ -1,0 +1,112 @@
+{
+  "observations": [
+    {
+      "kind": "lifecycle_event",
+      "ts_offset": 10,
+      "metadata_subset": {
+        "event_name": "session_start",
+        "session_id": "codex@scenario-01",
+        "agent": "codex",
+        "branch": "agent/scenario/default",
+        "binding_status": "bound_task"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_01_session",
+        "event_type": "session_start",
+        "ok": true
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_01_bind",
+        "event_type": "task_bind",
+        "ok": true
+      }
+    },
+    {
+      "kind": "claim",
+      "ts_offset": 40,
+      "metadata_subset": {
+        "kind": "claim",
+        "source": "pre-tool-use",
+        "file_path": "src/target.ts",
+        "auto_claimed_before_edit": true,
+        "tool": "Edit"
+      }
+    },
+    {
+      "kind": "claim-before-edit",
+      "ts_offset": 40,
+      "metadata_subset": {
+        "kind": "claim-before-edit",
+        "source": "pre-tool-use",
+        "outcome": "auto_claimed_before_edit",
+        "file_path": "src/target.ts",
+        "tool": "Edit",
+        "conflict": false
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "ts_offset": 40,
+      "metadata_subset": {
+        "event_id": "evt_01_pre",
+        "event_type": "pre_tool_use",
+        "tool_name": "Edit",
+        "extracted_paths": ["src/target.ts"]
+      }
+    },
+    {
+      "kind": "tool_use",
+      "ts_offset": 60,
+      "metadata_subset": {
+        "tool": "Edit",
+        "lifecycle_event_id": "evt_01_post",
+        "parent_event_id": "evt_01_pre",
+        "file_path": "src/target.ts"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "ts_offset": 60,
+      "metadata_subset": {
+        "event_id": "evt_01_post",
+        "event_type": "post_tool_use",
+        "parent_event_id": "evt_01_pre",
+        "tool_name": "Edit"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "task_id": 1,
+      "file_path": "src/target.ts",
+      "session_id": "codex@scenario-01",
+      "state": "active"
+    }
+  ],
+  "mcp_metrics": [],
+  "lifecycle_events": [
+    {
+      "event_type": "session_start",
+      "event_id": "evt_01_session"
+    },
+    {
+      "event_type": "task_bind",
+      "event_id": "evt_01_bind"
+    },
+    {
+      "event_type": "pre_tool_use",
+      "event_id": "evt_01_pre"
+    },
+    {
+      "event_type": "post_tool_use",
+      "event_id": "evt_01_post",
+      "parent_event_id": "evt_01_pre"
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "observations": [
+    {
+      "kind": "lifecycle_event",
+      "metadata_subset": {
+        "session_id": "codex@scenario-03",
+        "agent": "codex"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_03_session",
+        "event_type": "session_start"
+      }
+    },
+    {
+      "kind": "omx-lifecycle",
+      "metadata_subset": {
+        "event_id": "evt_03_bind",
+        "event_type": "task_bind"
+      }
+    },
+    {
+      "kind": "claim",
+      "ts_offset": 30,
+      "metadata_subset": {
+        "kind": "claim",
+        "file_path": "src/target.ts"
+      }
+    },
+    {
+      "kind": "relay",
+      "ts_offset": 50,
+      "metadata_subset": {
+        "kind": "relay",
+        "reason": "quota"
+      }
+    },
+    {
+      "kind": "claim-weakened",
+      "ts_offset": 50,
+      "metadata_subset": {
+        "kind": "claim-weakened",
+        "file_path": "src/target.ts",
+        "state": "handoff_pending"
+      }
+    },
+    {
+      "kind": "claim-weakened",
+      "ts_offset": 120100,
+      "metadata_subset": {
+        "kind": "claim-weakened",
+        "file_path": "src/target.ts",
+        "state": "weak_expired"
+      }
+    }
+  ],
+  "claims": [
+    {
+      "task_id": 1,
+      "file_path": "src/target.ts",
+      "state": "weak_expired"
+    }
+  ],
+  "mcp_metrics": [],
+  "lifecycle_events": [
+    {
+      "event_type": "session_start",
+      "event_id": "evt_03_session"
+    },
+    {
+      "event_type": "task_bind",
+      "event_id": "evt_03_bind"
+    }
+  ]
+}

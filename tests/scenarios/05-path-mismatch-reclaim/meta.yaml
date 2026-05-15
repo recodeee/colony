@@ -1,0 +1,11 @@
+description: |
+  Codex claims src/secondary.ts then issues a pre_tool_use Edit on
+  src/target.ts. Proves the pre-tool-use auto-claim path catches the
+  mismatch and adds an active claim for the actual edited file, leaving
+  both rows in task_claims.
+runtimes:
+  - codex
+tags:
+  - claim-before-edit
+  - path-mismatch
+  - reclaim

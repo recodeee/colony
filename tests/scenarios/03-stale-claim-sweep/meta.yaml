@@ -1,0 +1,11 @@
+description: |
+  Codex claims src/target.ts then relays out with TTL=60s. The
+  scenario ticks past TTL and asks the task to release_expired_quota.
+  Proves stale claims transition to weak_expired and become eligible
+  for the next agent to claim.
+runtimes:
+  - codex
+tags:
+  - stale-claim
+  - sweep
+  - ttl

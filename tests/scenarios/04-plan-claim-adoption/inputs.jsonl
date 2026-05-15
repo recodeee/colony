@@ -1,0 +1,9 @@
+# Scenario 04 — plan claim adoption
+# Queen published a plan sub-task (seeded). A codex agent starts a
+# session on the sub-task branch, joins the task, claims the file scope,
+# and emits a plan-subtask-claim observation transitioning to 'claimed'.
+{"kind":"lifecycle","at_ms":10,"payload":{"event_id":"evt_04_session","event_name":"session_start","session_id":"codex@scenario-04","agent":"codex","branch":"spec/scenario-04-plan/sub-0"}}
+{"kind":"lifecycle","at_ms":20,"payload":{"event_id":"evt_04_bind","event_name":"task_bind","session_id":"codex@scenario-04","agent":"codex","branch":"spec/scenario-04-plan/sub-0"}}
+{"kind":"task","at_ms":30,"payload":{"action":"join","task_id":100,"session_id":"codex@scenario-04","agent":"codex"}}
+{"kind":"task","at_ms":40,"payload":{"action":"claim_file","task_id":100,"session_id":"codex@scenario-04","file_path":"src/target.ts","note":"adopting plan sub-task"}}
+{"kind":"task","at_ms":50,"payload":{"action":"add_observation","task_id":100,"session_id":"codex@scenario-04","kind":"plan-subtask-claim","content":"codex adopting scenario-04-plan sub-0","metadata":{"kind":"plan-subtask-claim","status":"claimed","plan_slug":"scenario-04-plan","subtask_index":0,"session_id":"codex@scenario-04","agent":"codex"}}}

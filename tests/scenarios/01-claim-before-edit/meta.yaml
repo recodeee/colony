@@ -1,0 +1,10 @@
+description: |
+  Codex session binds to a task on agent/scenario/default and edits
+  src/target.ts. Proves pre_tool_use synthesizes a claim-before-edit
+  signal and that the post_tool_use observation lands with the claim
+  already in place.
+runtimes:
+  - codex
+tags:
+  - claim-before-edit
+  - lifecycle

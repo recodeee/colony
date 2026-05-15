@@ -1,0 +1,10 @@
+# Scenario 03 — stale-claim sweep
+# Codex binds, claims, then relays out (creates handoff_pending claim
+# with TTL=60s). After the TTL passes, a tick + release_expired_quota
+# transitions the claim into weak_expired.
+{"kind":"lifecycle","at_ms":10,"payload":{"event_id":"evt_03_session","event_name":"session_start","session_id":"codex@scenario-03","agent":"codex","branch":"agent/scenario/default"}}
+{"kind":"lifecycle","at_ms":20,"payload":{"event_id":"evt_03_bind","event_name":"task_bind","session_id":"codex@scenario-03","agent":"codex","branch":"agent/scenario/default"}}
+{"kind":"task","at_ms":30,"payload":{"action":"claim_file","task_id":1,"session_id":"codex@scenario-03","file_path":"src/target.ts","note":"about to be expired"}}
+{"kind":"task","at_ms":50,"payload":{"action":"relay","task_id":1,"from_session_id":"codex@scenario-03","from_agent":"codex","reason":"quota","one_line":"forced quota for stale-claim test","base_branch":"main","expires_in_ms":60000}}
+{"kind":"tick","at_ms":120000,"payload":{"reason":"advance past 60s TTL"}}
+{"kind":"task","at_ms":120100,"payload":{"action":"release_expired_quota","task_id":1,"session_id":"codex@scenario-03"}}

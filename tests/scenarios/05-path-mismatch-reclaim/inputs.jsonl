@@ -1,0 +1,8 @@
+# Scenario 05 — path-mismatch reclaim
+# Codex claims src/secondary.ts up front, then issues pre_tool_use on
+# src/target.ts. The pre-tool-use hook must auto-claim the actual file
+# (target.ts), producing both claims on the task.
+{"kind":"lifecycle","at_ms":10,"payload":{"event_id":"evt_05_session","event_name":"session_start","session_id":"codex@scenario-05","agent":"codex","branch":"agent/scenario/default"}}
+{"kind":"lifecycle","at_ms":20,"payload":{"event_id":"evt_05_bind","event_name":"task_bind","session_id":"codex@scenario-05","agent":"codex","branch":"agent/scenario/default"}}
+{"kind":"task","at_ms":30,"payload":{"action":"claim_file","task_id":1,"session_id":"codex@scenario-05","file_path":"src/secondary.ts","note":"claimed wrong file first"}}
+{"kind":"lifecycle","at_ms":50,"payload":{"event_id":"evt_05_pre","event_name":"pre_tool_use","session_id":"codex@scenario-05","agent":"codex","branch":"agent/scenario/default","tool_name":"Edit","tool_input":{"operation":"replace","paths":[{"path":"<REPO_ROOT>/src/target.ts","role":"target","kind":"file"}]}}}
