@@ -16,6 +16,7 @@ import {
   loadProfile,
   rankCandidates,
 } from './response-thresholds.js';
+import { SCOUT_PROPOSAL_ERROR_CODES } from './types.js';
 import {
   type WorkingHandoffNoteInput,
   type WorkingHandoffNoteResult,
@@ -101,6 +102,7 @@ export const TASK_THREAD_ERROR_CODES = {
   CLAIM_BATON_CONFLICT: 'CLAIM_BATON_CONFLICT',
   INVALID_CLAIM_PATH: 'INVALID_CLAIM_PATH',
   PROTECTED_BRANCH_CLAIM_REJECTED: 'PROTECTED_BRANCH_CLAIM_REJECTED',
+  ...SCOUT_PROPOSAL_ERROR_CODES,
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 } as const;
 

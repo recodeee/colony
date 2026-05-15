@@ -106,7 +106,18 @@ export {
   type ReflexionKind,
   type ReflexionMetadata,
 } from './reflexion.js';
-export type { SearchResult, GetObservationsOptions, Observation, Session } from './types.js';
+export {
+  MAX_OPEN_PROPOSALS_PER_SCOUT,
+  SCOUT_PROPOSAL_ERROR_CODES,
+  type AgentRole,
+  type GetObservationsOptions,
+  type Observation,
+  type SearchResult,
+  type Session,
+  type ScoutProposalErrorCode,
+  type TaskProposalStatus,
+  type TaskThreadProposalFields,
+} from './types.js';
 export { createSessionId } from './ids.js';
 export { inferIdeFromSessionId } from './infer-ide.js';
 export {
