@@ -546,8 +546,33 @@ interface HealthFixPlanPayload {
   };
   steps: HealthFixPlanStep[];
   verification_commands: string[];
+  coordination_sweep_diff?: CoordinationSweepDiffPayload | undefined;
   coordination_sweep?: CoordinationSweepResult | undefined;
   queen_sweep?: ReturnType<typeof sweepQueenPlans> | undefined;
+}
+
+interface CoordinationSweepDiffPayload {
+  mode: 'projected' | 'actual';
+  before: {
+    stale_claims: number;
+    expired_or_weak_claims: number;
+    quota_pending_claims: number;
+    stale_downstream_blockers: number;
+  };
+  after: {
+    stale_claims: number;
+    expired_or_weak_claims: number;
+    quota_pending_claims: number;
+    stale_downstream_blockers: number;
+  };
+  changes: {
+    released_claims: number;
+    downgraded_claims: number;
+    released_quota_pending_claims: number;
+    skipped_dirty_claims: number;
+    skipped_active_claims: number;
+    skipped_downstream_blocking_claims: number;
+  };
 }
 
 function codexPrompt(input: {
@@ -1627,13 +1652,11 @@ export function registerHealthCommand(program: Command): void {
                   merge_storages: mergeStorages,
                   merged_repo_stores: mergedRepoStores,
                 });
-                const coordinationSweep =
-                  opts.apply === true
-                    ? buildCoordinationSweep(store, {
-                        repo_root: repoRoot,
-                        release_safe_stale_claims: opts.releaseSafeStaleClaims === true,
-                      })
-                    : undefined;
+                const coordinationSweep = buildCoordinationSweep(store, {
+                  repo_root: repoRoot,
+                  release_safe_stale_claims:
+                    opts.apply === true && opts.releaseSafeStaleClaims === true,
+                });
                 const queenSweep =
                   opts.apply === true
                     ? sweepQueenPlans(store, {
@@ -1645,9 +1668,7 @@ export function registerHealthCommand(program: Command): void {
                   repo_root: repoRoot,
                   apply: opts.apply === true,
                   release_safe_stale_claims: opts.releaseSafeStaleClaims === true,
-                  ...(coordinationSweep !== undefined
-                    ? { coordination_sweep: coordinationSweep }
-                    : {}),
+                  coordination_sweep: coordinationSweep,
                   ...(queenSweep !== undefined ? { queen_sweep: queenSweep } : {}),
                 });
                 process.stdout.write(
@@ -1705,6 +1726,12 @@ export function buildHealthFixPlan(
   const coordinationCommand = `colony coordination sweep --repo-root ${shellQuote(options.repo_root)} --json`;
   const queenCommand = `colony queen sweep --repo-root ${shellQuote(options.repo_root)} --json`;
   const mutatesClaims = options.apply && options.release_safe_stale_claims === true;
+  const coordinationSweepDiff =
+    options.coordination_sweep === undefined
+      ? undefined
+      : buildCoordinationSweepDiffPayload(options.coordination_sweep, {
+          mode: options.apply ? 'actual' : 'projected',
+        });
   const steps: HealthFixPlanStep[] = [];
 
   if (preToolUseMissingDominates && !claim.old_telemetry_pollution) {
@@ -1768,9 +1795,11 @@ export function buildHealthFixPlan(
   } else {
     steps.push({
       title: 'Run coordination sweep',
-      status: 'planned',
+      status: options.coordination_sweep === undefined ? 'planned' : 'ran',
       detail:
-        'Dry-run only: pass --apply to run this sweep. Claim mutation stays off unless --release-safe-stale-claims is also set.',
+        options.coordination_sweep === undefined
+          ? 'Dry-run only: pass --apply to run this sweep. Claim mutation stays off unless --release-safe-stale-claims is also set.'
+          : `Dry-run sweep diff: ${formatCoordinationSweepDiff(coordinationSweepDiff)}. Claim mutation stays off unless --apply --release-safe-stale-claims is set.`,
       command: coordinationCommand,
     });
     steps.push({
@@ -1789,7 +1818,7 @@ export function buildHealthFixPlan(
     safety: {
       mutates_claims: mutatesClaims,
       installs_hooks: false,
-      ran_coordination_sweep: options.apply,
+      ran_coordination_sweep: options.coordination_sweep !== undefined,
       ran_queen_sweep: options.apply,
       release_safe_stale_claims: options.release_safe_stale_claims === true,
     },
@@ -1809,6 +1838,7 @@ export function buildHealthFixPlan(
       queenCommand,
       'pnpm smoke:codex-omx-pretool',
     ],
+    coordination_sweep_diff: coordinationSweepDiff,
     coordination_sweep: options.coordination_sweep,
     queen_sweep: options.queen_sweep,
   };
@@ -1820,7 +1850,13 @@ export function formatHealthFixPlanOutput(plan: HealthFixPlanPayload): string {
     : 'does not release claims';
   const lines = [
     kleur.bold('colony health --fix-plan'),
-    `mode: ${plan.mode}${plan.mode === 'dry-run' ? ' (no sweeps run)' : ' (sweeps run)'}`,
+    `mode: ${plan.mode}${
+      plan.mode === 'dry-run'
+        ? plan.coordination_sweep_diff
+          ? ' (dry-run sweep diff)'
+          : ' (no sweeps run)'
+        : ' (sweeps run)'
+    }`,
     `safety: mutates_claims: ${plan.safety.mutates_claims}; ${claimSafety}; does not install hooks; queen sweep auto-message disabled`,
     '',
     kleur.bold('Current health'),
@@ -1830,9 +1866,15 @@ export function formatHealthFixPlanOutput(plan: HealthFixPlanPayload): string {
     `  live contentions:     ${plan.current.live_contentions}`,
     `  dirty contended:      ${plan.current.dirty_contended_files}`,
     `  stale downstream:     ${plan.current.stale_downstream_blockers}`,
-    '',
-    kleur.bold('Recovery plan'),
   ];
+  if (plan.coordination_sweep_diff) {
+    const diff = plan.coordination_sweep_diff;
+    lines.push(
+      `  sweep diff:           ${formatCoordinationSweepDiff(diff)}`,
+      `  sweep skipped:        dirty=${diff.changes.skipped_dirty_claims}, active=${diff.changes.skipped_active_claims}, downstream=${diff.changes.skipped_downstream_blocking_claims}`,
+    );
+  }
+  lines.push('', kleur.bold('Recovery plan'));
 
   plan.steps.forEach((step, index) => {
     lines.push(`  ${index + 1}. [${step.status}] ${step.title}: ${step.detail}`);
@@ -1845,6 +1887,88 @@ export function formatHealthFixPlanOutput(plan: HealthFixPlanPayload): string {
   }
 
   return lines.join('\n');
+}
+
+function buildCoordinationSweepDiffPayload(
+  result: CoordinationSweepResult,
+  opts: { mode: CoordinationSweepDiffPayload['mode'] },
+): CoordinationSweepDiffPayload {
+  const safe = result.safe_cleanup ?? {
+    stale_claims: result.summary.stale_claim_count,
+    expired_or_weak_claims: result.summary.expired_weak_claim_count,
+    quota_pending_claims: 0,
+    released_quota_pending_claims: 0,
+    released_claims: result.summary.released_stale_claim_count,
+    downgraded_claims: result.summary.downgraded_stale_claim_count,
+    skipped_dirty_claims: 0,
+    skipped_active_claims: 0,
+    skipped_downstream_blocking_claims: 0,
+    recommended_actions: [],
+  };
+  const skippedClaims = result.skipped_dirty_claims ?? [];
+  const staleClaims = result.stale_claims ?? [];
+  const skippedKeys = new Set(skippedClaims.map(staleClaimDiffKey));
+  const releasable = staleClaims.filter(
+    (claim) => !skippedKeys.has(staleClaimDiffKey(claim)),
+  );
+  const projectedReleased = releasable.filter(
+    (claim) => claim.cleanup_action === 'expire_weak_claim',
+  ).length;
+  const projectedDowngraded = releasable.length - projectedReleased;
+  const releasedClaims =
+    opts.mode === 'actual' ? safe.released_claims : safe.released_claims + projectedReleased;
+  const downgradedClaims =
+    opts.mode === 'actual'
+      ? safe.downgraded_claims
+      : safe.downgraded_claims + projectedDowngraded;
+  const releasedQuotaPendingClaims = safe.released_quota_pending_claims;
+
+  return {
+    mode: opts.mode,
+    before: {
+      stale_claims: safe.stale_claims,
+      expired_or_weak_claims: safe.expired_or_weak_claims,
+      quota_pending_claims: safe.quota_pending_claims,
+      stale_downstream_blockers: result.summary.stale_downstream_blocker_count,
+    },
+    after: {
+      stale_claims: Math.max(0, safe.stale_claims - releasedClaims - downgradedClaims),
+      expired_or_weak_claims: Math.max(0, safe.expired_or_weak_claims - releasedClaims),
+      quota_pending_claims: Math.max(0, safe.quota_pending_claims - releasedQuotaPendingClaims),
+      stale_downstream_blockers: Math.max(
+        0,
+        result.summary.stale_downstream_blocker_count -
+          result.summary.released_stale_blocker_claim_count,
+      ),
+    },
+    changes: {
+      released_claims: releasedClaims,
+      downgraded_claims: downgradedClaims,
+      released_quota_pending_claims: releasedQuotaPendingClaims,
+      skipped_dirty_claims: safe.skipped_dirty_claims,
+      skipped_active_claims: safe.skipped_active_claims,
+      skipped_downstream_blocking_claims: safe.skipped_downstream_blocking_claims,
+    },
+  };
+}
+
+function staleClaimDiffKey(claim: {
+  task_id: number;
+  file_path: string;
+  session_id: string;
+}): string {
+  return `${claim.task_id}\u0000${claim.file_path}\u0000${claim.session_id}`;
+}
+
+function formatCoordinationSweepDiff(diff: CoordinationSweepDiffPayload | undefined): string {
+  if (diff === undefined) return 'unavailable';
+  return [
+    `${diff.mode}`,
+    `stale ${diff.before.stale_claims}->${diff.after.stale_claims}`,
+    `expired/weak ${diff.before.expired_or_weak_claims}->${diff.after.expired_or_weak_claims}`,
+    `release ${diff.changes.released_claims}`,
+    `downgrade ${diff.changes.downgraded_claims}`,
+  ].join('; ');
 }
 
 function queenSweepSummary(result: ReturnType<typeof sweepQueenPlans>): string {

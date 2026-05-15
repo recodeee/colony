@@ -101,8 +101,28 @@ describe('colony health safe stale cleanup flow', () => {
     });
     expect(dryRun.safety).toMatchObject({
       mutates_claims: false,
-      ran_coordination_sweep: false,
+      ran_coordination_sweep: true,
       release_safe_stale_claims: false,
+    });
+    expect(dryRun.coordination_sweep_diff).toMatchObject({
+      mode: 'projected',
+      before: {
+        stale_claims: 5,
+        expired_or_weak_claims: 1,
+        stale_downstream_blockers: 1,
+      },
+      after: {
+        stale_claims: 3,
+        expired_or_weak_claims: 0,
+        stale_downstream_blockers: 1,
+      },
+      changes: {
+        released_claims: 1,
+        downgraded_claims: 1,
+        skipped_dirty_claims: 1,
+        skipped_active_claims: 1,
+        skipped_downstream_blocking_claims: 1,
+      },
     });
 
     const beforeApplyClaims = await claimFiles();
@@ -252,6 +272,26 @@ async function readFixPlanJson(flags: string[]): Promise<{
     released_stale_claims: Array<{ file_path: string; reason: string }>;
     downgraded_stale_claims: Array<{ file_path: string; reason: string }>;
     skipped_dirty_claims: Array<{ file_path: string; reason: string }>;
+  };
+  coordination_sweep_diff: {
+    mode: string;
+    before: {
+      stale_claims: number;
+      expired_or_weak_claims: number;
+      stale_downstream_blockers: number;
+    };
+    after: {
+      stale_claims: number;
+      expired_or_weak_claims: number;
+      stale_downstream_blockers: number;
+    };
+    changes: {
+      released_claims: number;
+      downgraded_claims: number;
+      skipped_dirty_claims: number;
+      skipped_active_claims: number;
+      skipped_downstream_blocking_claims: number;
+    };
   };
 }> {
   output = '';
