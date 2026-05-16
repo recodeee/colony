@@ -1,26 +1,27 @@
 // Synchronous SQLITE_BUSY retry wrapper for better-sqlite3 writes.
 //
-// Background: the Storage constructor sets busy_timeout=5000 and
+// Background: the Storage constructor sets busy_timeout=15000 and
 // journal_mode=WAL, which together absorb the overwhelming majority of
 // contention between the worker daemon, MCP server, and CLI hooks. The
 // remaining tail comes from edge cases — a long checkpoint, a migration
 // that holds a write transaction, or a misbehaving hook that opens its
-// own connection. In those cases SQLite still raises SQLITE_BUSY after
-// the busy_timeout window expires, which the 168h gain telemetry saw
-// surface once on task_claim_quota_release_expired.
+// own connection — plus sustained pressure from the codex-fleet shape
+// (~30+ concurrent writers). In those cases SQLite still raises
+// SQLITE_BUSY after the busy_timeout window expires.
 //
 // This helper gives callers a defensive Node-level retry on top of
-// SQLite's own busy_timeout. Five attempts with backoff 5/20/80/250ms
-// cap total wait at ~355ms — small enough that the caller is not
-// noticeably slower, large enough that a transient checkpoint or
-// short-held write transaction has time to clear.
+// SQLite's own busy_timeout. Eight attempts with backoff
+// 10/40/160/640/1000/1000/1000ms cap total wait at ~3.85s — bounded
+// enough to keep CLI hooks under the 150ms p95 budget on the happy
+// path while giving a transient checkpoint or fleet-burst window time
+// to clear.
 
 export interface BusyRetryOptions {
-  /** Maximum number of attempts (including the first). Defaults to 5. */
+  /** Maximum number of attempts (including the first). Defaults to 8. */
   maxAttempts?: number;
-  /** Base delay in milliseconds; backoff is base * 4^(attempt-1) capped at 250ms. Defaults to 5. */
+  /** Base delay in milliseconds; backoff is base * 4^(attempt-1) capped at maxDelayMs. Defaults to 10. */
   baseDelayMs?: number;
-  /** Maximum per-attempt delay in milliseconds. Defaults to 250. */
+  /** Maximum per-attempt delay in milliseconds. Defaults to 1000. */
   maxDelayMs?: number;
 }
 
@@ -55,9 +56,9 @@ function sleepSync(ms: number): void {
  * `maxAttempts` retries.
  */
 export function withBusyRetry<T>(fn: () => T, opts: BusyRetryOptions = {}): T {
-  const maxAttempts = opts.maxAttempts ?? 5;
-  const baseDelayMs = opts.baseDelayMs ?? 5;
-  const maxDelayMs = opts.maxDelayMs ?? 250;
+  const maxAttempts = opts.maxAttempts ?? 8;
+  const baseDelayMs = opts.baseDelayMs ?? 10;
+  const maxDelayMs = opts.maxDelayMs ?? 1000;
   let attempt = 0;
   // The loop body always either returns or throws, so the linter is
   // happy with the `while (true)` shape.

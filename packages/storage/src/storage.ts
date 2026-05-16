@@ -320,8 +320,11 @@ export class Storage {
     this.db = new Database(dbPath, opts.readonly ? { readonly: true } : {});
     // busy_timeout is connection-scoped. Multiple processes (worker daemon,
     // MCP server, CLI hooks) hit the same WAL file; without this they trip
-    // SQLITE_BUSY immediately on contention. 5s lets the kernel retry.
-    this.db.pragma('busy_timeout = 5000');
+    // SQLITE_BUSY immediately on contention. 15s absorbs sustained
+    // contention from ~30+ concurrent writers (the codex-fleet shape):
+    // 5s was tuned for the worker+MCP+CLI trio and got exhausted under
+    // fleet load on 2026-05-16.
+    this.db.pragma('busy_timeout = 15000');
     // WAL mode lets readers and a single writer coexist without blocking,
     // which matters because the worker daemon, MCP server, and CLI hooks
     // all hit the same DB file concurrently. Without WAL the default

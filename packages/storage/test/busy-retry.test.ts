@@ -25,11 +25,11 @@ describe('Storage WAL mode', () => {
     expect(mode[0]?.toLowerCase()).toBe('wal');
   });
 
-  it('keeps busy_timeout set to 5000', () => {
+  it('keeps busy_timeout set to 15000', () => {
     const timeout = (storage as unknown as { db: { pragma: (sql: string) => unknown[] } }).db
       .pragma('busy_timeout')
       .map((r: unknown) => (r as { timeout: number }).timeout);
-    expect(timeout[0]).toBe(5000);
+    expect(timeout[0]).toBe(15000);
   });
 });
 
