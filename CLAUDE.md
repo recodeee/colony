@@ -118,3 +118,8 @@ Unit tests cover handlers, storage, and protocol contracts in isolation. They ca
 ## Authorship voice
 
 Code comments are minimal and explain **why**, not what. Keep naming explicit. Prefer pure functions. Avoid adding dependencies when the standard library or an existing package covers the need.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->
